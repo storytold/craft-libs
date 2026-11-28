@@ -111,7 +111,8 @@ pub struct DockConfig {
     pub tab_look: PanelTabLook,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and
-    /// with this off, it shows in the app window.
+    /// with this off, it shows in the app window. A window that takes over a held press (`DockArea::continue_move`)
+    /// opens its OS window once that press ends.
     pub native_windows: bool,
     /// Docked groups' menus get Minimize and Move Group Up and Down.
     pub group_order_items: bool,

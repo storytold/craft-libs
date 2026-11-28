@@ -18,7 +18,7 @@ use crate::menu::GroupItem;
 use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::env::{Env, EnvValue, Label, with_env};
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, GlyphRole, RuleKind, StyleColor, StyleCx, SurfaceKind, SurfaceStyle};
+use crate::style::{ComponentStyle, Corners, FocusLook, GlyphRole, RuleKind, StyleColor, StyleCx, SurfaceKind, SurfaceStyle};
 use crate::tabs::PanelTabLook;
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::overlay::Side;
@@ -177,6 +177,9 @@ impl<P: Value + Hash + 'static> Outcome for IconicColumnOutput<P> {
 pub struct IconicColumnStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the chevron, the icon cell or the edge divider that has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     sizes: IconicSizes,
     /// The ink of a panel's name in a wide column.
     name: StyleColor,
@@ -208,7 +211,8 @@ pub struct IconicColumnStyle {
 /// icon groups, the top and bottom of the stack and each icon group's cells, which join its tabs. The flyout shows
 /// its group through the `view` of [`show_flyouts`](IconicColumn::show_flyouts), with the opened panel active, as tall as the view measures the
 /// group within the room and at least the height of its panels' default heights; a group the user sized keeps that
-/// size. The flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`.
+/// size. The flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`;
+/// a flyout taller than the room below that top moves up by what it overflows and no further.
 /// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
 /// [`IconicColumnOutput::flyout`], which the host keeps in the group (`flyout_width`, `height`, `flyout_offset`).
 ///
@@ -549,6 +553,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         let colors = &cx.tokens.color;
         IconicColumnStyle {
             metrics: Metrics::new(),
+            focus: cx.focus_look(),
             sizes: IconicSizes::style(cx),
             name: cx.color(colors.text.normal),
             name_open: cx.color(colors.accent.text),

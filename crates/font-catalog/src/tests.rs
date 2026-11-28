@@ -260,6 +260,23 @@ fn lookup_by_every_name_kind() {
 }
 
 #[test]
+fn the_stores_face_wins_over_its_copy_in_the_os_folder() {
+    // A Flatpak's store sits under ~/.var/app, which sorts after the host's ~/.local/share/fonts
+    // the store copies its fonts into.
+    let root = temp("store-copy");
+    let bytes = font(&spec("Copied Sans", "Regular", 400));
+    write(&root.join("home/.local/share/fonts/Craft/Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let store = root.join("home/.var/app/org.example.Fonts/data/craft-fonts");
+    write(&store.join("Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let cat = Catalog::new(FontEnv { font_store: Some(store), ..linux_env(&root) }).with_font_service(false);
+    cat.rescan();
+    let styles = cat.styles("Copied Sans");
+    assert_eq!(styles.len(), 1);
+    assert_eq!(styles[0].source, Source::Store);
+    assert_eq!(cat.scanned_faces().iter().filter(|f| f.family == "Copied Sans").count(), 2);
+}
+
+#[test]
 fn installed_and_removed_fonts_are_seen_without_a_restart() {
     let root = temp("rescan");
     let cat = system(&root);
@@ -371,6 +388,39 @@ fn a_family_loads_once_for_every_thread() {
     cat.rescan();
     assert!(!Arc::ptr_eq(&cat.load_family("Host Serif"), &loads[0]));
     assert!(cat.load_family("Missing").is_empty());
+}
+
+#[test]
+fn generic_families_follow_the_platforms_list_then_the_others() {
+    let root = temp("generic");
+    let dir = root.join("listed");
+    write(&dir.join("Arial.ttf"), font(&spec("Arial", "Regular", 400)));
+    write(&dir.join("NotoSans.ttf"), font(&spec("Noto Sans", "Regular", 400)));
+    write(&dir.join("Mono.ttf"), font(&spec("DEJAVU SANS MONO", "Regular", 400)));
+    write(&dir.join("Times.ttf"), font(&Spec { legacy: Some(("Times New Roman", "Regular")), ..spec("Times New Roman Pro", "Regular", 400) }));
+    write(&dir.join("DejaVuSans.ttf"), font(&Spec { outlines: false, ..spec("DejaVu Sans", "Regular", 400) }));
+    let catalog = |os: Os| {
+        let listed = dir.clone();
+        Catalog::new(FontEnv { os, ..linux_env(&root) }).with_font_service(false).with_lister(Arc::new(move || vec![listed.clone()]))
+    };
+    // Linux: DejaVu Sans has no outlines, so Noto Sans; the family's own spelling comes back.
+    let linux = catalog(Os::Unix);
+    assert_eq!(linux.generic_family(Generic::SansSerif).as_deref(), Some("Noto Sans"));
+    assert_eq!(linux.generic_family(Generic::Monospace).as_deref(), Some("DEJAVU SANS MONO"));
+    // A legacy family name finds its family.
+    assert_eq!(linux.generic_family(Generic::Serif).as_deref(), Some("Times New Roman Pro"));
+    assert_eq!(linux.generic_family(Generic::SystemUi).as_deref(), Some("Noto Sans"));
+    // Windows tries Arial before the Linux names.
+    let windows = catalog(Os::Windows);
+    assert_eq!(windows.generic_family(Generic::SansSerif).as_deref(), Some("Arial"));
+    // Nothing of macOS's system-ui list: sans-serif's answer.
+    assert_eq!(catalog(Os::MacOs).generic_family(Generic::SystemUi).as_deref(), Some("Arial"));
+    // An added face counts; with nothing installed there is no answer.
+    let empty = Catalog::new(linux_env(&root.join("empty"))).with_font_service(false);
+    assert_eq!(empty.generic_family(Generic::Monospace), None);
+    empty.add_bytes(font(&spec("Liberation Mono", "Regular", 400)), Source::Document, &Limits::default()).unwrap();
+    assert_eq!(empty.generic_family(Generic::Monospace).as_deref(), Some("Liberation Mono"));
+    assert_eq!(empty.generic_family(Generic::Serif), None);
 }
 
 #[test]
@@ -536,11 +586,11 @@ fn a_background_scan_that_panics_lets_the_next_call_scan_again() {
     });
     let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(lister));
     // Each call starts a scan only when none is running; the second starts once the failed one has ended.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !cat.is_ready() && std::time::Instant::now() < deadline {
-        cat.scan_in_background();
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    let failed = cat.start_background_scan().expect("the first call starts a scan");
+    assert!(failed.join().is_err(), "the first scan fails");
+    assert!(!cat.is_ready());
+    let again = cat.start_background_scan().expect("a failed scan must not leave the catalog waiting on it");
+    again.join().unwrap();
     assert!(cat.is_ready(), "a failed scan must not leave the catalog waiting on it");
     assert_eq!(calls.load(Ordering::Relaxed), 2);
 }
@@ -555,13 +605,10 @@ fn adding_fonts_does_not_wait_for_the_installed_fonts() {
     let (entered, scan_entered) = mpsc::channel();
     let (release, scan_released) = mpsc::channel::<()>();
     let scan_released = std::sync::Mutex::new(scan_released);
-    let waited_out = Arc::new(AtomicUsize::new(0));
-    let flag = Arc::clone(&waited_out);
     let lister: Lister = Arc::new(move || {
         let _ = entered.send(());
-        if let Err(mpsc::RecvTimeoutError::Timeout) = scan_released.lock().unwrap().recv_timeout(Duration::from_secs(10)) {
-            flag.fetch_add(1, Ordering::Relaxed);
-        }
+        // The first scan stays here until the test sends on `release`; once it is dropped, scans go straight through.
+        let _ = scan_released.lock().unwrap().recv();
         Vec::new()
     });
     let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(lister));
@@ -569,12 +616,19 @@ fn adding_fonts_does_not_wait_for_the_installed_fonts() {
     assert!(!cat.is_ready(), "adding started no scan");
     cat.scan_in_background();
     scan_entered.recv_timeout(Duration::from_secs(10)).unwrap();
-    cat.add_bytes(font(&spec("App Face", "Regular", 400)), Source::Bundled, &Limits::default()).unwrap();
+    let adding = Arc::clone(&cat);
+    let (added, add_returned) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = added.send(adding.add_bytes(font(&spec("App Face", "Regular", 400)), Source::Bundled, &Limits::default()));
+    });
+    // The scan cannot end before `release` sends, so an add that returns now did not wait for it. The limit only stops a
+    // test whose add waits.
+    let returned = add_returned.recv_timeout(Duration::from_secs(10));
     release.send(()).unwrap();
     // Later scans (the rescans below) go straight through.
     drop(release);
+    returned.expect("the add during the scan returned before the scan did").unwrap();
     assert_eq!(cat.styles("App Face").len(), 1);
-    assert_eq!(waited_out.load(Ordering::Relaxed), 0, "the add during the scan returned before the scan did");
     // The added Bold comes first; the installed file's Bold is another version of it, not another face.
     assert_eq!(cat.resolve("Test Sans", "Bold").map(|(f, _)| f), bold.first().cloned());
     assert_eq!(cat.versions(&bold[0]).len(), 2);

@@ -1,5 +1,6 @@
 //! The data of a tool rail: tools, slots and the tool each slot showed last.
 
+use crate::primitives::IconSpec;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use egui::Ui;
@@ -8,7 +9,7 @@ use egui::Ui;
 pub type SlotId = u32;
 
 /// One tool of a slot. A tool is a command: the command gives the label, the icon, the chord and the enabled state,
-/// and picking the tool runs it.
+/// and picking the tool runs it. An [`icon`](RailTool::icon) of the tool's own replaces the command's.
 #[derive(Clone, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub struct RailTool<T> {
@@ -16,12 +17,24 @@ pub struct RailTool<T> {
     pub id: T,
     /// The command the tool runs.
     pub command: CommandRef,
+    /// The icon the tool shows in place of its command's: the app's own artwork, a value glyph, where the icon sets
+    /// have none.
+    #[plain_data(assume = "an icon is a value: an SVG name, a colour or a 'static glyph compared by address, never written through")]
+    pub icon: Option<IconSpec<'static>>,
 }
 
 impl<T> RailTool<T> {
-    /// A tool reported as `id` that runs `command`.
+    /// A tool reported as `id` that runs `command`, showing its command's icon.
     pub fn new(id: T, command: impl Into<CommandRef>) -> Self {
-        RailTool { id, command: command.into() }
+        RailTool { id, command: command.into(), icon: None }
+    }
+
+    /// Shows `icon` for the tool, on its rail button, its flyout row and its drawer row, in place of its command's
+    /// icon: an app's own tool artwork (`IconSpec::glyph`).
+    #[must_use]
+    pub fn icon(mut self, icon: impl Into<IconSpec<'static>>) -> Self {
+        self.icon = Some(icon.into());
+        self
     }
 }
 

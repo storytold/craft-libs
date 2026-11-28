@@ -38,6 +38,9 @@ pub enum GlyphRole {
     ToolRail,
     /// A list row's trailing icon button: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
     PanelRail,
+    /// A stack of small arrow buttons (a gallery's scroll arrows): `size.icon.glyph_sm` whatever the control size, and
+    /// a ribbon's small icon side does not widen it.
+    Compact,
 }
 
 /// What `fn style` gets. Tokens are read here and nowhere else.
@@ -207,12 +210,12 @@ impl<'a> StyleCx<'a> {
         f(&StyleCx::of_env(ctx, &env))
     }
 
-    /// The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
-    /// not `enabled`.
+    /// The one link look: body role, underlined, `accent.text`, `text.disabled` when not `enabled`.
+    ///
+    /// The theme holds `accent.text` to the text minimum on the panel, raised and sunken surfaces at every contrast.
     pub fn link_look(&self, enabled: bool) -> super::look::TextLook {
         let colors = &self.tokens.color;
-        let accent = if self.contrast() == Contrast::High { colors.accent.text } else { colors.accent.solid };
-        let (ink, off) = (self.color(accent), self.color(colors.text.disabled));
+        let (ink, off) = (self.color(colors.accent.text), self.color(colors.text.disabled));
         let rest = if enabled { ink } else { off };
         super::look::TextLook::new(craft_theme::TypeRole::Body, Stateful::new(rest).off(States::new(rest, rest, rest, off)))
     }
@@ -287,6 +290,19 @@ impl<'a> StyleCx<'a> {
             text.normal
         };
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
+    }
+
+    /// The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
+    /// pushed to the non-text contrast it needs (3.0 in standard, 4.5 in high contrast).
+    pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor {
+        let fill = Rgba::from(fill.0);
+        let text = &self.tokens.color.text;
+        let start = if craft_theme::contrast_ratio(text.on_strong, fill) > craft_theme::contrast_ratio(text.normal, fill) {
+            text.on_strong
+        } else {
+            text.normal
+        };
+        self.color(craft_theme::ensure_contrast(start, fill, craft_theme::non_text_contrast_min(self.contrast())))
     }
 
     /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
@@ -483,6 +499,29 @@ impl<'a> StyleCx<'a> {
             edge.when.push((Flags::INVALID.into(), bad));
             let clear = self.color(Rgba::TRANSPARENT);
             look.inner = Some(Stateful::new(clear).when(Flags::INVALID | Flags::FOCUSED, bad));
+        }
+        look
+    }
+
+    /// The look of a field that sits in a bar (a title bar's search box,
+    /// [`FieldLook::Quiet`](crate::style::FieldLook::Quiet)): [`field`](Self::field) filled with the window background
+    /// (`surface.background`) at rest and with the field fill under the pointer and while it holds focus, and with
+    /// the quieter `line.border` edge at rest. The focus and invalid edges are the field's own. A bevelled well keeps
+    /// its bevel; only its fill changes. At high contrast, and in a theme whose `line.border` is the window background
+    /// itself, the field keeps its own edge, so it still shows at rest.
+    pub fn quiet_field(&self) -> SurfaceLook {
+        let mut look = self.field();
+        let (surface, line) = (&self.tokens.color.surface, &self.tokens.color.line);
+        let (bar, sunken) = (self.color(surface.background), self.color(surface.sunken));
+        let off = self.color(self.tokens.color.state.disabled_fill);
+        look.fill = Stateful::new(bar).off(States::new(bar, sunken, sunken, off)).when(Flags::FOCUSED, sunken);
+        let quiet_edge_shows = self.contrast() == Contrast::Standard && line.border != surface.background;
+        if let Some(edge) = &mut look.border
+            && edge.off.rest != self.color(Rgba::TRANSPARENT)
+            && quiet_edge_shows
+        {
+            let (rest, disabled) = (self.color(line.border), self.color(line.divider));
+            edge.off = States::new(rest, rest, rest, disabled);
         }
         look
     }

@@ -618,6 +618,18 @@ pub(crate) fn host_drag_area(ui: &Ui, id: egui::Id, rect: Rect) -> (bool, bool) 
     (response.dragged(), response.drag_stopped())
 }
 
+/// A host's own clickable egui widget `id` at `rect` in a disabled `Ui`.
+#[cfg(feature = "suite")]
+pub(crate) fn host_disabled_button(ui: &mut Ui, id: egui::Id, rect: Rect) {
+    ui.scope_builder(egui::UiBuilder::new().disabled(), |ui| host_button(ui, id, rect));
+}
+
+/// A host's own egui widget `id` at `rect` that senses drags and takes no focus.
+#[cfg(feature = "suite")]
+pub(crate) fn host_unfocusable_area(ui: &Ui, id: egui::Id, rect: Rect) {
+    ui.interact(rect, id, egui::Sense::DRAG);
+}
+
 /// A host's own selectable egui label of `text`; returns its rect.
 #[cfg(feature = "suite")]
 pub(crate) fn host_label(ui: &mut Ui, text: &str) -> Rect {

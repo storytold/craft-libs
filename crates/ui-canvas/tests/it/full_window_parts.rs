@@ -362,6 +362,58 @@ pub(crate) mod own_window {
         assert!(!open.get(), "closing the dialog's window closes the dialog");
         assert_eq!(closed.get(), Some((CloseReason::Requested, true)), "the close is a cancel");
     }
+
+    /// photocraft#16905: in a window the app frames, a full-window dialog's own window moves by its title row. Its
+    /// fallback covers the main window and does not move, and the window took that rule, so RAW Develop's window could
+    /// not be moved.
+    #[trial]
+    fn a_full_window_dialogs_own_window_moves_by_its_title_row() {
+        use craft_host::target::{Backend, Os, ShellInfo, WindowKind};
+        use craft_ui::runtime::InstallSpec;
+        use craft_ui::testing::pointer::{moved, press, release};
+        use craft_ui::testing::windows::FakeSystem;
+        use craft_window::policy::{Desktop, DesktopKind, Runtime, TitleBarPref};
+        use egui::{Pos2, Rect, Vec2, ViewportCommand, pos2, vec2};
+        use std::sync::Arc;
+
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        let integrated =
+            craft_window::policy::decide(Os::Linux, Runtime::Native, Backend::X11, &desktop, WindowKind::Main, TitleBarPref::Integrated, None);
+        let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).frame(integrated));
+        let open = Cell::new(true);
+        let frame = |events: Vec<egui::Event>| {
+            windows.frame(vec![], events, |ui| {
+                let mut is_open = open.get();
+                FullWindowDialog::new("Workspace").own_window(WindowSpec::dialog()).opened(Bind::bound(&mut is_open)).show(ui, |_, _| {});
+                open.set(is_open);
+            })
+        };
+        let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(900.0, 640.0));
+        windows.child_info(ViewportInfo {
+            inner_rect: Some(rect),
+            outer_rect: Some(rect),
+            native_pixels_per_point: Some(1.0),
+            ..ViewportInfo::default()
+        });
+        for _ in 0..4 {
+            frame(vec![]);
+        }
+        // Clear of the top edge's grip and of the title row's own parts (the title at the start, the close action at
+        // the end).
+        let at = pos2(450.0, 14.0);
+        let mut sent = Vec::new();
+        for events in [
+            vec![moved(at)],
+            vec![press(at)],
+            vec![moved(at + vec2(20.0, 10.0))],
+            vec![moved(at + vec2(40.0, 20.0))],
+            vec![release(at + vec2(40.0, 20.0))],
+        ] {
+            sent.extend(frame(events).commands.into_iter().map(|(_, command)| command));
+        }
+        assert!(open.get(), "the dialog stays open");
+        assert!(sent.contains(&ViewportCommand::StartDrag), "a drag of the title row moves the window: {sent:?}");
+    }
 }
 
 /// An overlay drawn through a frame.

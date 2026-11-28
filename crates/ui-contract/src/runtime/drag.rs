@@ -658,6 +658,13 @@ pub fn moves(ctx: &Context, viewport: ViewportId) -> bool {
     board(ctx, |board| board.session.as_ref().is_some_and(|session| session.moving.viewport == Some(viewport)))
 }
 
+/// Whether `source` started the running session, which after its release lives until a target in another window has
+/// taken the drop.
+#[doc(hidden)]
+pub fn sourced_by(ctx: &Context, source: Id) -> bool {
+    board(ctx, |board| board.session.as_ref().is_some_and(|session| session.source == source))
+}
+
 /// Starts a session whose source is the container `source`, as the title row of a dock window does, with no payload
 /// of its own. For trials.
 #[cfg(feature = "testing")]

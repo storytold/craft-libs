@@ -51,8 +51,11 @@ impl Outcome for FlyoutOutput {
 
 /// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape closes it; with
 /// Auto-Collapse Iconic Panels a press outside it and the focus leaving it close it too. Its body is measured at the
-/// flyout's width first: the flyout is as tall as the body measures within the room below its top, and at least its
-/// `size`'s height, and the body then shows in the rect that takes.
+/// flyout's width first: the flyout is as tall as the body measures, at most the height of `within`, and at least its
+/// `size`'s height, and the body then shows in the rect that takes. A flyout that fits below its top stays there; one
+/// taller than the room below its top moves up by what it overflows and no further, its bottom on `within`'s (the
+/// layer's keep rule moves it the least distance into its bounds), and only one taller than `within` starts at
+/// `within`'s top and scrolls.
 ///
 /// The user resizes it by its top and bottom edges, the edge away from the column and the two corners there; the
 /// column side stays. The flyout keeps no rect of its own: each step comes back in [`FlyoutShown::placed`] and the
@@ -140,8 +143,9 @@ impl Flyout {
             }
         };
         let size = self.size;
-        // A body measures no taller than the room below the top, inside the bounds.
-        let room = (self.within.bottom() - top_left.y).max(size.y);
+        // A body measures no taller than the bounds: a flyout that does not fit below its top moves up by its overflow
+        // alone, so only a body taller than the bounds is limited to them.
+        let room = self.within.height().max(size.y);
         let overlay = self.overlay(top_left, ui.is_rtl());
         self.props = self.props.mount(Mount::Layer(overlay));
         let shown = ui.show_container(popup, self, |ui, cx| {

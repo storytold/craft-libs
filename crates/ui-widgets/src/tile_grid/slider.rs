@@ -6,7 +6,7 @@ use crate::contract::{
     Access, Bind, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, PaintUi, PartsCx, Props as _, Role, WordSetCx as _,
 };
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use craft_behavior::{IconId, Metrics, Mixed, NavShape, PartKey, Roving, Sense};
 use egui::{Rect, Vec2};
 use std::ops::RangeInclusive;
@@ -106,6 +106,8 @@ const LARGER_ICON: &str = "grid";
 pub struct ThumbnailSliderStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
 }
 
 /// Where the thumbnail slider's three controls lie.
@@ -152,7 +154,7 @@ impl Component for ThumbnailSlider<'_> {
     type Output = EditResponse<f64>;
 
     fn style(cx: &StyleCx<'_>, _: ThumbnailSliderStyleKey) -> ThumbnailSliderStyle {
-        ThumbnailSliderStyle { metrics: Metrics::new().gap(cx.control().gap) }
+        ThumbnailSliderStyle { metrics: Metrics::new().gap(cx.control().gap), focus: cx.focus_look() }
     }
 
     fn sense(&self) -> Sense {

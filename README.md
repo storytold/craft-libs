@@ -77,6 +77,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   model (cues with exact tick times): SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and
   TTML / IMSC1 / DFXP readers and writers, and CEA-608 / CEA-708 byte-pair coding. Carved from
   FilmCraft.
+- [`craft-cdr`](crates/cdr/README.md): bounded reader and writer of `.cdr` drawings: versions 1 to
+  27 and `.cmx` files read into one drawing model (pages, layers, groups, shapes, fills and
+  outlines), and version 15 `.cdr` files written.
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
@@ -126,6 +129,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
   (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
   (`a:prstTxWarp`). From DeckCraft. Takes `craft-xml` trees; packages stay with each format.
+- [`craft-ease`](crates/ease/README.md): easing curves, keyed tracks, constant-speed motion paths
+  and damped springs for animation: named eases, CSS `cubic-bezier()`, speed and influence,
+  editable custom and sampled curves, hold keys and a spring stepped by its exact solution.
+  From AniCraft and EffectCraft. No dependencies without the optional `serde` feature.
 - [`craft-elf`](crates/elf/src/lib.rs): ELF program headers and dynamic section entries from untrusted bytes, from Craft Anything: 32- or 64-bit in either byte order, bounded counts and overflow-checked offsets, virtual-address-to-file mapping through `PT_LOAD`, and segment, permission and dynamic tag names.
 - [`craft-eps`](crates/eps/README.md): Encapsulated PostScript files as a container: the binary
   preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
@@ -182,6 +189,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   and filters over the Google Fonts index, installed fonts by family, the font store interface,
   and (`ui` feature) `FontsPanel`, the whole interface as one panel for the launcher's Fonts tab
   and the standalone app.
+- [`craft-font-os-windows`](crates/font-os-windows/src/lib.rs): the Win32 calls `craft-font-store`
+  needs on Windows to make a font available to every app of the user (the per-user font
+  registry, `AddFontResourceW`, `WM_FONTCHANGE`), behind a safe API.
 - [`craft-font-store`](crates/font-store/README.md): the suite's font store: the pinned Google
   Fonts and Noto indexes plus indexes the user adds (never curated), exact lookup by family and
   style or PostScript name, and installs from each source's URLs (jsDelivr, then raw GitHub)
@@ -201,6 +211,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
+- [`craft-gpu-device`](crates/gpu-device/README.md): choosing and opening a wgpu device: Auto,
+  low power, a named adapter that survives a reordered list and a driver update, or software;
+  corrections for drivers that crash; the next adapter and then a software one when a device fails
+  to open; a capability report; device-loss and error recording without panics; and what to reopen
+  after a loss. Settings pages and the window stay in each app.
 - [`craft-gridcraft-format`](crates/gridcraft-format/README.md): GridCraft's native JSON workbook
   (`.json`, `.scjson`): the extensions, the reader, the pretty writer, and newer entries kept
   unread and written back into a list. The workbook model and what follows a read stay in GridCraft.
@@ -216,6 +231,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-i18n-build`](crates/i18n-build/README.md): embeds the optional craft-i18n catalogs
+  from an app's `build.rs` (`CRAFT_I18N_DIR`, `CRAFT_I18N_REQUIRED`) as the table `craft-i18n`
+  reads, with each regional locale's parent and the app's own catalogs merged in. No
+  dependencies.
 - [`craft-raw`](crates/raw/README.md): camera raw files, the file-format layer, from LightCraft with
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
@@ -288,7 +307,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
-  (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
+  (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`), Bink (`bink`) and
   MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, a Sierra VMD (`vmd`) demuxer, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
 - [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON: the document model of
@@ -363,8 +382,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   with a password. Salvages damaged files. Bounded and panic-free on hostile input. What an item
   means stays in each app.
 
-- [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
-  app menu. Unsaved-document decisions and save prompts stay in each app.
+- [`craft-quit`](crates/quit/README.md): native macOS quit, a window close held for unsaved
+  documents, the Quit menu item id and the unsaved-changes question one document at a time
+  (`CloseGuard`). The prompt and the saving stay in each app.
 - [`craft-rtf`](crates/rtf/README.md): Rich Text Format: a tokenizer, text decoding in the file's code pages
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer
   for a small neutral model (paragraphs, character formatting, outline levels, tables).
@@ -374,6 +394,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   revisions panel, presence, voting, cursor chat and join over the app's own transport (`ui`
   feature).
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations, plus remembered dialog options and preset folders (also on wasm32). Policy in [docs/settings-storage.md](docs/settings-storage.md).
+- [`craft-shared-vec`](crates/shared-vec/README.md): an ordered, indexed list whose clones share storage, for document trees kept in an undo history: an edit copies the blocks on its path instead of the whole list, and `bytes_not_in` counts what keeping two versions costs. Reads and writes as a plain sequence with `serde`.
 - [`craft-sheet`](crates/sheet/README.md): spreadsheet vocabulary shared by `craft-xls`, `craft-xlsx` and `craft-ods`: cell positions and A1 text, cell values and error values, sheet-name quoting, Excel's built-in number formats and indexed colour palette. Not a file format; no dependencies.
 - [`craft-sf2`](crates/sf2/README.md): SoundFont 2 (`.sf2`) reader: the sample pool and, per preset, the key and velocity regions a note sounds, with tuning, loop points, pan, level and volume envelope resolved from the preset and instrument zones. Bounded on hostile input. From LoopCraft.
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
@@ -399,8 +420,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   out of range, and `std::time::Instant` in code the web build runs. Its `deadline` module fails a test
   whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
   replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
-  copies of a valid input, and fails the test with the case that panicked or did not finish. Not
-  published.
+  copies of a valid input, and fails the test with the case that panicked or did not finish. Its `rng`
+  module holds two seeded generators for repeatable test input. Its `skip` module prints a `SKIPPED:`
+  line when a test lacks a program, a corpus or the craft-fonts faces, or fails the test when the
+  variable the caller names is `1`. Any other value of that variable except empty fails the test as a
+  configuration error. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each). With `ui`, the canvas text editor, Character and
@@ -476,7 +500,7 @@ architecture: [docs/craft-framework.md](docs/craft-framework.md).
 - [`craft-theme`](crates/theme/README.md) and [`craft-theme-store`](crates/theme-store/README.md): the token model,
   the built-in themes and the suite's theme selection ([docs/suite-themes.md](docs/suite-themes.md)).
 - [`craft-host`](crates/host/README.md): the services an app installs once and every feature reads.
-- `craft-win32`: the Win32 calls that need `unsafe`, behind a safe API; the one crate that allows `unsafe`.
+- `craft-win32`: the window-procedure and window-handle Win32 calls that need `unsafe`, behind a safe API.
 - Tools, not shipped in apps: `craft-ui-gallery` (the story viewer), `story-render` (one component's stories to
   PNG files), [`craft-design-lint`](crates/design-lint/README.md), `craft-ui-bench`, `craft-ui-test-kit`.
 

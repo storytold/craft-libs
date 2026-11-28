@@ -18,7 +18,7 @@ pub(crate) struct IdPass {
 /// Runs `f` as a measuring run that leaves the `Auto` ordinals as it found them, so the run that follows in the same
 /// pass gives every component the id the measuring run gave it.
 pub(in crate::contract) fn measuring<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
-    keeping_ids(ctx, || (crate::runtime::measure::run(ctx, f), true))
+    keeping_ids(ctx, || (crate::runtime::measure::measuring(ctx, f), true))
 }
 
 /// Runs the measuring run `run` as a draft (`layout_memory::draft`) whose `Auto` ordinals go with it: taken back, it leaves

@@ -61,6 +61,23 @@ fn keys_in_the_open_list_move_the_value_and_escape_puts_it_back() {
     assert_eq!(value(&mut fixture), 1, "and puts back the value from before the list opened");
 }
 
+/// The list that Escape closed is closed for its field's keys while it still fades out: the Enter that follows at once
+/// is the field's own and opens the list again, rather than choosing a row of the list that is leaving.
+#[trial]
+fn enter_on_the_field_right_after_escape_opens_the_list_again_during_its_exit_fade() {
+    let mut fixture = focused();
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Alt+Down opens the list");
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(value(&mut fixture), 1, "Escape puts back the value from before the list opened");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Enter on the focused field opens the list again before the old one has faded out");
+    assert_eq!(value(&mut fixture), 1, "and picks no row of the list that was leaving");
+}
+
 #[trial]
 fn typing_on_the_closed_select_opens_the_list_on_the_first_match() {
     let mut fixture = focused();
@@ -68,6 +85,26 @@ fn typing_on_the_closed_select_opens_the_list_on_the_first_match() {
     fixture.settle();
     assert!(list_open(&mut fixture), "a typed letter opens the list");
     assert_eq!(value(&mut fixture), 2, "on the first entry it begins, after the held one");
+}
+
+#[trial]
+fn typing_on_the_closed_select_skips_disabled_matches_when_wrapping() {
+    let story = Story::new("select_with_disabled_entries", |ui, data| {
+        let entries = [Entry::new(2u8, "Beta"), Entry::new(1u8, "Current"), Entry::new(3u8, "Blocked").enabled(false)];
+        Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
+    });
+    let mut fixture = Fixture::story(&story);
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+    fixture.type_text("bl");
+    fixture.settle();
+    assert!(!list_open(&mut fixture), "a disabled-only match leaves the list closed");
+    assert_eq!(value(&mut fixture), 1, "and keeps the held value");
+    fixture.type_text("b");
+    fixture.settle();
+    assert!(list_open(&mut fixture), "a disabled match does not stop the search");
+    assert_eq!(value(&mut fixture), 2, "the search wraps to the enabled match");
 }
 
 #[trial]

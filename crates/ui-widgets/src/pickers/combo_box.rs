@@ -98,14 +98,27 @@ pub struct ComboBox<'a> {
     empty: String,
     /// What this pass did to the preview, reported in [`ComboBoxOutput::preview`].
     preview: Preview<String>,
+    /// Whether the combo box sizes to its options alone, as in a toolbar or ribbon.
+    #[style_key]
+    #[prop]
+    compact: bool,
 }
 
 impl<'a> ComboBox<'a> {
     /// A combo box named `label` over the text `value`, offering `options`; an option's value is the text it puts in
     /// the field.
     pub fn new(label: impl Into<Label>, value: Bind<'a, String>, options: &'a [Entry<String>]) -> Self {
-        ComboBox { common: Common::new(), value, options, placeholder: None, decorate: None, empty: String::new(), preview: Preview::Unchanged }
-            .label(label)
+        ComboBox {
+            common: Common::new(),
+            value,
+            options,
+            placeholder: None,
+            decorate: None,
+            empty: String::new(),
+            preview: Preview::Unchanged,
+            compact: false,
+        }
+        .label(label)
     }
 
     /// Previews `text`, led by the pointer or by the keys. The pass reports it only when the previewed text changes,
@@ -163,10 +176,13 @@ impl Component for ComboBox<'_> {
     type Style = crate::text::FieldStyle;
     type Output = ComboBoxOutput;
 
-    /// A field; in a ribbon (`ControlPlace::Ribbon`) sized by its options alone, as a ribbon's font size box is.
-    fn style(cx: &crate::style::StyleCx<'_>, _: ComboBoxStyleKey) -> crate::text::FieldStyle {
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) or toolbar (`InBar`), or when `compact` is set,
+    /// sized by its options alone, as a ribbon's font size box is.
+    fn style(cx: &crate::style::StyleCx<'_>, key: ComboBoxStyleKey) -> crate::text::FieldStyle {
         let field = crate::text::FieldStyle::at(cx);
-        if cx.env::<crate::buttons::ControlPlace>() == crate::buttons::ControlPlace::Ribbon { field.sized_by_content() } else { field }
+        let in_bar = cx.env::<crate::contract::InBar>().0;
+        let ribbon = cx.env::<crate::buttons::ControlPlace>() == crate::buttons::ControlPlace::Ribbon;
+        if key.compact || ribbon || in_bar { field.sized_by_content() } else { field }
     }
 
     /// The wheel steps the text through the options.
@@ -236,20 +252,20 @@ impl Component for ComboBox<'_> {
         }
         // A list closed by any path (a pick, Escape, a click outside, the draft ending) ends its preview.
         self.end_preview(cx);
-        let text = cx.value().cloned().unwrap_or_default();
         while let Some((step, mods)) = cx.intents().take_move() {
             let forward = match step {
                 NavMove::Down if !mods.fine => true,
                 NavMove::Up if !mods.fine => false,
                 _ => continue,
             };
-            if let Some(value) = self.neighbour(&text, forward).and_then(|at| self.options[at].value()) {
+            let text = cx.value().map_or("", String::as_str);
+            if let Some(value) = self.neighbour(text, forward).and_then(|at| self.options[at].value()) {
                 cx.set(value.clone());
             }
         }
         if let Some(wheel) = cx.take_wheel()
             && wheel.scroll.y != 0.0
-            && let Some(value) = self.neighbour(&text, wheel.scroll.y < 0.0).and_then(|at| self.options[at].value())
+            && let Some(value) = self.neighbour(cx.value().map_or("", String::as_str), wheel.scroll.y < 0.0).and_then(|at| self.options[at].value())
         {
             cx.set(value.clone());
         }

@@ -21,6 +21,8 @@ suite = ["screen-testing", "craft-ui/suite"]
 # Opt-in migration of first party Flatpak bundles to the ArtCraft OCI remote.
 oci_migration = []
 default = []
+# Developer builds only: downloads from a mirror on loopback, and plain HTTP from remote hosts. No other feature turns it on.
+local-mirror = []
 ui = ["dep:egui", "dep:image", "dep:craft-ui", "dep:craft-host", "dep:craft-theme"]
 # The dialog stories, the updater's test seams and the integration binary `tests/it`.
 screen-testing = ["ui", "craft-ui/testing"]
@@ -39,6 +41,9 @@ serde_json = { workspace = true }
 log = "0.4"
 tempfile = "3"
 sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast", "pem"] }
+toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "std"] }
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
 chrono = { workspace = true }
 semver = { version = "1", features = ["serde"] }

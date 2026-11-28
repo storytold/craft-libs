@@ -65,7 +65,7 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119
 
 Shared Rust libraries for the Craft Apps: a Cargo workspace (edition 2024, resolver 3) of crates under `crates/<name>`. See `README.md` for layout and released versions.
 
-- **New crates** go in `crates/<name>`, named `craft-<name>`, inherit the workspace package fields and lints, and are listed in `[workspace.dependencies]`. A new crate's `Cargo.toml` includes `[lints] workspace = true`.
+- **New crates** go in `crates/<name>`, named `craft-<name>`, inherit the workspace package fields and lints, and are listed in `[workspace.dependencies]`. A new crate's `Cargo.toml` includes `[lints] workspace = true` (`crates/font-os-windows` is the one exception; see `unsafe` below).
 - **No app code.** A crate here is useful to more than one app and does not depend on any app.
-- **`unsafe`:** the workspace sets `unsafe_code = "forbid"`, and no crate in `crates/` allows it, so no module here may use `unsafe`. The one exception is vendored upstream code in `vendor/hayro-syntax`.
+- **`unsafe`:** the workspace sets `unsafe_code = "forbid"`, so no module here may use `unsafe`, with two exceptions: vendored upstream code in `vendor/hayro-syntax`, and `crates/font-os-windows`, because loading a font into the running Windows session needs `AddFontResourceW`, which the Windows crates offer only as an unsafe call. That crate copies the workspace lints with `unsafe_code = "deny"` instead of `[lints] workspace = true`, and allows `unsafe` only on the functions that make Win32 calls.
 - **Checks for the crates you changed:** `cargo fmt --check`, `cargo clippy -p <crate> --all-targets -- -D warnings`, `cargo test -p <crate>`.

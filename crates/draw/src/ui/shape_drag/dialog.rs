@@ -26,6 +26,7 @@ use serde_json::{Value, json};
 use super::ShapeKind;
 use super::words::CreateShapeWords;
 use crate::geometry::shape::{SIDES, ShapeGeometry};
+use crate::ui::shape::RADIUS_RANGE;
 
 /// The farthest the click may lie from the origin on either axis, in pixels: the same bound as
 /// a side (PhotoCraft's `MAX_PX`, `shape_dialog.rs:19`, checked at `:111`).
@@ -52,7 +53,7 @@ pub struct CreateShapeOptions {
     /// Width and height in document pixels (100 × 100 by default).
     pub size: (f64, f64),
     /// A rectangle's radii, top-left, top-right, bottom-right, bottom-left (from the tool's corner
-    /// radius).
+    /// radius). A triangle's one corner radius is all four.
     pub radii: [f64; 4],
     /// "Link radii": one radius for all four corners; on by default.
     pub link_radii: bool,
@@ -102,7 +103,7 @@ impl CreateShapeOptions {
         self
     }
 
-    /// The tool's corner radius (all four corners), sides and star ratio.
+    /// The tool's corner radius (all four corners; a triangle's three), sides and star ratio.
     #[must_use]
     pub fn tool(mut self, corner_radius: f64, sides: u32, star_ratio: f64) -> Self {
         self.radii = [corner_radius; 4];
@@ -149,8 +150,9 @@ struct Memory {
 ///   picked for a field is not remembered, storytold/photocraft#7786). Rectangle and Rounded
 ///   Rectangle: four radii Top Left, Top Right, Bottom Left, Bottom Right in two columns under one
 ///   "Radius" label, with the "Link radii" toggle between the columns (`LinkMode::Equal`, on by
-///   default). Polygon and Star: Sides (3–100) and Star Ratio (1–100 %, default 100); the Polygon drag
-///   keeps ratio 1. Then "From Center".
+///   default). Triangle: one "Radius" for its three corners (0 to 150,000 px, from the Triangle tool's own radius;
+///   storytold/photocraft#13355). Polygon and Star: Sides (3–100) and Star Ratio (1–100 %, default 100); the Polygon
+///   drag keeps ratio 1. Then "From Center".
 /// - A width or height typed past [`CreateShapeOptions::SIZE`] keeps the nearest end and raises the range alert,
 ///   which the app opens from [`take_range_alert`](Self::take_range_alert) (#13358). A size set out of range
 ///   through automation shows [`CreateShapeWords::bad_size`] under the fields and disables OK; so does a click
@@ -214,7 +216,11 @@ fn answer(o: &CreateShapeOptions, words: &CreateShapeWords, units: &Units) -> Re
             ShapeGeometry::Rect { rect, radii }
         }
         ShapeKind::Ellipse => ShapeGeometry::Ellipse { rect },
-        ShapeKind::Triangle => ShapeGeometry::Triangle { rect },
+        ShapeKind::Triangle => {
+            let radius = o.radii[0];
+            let corner_radius = if radius.is_finite() { radius.clamp(*RADIUS_RANGE.start(), *RADIUS_RANGE.end()) } else { 0.0 };
+            ShapeGeometry::Triangle { rect, corner_radius }
+        }
         ShapeKind::Polygon | ShapeKind::Star => {
             let ratio = if o.star_ratio.is_finite() { o.star_ratio.clamp(0.01, 1.0) } else { 1.0 };
             ShapeGeometry::Polygon { rect, sides, star_ratio: ratio }
@@ -441,6 +447,20 @@ fn body(
                 }
             });
         }
+        if kind == ShapeKind::Triangle {
+            Field::new(Label::from(words.radius.as_str().to_owned())).show(ui, |ui, _| {
+                let radius = values.radii[0];
+                let field = NumberField::new(words.radius.as_str().to_owned(), Bind::given(Some(radius)))
+                    .range(RADIUS_RANGE)
+                    .unit(numbers.symbol(UnitKind::Pixels))
+                    .commit_decimals(2);
+                if let Some(value) = field.show(ui).value().copied().flatten()
+                    && value != radius
+                {
+                    values.radii = [value.clamp(*RADIUS_RANGE.start(), *RADIUS_RANGE.end()); 4];
+                }
+            });
+        }
         if matches!(kind, ShapeKind::Polygon | ShapeKind::Star) {
             Field::new(Label::from(words.sides.as_str().to_owned())).show(ui, |ui, _| {
                 let field = NumberField::new(words.sides.as_str().to_owned(), Bind::given(Some(f64::from(values.sides))))
@@ -487,7 +507,7 @@ impl StackDialog for CreateShapeDialog {
     type Result = CreatedShape;
 
     /// `width` and `height` in the unit their field shows, `widthUnit` and `heightUnit`, `radii` (top-left,
-    /// top-right, bottom-right, bottom-left, in pixels), `linkRadii`, `sides`, `starRatio` (in percent, as its
+    /// top-right, bottom-right, bottom-left, in pixels), `linkRadii`, a triangle's `cornerRadius` (pixels), `sides`, `starRatio` (in percent, as its
     /// field shows it) and `fromCenter`.
     fn json_fields(&self) -> Option<Value> {
         let o = &self.options;
@@ -499,15 +519,16 @@ impl StackDialog for CreateShapeDialog {
             "heightUnit": self.units[1],
             "radii": o.radii,
             "linkRadii": o.link_radii,
+            "cornerRadius": o.radii[0],
             "sides": o.sides,
             "starRatio": (o.star_ratio * 100.0).clamp(1.0, 100.0),
             "fromCenter": o.from_center,
         }))
     }
 
-    /// Sets a field as its row does, from the remembered values on. The radius rows answer only for a rectangle, and
-    /// Sides and Star Ratio only for a polygon or star; elsewhere they refuse as inactive. Linked radii take four
-    /// equal values.
+    /// Sets a field as its row does, from the remembered values on. The radius rows answer only for a rectangle,
+    /// `cornerRadius` only for a triangle, and Sides and Star Ratio only for a polygon or star; elsewhere they refuse
+    /// as inactive. Linked radii take four equal values.
     fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
         self.recall(ctx);
         let rejects = || FieldRefusal::Rejects(&value).message(field);
@@ -516,6 +537,7 @@ impl StackDialog for CreateShapeDialog {
         let polygon = matches!(kind, ShapeKind::Polygon | ShapeKind::Star);
         let shown = match field {
             "radii" | "linkRadii" => rect,
+            "cornerRadius" => kind == ShapeKind::Triangle,
             "sides" | "starRatio" => polygon,
             _ => true,
         };
@@ -545,6 +567,10 @@ impl StackDialog for CreateShapeDialog {
                 o.radii = radii.map(|radius| radius.clamp(0.0, MAX_RADIUS));
             }
             "linkRadii" => o.link_radii = value.as_bool().ok_or_else(rejects)?,
+            "cornerRadius" => {
+                let radius = value.as_f64().filter(|radius| radius.is_finite()).ok_or_else(rejects)?;
+                o.radii = [radius.clamp(*RADIUS_RANGE.start(), *RADIUS_RANGE.end()); 4];
+            }
             "sides" => {
                 let sides = value.as_f64().ok_or_else(rejects)?;
                 o.sides = sides.round().clamp(f64::from(*SIDES.start()), f64::from(*SIDES.end())) as u32;

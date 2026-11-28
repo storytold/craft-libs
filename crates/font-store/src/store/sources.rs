@@ -100,6 +100,37 @@ impl FontStore {
         self.change_settings(|s| s.previews = enabled)
     }
 
+    /// Whether the user keeps store fonts in Craft apps only by default. Off by default: the font
+    /// manager then copies each family it installs into the OS user font folder
+    /// ([`FontStore::make_available`]), so other apps can use it, unless the user chose otherwise
+    /// for that family ([`crate::InstalledFamily::available_to_all`]).
+    pub fn craft_apps_only(&self) -> bool {
+        self.settings().craft_apps_only
+    }
+
+    /// Sets [`FontStore::craft_apps_only`], from the user's own action. It only records the choice;
+    /// installed families keep theirs. [`Error::NotAllowed`] for an agent.
+    pub fn set_craft_apps_only(&self, on: bool) -> Result<(), Error> {
+        if self.caller != Caller::User {
+            return Err(Error::NotAllowed);
+        }
+        self.change_settings(|s| s.craft_apps_only = on)
+    }
+
+    /// Records the user's choice for the installed family ([`crate::InstalledFamily::available_to_all`]).
+    /// It only records it: the caller copies or withdraws the family. [`Error::NotAllowed`] for an
+    /// agent, [`Error::NotInstalled`] for a family that isn't installed.
+    pub fn set_available_to_all_choice(&self, source: &str, name: &str, on: bool) -> Result<(), Error> {
+        if self.caller != Caller::User {
+            return Err(Error::NotAllowed);
+        }
+        let _lock = self.lock()?;
+        let mut manifest = self.read_manifest();
+        let entry = manifest.families.iter_mut().find(|f| f.is(source, name)).ok_or_else(|| Error::NotInstalled(name.to_string()))?;
+        entry.available_to_all = Some(on);
+        self.write_manifest(&manifest)
+    }
+
     fn change_settings(&self, change: impl FnOnce(&mut Settings)) -> Result<(), Error> {
         let _lock = self.lock()?;
         let mut settings = self.settings();

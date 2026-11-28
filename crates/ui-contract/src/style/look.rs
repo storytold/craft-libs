@@ -39,6 +39,26 @@ impl DataColor {
     }
 }
 
+impl From<Color32> for DataColor {
+    fn from(color: Color32) -> Self {
+        DataColor(color)
+    }
+}
+
+/// How a text field looks where it sits: one value picks its fill, its edge and its placeholder together, so they
+/// cannot come apart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FieldLook {
+    /// The field's own fill and edge, and the faint placeholder.
+    #[default]
+    Normal,
+    /// A field in a bar (a title bar's search box): [`StyleCx::quiet_field`](crate::style::StyleCx::quiet_field)'s
+    /// fill and edge, and the muted placeholder, which reads on the window background (`surface.background`) where
+    /// the faint one does not.
+    Quiet,
+}
+
 /// The surface a container or part sits on, which picks fill, edge, shadow and ink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]

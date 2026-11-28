@@ -458,7 +458,7 @@ impl Component for MarginHandles<'_> {
         let (grab, strip) = (cx.style.grab, cx.style.strip);
         let words = cx.words::<MarginHandlesWords>();
         for &visible in self.edges_shown() {
-            divider::declare(cx, rect, EDGE, visible.index(), &self.divider(&rules, visible, rect, (grab, strip)))
+            divider::declare_focusing(cx, rect, EDGE, visible.index(), &self.divider(&rules, visible, rect, (grab, strip)))
                 .tooltip(visible.name(&words).clone());
         }
     }

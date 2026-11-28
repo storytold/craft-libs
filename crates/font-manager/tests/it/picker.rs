@@ -9,8 +9,8 @@ use craft_behavior::{GESTURE_GAP, PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FamilyInfos, FamilySet, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontPreviewSize, FontScript,
-    HostFontGroup, HostFontRow, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FamilySet, FilterLayout, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontPreviewSize,
+    FontScript, HostFontGroup, HostFontRow, MissingAdvice, SIMILAR_COUNT, SampleText, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
 use craft_theme::{Contrast, Mode};
@@ -575,6 +575,9 @@ fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after
     fx.settle();
 
     let field = fx.by_label("Font family").expect("the family field");
+    // Unfocus after Escape so the click below is a focusing click that selects all text in Plain mode.
+    fx.click_at(field.rect.right_center() + egui::vec2(20.0, 0.0));
+    fx.settle();
     fx.click(&field);
     fx.settle();
     fx.type_text("x");
@@ -590,6 +593,76 @@ fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after
     fx.settle();
     assert_eq!(seen.borrow().family, "Zapfino", "a name that is no family is applied as typed");
     assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some("Zapfino"));
+}
+
+#[trial]
+fn clicking_the_font_field_selects_all_without_opening_dropdown_and_chevron_toggles() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, _seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let words = FontPickerWords::default();
+    let (recently, all) = (words.recently_used.as_str(), words.all_fonts.as_str());
+
+    // 1. Clicking the text field focuses and selects all text without opening the dropdown popup
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    assert!(!present(&fx, recently), "recently used fonts do not open on field click");
+    assert!(!present(&fx, all), "all fonts do not open on field click");
+
+    // 2. Typing in the field opens the dropdown filtered on matches
+    fx.type_text("Ha");
+    fx.settle();
+    assert!(present(&fx, "Hack"), "typing in the field opens the dropdown with matches");
+
+    // Pressing Enter commits the typed family and closes the dropdown
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    fx.frame(vec![]);
+    fx.settle();
+    assert!(!present(&fx, all), "committing typed query closes the dropdown");
+
+    // 3. Clicking the dropdown arrow (chevron) toggles the dropdown list open
+    let chevron = fx.by_label(words.list.as_str()).expect("the chevron button");
+    fx.click(&chevron);
+    fx.settle();
+    assert!(present(&fx, recently), "recently used fonts show up on chevron click");
+    assert!(present(&fx, all), "all fonts show up on chevron click");
+
+    // 4. Clicking inside the field while already open keeps dropdown open
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    assert!(present(&fx, all), "dropdown remains open on click inside field");
+
+    // 5. Clicking the chevron button again toggles the dropdown closed
+    let chevron = fx.by_label(words.list.as_str()).expect("the chevron button");
+    fx.click(&chevron);
+    fx.settle();
+    fx.frame(vec![]);
+    fx.settle();
+    assert!(!present(&fx, all), "dropdown closes on chevron click toggle");
+}
+
+#[trial]
+fn clicking_the_focused_plain_box_places_caret_instead_of_selecting_all() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, _seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let field = fx.by_label("Font family").expect("the family field");
+
+    // 1. The first click gives the field focus and selects all text
+    fx.click(&field);
+    fx.settle();
+
+    // 2. Clicking again after double-click interval places the caret before the "I" without re-selecting all
+    fx.advance(1.0);
+    fx.click_at(field.rect.left_center() + egui::vec2(6.0, 0.0));
+    fx.settle();
+
+    // 3. Typing "Ha" inserts before "Inter" producing "HaInter" rather than replacing the text with "Ha"
+    fx.type_text("Ha");
+    fx.settle();
+    assert!(present(&fx, "HaInter"), "typing inserts at placed caret before the existing family name");
+    assert!(!present(&fx, "Hack"), "Hack is not suggested because draft is HaInter, not Ha");
 }
 
 #[trial]
@@ -654,6 +727,48 @@ fn a_ribbons_font_box_is_short_and_keeps_its_width() {
     assert!((ribbon - length).abs() < 0.5, "the ribbon's font box is the small field length {length}: {ribbon}");
     let long = picker_width("Source Sans Pro Semibold Condensed Extra", true);
     assert!((long - ribbon).abs() < 0.5, "a long family name leaves its width: {long} against {ribbon}");
+}
+
+/// In a toolbar (`InBar`) or when `compact` is set, the font box is held at the small field length,
+/// narrower than in a form, and keeps its width whichever family it shows.
+#[trial]
+fn a_bars_font_box_is_short_and_keeps_its_width() {
+    let bar_width = |family: &'static str, in_bar: bool, compact: bool| {
+        let catalog = catalog_of(&[INTER_REGULAR]);
+        let mut fx = Fixture::new(move |ui| {
+            let mut family = family.to_owned();
+            let mut show = |ui: &mut egui::Ui| {
+                let mut picker = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain);
+                if compact {
+                    picker = picker.compact(true);
+                }
+                let _ = picker.show(ui);
+            };
+            if in_bar {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(craft_ui::contract::InBar(true));
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fx.in_room(Room::Window);
+        fx.settle();
+        fx.by_label("Font family").expect("the picker").rect.width()
+    };
+    let standard = bar_width("Inter", false, false);
+    let bar = bar_width("Inter", true, false);
+    let opt_in = bar_width("Inter", false, true);
+    assert!(bar < standard - 0.5, "the bar's font box is narrower: {bar} against {standard}");
+    assert!((bar - opt_in).abs() < 0.5, "the opt-in compact picker matches the bar picker: {opt_in} against {bar}");
+    let length = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.field.sm;
+    assert!((bar - length).abs() < 0.5, "the bar's font box is the small field length {length}: {bar}");
+    let long = bar_width("Source Sans Pro Semibold Condensed Extra", true, false);
+    assert!((long - bar).abs() < 0.5, "a long family name leaves its width in a bar: {long} against {bar}");
 }
 
 /// The width of a plain picker over "Inter" in a ribbon group's place, in a row beside a block that leaves it 60 pt of
@@ -937,6 +1052,66 @@ fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
         fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
         "the banner of a face without the text's letters shows what its row shows, not the text"
     );
+}
+
+/// The sample texts the host offers in the chips rigs: the selection's text first, then a fixed word.
+const SAMPLE_TEXTS: [(&str, &str, &str); 2] = [("selection", "Selected Text", "Hello"), ("word", "Word", "Abc")];
+
+/// An open library list in the `Chips` layout over Inter, keeping `settings`, with the host's sample texts when
+/// `offered` and "Hello" as the preview text.
+fn sample_texts_rig(settings: Rc<RefCell<FontPickerSettings>>, offered: bool) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let mut family = "Inter".to_owned();
+    let mut filters = FontFilters::default();
+    let mut fx = Fixture::new(move |ui| {
+        let texts: Vec<SampleText<'_>> =
+            if offered { SAMPLE_TEXTS.iter().map(|(key, label, text)| SampleText::new(key, *label, text)).collect() } else { Vec::new() };
+        let mut settings = settings.borrow_mut();
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .filters(Bind::bound(&mut filters))
+            .filter_layout(FilterLayout::Chips)
+            .preview_text("Hello")
+            .sample_texts(&texts)
+            .show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// The host's sample texts make a Sample Text dropdown beside the preview size: the rows and the banner show the
+/// chosen text (the first while none is chosen), a choice from the dropdown is kept in the settings and every row
+/// follows it, and a stored choice the host no longer offers falls back to the first. Without sample texts there is
+/// no dropdown and the preview text shows.
+#[trial]
+fn the_sample_text_dropdown_picks_what_every_sample_shows() {
+    let settings = Rc::new(RefCell::new(FontPickerSettings::default()));
+    let mut fx = sample_texts_rig(Rc::clone(&settings), true);
+    assert!(fx.by_label("Inter: Hello").is_some(), "with no choice stored the rows show the first sample text");
+    let dropdown = fx.by_label("Sample Text").expect("the sample text dropdown");
+    fx.click(&dropdown);
+    fx.settle();
+    let word = fx.by_label("Word").expect("the dropdown lists the host's sample texts");
+    fx.click(&word);
+    fx.settle();
+    assert_eq!(settings.borrow().sample_text.as_deref(), Some("word"), "the choice is kept in the settings");
+    assert!(fx.by_label("Inter: Abc").is_some(), "the row follows the chosen sample text");
+    assert!(fx.by_label("Inter: Hello").is_none(), "no row keeps the earlier text");
+    assert!(fx.texts().iter().any(|painted| painted.text == "Abc"), "the banner shows the chosen text");
+
+    let stored = |key: &str| {
+        let mut settings = FontPickerSettings::default();
+        settings.sample_text = Some(key.to_owned());
+        Rc::new(RefCell::new(settings))
+    };
+    let fx = sample_texts_rig(stored("gone"), true);
+    assert!(fx.by_label("Inter: Hello").is_some(), "a choice the host no longer offers falls back to the first sample text");
+
+    let fx = sample_texts_rig(stored("word"), false);
+    assert!(fx.by_label("Sample Text").is_none(), "without the host's sample texts there is no dropdown");
+    assert!(fx.by_label("Inter: Hello").is_some(), "without sample texts the rows show the preview text");
 }
 
 /// The repository's Noto Sans CJK SC subset (CFF): its line (hhea 1160/-288) is taller than Inter's.

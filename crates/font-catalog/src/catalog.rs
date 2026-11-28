@@ -139,21 +139,43 @@ struct Index {
 
 impl Index {
     /// Added faces first: a document's or the app's own face wins over an installed face of the
-    /// same family and style.
+    /// same family and style. Among scanned duplicates the font store's face wins, so a store
+    /// font copied into the OS font folder stays the store's wherever the folders sort.
     fn build(added: &[Face], scanned: &[Face]) -> Self {
-        let mut faces: Vec<Face> = Vec::new();
-        let mut listed = HashMap::new();
-        let mut versions: HashMap<usize, Vec<FaceInfo>> = HashMap::new();
-        for f in added.iter().chain(scanned) {
+        let all: Vec<&Face> = added.iter().chain(scanned).collect();
+        // The positions in `all` of each face's versions, the listed one first.
+        let mut groups: HashMap<_, Vec<usize>> = HashMap::new();
+        for (i, f) in all.iter().enumerate() {
             let variations: Vec<(u32, u32)> = f.info.variations.iter().map(|(t, v)| (u32::from_be_bytes(*t), v.to_bits())).collect();
             let key = (f.info.family.to_ascii_lowercase(), norm(&f.info.style), f.keys.postscript.first().cloned(), variations);
-            match listed.entry(key) {
-                Entry::Occupied(e) => versions.entry(*e.get()).or_default().push(f.info.clone()),
+            match groups.entry(key) {
                 Entry::Vacant(e) => {
-                    e.insert(faces.len());
-                    faces.push(f.clone());
+                    e.insert(vec![i]);
+                }
+                Entry::Occupied(mut e) => {
+                    let group = e.get_mut();
+                    let store_first =
+                        group.first().is_some_and(|held| *held >= added.len() && all.get(*held).is_some_and(|h| h.info.source != Source::Store));
+                    if store_first && f.info.source == Source::Store {
+                        group.insert(0, i);
+                    } else {
+                        group.push(i);
+                    }
                 }
             }
+        }
+        let mut groups: Vec<Vec<usize>> = groups.into_values().collect();
+        groups.sort_unstable();
+        let mut faces: Vec<Face> = Vec::new();
+        let mut versions: HashMap<usize, Vec<FaceInfo>> = HashMap::new();
+        for group in &groups {
+            let mut group = group.iter().filter_map(|i| all.get(*i));
+            let Some(listed) = group.next() else { continue };
+            let others: Vec<FaceInfo> = group.map(|f| f.info.clone()).collect();
+            if !others.is_empty() {
+                versions.insert(faces.len(), others);
+            }
+            faces.push((*listed).clone());
         }
         let mut by_family: HashMap<String, Vec<usize>> = HashMap::new();
         let mut aliases: HashMap<String, Vec<Alias>> = HashMap::new();
@@ -469,6 +491,12 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// The faces of the font file at `path` as a scan reads them, named instances included, with
+/// `source` as their source. Empty when it isn't a font.
+pub fn read_faces(path: &Path, source: Source) -> Vec<FaceInfo> {
+    scan::file_faces(path, MAX_SCAN_READ, source).into_iter().map(|f| f.info).collect()
+}
+
 impl Catalog {
     /// A catalog of the fonts installed on the system `env` describes, the font store, and the
     /// files the platform's font service lists (with the `system` feature).
@@ -546,6 +574,11 @@ impl Catalog {
         self.config.read().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether scans ask the platform's font service ([`Catalog::with_font_service`]).
+    pub(crate) fn uses_font_service(&self) -> bool {
+        self.read_config().font_service
+    }
+
     /// The environment the catalog was made for.
     pub fn env(&self) -> &FontEnv {
         &self.env
@@ -555,12 +588,20 @@ impl Catalog {
     /// it. Does nothing once it has started or run, or when no thread can be started (the first
     /// lookup then scans).
     pub fn scan_in_background(self: &Arc<Self>) {
-        if self.ready.get().is_none() && !self.scanning.swap(true, Ordering::AcqRel) {
-            let me = Arc::clone(self);
-            if std::thread::Builder::new().name("font-catalog-scan".into()).spawn(move || me.background_scan()).is_err() {
-                self.scanning.store(false, Ordering::Release);
-            }
+        drop(self.start_background_scan());
+    }
+
+    /// [`Catalog::scan_in_background`], returning the thread it started, if it started one.
+    pub(crate) fn start_background_scan(self: &Arc<Self>) -> Option<std::thread::JoinHandle<()>> {
+        if self.ready.get().is_some() || self.scanning.swap(true, Ordering::AcqRel) {
+            return None;
         }
+        let me = Arc::clone(self);
+        let thread = std::thread::Builder::new().name("font-catalog-scan".into()).spawn(move || me.background_scan());
+        if thread.is_err() {
+            self.scanning.store(false, Ordering::Release);
+        }
+        thread.ok()
     }
 
     /// The background thread's scan. A scan that panics leaves the catalog unscanned and not
@@ -726,6 +767,14 @@ impl Catalog {
         lock(&self.loaded).clear();
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         history.record(generation, &old, &new);
+    }
+
+    /// Every face the last scan found, in path order, with the faces [`Catalog::faces`] drops as
+    /// duplicates of another of the same family, style and PostScript name. Faces added from
+    /// files or bytes aren't in it. For telling apart copies of one font in different places.
+    pub fn scanned_faces(&self) -> Vec<FaceInfo> {
+        self.ensure();
+        self.scanned().iter().map(|f| f.info.clone()).collect()
     }
 
     /// The family names, sorted ignoring case. Private system families are among them ([`is_private_family`]): a

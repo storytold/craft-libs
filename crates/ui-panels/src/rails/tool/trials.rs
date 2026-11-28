@@ -156,6 +156,32 @@ fn in_a_short_room_the_rows_scroll_above_the_footer_that_stays_in_view() {
     }
 }
 
+/// A rail too short for its rows shows its bar in the end padding beside the buttons while the pointer is away only
+/// with `bar_at_rest`.
+#[trial]
+fn a_short_rail_shows_its_bar_at_rest_only_with_bar_at_rest() {
+    let grid = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(Fixture::new(|_| {}).ctx()));
+    for at_rest in [false, true] {
+        let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
+        let mut fixture = Fixture::new(move |ui| {
+            let rail = ToolRail::new("Tools", &slots, &0, &last);
+            let rail = if at_rest { rail.bar_at_rest() } else { rail };
+            rail.show_rail(ui, |ui, _| {
+                Button::new("Foot").show(ui);
+            });
+        });
+        fixture.room(Vec2::new(grid.width(1), 100.0)).settle();
+        let (rail, first, foot) = (rect(&fixture, "Tools"), rect(&fixture, "Move"), rect(&fixture, "Foot"));
+        assert!(rect(&fixture, "Clone Stamp").bottom() > foot.top(), "at rest {at_rest}: the rows do not fit the room");
+        let band = Rect::from_x_y_ranges(first.right()..=rail.right(), rail.top()..=foot.top());
+        fixture.frame(vec![moved(rail.right_bottom() + Vec2::splat(200.0))]);
+        fixture.settle();
+        let shapes = fixture.frame_shapes();
+        let paints = shapes.iter().map(egui::Shape::visual_bounding_rect).any(|b| b.is_positive() && band.expand(0.5).contains_rect(b));
+        assert_eq!(paints, at_rest, "at rest {at_rest}: a bar shows in the end padding with the pointer away: {band:?}");
+    }
+}
+
 /// The tool rail's buttons are larger than a lone icon button's and rest in a quieter ink than they show under the
 /// pointer.
 #[trial]
@@ -475,4 +501,56 @@ fn idle_key_bytes(count: u8) -> usize {
 #[trial]
 fn a_tool_rails_idle_key_bytes_do_not_grow_with_its_slots() {
     assert_eq!(idle_key_bytes(10), idle_key_bytes(100), "the key follows revisions, not the slots, the hidden or the remembered tools");
+}
+
+/// A tool's own icon replaces its command's: the app's glyph paints the rail button that shows the tool and the tool's
+/// row in the flyout, and a tool without one keeps its command's icon.
+#[trial]
+fn a_tools_own_icon_paints_its_button_and_its_flyout_row() {
+    use crate::primitives::{Glyph, IconSpec};
+    use crate::style::UiTokens;
+
+    // An app's tool artwork: one ellipse across its rect, a shape nothing else on the rail paints, so the frame's
+    // shapes say where the glyph painted.
+    #[derive(crate::contract::MemoProps)]
+    struct Artwork;
+    impl Glyph for Artwork {
+        fn paint(&self, painter: &egui::Painter, _: &UiTokens, rect: Rect, color: egui::Color32, _: bool) {
+            painter.add(egui::Shape::ellipse_filled(rect.center(), rect.size() / 2.0, color));
+        }
+    }
+    // Where the glyph painted in the fixture's next frame. A frame that replays a memoized view repeats its shapes, so
+    // the shapes of one frame show every place the glyph is on screen.
+    let painted = |fixture: &mut Fixture| -> Vec<Rect> {
+        fixture
+            .frame_shapes()
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Ellipse(ellipse) => Some(Rect::from_center_size(ellipse.center, ellipse.radius * 2.0)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let mut group = tools(&[1, 2]);
+    group[0] = group[0].clone().icon(IconSpec::glyph(&Artwork));
+    let (slots, last) = (Tracked::new(vec![ToolSlot::new(0, group)]), Tracked::new(LastUsed::default()));
+    let mut fixture = Fixture::new(move |ui| {
+        ToolRail::new("Tools", &slots, &1, &last).show_rail(ui, |_, _| {});
+    });
+    fixture.room(Vec2::new(200.0, 400.0)).settle();
+    let button = rect(&fixture, "Brush");
+    let face = painted(&mut fixture);
+    assert!(!face.is_empty() && face.iter().all(|at| button.contains_rect(*at)), "the glyph paints the Brush button: {face:?} in {button:?}");
+
+    // With the flyout open the glyph paints the Brush row too, and the Pencil row keeps its command's icon.
+    fixture.frame(vec![secondary(button.center(), true), secondary(button.center(), false)]);
+    fixture.settle();
+    let pencil = rect(&fixture, "Pencil");
+    let shown = painted(&mut fixture);
+    assert!(
+        shown.iter().any(|at| !button.intersects(*at) && !pencil.contains(at.center())),
+        "the open flyout's Brush row paints the glyph too: {shown:?}, button {button:?}, Pencil row {pencil:?}"
+    );
+    assert!(shown.iter().all(|at| !pencil.contains_rect(*at)), "the Pencil row keeps its command's icon: {shown:?} in {pencil:?}");
 }

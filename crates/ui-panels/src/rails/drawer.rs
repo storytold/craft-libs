@@ -440,7 +440,9 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 if let Some(run) = run_of(&groups[group].slots, tool) {
                                     row = row.run(run);
                                 }
-                                if let Some(icon) = &command.icon {
+                                if let Some(icon) = &groups[group].tools[tool].icon {
+                                    row = row.icon(icon.clone());
+                                } else if let Some(icon) = &command.icon {
                                     row = row.icon(IconSpec::svg(IconId::from(icon.clone())));
                                 }
                                 if on_toolbar(toolbar, &groups[group].tools[tool].id, grouped_tools_drag) {

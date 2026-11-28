@@ -1,7 +1,7 @@
 //! The intents routed to a component and what it leaves untaken: Submit, Cancel, Escape and context requests.
 
 use super::route::push;
-use super::{Nudge, Source, Stage, current};
+use super::{Nudge, Source, Stage, current, with};
 use crate::runtime::focus::{self};
 use craft_behavior::focus::{EscapeFacts, EscapeStep, escape_step};
 use craft_behavior::{AccessRequest, CancelRule, EditCommand, EditorInput, Intent, MoveMods, NavMove, OwnerClass, PartRef};
@@ -440,6 +440,28 @@ pub(crate) fn lent_taken(ctx: &Context) -> u64 {
 /// Takes the window's untaken `Cancel` (Escape) while nothing has focus.
 pub(crate) fn take_window_cancel(ctx: &Context) -> bool {
     with_canvas_window_intents(ctx, false, |window| window.take(Intent::Cancel))
+}
+
+/// The end hook's hand-on: an Escape that nothing in the running window took, not even a reader of its intents, is the
+/// Cancel of the window it was opened from, where its spec says so (`WindowSpec::hands_on_cancel`). That window reads it
+/// in its next pass, which is requested. A popup or a modal open in the running window keeps the Escapes it leaves.
+pub(crate) fn hand_on_cancel(ctx: &Context) {
+    let Some(opener) = crate::runtime::windows::cancel_to(ctx) else { return };
+    if crate::runtime::overlay::popup_or_modal_open(ctx) {
+        return;
+    }
+    let mut left = 0;
+    with_window_intents(ctx, false, |window| {
+        while window.take(Intent::Cancel) {
+            left += 1;
+        }
+        left > 0
+    });
+    if left > 0 {
+        let mods = current(ctx, |stage| stage.escape_mods).unwrap_or(Mods::NONE);
+        with(ctx, opener, |stage| stage.handed_cancels.extend(std::iter::repeat_n(mods, left)));
+        crate::runtime::egui::repaint::request_of(ctx, opener);
+    }
 }
 
 /// Writes back what a component left untaken, so a scope's `Submit` and `Cancel` rules see it.

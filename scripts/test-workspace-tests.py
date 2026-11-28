@@ -114,6 +114,7 @@ EXAMPLES = "--example stubicc --example h264_h264enc_bench"
 AUDIT_PACKAGES = ("craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-patterns",
                   "craft-ui-shell", "craft-ui-gallery", "craft-menu")
 AUDIT = " | ".join(f"package({name})" for name in AUDIT_PACKAGES)
+SHARD_2 = AUDIT + " | package(craft-draw)"
 DOCTESTS = f"test --workspace --doc --all-features --locked {CONFIG}"
 
 
@@ -129,9 +130,9 @@ def run_commands(test_filter="all()"):
 
 def archive_commands(directory, test_filter="all()"):
     return [
-        f"nextest archive {ALL} {TARGETS} {EXAMPLES} -E ({test_filter}) & !({AUDIT}) "
+        f"nextest archive {ALL} {TARGETS} {EXAMPLES} -E ({test_filter}) & !({SHARD_2}) "
         f"--archive-file {directory}/1/a.tar.zst",
-        f"nextest archive {ALL} {TARGETS} {EXAMPLES} -E ({test_filter}) & ({AUDIT}) "
+        f"nextest archive {ALL} {TARGETS} {EXAMPLES} -E ({test_filter}) & ({SHARD_2}) "
         f"--archive-file {directory}/2/a.tar.zst",
         f"nextest archive {DEFAULT} {TARGETS} -E {test_filter} --archive-file {directory}/3/a.tar.zst",
     ]
@@ -196,11 +197,12 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_each_shard_runs_its_archive_and_shard_2_also_audits(self):
         expected = "nextest run --archive-file /a/b.tar.zst --workspace-remap . --profile ci --no-tests=warn"
-        for shard, prefixes in (("1", [""]), ("2", ["", "AUDIT "]), ("3", [""])):
+        # Shard 2 audits only the audit crates of its archive.
+        for shard, lines in (("1", [expected]), ("2", [expected, f"AUDIT {expected} -E {AUDIT}"]), ("3", [expected])):
             with self.subTest(shard=shard):
                 result, _ = step("shard", GATE_SHARD=shard, NEXTEST_ARCHIVE_FILE="/a/b.tar.zst")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), [prefix + expected for prefix in prefixes])
+                self.assertEqual(result.stdout.splitlines(), lines)
         result, _ = step("shard", GATE_SHARD="4", NEXTEST_ARCHIVE_FILE="/a/b.tar.zst")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
@@ -316,7 +318,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("test-shards: ${{ needs.platforms.outputs.audit == 'true' && 3 || 0 }}", source)
         # The Linux leg's entry, which keeps workspace crates, is named after every profile override;
         # the macOS and Windows legs' dependency-only entries after the settings that reach a
-        # dependency, so next restores main's (test_profile_overrides_name_only_workspace_members).
+        # dependency (test_profile_overrides_name_only_workspace_members).
         self.assertIn("cache-version: &cache-version v2-${{ needs.platforms.outputs.profile }}\n", source)
         self.assertIn("      cache-version: v2-${{ needs.platforms.outputs.deps-profile }}\n", source)
         self.assertIn("      deps-profile: ${{ steps.audit.outputs.deps-profile }}\n", source)

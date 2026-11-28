@@ -83,3 +83,24 @@ fn toggling_holds_rebuilds_the_rows_and_the_keymap_view() {
     rig.click("Hold Shortcuts");
     assert!(rig.has("Save: Hold K"), "switched on again, the hold is back");
 }
+
+#[trial]
+fn replacing_a_hold_in_the_detail_pane_records_another_hold() {
+    let command = CommandRef::from("file.save");
+    let mut km = fixture::keymap(Platform::Mac);
+    km.set_holds(true);
+    km.assign(&command, Binding::parse("Hold K").unwrap(), Policy::Keep).unwrap();
+    let mut options = fixture::options();
+    options.double_press = true;
+    let mut rig = Rig::with_holds(km, options, setting(true));
+    rig.shared.borrow_mut().state.select(&command);
+    rig.pass();
+
+    rig.click("Replace Hold K for Save");
+    {
+        let shared = rig.shared.borrow();
+        assert_eq!(shared.state.snapshot(&shared.km).unwrap().recording_hold, Some(command));
+    }
+    rig.press(Modifiers::NONE, Key::J);
+    assert_eq!(holds_of(&rig, "file.save"), ["Hold J"]);
+}

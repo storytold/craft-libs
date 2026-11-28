@@ -1,8 +1,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 //! The suite's font store: the font indexes of every source (Google Fonts, Noto, indexes the user
-//! adds), exact lookup of a missing font, and verified installs into the one folder every app's
-//! font catalog reads.
+//! adds), exact lookup of a missing font, verified installs into the one folder every app's font
+//! catalog reads, and, per family at the user's request, copies in the OS user font folder for
+//! every other program ([`FontStore::make_available`]).
 //!
 //! ```no_run
 //! # #[cfg(not(target_arch = "wasm32"))] {
@@ -43,7 +44,7 @@ pub use index::{
     MAX_FILE_BYTES, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Sample, Script, SourceProblem, Unavailable, parse_style,
 };
 pub use pin::{IndexPin, PINNED_INDEX};
-pub use service::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, PreviewStore};
+pub use service::{Conflict, LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, PreviewStore};
 pub use sources::{SourceEntry, SourcesFile};
 pub use verify::{VerifyError, is_font, sha256_hex, verify_font};
 
@@ -69,7 +70,9 @@ pub use language_packs::{
     MAX_PACK_INDEX_BYTES, MAX_PACK_UNPACKED_BYTES, PackEntry, PackIndex, PackIndexPin, language_pack_index_overridden,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress, check_preview_service};
+pub use store::{
+    Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, OsFontFolder, OsFontLayout, Problem, Progress, check_preview_service,
+};
 
 #[cfg(test)]
 mod tests;

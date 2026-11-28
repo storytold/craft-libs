@@ -53,3 +53,71 @@ fn a_dropdown_box_fills_under_the_pointer_and_while_open() {
         assert_eq!(open, hover, "an open box keeps the hover fill");
     });
 }
+
+#[trial]
+fn a_quiet_field_takes_the_background_fill_and_a_lighter_edge_at_rest_and_keeps_the_focus_edge() {
+    let ctx = egui::Context::default();
+    let tokens = tokens(Mode::Light, Contrast::Standard);
+    with_cx(&ctx, &tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+        let (plain, quiet) = (cx.field(), cx.quiet_field());
+        let (plain_edge, quiet_edge) = (plain.border.as_ref().expect("a field draws an edge"), quiet.border.as_ref().expect("so does a quiet one"));
+        let at = |state: State, flags: Flags| StateSet::new(state, flags, StateMix::REST);
+        let rest = at(State::Rest, Flags::empty());
+        let hover = StateSet::new(State::Hover, Flags::empty(), StateMix::new(1.0, 0.0, 0.0));
+        assert_ne!(rest.resolve(&quiet.fill), rest.resolve(&plain.fill), "at rest the field takes the bar's fill, not the field fill");
+        assert_eq!(rest.resolve(&quiet.fill), cx.color(cx.tokens.color.surface.background), "the bar's fill is surface.background");
+        assert_eq!(hover.resolve(&quiet.fill), rest.resolve(&plain.fill), "under the pointer it takes the field fill");
+        assert_eq!(at(State::Rest, Flags::FOCUSED).resolve(&quiet.fill), rest.resolve(&plain.fill), "so does a focused one");
+        assert_ne!(rest.resolve(quiet_edge), rest.resolve(plain_edge), "the rest edge is quieter than the control edge");
+        let focused = at(State::Rest, Flags::FOCUSED);
+        assert_eq!(focused.resolve(quiet_edge), focused.resolve(plain_edge), "the focus edge is the field's own");
+    });
+}
+
+/// A quiet field keeps the field's own edge where the quieter one would not show at rest: at high contrast, and in a
+/// theme whose `line.border` is the window background (Artcraft dark), where the field would have no edge at all.
+#[trial]
+fn a_quiet_field_keeps_its_own_edge_where_the_quiet_one_would_not_show() {
+    let ctx = egui::Context::default();
+    for (mode, contrast) in [(Mode::Light, Contrast::High), (Mode::Dark, Contrast::High), (Mode::Dark, Contrast::Standard)] {
+        let tokens = tokens(mode, contrast);
+        with_cx(&ctx, &tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+            let (plain, quiet) = (cx.field(), cx.quiet_field());
+            let rest = StateSet::new(State::Rest, Flags::empty(), StateMix::REST);
+            let edge = rest.resolve(quiet.border.as_ref().expect("a quiet field draws an edge"));
+            assert_ne!(edge, rest.resolve(&quiet.fill), "{mode:?} {contrast:?}: the edge differs from the fill at rest");
+            assert_eq!(edge, rest.resolve(plain.border.as_ref().expect("so does a field")), "{mode:?} {contrast:?}: the field's own edge");
+        });
+    }
+}
+
+#[trial]
+fn icon_ink_on_reaches_non_text_contrast_minimum_under_standard_and_high_contrast() {
+    let ctx = egui::Context::default();
+    let white_paper = craft_ui::style::DataColor::new(Color32::WHITE);
+    let dark_paper = craft_ui::style::DataColor::new(Color32::from_rgb(0x18, 0x18, 0x1b));
+
+    // Standard contrast: at least 3.0:1
+    let standard_tokens = tokens(Mode::Light, Contrast::Standard);
+    with_cx(&ctx, &standard_tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+        let ink_white = cx.icon_ink_on(white_paper);
+        let ratio_white = craft_theme::contrast_ratio(craft_theme::Rgba::from(ink_white.egui()), craft_theme::Rgba::from(white_paper.0));
+        assert!(ratio_white >= 3.0, "standard contrast icon ink on white paper reaches 3:1: {ratio_white}");
+
+        let ink_dark = cx.icon_ink_on(dark_paper);
+        let ratio_dark = craft_theme::contrast_ratio(craft_theme::Rgba::from(ink_dark.egui()), craft_theme::Rgba::from(dark_paper.0));
+        assert!(ratio_dark >= 3.0, "standard contrast icon ink on dark paper reaches 3:1: {ratio_dark}");
+    });
+
+    // High contrast: at least 4.5:1
+    let high_tokens = tokens(Mode::Light, Contrast::High);
+    with_cx(&ctx, &high_tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+        let ink_white = cx.icon_ink_on(white_paper);
+        let ratio_white = craft_theme::contrast_ratio(craft_theme::Rgba::from(ink_white.egui()), craft_theme::Rgba::from(white_paper.0));
+        assert!(ratio_white >= 4.5, "high contrast icon ink on white paper reaches 4.5:1: {ratio_white}");
+
+        let ink_dark = cx.icon_ink_on(dark_paper);
+        let ratio_dark = craft_theme::contrast_ratio(craft_theme::Rgba::from(ink_dark.egui()), craft_theme::Rgba::from(dark_paper.0));
+        assert!(ratio_dark >= 4.5, "high contrast icon ink on dark paper reaches 4.5:1: {ratio_dark}");
+    });
+}

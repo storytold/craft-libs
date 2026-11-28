@@ -25,6 +25,9 @@ jxl = ["dep:craft-jxl"]
 # AVIF decode: craft-video's clean-room pure-Rust AV1 decoder. Native targets only (on wasm32 a
 # decoder panic aborts instead of becoming an error), so wasm32 builds leave AVIF unreadable.
 avif-decode = ["dep:craft-video", "craft-video/av1-decode"]
+# `Image::source_profile` and `Image::to_display_rgba8`: convert an image's colors from its ICC
+# profile or CICP description into a display profile with craft-cms.
+cms = ["dep:craft-cms"]
 
 [dependencies]
 craft-dds = { workspace = true }
@@ -40,11 +43,12 @@ flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", 
 image-webp = "0.2"
 zune-jpeg = "0.5"
 zune-core = "0.5"
-jpeg-encoder = "0.6"
+jpeg-encoder = "0.7.1"
 craft-jpeg = { workspace = true }
 craft-metadata = { workspace = true }
 craft-tiff = { workspace = true, features = ["plain-rgba16"] }
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
+craft-cms = { workspace = true, optional = true }
 craft-heif = { workspace = true, optional = true }
 craft-jxl = { workspace = true, optional = true, features = ["decode"] }
 ravif = { version = "0.13", default-features = false, optional = true }

@@ -232,7 +232,7 @@ impl Component for ColumnBar<'_> {
             start = end;
         }
         for (at, divider) in dividers(&shares, rect, cx.style.grab) {
-            divider::declare(cx, rect, DIVIDER, at, &divider);
+            divider::declare_focusing(cx, rect, DIVIDER, at, &divider);
         }
     }
 

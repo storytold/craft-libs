@@ -578,7 +578,17 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                             moving.column.groups.iter_mut().for_each(|group| group.height = height);
                         }
                         let index = place.group_index().ok_or(DockError::InvalidPlacement)?;
-                        let groups = &mut self.column_mut(&place).ok_or(DockError::MissingTarget)?.groups;
+                        let column = self.column_mut(&place).ok_or(DockError::MissingTarget)?;
+                        // Groups shown at a width of their own, in a floating window or an expanded column, keep it
+                        // as the flyout width of the collapsed column they join.
+                        if column.iconic
+                            && !moving.column.iconic
+                            && let Some(width) = moving.column.width
+                        {
+                            let flyout = (column.width != Some(width)).then_some(width);
+                            moving.column.groups.iter_mut().for_each(|group| group.flyout_width = flyout);
+                        }
+                        let groups = &mut column.groups;
                         let index = (index + usize::from(below)).min(groups.len());
                         groups.splice(index..index, moving.column.groups);
                         Ok(())

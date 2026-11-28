@@ -2,6 +2,9 @@
 
 Source-level platform regression guards and verification utilities for the Craft application suite.
 
+Shared test support for the Craft apps. The crate is not published, and apps and craft-libs crates
+take it under `[dev-dependencies]`.
+
 ## Overview
 
 `craft-testkit` provides lightweight, non-panicking source guards that prevent applications in the Craft ecosystem from repeating platform defects that were previously diagnosed and resolved in peer applications:
@@ -10,6 +13,24 @@ Source-level platform regression guards and verification utilities for the Craft
 2. **`wgsl_float_literals` / `wgsl_float_literals_in`**: Scans WGSL shader sources and flags decimal and hexadecimal float literals whose value, rounded to `f64`, exceeds `f32::MAX` (such as `3.40282347e38` or `0x1p+500f`), or 65504, the largest finite `f16`, for a literal with an `h` suffix. A literal that exceeds the maximum by less than `f64` precision rounds to the maximum and is not reported. Integer literals are not checked. Some native compilers round such literals down, but browser WebGPU compilers reject them with pipeline compilation errors, forcing applications into CPU fallback rendering. `f32::MAX` can be written as the hex float `0x1.fffffep+127f`, which equals it, or as the decimal `3.4028234663852886e38`, which rounds to it.
 3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`, under any name. The parts of a path may be split by whitespace, comments or line breaks. Other crates' `Instant` (such as `web_time::Instant` or `tokio::time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`; code before that attribute or after its item on the same line is still checked. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
 4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file that starts with the line `Signature: 8a477f597d28d172789f06886806bc55`, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
+
+## Random test input: `rng`
+
+`craft_testkit::rng` holds two seeded generators for repeatable test input. They are not suitable for cryptography.
+
+| Type | Recurrence | Output |
+|---|---|---|
+| `XorShift64` | `x ^= x << 13; x ^= x >> 7; x ^= x << 17` | the new state |
+| `XorShift64Star` | `x ^= x >> 12; x ^= x << 25; x ^= x >> 27` | the new state multiplied by `0x2545_F491_4F6C_DD1D` |
+
+Each type has `new(seed) -> Result<Self, SeedError>`, which returns `SeedError::ZeroSeed` for a seed of 0, and these methods:
+
+- `next()` advances the state and returns one draw.
+- `below(n)` returns one draw modulo `n`. A bound of 0 returns 0 and still takes a draw. A draw is never 0, so it is one of the 2^64 - 1 values from 1 to 2^64 - 1. When `n` divides 2^64 - 1, every result is equally likely: `below(3)` is unbiased over all nonzero states. For any other `n`, the results from 1 to (2^64 - 1) mod `n` each come from one more state than the other results, and the bias can be large: on a 64-bit target, `below(2^63 + 1)` returns 1 twice as often as 0.
+- `byte()` returns the low 8 bits of one draw.
+- `fill(out)` sets each byte of `out` to one `byte()`, in index order. An empty slice takes no draw.
+
+A suite that switches to `rng` keeps the generator and seed it uses today, so its inputs do not change. The module builds for `wasm32-unknown-unknown`.
 
 ## Epistemic Scope: Syntactic Guards vs Runtime Validation
 
@@ -216,7 +237,97 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## skip
+
+The `skip` module is not built for `wasm32`. A test that needs something a test environment may lack
+(a program, a corpus file, the craft-fonts faces) skips or fails under one rule:
+
+The variable is read only when something is missing.
+
+| Value | Result |
+|---|---|
+| Not set or empty | The helper prints `SKIPPED: <reason>` and one line feed to stderr, and the test returns and passes. Carriage returns and line feeds in the reason are printed as `\r` and `\n`. |
+| `1` | The test fails. No skip line is printed. |
+| Any other value, such as `0`, `true`, `yes`, ` 1` or `1` followed by a line feed | The test fails with the reason and the variable's name and value. No skip line is printed. |
+| Not Unicode | The test fails with the reason and the variable's name. No skip line is printed. |
+
+A variable name that is empty or holds `=` or a NUL character also fails the test, before the
+environment is read.
+
+`skip::required(var)` returns the same decision without failing the test: `Ok(false)`, `Ok(true)`,
+or a `RequiredError` that names the variable. Every module of this crate that reads a required
+variable reads it with `skip::required`, so one rule applies to all of them.
+
+The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
+`CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
+`skip::REQUIRED_VAR` (`CRAFT_TEST_REQUIRED`) is the default name.
+
+```rust
+use craft_testkit::skip::{REQUIRED_VAR, craft_fonts, skip};
+
+#[test]
+fn renders_with_qpdf() {
+    let qpdf = craft_testkit::or_skip!(find_qpdf(), REQUIRED_VAR);
+    // ...
+}
+
+#[test]
+fn draws_japanese() {
+    if !craft_fonts(HAS_CRAFT_FONTS, CRAFT_FONTS_REQUIRED) {
+        return;
+    }
+    // ...
+}
+```
+
+`or_skip!` evaluates a `Result` once, binds the `Ok` value, and on `Err` skips with the error's
+`Display` text as the reason. The two-argument form returns `()`; a test that returns a `Result`
+passes the value to return as the third argument, for example `Ok(())`.
+
+`craft_fonts(present, required)` takes both values from the caller's build: a build constant, an
+`option_env!` value, or the table `craft-fonts-build` generates. A required failure names
+`CRAFT_FONTS_REQUIRED=1`.
+
+`craft_fonts_cover(text, faces)` needs the `font-coverage` feature, which adds skrifa. It returns
+`true` when one face maps every character of `text` that is not whitespace. Each face is font data
+with its index in a collection (`0` for a single font). A face that does not parse covers nothing,
+and coverage is not combined across faces.
+
+The module does not change the process environment. Its tests that read a real variable run the
+test binary again as a child process with that variable set.
+
+## serial
+
+`serial` is native only.
+
+- `TestLock::new()` is `const`, so a lock can be a `static`:
+  `static L: TestLock = TestLock::new(); let _g = L.hold();`.
+- The thread that holds a lock can call `hold()` again. The lock is released when the last of that
+  thread's guards is dropped, in any order.
+- A test that panics while it holds a lock does not block the next one, and a poisoned internal
+  mutex is recovered.
+- `gpu_lock()` is the one lock of the process for tests that build a GPU harness or device.
+  `hold_gpu_lock()` takes it and keeps it until the calling thread ends; a second call on the same
+  thread does nothing more.
+- A guard is not `Send`. The lock covers one process: under nextest each test runs in its own
+  process.
+- The module reads no environment variables and prints nothing.
+
+The tests use channel handshakes and contain no sleeps or time limits.
+
 ## Origin
+
+### serial
+
+| Module | Source repository | Path | SHA |
+|---|---|---|---|
+| `serial` | storytold/photocraft | `crates/testkit/src/gpu.rs` | `0d3b1e8523` |
+| `serial` | storytold/deckcraft | `crates/ui-egui/src/gpu_lock.rs` | `b0c77ebd6a` |
+| `serial` | storytold/effectcraft | `crates/ui-egui/tests/it/gpu_test.rs`, `crates/gpu/src/tests.rs` | `f029bbadb2` |
+| `serial` | storytold/pdfcraft | `apps/pdfcraft/src/tests.rs` | `346d803080` |
+
+`a_panicked_holder_does_not_block_the_next_test` and `holders_take_turns` keep their names from
+PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copies slept 2 ms.
 
 ### guards
 
@@ -243,6 +354,24 @@ Changes from `craft-media-testkit`'s `hammer`:
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
 
+### skip
+
+| Code | Repository | Path | Commit |
+|---|---|---|---|
+| `skip!`, `record` | storytold/lightcraft | `crates/testkit/src/lib.rs` | `7ebbb17a82` |
+| `or_skip!`, `REQUIRED_VAR` | storytold/pdfcraft | `crates/oracle/src/lib.rs` | `ee9bf28126` |
+| `require_*!`, `skip` | storytold/filmcraft | `crates/testkit/src/lib.rs`, `crates/testkit/src/oracle.rs` | `cff7e1442e` |
+| `skip`, `skip_with` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4f8` |
+| `craft_fonts_cover` | storytold/gridcraft | `crates/ui-egui/src/theme.rs` | `06c2b1440b` |
+
+### rng
+
+| Module | Source | Path | Commit |
+|---|---|---|---|
+| `rng` (`XorShift64`) | storytold/filmcraft | `crates/dnx/tests/it/fuzz_hostile.rs:9-20` | `0a881266` |
+| `rng` (`XorShift64`) | storytold/craft-libs | `crates/video/tests/dnx/fuzz_hostile.rs:9-20` | `9f10d434` |
+| `rng` (`XorShift64Star`) | storytold/craft-libs | `crates/jpeg/tests/mutation.rs:28-46` | `97c83dc9` |
+
 ## Migration
 
 ### guards
@@ -251,6 +380,14 @@ Changes from `craft-media-testkit`'s `hammer`:
 |---|---|---|---|
 | PhotoCraft | `wgsl_float_literals` | `crates/gpu/src/tests.rs` scanner | Not started |
 | FilmCraft | `std_instant` | `crates/engine/src/wasm_clock_tests.rs` search | Not started |
+
+### rng
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| craft-libs `video` | the generator in `tests/dnx/fuzz_hostile.rs` and the other `fuzz_hostile.rs` suites (`rng::XorShift64`) | Not started |
+| craft-libs `jpeg` | the generator in `tests/mutation.rs` (`rng::XorShift64Star`) | Not started |
+| FilmCraft | the generator in `crates/dnx/tests/it/fuzz_hostile.rs` (`rng::XorShift64`) | Not started |
 
 ### deadline
 
@@ -276,3 +413,28 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### skip
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| LightCraft | `lightcraft-testkit`'s `skip!`, which keeps its JSON skip log on top of `skip` | Not started |
+| PdfCraft | `pdfcraft-oracle`'s `or_skip!`, which reads any value of `PDFCRAFT_ORACLES_REQUIRED` | Not started |
+| FilmCraft | `filmcraft-testkit`'s `require_*!` and `skip`, which accept `1`, `true`, `yes` and `on` | Not started |
+| GridCraft | `craft_fonts_cover`, which reads GridCraft's embedded face table | Not started |
+| craft-libs `craft-media-testkit` | `skip` and `skip_with`, which accept `1`, `true`, `yes` and `on` | Not started |
+| craft-libs `pdf` tests | `or_skip!` in `crates/pdf/tests/cos/oracle.rs`, which reads any value of `CRAFT_PDF_ORACLES_REQUIRED` | Not started |
+
+After an adoption, an app that reads any value as required skips on an empty value, and fails as
+a configuration error on every other value except `1`, `0` included. An app that accepts `true`, `yes`
+and `on` fails on those values as a configuration error.
+Each adoption says which values change and keeps the variable name.
+
+### serial
+
+| Consumer | Module | Switched |
+|---|---|---|
+| PhotoCraft | `serial` | No |
+| DeckCraft | `serial` | No |
+| EffectCraft | `serial` | No |
+| PdfCraft | `serial` | No |

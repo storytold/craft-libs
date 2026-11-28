@@ -249,6 +249,9 @@ pub(crate) struct LayerSpec {
     pub tier: Tier,
     /// The physical left-top of the layer.
     pub at: Pos2,
+    /// The size the layer's content takes in this pass, when the host knows it before the layer shows (a container's
+    /// measured size). egui's `Area` otherwise starts the pass at the size it kept from the last pass.
+    pub size: Option<Vec2>,
     /// Whether the layer takes input; a tooltip and the ghost layer never do.
     pub interactable: bool,
     /// The accessibility node the layer's content hangs under, created before the layer shows: egui attaches the
@@ -265,8 +268,21 @@ pub(crate) struct LayerShown {
 }
 
 /// Shows an overlay layer: an `Area` with its left-top pivot at `spec.at`, never egui's default pivot. The motion
-/// service fades a layer in (`motion::layer_presence`), so egui's own fade-in of a new `Area` is off.
+/// service fades a layer in (`motion::layer_presence`), so egui's own fade-in of a new `Area` is off. A layer of known
+/// size (`spec.size`) starts its `Area` at that size, so egui senses the layer's background over the rect it shows in
+/// this pass, from its first pass on.
 pub(crate) fn show_layer(ctx: &Context, spec: &LayerSpec, body: impl FnOnce(&mut egui::Ui)) -> LayerShown {
+    if let Some(size) = spec.size {
+        let kept = egui::AreaState::load(ctx, spec.id);
+        let state = egui::AreaState {
+            pivot_pos: Some(spec.at),
+            pivot: egui::Align2::LEFT_TOP,
+            size: Some(size),
+            interactable: kept.is_some_and(|state| state.interactable),
+            last_became_visible_at: kept.and_then(|state| state.last_became_visible_at),
+        };
+        ctx.memory_mut(|memory| memory.areas_mut().set_state(layer_of(spec.tier, spec.id), state));
+    }
     let mut sizing = false;
     let mut area = egui::Area::new(spec.id)
         .fade_in(false)
@@ -292,7 +308,7 @@ pub(crate) fn show_layer(ctx: &Context, spec: &LayerSpec, body: impl FnOnce(&mut
 /// The rect the content of the layer `spec` shows takes in this pass, before the layer shows: its left-top and the size
 /// egui keeps for its `Area`. `None` when the layer shows in an egui sizing pass, which paints and reports nothing.
 pub(crate) fn content_rect(ctx: &Context, spec: &LayerSpec) -> Option<Rect> {
-    egui::AreaState::load(ctx, spec.id).and_then(|state| state.size).map(|size| Rect::from_min_size(spec.at, size))
+    spec.size.or_else(|| egui::AreaState::load(ctx, spec.id).and_then(|state| state.size)).map(|size| Rect::from_min_size(spec.at, size))
 }
 
 /// What an overlay layer's `Area` keeps in egui's memory for a pass it shows in: its egui layer, its left-top in
@@ -549,6 +565,12 @@ pub(crate) fn popup_open(ctx: &Context) -> bool {
 #[cfg(feature = "suite")]
 pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
+}
+
+/// A host's own egui window `id` around `body`: its first pass is a sizing pass, in an invisible `Ui`.
+#[cfg(feature = "suite")]
+pub(crate) fn host_egui_window(ctx: &Context, id: Id, body: impl FnOnce(&mut Ui)) {
+    egui::Window::new("host").id(id).show(ctx, body);
 }
 
 /// The size of one entry of [`host_popup_list`], as an app's popup list entry.

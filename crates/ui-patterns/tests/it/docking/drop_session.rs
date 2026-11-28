@@ -4,7 +4,9 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{Layout, Node, Permissions, SplitSize, Workspace};
 use craft_ui::contract::SizeLimits;
-use craft_ui::contract::{Bind, BodyCx, Common, Component, Cx, MeasureCx, PlainData, Pointer as _, Role, Show as _, ShowContainer as _, Tracked};
+use craft_ui::contract::{
+    Bind, BodyCx, Common, Component, Cx, MeasureCx, MemoKey, PlainData, Pointer as _, Role, Show as _, ShowContainer as _, Tracked,
+};
 use craft_ui::docking::tree::{self, FrameRules};
 use craft_ui::docking::{
     DockConfig, DockDropTarget, DockDropped, DockGroup, DockPanels, DockSizes, GroupDrag, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle,
@@ -131,13 +133,19 @@ fn bed(layout: Layout<String>) -> Bed {
         Host { common: Common::new(), target: &target, seen: &shared_taken }.show(ui);
         let limits = |_: &String| SizeLimits::default();
         let placed = placed_groups(&shown, origin);
-        SplitArea::new("Panels", Bind::given(shown.clone()), FrameRules::new(&limits)).show_at(ui, Rect::from_min_size(origin, AREA), |ui, _| {
-            for (anchor, panels, rect) in &placed {
-                let titles: Vec<PanelTitle> = panels.iter().map(|panel| PanelTitle::new(PanelKey::of(panel), panel.clone())).collect();
-                let active = titles.first().map_or(PanelKey::new(0), |title| title.key);
-                DockGroup::new(anchor.clone(), Titles::from_content(titles.clone()), active).dock(dock_id()).show_at(ui, *rect, |_, _| ());
-            }
-        });
+        // The layout's saved form stands for it: the rules read nothing else.
+        let revision = MemoKey::of(&serde_json::to_value(&shown).expect("a layout saves"));
+        SplitArea::new("Panels", Bind::given(shown.clone()), FrameRules::new(&limits), revision).show_at(
+            ui,
+            Rect::from_min_size(origin, AREA),
+            |ui, _| {
+                for (anchor, panels, rect) in &placed {
+                    let titles: Vec<PanelTitle> = panels.iter().map(|panel| PanelTitle::new(PanelKey::of(panel), panel.clone())).collect();
+                    let active = titles.first().map_or(PanelKey::new(0), |title| title.key);
+                    DockGroup::new(anchor.clone(), Titles::from_content(titles.clone()), active).dock(dock_id()).show_at(ui, *rect, |_, _| ());
+                }
+            },
+        );
         for dropped in shared_taken.borrow_mut().drain(..) {
             shared_layout.borrow_mut().apply_with_permissions(dropped.action, permissions).expect("the model takes what the dock accepted");
         }

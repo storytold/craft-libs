@@ -78,6 +78,18 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     return Err(DockError::NotAllowed);
                 }
             }
+            Action::Restore { panel, location } => {
+                let policy = permissions(panel);
+                let allowed = policy.movable
+                    && location
+                        .anchor
+                        .as_ref()
+                        .is_none_or(|anchor| location.placement.allowed_by(permissions(anchor)) && (!floats(anchor) || policy.floatable))
+                    && (location.floating.is_none() || policy.floatable);
+                if !allowed {
+                    return Err(DockError::NotAllowed);
+                }
+            }
             Action::MoveGroup { panel, to } | Action::MoveColumn { panel, to } | Action::MoveWindow { panel, to } => {
                 let members = self.members(panel, unit_of(&action))?;
                 if members.iter().any(|p| !permissions(p).movable) {

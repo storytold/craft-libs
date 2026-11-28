@@ -13,10 +13,12 @@
 //!
 //! Nothing here is mandatory. An application asks [`Store::shared`] what the suite has to offer and
 //! gets one of three answers: somebody is signed in, nobody is signed in, or there is an account on
-//! file whose token could not be read. The second and third leave the application exactly as it was
+//! file this process will not use. The second and third leave the application exactly as it was
 //! before this crate existed, offering its own sign-in. A machine with no keychain, a locked
-//! keychain, a missing folder and an empty suite all land on "nobody is signed in". None of them is
-//! an error that stops an application starting.
+//! keychain, a missing folder and an empty suite all land on "nobody is signed in". A row whose
+//! service is not `https://` or loopback `http://`, or whose handle no longer hashes from its
+//! service and user, comes back as unreadable and without the token. None of them is an error that
+//! stops an application starting.
 //!
 //! [`Store::discard`] clears the keychain entry and then the row, for a session this machine
 //! should stop holding. [`Store::forget`] clears only the keychain entry, leaving the row for a
@@ -126,8 +128,9 @@ pub enum Shared {
     Session { account: Account, token: Secret },
     /// Nobody is signed in here. Offer a sign-in.
     None,
-    /// An account is on file and its token could not be read: a locked keychain, a keychain this
-    /// process may not reach, or an entry somebody deleted by hand.
+    /// An account is on file and this process will not hand its token back: a locked keychain, a
+    /// keychain this process may not reach, a service address it will not send a token to, or a
+    /// row whose handle no longer matches its service and user.
     ///
     /// Offer a sign-in. Say why the shared one did not come through. Quietly showing a signed-out
     /// window would leave somebody wondering where their account went.
@@ -235,6 +238,14 @@ impl<S: TokenStore> Store<S> {
             }
         };
         let Some(account) = list.current().cloned() else { return Shared::None };
+        // The row comes from a plain JSON file. Nothing in `accounts::read` checks the address or
+        // that `id` still hashes from `service` and `user`. A caller that presents the token to
+        // `account.service` would otherwise send it wherever that file names, including a plain
+        // `http://` host, or a host left after `service` was edited in place. Refuse here, before
+        // the keychain is even read, so the token never leaves this function for a row like that.
+        if let Err(why) = accounts::validate_target(&account) {
+            return Shared::Unreadable { account, why };
+        }
         match self.tokens.get(&account.id) {
             Ok(Some(token)) => Shared::Session { account, token },
             // On file with no entry behind it. Somebody deleted the entry, or a sign-out got half

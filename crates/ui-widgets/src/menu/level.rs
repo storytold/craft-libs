@@ -326,6 +326,11 @@ impl MenuLevel {
         self.with(|state| state.active)
     }
 
+    /// The active row while it is enabled.
+    pub(super) fn active_enabled(&self) -> Option<Id> {
+        self.with(|state| state.active.filter(|active| state.shown.iter().any(|row| row.id == *active && row.enabled)))
+    }
+
     /// Moves the active row by `mv` among the enabled rows as the user last saw them, without moving the focus (the
     /// keys of a field that drives the menu): Up and Down wrap, Home and Page Up go to the first, End and Page Down to
     /// the last. Returns whether it moved.
@@ -386,7 +391,8 @@ impl MenuLevel {
 /// The level a menu container puts into its body's env: the rows of the body register with it.
 pub(crate) fn level_env<C: Component>(cx: &Cx<'_, C>, values: &mut AppValues, submenu: bool, valued: bool, pad: f32) {
     let level = MenuLevel::of(&cx.recall::<LevelMemory>());
-    let pointer = cx.core.ctx.input(|input| input.pointer.latest_pos());
+    // The aim follows every move of the pointer while the menu shows: a tracked read.
+    let pointer = crate::runtime::pointer::frame(&cx.core.ctx).pos;
     let keyboard = crate::runtime::focus::keyboard_in_menu(&cx.core.ctx);
     level.begin(submenu, valued, keyboard, (!cx.env.shell().os.is_mac()).then(|| cx.env.folder()), pointer, pad);
     values.set(level);
