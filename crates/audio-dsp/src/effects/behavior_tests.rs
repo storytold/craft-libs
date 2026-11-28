@@ -155,6 +155,7 @@ fn latency_is_where_the_impulse_lands() {
         ("voice_pitch", vec![]),
         ("voice_pitch", vec![("formant_follow", 1.0)]),
         ("voice_formant", vec![]),
+        ("noise_suppression", vec![("reduction", 0.0)]),
     ] {
         let mut e = fx(id, &p);
         let lat = e.latency();
@@ -986,6 +987,7 @@ fn direct_constructors_cap_the_channel_count() {
         pitch::PitchShifter,
         voice::VoicePitch,
         voice::VoiceFormant,
+        suppress::NoiseSuppression,
     );
 }
 

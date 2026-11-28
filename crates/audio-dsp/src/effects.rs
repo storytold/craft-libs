@@ -15,6 +15,7 @@ pub(crate) mod restoration;
 pub(crate) mod reverbs;
 pub(crate) mod special;
 mod stft;
+pub(crate) mod suppress;
 pub(crate) mod time;
 pub(crate) mod util;
 pub(crate) mod voice;
@@ -35,6 +36,7 @@ pub(crate) use restoration::{DeHum, DeNoise};
 pub(crate) use reverbs::{ConvolutionReverb, SurroundReverb};
 pub use special::LoudnessMeterFx;
 pub(crate) use special::{AmbisonicsPanner, Binauralizer, ChannelMixer, Distortion, GuitarSuite, Mastering, Mute, StereoExpander, VocalEnhancer};
+pub use suppress::NoiseSuppression;
 pub(crate) use time::{Delay, Reverb};
 pub use voice::{VoiceFormant, VoicePitch};
 
@@ -125,6 +127,7 @@ static REGISTRY: &[EffectInfo] = &[
     },
     entry!("dehum", "DeHum", Restoration, DeHum),
     entry!("denoise", "DeNoise", Restoration, DeNoise),
+    entry!("noise_suppression", "Noise Suppression", Restoration, NoiseSuppression),
     entry!("pitch_shifter", "Pitch Shifter", Pitch, PitchShifter),
     entry!("voice_pitch", "Voice Pitch", Pitch, VoicePitch),
     entry!("voice_formant", "Voice Formant", Pitch, VoiceFormant),
