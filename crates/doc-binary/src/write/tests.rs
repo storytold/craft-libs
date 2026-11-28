@@ -378,6 +378,33 @@ fn lists_round_trip() {
     assert_eq!((a.levels[1].indent, a.levels[1].hanging), (72.0, 18.0));
 }
 
+/// A bullet outside the BMP (such as the Wingdings squares and diamonds the reader maps to
+/// U+1F78F and U+1F799) is written as a surrogate pair and reads back as the one character.
+#[test]
+fn a_bullet_outside_the_bmp_round_trips_as_one_character() {
+    use craft_wordmodel::numbering::{AbstractNum, Level, Num};
+    use craft_wordmodel::section::NumFormat;
+    let mut d = Document::new();
+    let bullets = ["\u{1F78F}", "\u{1F799}", "\u{1F550}"];
+    let levels = bullets.iter().map(|b| Level { start: 1, format: NumFormat::Bullet, text: (*b).into(), ..Level::default() }).collect();
+    let numbering = Arc::make_mut(&mut d.numbering);
+    numbering.abstracts = vec![AbstractNum { id: 1, levels, ..Default::default() }];
+    numbering.nums = vec![Num { id: 1, abstract_id: 1, ..Default::default() }];
+    d.body = (0..bullets.len() as u8)
+        .map(|level| {
+            let mut p = para("Item");
+            p.props.numbering = Some(NumRef { num: 1, level });
+            para_block(p)
+        })
+        .collect();
+    let r = round(&d);
+    let a = r.numbering.abstracts.first().expect("the list's levels");
+    assert!(a.levels.len() >= bullets.len());
+    for (level, bullet) in a.levels.iter().zip(bullets) {
+        assert_eq!(level.text, bullet);
+    }
+}
+
 #[test]
 fn tracked_changes_round_trip() {
     use craft_wordmodel::{Revision, RevisionKind};
