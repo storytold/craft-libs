@@ -338,6 +338,10 @@ pub struct ShareDialog {
     provider: Option<Provider>,
     /// When the capability question was last asked.
     asked: Option<f64>,
+    /// The last request number issued before the latest [`ShareDialog::refresh`]
+    /// or [`ShareDialog::connect`]. A capabilities answer to that request or an
+    /// earlier one describes the account as it was, and is ignored.
+    capabilities_after: u64,
     open: Option<Sheet>,
     /// Keyed by the URL the contact carried, so reopening the dialog does not
     /// fetch the same faces again.
@@ -370,6 +374,7 @@ impl ShareDialog {
             seq: 0,
             provider: None,
             asked: None,
+            capabilities_after: 0,
             open: None,
             avatars: HashMap::new(),
             wants_save: None,
@@ -387,6 +392,7 @@ impl ShareDialog {
         self.backend = Some(Box::new(backend));
         self.provider = None;
         self.asked = None;
+        self.capabilities_after = self.seq;
     }
 
     pub fn connected(&self) -> bool {
@@ -413,10 +419,25 @@ impl ShareDialog {
     /// The answer is kept once it arrives, so a host that signs somebody
     /// in after the first answer has to say so. Without this the dialog
     /// keeps the answer it got while nobody was signed in, and Share
-    /// stays unavailable for the rest of the run.
+    /// stays unavailable for the rest of the run. An answer to a question
+    /// asked before the refresh is ignored when it arrives.
     pub fn refresh(&mut self) {
         self.provider = None;
         self.asked = None;
+        self.capabilities_after = self.seq;
+    }
+
+    /// Forget sharing for an account that signed out.
+    ///
+    /// Closes the sheet and offers nothing until [`ShareDialog::refresh`],
+    /// which the next sign-in calls. The provider is not asked again here: a
+    /// question asked before the sign-out reaches the service would describe
+    /// the account that is leaving. Answers to earlier questions are ignored.
+    pub fn signed_out(&mut self) {
+        self.close();
+        self.provider = Some(Provider { sharing: false, contacts: false, mail: false, links: false, key: false, key_required: false });
+        self.asked = None;
+        self.capabilities_after = self.seq;
     }
 
     pub fn available(&self) -> bool {
@@ -639,6 +660,8 @@ impl ShareDialog {
         // once the open sheet is no longer borrowed.
         let mut reload = None;
         match answer {
+            // Asked before the account changed: it describes the old one.
+            Answer::Capabilities { .. } if seq <= self.capabilities_after => {}
             Answer::Capabilities { capabilities, linked } => {
                 self.provider = Some(Provider {
                     sharing: linked && capabilities.contains(&Capability::Sharing),
@@ -675,14 +698,17 @@ impl ShareDialog {
                 }
             }
             Answer::Granted { shared, failed } => {
-                // A link was asked for in order to be handed out, so it goes
-                // to the clipboard without a second click.
-                if let Some(url) = shared.iter().find_map(|s| s.url.clone()) {
-                    ctx.copy_text(url);
-                }
                 if let Some(sheet) = &mut self.open
                     && sheet.granting == Some(seq)
                 {
+                    // A link was asked for in order to be handed out, so it
+                    // goes to the clipboard without a second click. Only for
+                    // the sheet that asked: a grant answered after the sheet
+                    // closed or moved to another document leaves the
+                    // clipboard alone.
+                    if let Some(url) = shared.iter().find_map(|s| s.url.clone()) {
+                        ctx.copy_text(url);
+                    }
                     sheet.granting = None;
                     sheet.error = None;
                     // Recipients that went through leave the picker. The ones
@@ -714,13 +740,16 @@ impl ShareDialog {
                 }
             }
             Answer::Linked => {
-                // An account arrived, so the list is stale.
-                if let Some(sheet) = &mut self.open {
-                    sheet.destinations = None;
-                }
-                let seq = self.issue(Request::Destinations);
-                if let Some(sheet) = &mut self.open {
-                    sheet.destinations_seq = Some(seq);
+                // An account arrived, so the list is stale. With no sheet open
+                // there is no list to reload.
+                if self.open.is_some() {
+                    if let Some(sheet) = &mut self.open {
+                        sheet.destinations = None;
+                    }
+                    let seq = self.issue(Request::Destinations);
+                    if let Some(sheet) = &mut self.open {
+                        sheet.destinations_seq = Some(seq);
+                    }
                 }
             }
             Answer::Withdrawn { share_id } => {
@@ -918,9 +947,11 @@ fn draw(ui: &mut Ui, sheet: &mut Sheet, avatars: &HashMap<String, Avatar>, label
                 ui.add(egui::TextEdit::singleline(&mut sheet.link_key).hint_text(labels.key_hint.as_str()).password(true).desired_width(150.0));
             }
             // A key the server insists on cannot be skipped, so the control
-            // stays disabled until one is typed.
+            // stays disabled until one is typed. It also waits, as Send does,
+            // while a grant is in flight: the answer to that grant is the one
+            // the sheet takes, and an earlier link would be dropped.
             let keyed = !sheet.link_key.trim().is_empty();
-            let ready = keyed || !allowed.key_required;
+            let ready = (keyed || !allowed.key_required) && sheet.granting.is_none();
             if ui.add_enabled(ready, egui::Button::new(labels.create_link.as_str())).clicked() {
                 acts.push(Act::Grant(Grant {
                     id: sheet.id.clone(),

@@ -115,7 +115,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     let resolved = core.resolved;
     // Before any return: a component without an AccessKit node (merged, or AccessKit off) still records its command
     // for the inspected region, which keytips place their badges by.
-    inspect::note_command(ctx, id, core.command.as_deref().map(|command| command.command.clone()));
+    inspect::note_command(ctx, id, core.command.as_deref().map(|command| (*command.command).clone()));
     let paint = core.paint.borrow();
     if role == Role::Merged {
         let facts = scope::Merged {

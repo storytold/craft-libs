@@ -634,6 +634,25 @@ fn the_fixture_writer_reads_back() {
     assert_eq!(v(&wb, 1, "A1"), text("Name"));
 }
 
+/// A fixture holds 1 to 4,096 sheets, the counts the reader accepts; any other count is an error
+/// naming it, returned before anything is written.
+#[test]
+fn the_fixture_writer_rejects_a_sheet_count_the_reader_refuses() {
+    let names: Vec<String> = (0..4097).map(|i| format!("S{i}")).collect();
+    let sheets: Vec<(&str, Vec<Vec<String>>)> = names.iter().map(|n| (n.as_str(), Vec::new())).collect();
+    match craft_xls::testing::workbook(&sheets) {
+        Err(craft_cfb::Error::Invalid(m)) => assert!(m.contains("4097 sheets") && m.contains("at most 4096"), "{m}"),
+        other => panic!("{:?}", other.map(|b| b.len())),
+    }
+    match craft_xls::testing::workbook(&[]) {
+        Err(craft_cfb::Error::Invalid(m)) => assert!(m.contains("no sheets"), "{m}"),
+        other => panic!("{:?}", other.map(|b| b.len())),
+    }
+    let read = craft_xls::read(&craft_xls::testing::workbook(&sheets[..4096]).unwrap()).unwrap();
+    assert_eq!(read.warnings, []);
+    assert!(read.workbook.sheets.iter().map(|s| s.name.as_str()).eq(names[..4096].iter().map(String::as_str)));
+}
+
 #[test]
 fn a_fixture_that_cannot_be_written_returns_the_writer_error() {
     assert_eq!(craft_xls::testing::compound("", b"x"), Err(craft_cfb::Error::BadName(String::new())));

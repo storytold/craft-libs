@@ -37,3 +37,22 @@ fn ignore_reports_its_item_and_restart_shows_the_first_item() {
     assert_eq!(word(&dialog), json!("teh"), "restart shows the first item");
     assert_eq!(dialog.borrow().json_fields().expect("fields")["changeTo"], json!("the"), "with its first suggestion");
 }
+
+#[trial]
+fn restarting_drops_a_change_waiting_on_the_previous_word() {
+    let dialog = Rc::new(RefCell::new(CheckSpellingDialog::new(items())));
+    let shown = dialog.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        shown.borrow_mut().show(ui);
+    });
+    fixture.settle();
+    let change = fixture.by_label("Change").expect("the Change button");
+    fixture.click(&change).settle();
+    let next = SpellingItem::new(2, 0..3, "adn", vec!["and".to_owned()]);
+    dialog.borrow_mut().restart(vec![next.clone()]);
+    assert!(dialog.borrow_mut().take_action().is_none(), "the previous word's change is discarded");
+    fixture.settle();
+    let change = fixture.by_label("Change").expect("the restarted Change button");
+    fixture.click(&change).settle();
+    assert_eq!(dialog.borrow_mut().take_action(), Some(SpellingAction::Change { item: next, to: "and".to_owned() }));
+}

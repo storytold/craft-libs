@@ -10,6 +10,9 @@
 //! (up to `max_whole`) and falls back to [`open_bytes`]. Container sources register themselves
 //! from later PRs.
 //!
+//! [`compositor_frame`] turns a picture a `craft-video` decoder returned
+//! (`craft_video::frame::VideoFrame`) into the [`VideoFrame`] a source returns.
+//!
 //! [`SharedSource`] is `Arc<dyn MediaSource>`. It is not `craft_audio::SharedSource`, which is a
 //! `ByteSource` marker used by the audio decoder.
 
@@ -27,8 +30,11 @@ use craft_time::{FrameRate, Tick};
 use serde::{Deserialize, Serialize};
 
 pub mod cancel;
+mod decoded;
 #[cfg(feature = "y4m")]
 pub mod y4m;
+
+pub use decoded::{compositor_frame, compositor_frame_within};
 
 /// Errors from opening or reading a media source.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]

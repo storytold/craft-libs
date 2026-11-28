@@ -84,6 +84,19 @@ fn param_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamRows::new("Filter", &params, fields_at.bind(fields)).patterns(&patterns).show(ui).into()
 }
 
+/// Number, int and range rows with unit text no `UnitKind` names (`kbps`, `s`, `MiB`) beside a row in milliseconds.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_unit_labels(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = vec![
+        Param::number("bitrate", "Bitrate", 6000.0, 50.0, 0).bounds(Some(100.0), Some(200_000.0)).unit_label("kbps"),
+        Param::new("keyframes", "Keyframe interval", ParamKind::int(Some(1), Some(20), 2)).unit_label("s"),
+        Param::new("offset", "Sync offset", ParamKind::number(Some(0.0), Some(20_000.0), 0.0, 1.0, 0)).unit(UnitKind::Milliseconds),
+        Param::new("buffer", "Buffer", ParamKind::range(1.0, 512.0, 64.0, Default::default())).unit_label("MiB"),
+    ];
+    let (fields, fields_at) = data.value_at("fields", DialogFields::new());
+    ParamRows::new("Output", &params, fields_at.bind(fields)).show(ui).into()
+}
+
 /// The rows of `params` over the story's values, which `setup` may prepare once.
 fn rows_story(ui: &mut Ui, data: &mut StoryData, params: &[Param], setup: impl FnOnce(&mut DialogFields)) -> StoryOutput {
     if data.present::<DialogFields>("fields").is_none() {

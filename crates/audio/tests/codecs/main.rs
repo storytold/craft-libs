@@ -18,6 +18,7 @@ mod mp3_encoder_oracle;
 mod mpa_oracle;
 mod opus;
 mod opusenc;
+mod packet_encoder;
 mod routing_oracle;
 mod track_decoder;
 #[cfg(feature = "vorbis-encode")]

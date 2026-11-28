@@ -12,7 +12,8 @@ use egui::{Color32, Vec2};
 
 use crate::Catalog;
 use crate::FaceInfo;
-use crate::panel::faces::{self, Owner, Shown};
+use crate::panel::faces::{self, Owner, Sample, Shown};
+use crate::panel::subsets::SubsetFont;
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -35,6 +36,8 @@ pub(crate) struct FontSampleStyle {
 pub(crate) enum SampleFace<'a> {
     /// A face of `catalog`, which the document-face registry loads when the sample is measured or painted.
     Face { catalog: &'a Arc<Catalog>, owner: Owner, face: &'a FaceInfo },
+    /// A subset of a face from the preview service.
+    Subset(&'a SubsetFont),
     /// A face the host gives, ready as it is (a host row of the picker).
     Font(&'a FontRef),
     /// No face is here to draw with: the sample keeps its band and shows nothing.
@@ -47,12 +50,47 @@ impl SampleFace<'_> {
     /// may lack the sample's characters.
     pub(crate) fn ready(&self, at: &impl craft_ui::primitives::FacesCx) -> Option<FontRef> {
         match self {
-            SampleFace::Face { catalog, owner, face } => match faces::shown(at, catalog, *owner, face) {
-                Shown::Ready(font) => Some(font),
-                _ => None,
-            },
+            SampleFace::Face { catalog, owner, face } => ready(faces::shown(at, catalog, *owner, face)),
+            SampleFace::Subset(subset) => ready(faces::subset(at, subset)),
             SampleFace::Font(font) => Some((*font).clone()),
             SampleFace::Missing => None,
+        }
+    }
+}
+
+fn ready(shown: Shown) -> Option<FontRef> {
+    match shown {
+        Shown::Ready(font) => Some(font),
+        _ => None,
+    }
+}
+
+/// The face a card or a style row draws its sample in, as the panel holds it.
+#[derive(Clone)]
+pub(crate) enum HeldFace {
+    /// A face of `catalog`.
+    Local { owner: Owner, face: Box<FaceInfo>, catalog: Arc<Catalog> },
+    /// A subset of a face from the preview service.
+    Subset(SubsetFont),
+}
+
+impl HeldFace {
+    /// `face` of `owner`'s catalog `catalog`.
+    pub(crate) fn local(owner: Owner, face: FaceInfo, catalog: &Arc<Catalog>) -> HeldFace {
+        HeldFace::Local { owner, face: Box::new(face), catalog: Arc::clone(catalog) }
+    }
+
+    /// Whether the face is installed here.
+    pub(crate) fn installed(&self) -> bool {
+        matches!(self, HeldFace::Local { owner: Owner::Installed, .. })
+    }
+
+    /// The face of a sample: `face`, or none.
+    pub(crate) fn sample(face: Option<&HeldFace>) -> SampleFace<'_> {
+        match face {
+            Some(HeldFace::Local { owner, face, catalog }) => SampleFace::Face { catalog, owner: *owner, face },
+            Some(HeldFace::Subset(subset)) => SampleFace::Subset(subset),
+            None => SampleFace::Missing,
         }
     }
 }
@@ -81,12 +119,16 @@ pub(crate) struct FontSample<'a> {
     /// [`LINE_EM`] of its size.
     #[prop(quantity = "band height the caller's layout gives, in points")]
     band: Option<f32>,
+    /// The variation coordinates (axis tag, value) the face is drawn at, over its own: one registered variable face
+    /// draws every named instance and every axis value.
+    #[prop]
+    coords: &'a [([u8; 4], f32)],
 }
 
 impl<'a> FontSample<'a> {
     /// A sample of `text` in `face` at `points`, named `label`.
     pub(crate) fn new(label: impl Into<Label>, text: impl Into<Cow<'a, str>>, face: SampleFace<'a>, points: f32) -> Self {
-        FontSample { common: Common::new(), text: text.into(), face, points, on_white: false, band: None }.label(label)
+        FontSample { common: Common::new(), text: text.into(), face, points, on_white: false, band: None, coords: &[] }.label(label)
     }
 }
 
@@ -113,7 +155,8 @@ impl Component for FontSample<'_> {
             return Vec2::new(cx.room.unwrap_or(0.0), band);
         };
         let ink = DataColor::new(Color32::PLACEHOLDER);
-        let line = faces::sample_line(|doc| cx.layout_doc(doc), &font, &self.text, self.points, band, cx.room, ink);
+        let sample = Sample::new(&self.text, &font, self.points, ink).at(self.coords);
+        let line = faces::sample_line(|doc| cx.layout_doc(doc), sample, band, cx.room);
         Vec2::new(line.layout.size().x, band)
     }
 
@@ -121,7 +164,7 @@ impl Component for FontSample<'_> {
         let painter = ui.content_painter(cx);
         let ink = faces::sample_ink(&painter, cx.rect, self.on_white, cx.style.ink.egui());
         if let Some(font) = self.face.ready(cx) {
-            faces::paint_sample(&painter, cx.content_rect, &font, &self.text, self.points, ink);
+            faces::paint_sample(&painter, cx.content_rect, Sample::new(&self.text, &font, self.points, ink).at(self.coords));
         }
     }
 

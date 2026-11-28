@@ -2,7 +2,7 @@
 //! (oracle; skipped when ffmpeg is absent, a failure with `CRAFT_MEDIA_REQUIRE_ORACLES=1`), and on
 //! hostile packets.
 
-use craft_video::mjpeg::{ChromaSubsampling, Decoder, Encoder, EncoderConfig, Frame, Samples, is_packet};
+use craft_video::mjpeg::{ChromaSubsampling, Decoder, Encoder, EncoderConfig, Error, Frame, PixelFormat, Samples, is_packet, picture_size};
 use std::path::Path;
 use std::process::Command;
 
@@ -245,6 +245,227 @@ fn adobe_transform_zero_keeps_numeric_id_components_as_rgb() {
             for (got, want) in px.iter().zip([r, g, b]) {
                 assert!((f32::from(*got) - want).abs() <= 3.0, "{px:?}");
             }
+        }
+    }
+}
+
+/// libjpeg-turbo's test images, kept with `craft-jpeg` (`crates/jpeg/tests/data/SOURCE.md`).
+const TESTORIG: &[u8] = include_bytes!("../../../jpeg/tests/data/testorig.jpg");
+const TESTORIG_PROGRESSIVE: &[u8] = include_bytes!("../../../jpeg/tests/data/testorig-huffman-progressive.jpg");
+const TESTORIG12: &[u8] = include_bytes!("../../../jpeg/tests/data/testorig12.jpg");
+/// libjpeg-turbo's decode of `testorig12.jpg`: binary PPM, maxval 4095.
+const TESTORIG12_PPM: &[u8] = include_bytes!("../../../jpeg/tests/data/testorig12.ppm");
+
+/// A byte the padding of a row starts as, to see that `decode_into` leaves it alone.
+const PAD: u8 = 0xA5;
+
+/// `f` as `format` pixels, rows `stride` bytes apart with [`PAD`] after each row.
+fn expected_pixels(f: &Frame, format: PixelFormat, stride: usize) -> Vec<u8> {
+    let (w, h, ch) = (f.width as usize, f.height as usize, usize::from(f.channels));
+    let eight: Vec<u8> = match &f.samples {
+        Samples::U8(v) => v.clone(),
+        Samples::U16(v) => v.iter().map(|&s| ((u32::from(s) * 255 + 32_767) / 65_535) as u8).collect(),
+    };
+    let mut out = vec![PAD; stride * h];
+    for y in 0..h {
+        for x in 0..w {
+            let s = &eight[(y * w + x) * ch..][..ch];
+            let rgb = match ch {
+                1 => [s[0]; 3],
+                3 => [s[0], s[1], s[2]],
+                _ => panic!("{ch} channels"),
+            };
+            let px = match format {
+                PixelFormat::Rgba8 => [rgb[0], rgb[1], rgb[2], 255],
+                PixelFormat::Bgra8 => [rgb[2], rgb[1], rgb[0], 255],
+            };
+            out[y * stride + x * 4..][..4].copy_from_slice(&px);
+        }
+    }
+    out
+}
+
+/// `decode_into` of `packet` at a stride of `pad` bytes past each row.
+fn decoded_into(packet: &[u8], format: PixelFormat, pad: usize) -> (craft_video::mjpeg::Picture, Vec<u8>, usize) {
+    let (w, h) = picture_size(packet).expect("size");
+    let stride = w as usize * 4 + pad;
+    let mut out = vec![PAD; stride * h as usize];
+    let p = Decoder::new().decode_into(packet, format, &mut out, stride).expect("decode_into");
+    (p, out, stride)
+}
+
+#[test]
+fn decode_into_writes_the_pixels_of_decode_at_any_stride() {
+    let enc = |w: usize, h: usize, ch: usize, sub| {
+        Encoder::new(EncoderConfig { quality: 85, subsampling: sub })
+            .expect("encoder")
+            .encode(w as u32, h as u32, ch as u8, &picture(w, h, ch))
+            .expect("encode")
+    };
+    let packets = [
+        ("420", enc(67, 41, 3, ChromaSubsampling::S420)),
+        ("422", enc(67, 41, 3, ChromaSubsampling::S422)),
+        ("444", enc(64, 48, 3, ChromaSubsampling::S444)),
+        ("1x1", enc(1, 1, 3, ChromaSubsampling::S420)),
+        ("gray", enc(33, 17, 1, ChromaSubsampling::S420)),
+        ("adobe0", with_app14(&enc(16, 16, 3, ChromaSubsampling::S444), 0)),
+        ("testorig", TESTORIG.to_vec()),
+        ("progressive", TESTORIG_PROGRESSIVE.to_vec()),
+        ("12-bit", TESTORIG12.to_vec()),
+    ];
+    for (name, packet) in &packets {
+        let f = Decoder::new().decode(packet).expect("decode");
+        for format in [PixelFormat::Rgba8, PixelFormat::Bgra8] {
+            for pad in [0, 3, 64] {
+                let (p, out, stride) = decoded_into(packet, format, pad);
+                assert_eq!((p.width, p.height, p.damaged), (f.width, f.height, f.damaged), "{name}");
+                assert!(out == expected_pixels(&f, format, stride), "{name} {format:?} pad {pad}: pixels differ from decode's");
+            }
+        }
+    }
+}
+
+#[test]
+fn decode_into_reads_past_the_first_scan_as_decode_does() {
+    let packet = Encoder::default().encode(40, 24, 3, &picture(40, 24, 3)).expect("encode");
+    let sos = packet.windows(2).position(|w| w == [0xFF, 0xDA]).expect("SOS");
+    let eoi = packet.len() - 2;
+    let mut sof = packet.clone();
+    sof.truncate(eoi);
+    // a second frame header, and a second copy of the scan, after the first scan
+    let frame = packet.windows(2).position(|w| w == [0xFF, 0xC0]).expect("SOF0");
+    let frame_len = usize::from(u16::from_be_bytes([packet[frame + 2], packet[frame + 3]]));
+    sof.extend_from_slice(&packet[frame..frame + 2 + frame_len]);
+    sof.extend_from_slice(&packet[eoi..]);
+    let mut two_scans = packet[..eoi].to_vec();
+    two_scans.extend_from_slice(&packet[sos..]);
+    // a comment before EOI is read by decode too
+    let mut comment = packet[..eoi].to_vec();
+    comment.extend_from_slice(&[0xFF, 0xFE, 0, 4, b'h', b'i']);
+    comment.extend_from_slice(&packet[eoi..]);
+    for (name, p) in [("second SOF", sof), ("second SOS", two_scans), ("COM", comment)] {
+        let whole = Decoder::new().decode(&p);
+        let mut out = vec![PAD; 40 * 4 * 24];
+        let into = Decoder::new().decode_into(&p, PixelFormat::Rgba8, &mut out, 40 * 4);
+        match whole {
+            Err(e) => assert_eq!(into.err(), Some(e), "{name}"),
+            Ok(f) => {
+                assert_eq!(into.map(|p| (p.width, p.height, p.damaged)), Ok((f.width, f.height, f.damaged)), "{name}");
+                assert!(out == expected_pixels(&f, PixelFormat::Rgba8, 40 * 4), "{name}: pixels differ from decode's");
+            }
+        }
+    }
+}
+
+#[test]
+fn decode_into_rounds_12_bit_pictures_close_to_libjpeg_turbo() {
+    // The PPM's header is "P6\n227 149\n4095\n" and its samples are big-endian 16-bit.
+    let header = b"P6\n227 149\n4095\n";
+    assert_eq!(&TESTORIG12_PPM[..header.len()], header);
+    let reference: Vec<u8> =
+        TESTORIG12_PPM[header.len()..].as_chunks::<2>().0.iter().map(|b| ((u32::from(u16::from_be_bytes(*b)) * 255 + 2047) / 4095) as u8).collect();
+    let (p, out, stride) = decoded_into(TESTORIG12, PixelFormat::Rgba8, 0);
+    assert_eq!((p.width, p.height, stride), (227, 149, 227 * 4));
+    let rgb: Vec<u8> = out.as_chunks::<4>().0.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
+    let worst = rgb.iter().zip(&reference).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+    assert!(worst <= 1, "{worst} levels from libjpeg-turbo's decode");
+    assert!(out.as_chunks::<4>().0.iter().all(|px| px[3] == 255));
+}
+
+#[test]
+fn decode_into_refuses_a_buffer_or_stride_too_small_without_writing() {
+    let packet = Encoder::default().encode(20, 10, 3, &picture(20, 10, 3)).expect("encode");
+    assert_eq!(picture_size(&packet).expect("size"), (20, 10));
+    let dec = Decoder::new();
+    let progressive = (TESTORIG_PROGRESSIVE, 227 * 4, 149);
+    for (packet, row, rows) in [(&packet[..], 80, 10), progressive] {
+        // one byte short of the last row, and a stride under a row
+        for (len, stride) in [(row * rows - 1, row), (row * rows, row - 1), (0, row)] {
+            let mut out = vec![PAD; len];
+            assert!(matches!(dec.decode_into(packet, PixelFormat::Rgba8, &mut out, stride), Err(Error::Input(_))), "{len} {stride}");
+            assert!(out.iter().all(|&b| b == PAD), "nothing is written");
+        }
+        // the last row needs no padding after it
+        let mut out = vec![PAD; row * 2 * (rows - 1) + row];
+        assert!(dec.decode_into(packet, PixelFormat::Rgba8, &mut out, row * 2).is_ok());
+        // a stride the buffer size overflows
+        assert!(matches!(dec.decode_into(packet, PixelFormat::Rgba8, &mut out, usize::MAX), Err(Error::Input(_))));
+    }
+    // A packet decoded whole is checked against its frame header before it is decoded: the
+    // progressive one cut before its first scan has no picture to decode.
+    let sos = TESTORIG_PROGRESSIVE.windows(2).position(|w| w == [0xFF, 0xDA]).expect("SOS");
+    let mut out = vec![PAD; 64];
+    assert!(matches!(dec.decode_into(&TESTORIG_PROGRESSIVE[..sos], PixelFormat::Rgba8, &mut out, 227 * 4), Err(Error::Input(_))));
+    let mut out = vec![0; 64];
+    assert!(matches!(dec.decode_into(b"not a jpeg", PixelFormat::Rgba8, &mut out, 4), Err(Error::Invalid(_))));
+    let mut out = vec![0; 80 * 10];
+    assert!(matches!(dec.clone().max_pixels(199).decode_into(&packet, PixelFormat::Rgba8, &mut out, 80), Err(Error::Limit(_))));
+    assert!(matches!(dec.max_pixels(199).decode_into(TESTORIG_PROGRESSIVE, PixelFormat::Rgba8, &mut out, 80), Err(Error::Limit(_))));
+}
+
+#[test]
+fn picture_size_reads_the_frame_header_only() {
+    for packet in [TESTORIG, TESTORIG_PROGRESSIVE, TESTORIG12] {
+        assert_eq!(picture_size(packet).expect("size"), (227, 149));
+        // the headers alone are enough
+        let sos = packet.windows(2).position(|w| w == [0xFF, 0xDA]).expect("SOS");
+        assert_eq!(picture_size(&packet[..sos]).expect("size"), (227, 149));
+    }
+    let packet = Encoder::default().encode(20, 10, 1, &[9; 200]).expect("encode");
+    let sof = packet.windows(2).position(|w| w == [0xFF, 0xC0]).expect("SOF0");
+    let mut dnl = packet.clone();
+    dnl[sof + 5..sof + 7].copy_from_slice(&[0, 0]);
+    assert!(matches!(picture_size(&dnl), Err(Error::Unsupported(_))));
+    let mut no_width = packet.clone();
+    no_width[sof + 7..sof + 9].copy_from_slice(&[0, 0]);
+    assert!(matches!(picture_size(&no_width), Err(Error::Invalid(_))));
+    for n in 0..sof + 9 {
+        assert!(picture_size(&packet[..n]).is_err(), "cut at {n}");
+    }
+    for junk in [&b"RIFF"[..], &[0xFF, 0xD8, 0xFF, 0xD9], &[0xFF, 0xD8, 0xFF, 0xDA, 0, 2], &[0xFF, 0xD8, 0xFF, 0xE0, 0, 1]] {
+        assert!(picture_size(junk).is_err());
+    }
+}
+
+#[test]
+fn hostile_packets_decode_into_errors_never_panics() {
+    let packet = Encoder::default().encode(48, 40, 3, &picture(48, 40, 3)).expect("encode");
+    let dec = Decoder::new();
+    let mut out = vec![0u8; 48 * 4 * 40];
+    for n in 0..packet.len() {
+        let _ = dec.decode_into(&packet[..n], PixelFormat::Bgra8, &mut out, 48 * 4);
+    }
+    let mut x = 0x9E37_79B9u32;
+    for i in 0..packet.len() {
+        let mut p = packet.clone();
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        p[i] ^= (x >> 8) as u8 | 1;
+        // a flipped size byte can ask for more than the buffer holds: an error, not a panic
+        let _ = dec.decode_into(&p, PixelFormat::Rgba8, &mut out, 48 * 4);
+        let _ = picture_size(&p);
+    }
+}
+
+#[test]
+fn ffmpeg_decodes_to_the_rgba_and_bgra_of_decode_into() {
+    let Some(ff) = craft_media_testkit::ffmpeg() else { return };
+    let dir = craft_media_testkit::fixture_subdir("mjpeg");
+    let s = |p: &Path| p.to_str().expect("path").to_string();
+    for (name, sub) in [("into420", ChromaSubsampling::S420), ("into422", ChromaSubsampling::S422)] {
+        let packet =
+            Encoder::new(EncoderConfig { quality: 90, subsampling: sub }).expect("encoder").encode(67, 41, 3, &picture(67, 41, 3)).expect("encode");
+        let jpg = dir.join(format!("{name}.jpg"));
+        std::fs::write(&jpg, &packet).expect("write");
+        for (format, pix_fmt) in [(PixelFormat::Rgba8, "rgba"), (PixelFormat::Bgra8, "bgra")] {
+            let raw = dir.join(format!("{name}_{pix_fmt}.raw"));
+            ffmpeg(&ff, &["-i", &s(&jpg), "-f", "rawvideo", "-pix_fmt", pix_fmt, &s(&raw)]);
+            let theirs = std::fs::read(&raw).expect("read");
+            let (_, ours, _) = decoded_into(&packet, format, 0);
+            let p = psnr(&theirs, &ours);
+            println!("{name} {pix_fmt}: ffmpeg against decode_into {p:.1} dB");
+            assert!(p >= 38.0, "{name} {pix_fmt}: {p:.1} dB");
         }
     }
 }

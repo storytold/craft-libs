@@ -29,7 +29,7 @@ pub use stroke_cells::{StrokeCells, StrokeCellsOutput};
 pub use words::ShapeWords;
 
 /// The drawing mode of the vector tools.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum VectorMode {
@@ -252,7 +252,8 @@ pub enum ShapeChange {
     },
     /// A rectangle's four radii (the "Corner radius" field sets all four).
     Radii([f64; 4]),
-    /// A polygon's corner radius, or the options bar's Radius.
+    /// A polygon's or triangle's corner radius, or the options bar's Radius (the Rectangle's, or the Triangle
+    /// tool's own).
     CornerRadius(f64),
     /// A polygon's number of sides.
     Sides(u32),
@@ -270,8 +271,8 @@ impl ShapeChange {
     pub const ENABLED_STROKE_WIDTH: f64 = 3.0;
 }
 
-/// The Shape tools' persisted options-bar values (Fill on, radius, sides, star ratio, weight,
-/// stroke width, the Rectangle's gear); the paints are the app's foreground and background.
+/// The Shape tools' persisted options-bar values (Fill on, the Rectangle's and the Triangle's radius, sides, star
+/// ratio, weight, stroke width, the Rectangle's gear); the paints are the app's foreground and background.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
@@ -280,6 +281,9 @@ pub struct ShapeToolSettings {
     pub fill_on: bool,
     /// The Rectangle's corner radius.
     pub corner_radius: f64,
+    /// The Triangle's corner radius, one for its three corners: the Triangle tool keeps its own, apart from the
+    /// Rectangle's (storytold/photocraft#13355).
+    pub triangle_corner_radius: f64,
     /// A polygon's sides or a star's points.
     pub sides: u32,
     /// A star's inner over outer radius.
@@ -295,12 +299,13 @@ pub struct ShapeToolSettings {
 }
 
 impl Default for ShapeToolSettings {
-    /// Fill on, square corners, 5 sides, a star ratio of 0.5 (production's Star), weight 3, no stroke, no
+    /// Fill on, square corners (Rectangle and Triangle), 5 sides, a star ratio of 0.5 (production's Star), weight 3, no stroke, no
     /// arrowheads, an unconstrained Rectangle.
     fn default() -> Self {
         ShapeToolSettings {
             fill_on: true,
             corner_radius: 0.0,
+            triangle_corner_radius: 0.0,
             sides: 5,
             star_ratio: 0.5,
             line_weight: 3.0,
@@ -312,10 +317,11 @@ impl Default for ShapeToolSettings {
 }
 
 impl ShapeToolSettings {
-    /// The drag options of `kind` with these values; the gear's constraints apply to the Rectangle only.
+    /// The drag options of `kind` with these values; the gear's constraints apply to the Rectangle only, and a
+    /// Triangle takes its own corner radius.
     pub fn drag_options(&self, kind: ShapeKind) -> ShapeDragOptions {
-        let options =
-            ShapeDragOptions::new(kind).corner_radius(self.corner_radius).sides(self.sides).star_ratio(self.star_ratio).line_weight(self.line_weight);
+        let radius = if kind == ShapeKind::Triangle { self.triangle_corner_radius } else { self.corner_radius };
+        let options = ShapeDragOptions::new(kind).corner_radius(radius).sides(self.sides).star_ratio(self.star_ratio).line_weight(self.line_weight);
         match kind {
             ShapeKind::Rectangle => options.constraints(self.rect_box),
             _ => options,

@@ -5,11 +5,11 @@ use craft_behavior::geometry::Constraint;
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::slice::{
-    DivideBy, DivideSlices, DivideSlicesDialog, SliceCommand, SliceEvent, SliceItem, SliceMode, SliceOrigin, SliceOverlay, SliceRefusal, SliceTool,
-    SliceToolSettings,
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceCommand, SliceEvent, SliceItem, SliceMode, SliceOptions, SliceOptionsDialog, SliceOrigin,
+    SliceOverlay, SliceRefusal, SliceTool, SliceToolSettings,
 };
 use craft_ui::contract::{CommandSet, Role, Show as _};
-use craft_ui::dialog::DialogHost;
+use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, HoldsOk};
 use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::{Fixture, ToolFixture, access, trial};
@@ -240,4 +240,82 @@ fn divide_slice_names_each_axis_control_by_its_axis() {
             assert!(name.contains(axis), "{what}: {name:?} names its axis {axis:?}");
         }
     }
+}
+
+const STALE_SELECTION: &str = "Select the opening slices and try again.";
+
+#[trial]
+fn slice_options_keeps_its_draft_after_the_app_refuses_ok() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 700.0));
+    let id = host.borrow_mut().open(SliceOptionsDialog::new(SliceOptions::default()).held_ok());
+    fixture.idle(10);
+    host.borrow_mut().set_json_field(fixture.ctx(), id, "name", serde_json::json!("Draft name")).unwrap();
+    fixture.idle(4);
+
+    fixture.click(&fixture.by_label("OK").unwrap()).idle(4);
+    assert_eq!(host.borrow().held_state(id), Some(HeldOk::Waiting));
+    let draft = host.borrow_mut().get_mut::<SliceOptionsDialog>().unwrap().take_ok().unwrap();
+    assert_eq!(draft.name, "Draft name");
+    assert!(host.borrow_mut().get_mut::<SliceOptionsDialog>().unwrap().take_ok().is_none());
+    assert!(host.borrow_mut().take::<SliceOptionsDialog>().is_none());
+    host.borrow_mut().get_mut::<SliceOptionsDialog>().unwrap().answer_ok(Err(STALE_SELECTION.into()));
+    fixture.idle(4);
+    assert_eq!(host.borrow().get::<SliceOptionsDialog>().unwrap().options(), &draft);
+    assert!(fixture.by_label(STALE_SELECTION).is_some(), "the refusal shows in the dialog");
+
+    fixture.click(&fixture.by_label("OK").unwrap()).idle(4);
+    let mut open = host.borrow_mut();
+    let dialog = open.get_mut::<SliceOptionsDialog>().unwrap();
+    assert_eq!(dialog.take_ok(), Some(draft.clone()));
+    dialog.answer_ok(Ok(()));
+    drop(open);
+    fixture.idle(4);
+    assert_eq!(host.borrow_mut().take::<SliceOptionsDialog>().and_then(DialogResult::ok), Some(draft));
+}
+
+#[trial]
+fn divide_slices_can_retry_a_held_answer_and_cancel_it_while_waiting() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 700.0));
+    let id = host.borrow_mut().open(DivideSlicesDialog::new(DivideSlices::new(None, None)).held_ok());
+    fixture.idle(10);
+    assert!(!host.borrow_mut().confirm::<DivideSlicesDialog>(fixture.ctx()));
+    assert!(host.borrow().held_state(id).is_none(), "two disabled axes produce no answer");
+    host.borrow_mut().set_json_field(fixture.ctx(), id, "rows", serde_json::json!(3)).unwrap();
+    fixture.idle(4);
+
+    let ok = fixture.by_label("OK").unwrap();
+    assert!(!fixture.tree().is_disabled_key(ok.node), "setting one axis enables OK");
+    fixture.click(&ok).idle(4);
+    let draft = DivideSlices::new(Some(DivideBy::Count(3)), None);
+    let mut open = host.borrow_mut();
+    let dialog = open.get_mut::<DivideSlicesDialog>().unwrap();
+    assert_eq!(dialog.take_ok(), Some(draft));
+    dialog.answer_ok(Err(STALE_SELECTION.into()));
+    drop(open);
+    fixture.idle(4);
+    assert!(fixture.by_label(STALE_SELECTION).is_some());
+    assert!(!host.borrow_mut().confirm::<DivideSlicesDialog>(fixture.ctx()), "programmatic OK files before closing");
+    let mut open = host.borrow_mut();
+    let dialog = open.get_mut::<DivideSlicesDialog>().unwrap();
+    assert_eq!(dialog.take_ok(), Some(draft));
+    dialog.answer_ok(Ok(()));
+    assert!(open.confirm::<DivideSlicesDialog>(fixture.ctx()));
+    assert_eq!(open.take::<DivideSlicesDialog>().and_then(DialogResult::ok), Some(draft));
+    open.open(DivideSlicesDialog::new(draft).held_ok());
+    assert!(!open.confirm::<DivideSlicesDialog>(fixture.ctx()));
+    drop(open);
+
+    fixture.idle(4);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(4);
+    assert!(matches!(host.borrow_mut().take::<DivideSlicesDialog>(), Some(DialogResult::Cancel)));
+    host.borrow_mut().open(DivideSlicesDialog::new(draft));
+    assert!(host.borrow_mut().confirm::<DivideSlicesDialog>(fixture.ctx()), "ordinary callers close immediately");
+    assert_eq!(host.borrow_mut().take::<DivideSlicesDialog>().and_then(DialogResult::ok), Some(draft));
 }

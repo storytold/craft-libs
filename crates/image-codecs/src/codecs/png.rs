@@ -1266,6 +1266,35 @@ fn encode_data(raw: RawPng<'_>, opts: &EncodeOptions) -> Result<Vec<u8>, CodecEr
     Ok(out)
 }
 
+/// Encodes interleaved 8-bit RGBA pixels, row-major with no row padding, as a PNG without
+/// copying them into an [`Image`]. The output matches [`crate::encode`] of the same pixels with
+/// no ICC profile and default metadata. `pixels` must hold exactly `width * height * 4` bytes.
+pub fn encode_rgba8(width: u32, height: u32, pixels: &[u8], opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    if width == 0 || height == 0 {
+        return Err(CodecError::InvalidImage("cannot encode an empty image".into()));
+    }
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| CodecError::InvalidImage("image size overflows usize".into()))?;
+    if pixels.len() != expected {
+        return Err(CodecError::InvalidImage(format!("buffer has {} bytes, expected {expected} for {width}x{height} RGBA8", pixels.len())));
+    }
+    encode_data(
+        RawPng {
+            width,
+            height,
+            layout: ChannelLayout::Rgba,
+            sample: SampleType::U8,
+            icc: None,
+            cicp: None,
+            meta: &Metadata::default(),
+            data: pixels,
+        },
+        opts,
+    )
+}
+
 /// Encodes linear-light Rec. 2020 RGB as 16-bit PNG with BT.2100 PQ (`cICP`) and measured
 /// content-light levels (`cLLI`). Input samples are relative to 203 cd/m² diffuse white, as in
 /// [`crate::cicp::linearize`]. Negative and non-finite values become black; values above 10,000
@@ -1361,12 +1390,12 @@ fn start<W: Write>(
     if opts.embed_icc
         && let Some(icc) = icc
     {
-        info.icc_profile = Some(icc.clone().into());
+        info.icc_profile = Some(std::borrow::Cow::Borrowed(icc.as_slice()));
     }
     if opts.embed_metadata {
         if let Some(exif) = &meta.exif {
             // The pixels are written as they are shown: never let a viewer rotate them again.
-            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi).into_owned().into());
+            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi));
         }
         if let Some((x, y)) = meta.dpi
             && x > 0.0
@@ -2336,10 +2365,15 @@ mod streamed_tests {
                 xmp: Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into()),
                 ..Default::default()
             };
-            let img = Image::from_raw(w, h, layout, sample, noise(w as usize * h as usize * ch * bytes, 7))
-                .unwrap()
-                .with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect()))
-                .with_meta(meta);
+            // Distinct nonconstant row runs retain carry and row-order sensitivity across pushes.
+            let stride = w as usize * ch * bytes;
+            let row = noise(stride, 7);
+            let mut pixels = row.repeat(h as usize);
+            for row in pixels.chunks_exact_mut(stride).skip(h as usize / 2) {
+                row[0] ^= 0x5a;
+            }
+            let img =
+                Image::from_raw(w, h, layout, sample, pixels).unwrap().with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect())).with_meta(meta);
             for level in [PngCompression::Fast, PngCompression::Default] {
                 let opts = EncodeOptions { png_compression: level, ..Default::default() };
                 let one_band = [h];

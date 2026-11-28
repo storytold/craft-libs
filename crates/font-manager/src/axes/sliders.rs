@@ -25,13 +25,14 @@ craft_ui::words! {
         width: "axisSliders.width" = "Width";
         slant: "axisSliders.slant" = "Slant";
         italic: "axisSliders.italic" = "Italic";
+        optical_size: "axisSliders.opticalSize" = "Optical size";
         style: "axisSliders.style" = "Style";
         custom: "axisSliders.custom" = "Custom";
     }
 }
 
 /// The label of an axis: its name when the font gives one, else the registered tag's
-/// (`Weight`, `Width`, `Slant`, `Italic`), else the tag itself.
+/// (`Weight`, `Width`, `Slant`, `Italic`, `Optical size`), else the tag itself.
 pub fn axis_label(axis: &FontAxis) -> String {
     label_in(axis, &AxisSlidersWords::default())
 }
@@ -45,6 +46,7 @@ fn label_in(axis: &FontAxis, labels: &AxisSlidersWords) -> String {
         b"wdth" => labels.width.as_str().to_owned(),
         b"slnt" => labels.slant.as_str().to_owned(),
         b"ital" => labels.italic.as_str().to_owned(),
+        b"opsz" => labels.optical_size.as_str().to_owned(),
         tag => Tag::new(tag).to_string(),
     }
 }
@@ -70,9 +72,21 @@ fn set_value(values: &mut AxisValues, tag: [u8; 4], value: f32) {
     }
 }
 
-/// The axes the sliders show: not hidden, not `opsz`, with a finite, non-empty range.
-fn shown_axes(axes: &[FontAxis]) -> impl Iterator<Item = &FontAxis> {
-    axes.iter().filter(|a| !a.hidden && a.tag != *b"opsz" && a.min.is_finite() && a.max.is_finite() && a.min < a.max)
+/// Where the optical size axis (`opsz`) takes its value from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpticalSize {
+    /// The text layout sets it from the font size: it has no slider.
+    #[default]
+    FontSize,
+    /// Its own slider, as any axis: for text drawn only to look at the face.
+    Slider,
+}
+
+/// The axes the sliders show: not hidden, `opsz` only where it has a slider, with a finite, non-empty range.
+pub(crate) fn shown_axes(axes: &[FontAxis], optical_size: OpticalSize) -> impl Iterator<Item = &FontAxis> {
+    let slides = move |a: &FontAxis| a.tag != *b"opsz" || optical_size == OpticalSize::Slider;
+    axes.iter().filter(move |a| !a.hidden && slides(a) && a.min.is_finite() && a.max.is_finite() && a.min < a.max)
 }
 
 /// What changed in the sliders this pass.
@@ -108,8 +122,8 @@ struct Drawn {
 }
 
 /// One slider field per visible axis (label, slider, number field with the axis's range), plus a `Select` of named
-/// instances above them when the face has any. Hidden axes, `opsz` (the text layout sets the optical size from the
-/// font size) and axes with an empty or non-finite range are left out. Values are the current coordinates; an axis
+/// instances above them when the face has any. Hidden axes, `opsz` ([`OpticalSize::FontSize`]) and axes with an empty or
+/// non-finite range are left out. Values are the current coordinates; an axis
 /// without one shows what the layout draws (its style's weight and italic; else its default). Axes whose range is 10 wide
 /// or more step by whole units, the others by hundredths. A drag is one edit; an instance sets every axis in one
 /// edit.
@@ -128,6 +142,9 @@ pub struct AxisSliders<'a> {
     /// Whether the style is italic: an unset `ital` axis then shows its maximum, once a weight is given.
     #[prop]
     italic: bool,
+    /// Whether the `opsz` axis has a slider.
+    #[prop]
+    optical_size: OpticalSize,
     /// The axes (by tag) the selection mixes: each shows `Mixed` and is left out of the edit's held values.
     #[prop]
     #[allow(dead_code)] // P3(type-w3): ty.X21a
@@ -137,12 +154,21 @@ pub struct AxisSliders<'a> {
 impl<'a> AxisSliders<'a> {
     /// Sliders named `label` over the `axes` of a face, editing the coordinates `values`.
     pub fn new(label: impl Into<Label>, axes: &'a [FontAxis], values: Bind<'a, AxisValues>) -> Self {
-        AxisSliders { label: label.into(), axes, values, instances: &[], weight: None, italic: false, mixed: &[] }
+        AxisSliders {
+            label: label.into(),
+            axes,
+            values,
+            instances: &[],
+            weight: None,
+            italic: false,
+            optical_size: OpticalSize::default(),
+            mixed: &[],
+        }
     }
 
     /// Draws the sliders (and the instance list, if any) and reports the edit made this pass.
     pub fn show(self, ui: &mut Ui) -> AxisSlidersOutput {
-        let AxisSliders { label, axes, mut values, instances, weight, italic, mixed: _ } = self;
+        let AxisSliders { label, axes, mut values, instances, weight, italic, optical_size, mixed: _ } = self;
         let drawn = Drawn { weight, italic };
         let env = Env::of(ui);
         let words = env.words::<AxisSlidersWords>();
@@ -172,7 +198,7 @@ impl<'a> AxisSliders<'a> {
                     instance = Some(chosen.clone());
                 }
             }
-            for axis in shown_axes(axes) {
+            for axis in shown_axes(axes, optical_size) {
                 let held = read_bind(&mut values, cx).unwrap_or_default();
                 let wide = axis.max - axis.min >= 10.0;
                 let mut value = f64::from(value_of(&held, axis, drawn));
