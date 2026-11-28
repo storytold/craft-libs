@@ -649,6 +649,26 @@ fn a_scrolling_container_in_a_right_to_left_row_measures_and_shows_finite() {
     }
 }
 
+/// A Row offered unbounded width (its layout's width is infinite) holding a content-sized container: the container's
+/// room is unbounded, not NaN, so it and the probe inside it measure and show finite.
+#[trial]
+fn a_container_in_a_row_offered_unbounded_width_measures_finite() {
+    let inside = RefCell::new(Seen::default());
+    let (_, rects) = lay_out(None, |ui| {
+        let unbounded = Rect::from_min_size(ui.cursor().min, Vec2::new(f32::INFINITY, 200.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(unbounded), |ui| {
+            let row = Panel::new().layout(BodyLayout::row()).id_salt("row").show(ui, |ui, _| {
+                Panel::new().id_salt("child").show(ui, |ui, _| Probe::new(&inside).size(ITEM).id_salt("inside").show(ui)).output.rect
+            });
+            vec![row.output.rect, row.inner.unwrap_or(Rect::NOTHING)]
+        })
+        .inner
+    });
+    let inside = inside.into_inner().rect;
+    let finite = |rect: Rect| rect.min.is_finite() && rect.max.is_finite();
+    assert!(rects.iter().chain([&inside]).all(|rect| finite(*rect)), "every rect is finite: {rects:?}, inside {inside:?}");
+}
+
 /// A labelled container with a footer, shown in a rect narrower than its padding, in either direction: its measuring
 /// run places the footer under the control column of a line with no room, and the container shows.
 #[trial]
