@@ -107,10 +107,12 @@ fn search(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
     let words = env.text.words();
     let label = words.search.clone();
     let mut query = state.query.clone();
+    let mut edited = false;
     Field::new(label.clone()).id_salt("shortcuts.search").sizing(Sizing::Content).show(ui, |ui, _| {
-        TextField::search(label.clone(), Bind::bound(&mut query)).id_salt("search").show(ui);
+        edited = !TextField::search(label.clone(), Bind::bound(&mut query)).id_salt("search").show(ui).events.is_empty();
     });
-    if query != state.query {
+    // Typing over a recorded chord makes the query typed, even when the text comes out the same.
+    if edited || query != state.query {
         state.set_query(query);
     }
     let searching = matches!(state.recording.as_ref().map(|recording| &recording.target), Some(Target::Search));

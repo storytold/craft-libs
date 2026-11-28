@@ -168,7 +168,16 @@ fn with_match_case_ticked_search_by_key_still_finds_the_binding() {
     let check = match_case_box(&rig).expect("the dialog offers Match Case");
     assert_eq!(rig.fixture.tree().toggled_of(check.node), Some(craft_behavior::Mixed::Same(true)), "Match Case stays ticked");
 
+    // Typing the recorded text over itself makes it a typed query.
     tab_to(&mut rig, "Search:");
+    let recorded = rig.fixture.tree().value_of(rig.find("Search:").node).expect("Search holds the chord").to_owned();
+    rig.press(Modifiers::COMMAND, Key::A);
+    rig.fixture.type_text(&recorded);
+    rig.fixture.idle(2);
+    assert_eq!(rig.fixture.tree().value_of(rig.find("Search:").node), Some(recorded.as_str()), "the text is unchanged");
+    let rows = rig.names_with(Role::ROW, "Export");
+    assert!(rows.is_empty(), "the same text typed is not in Export…'s name: {rows:?}");
+
     rig.press(Modifiers::COMMAND, Key::A);
     rig.fixture.type_text("Cmd+E");
     rig.fixture.idle(2);
