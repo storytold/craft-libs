@@ -2228,6 +2228,8 @@ dependencies = [
  "md-5 0.10.6",
  "moxcms",
  "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
