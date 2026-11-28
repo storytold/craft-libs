@@ -420,6 +420,262 @@ fn three_curvature_clicks_give_three_anchors() {
     }
 }
 
+// ---- Curvature Pen: Delete on a selected anchor ----
+
+// The measured rows of photocraft #12696: a click on an anchor of the draft selects it, and Delete or Backspace
+// removes that anchor with the curve re-solved through the remaining ones, as for a path drawn through them.
+// A case the issue does not measure keeps today's behaviour, pinned below.
+
+/// The five anchors of the issue's measured example, halved to fit the test canvas: A, B, C, D, E.
+const CURVE5: [(f64, f64); 5] = [(50.0, 150.0), (125.0, 75.0), (200.0, 150.0), (275.0, 75.0), (350.0, 150.0)];
+
+/// The four left when C is deleted from CURVE5, in drawing order: A, B, D, E.
+const CURVE4: [(f64, f64); 4] = [CURVE5[0], CURVE5[1], CURVE5[3], CURVE5[4]];
+
+/// A Curvature Pen with the anchors of `points` clicked in drawing order.
+fn curvature_drawn(points: &[(f64, f64)]) -> Pen {
+    let mut pen = pen();
+    pen.fixture.tool_mut().mode(PenMode::Curvature);
+    for &(x, y) in points {
+        pen.click_doc(x, y);
+    }
+    pen
+}
+
+impl Pen {
+    /// Delete or Backspace, and the events it reported.
+    fn delete_key(&mut self, key: egui::Key) {
+        self.fixture.fixture().key(key, Modifiers::NONE);
+        self.sync();
+    }
+
+    /// The whole-draft values of the `Update`s reported so far.
+    fn updates(&self) -> Vec<EditSubpath> {
+        self.log
+            .iter()
+            .filter_map(|event| match event {
+                PenEvent::Edit(EditEvent::Update { value, .. }) => Some(value.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+#[trial]
+fn a_selected_curvature_anchor_deletes_and_the_curve_resolves_through_the_neighbours() {
+    let mut pen = curvature_drawn(&CURVE5);
+    let five = pen.draft();
+    assert_eq!(five.knots.len(), 5, "the draft A, B, C, D, E is open");
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    assert_eq!(pen.draft(), five, "a click on an anchor changes nothing but the selection");
+    pen.delete_key(egui::Key::Delete);
+    let after = pen.draft();
+    assert_eq!(after.knots.len(), 4, "C is gone");
+    let drawn = curvature_drawn(&CURVE4);
+    assert_eq!(after, drawn.draft(), "every handle re-solved as for a path drawn through A, B, D, E");
+    assert_eq!(pen.kinds().iter().filter(|kind| **kind == "begin").count(), 1, "the open gesture stays one history step");
+    assert!(pen.kinds().ends_with(&["update"]), "the removal is one Update: {:?}", pen.kinds());
+    assert!(pen.log.iter().all(|event| !matches!(event, PenEvent::Finished(_))), "the draft stays open");
+}
+
+// The app hands its held draft back in before every pass, as `apply_pen` does: the selection survives that round
+// trip, so a Delete in a later pass still removes the anchor clicked before it.
+#[trial]
+fn the_curvature_selection_survives_the_host_handing_the_draft_back() {
+    let mut pen = curvature_drawn(&CURVE5);
+    let five = pen.draft();
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    {
+        let mut tool = pen.fixture.tool_mut();
+        tool.mode(PenMode::Curvature).draft(Some(PenDraft::Own(&five))).kept(0);
+    }
+    pen.fixture.fixture().settle();
+    pen.sync();
+    assert_eq!(pen.draft(), five, "the round trip leaves the draft");
+    pen.delete_key(egui::Key::Delete);
+    let drawn = curvature_drawn(&CURVE4);
+    assert_eq!(pen.draft(), drawn.draft(), "the selected anchor is the one removed");
+}
+
+#[trial]
+fn backspace_deletes_the_selected_curvature_anchor_like_delete() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    pen.delete_key(egui::Key::Backspace);
+    let drawn = curvature_drawn(&CURVE4);
+    assert_eq!(pen.draft(), drawn.draft(), "Backspace does the same as Delete");
+}
+
+// Deleting the last anchor stays today's removal: right after placing it, and after clicking it. The click on D
+// keeps the click on E a single click.
+#[trial]
+fn delete_right_after_placing_the_last_anchor_removes_it_as_today() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.delete_key(egui::Key::Delete);
+    let drawn = curvature_drawn(&CURVE5[..4]);
+    assert_eq!(pen.draft(), drawn.draft(), "the last anchor goes, as today");
+}
+
+#[trial]
+fn a_click_on_the_last_anchor_and_delete_removes_the_last_as_today() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.click_doc(CURVE5[3].0, CURVE5[3].1);
+    pen.click_doc(CURVE5[4].0, CURVE5[4].1);
+    pen.delete_key(egui::Key::Delete);
+    let drawn = curvature_drawn(&CURVE5[..4]);
+    assert_eq!(pen.draft(), drawn.draft(), "the last anchor goes, as today");
+}
+
+// The selection is spent by the removal: with nothing selected again the key takes back the last anchor, as today.
+#[trial]
+fn the_delete_after_a_selected_removal_takes_back_the_last_anchor() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    pen.delete_key(egui::Key::Delete);
+    pen.delete_key(egui::Key::Backspace);
+    let drawn = curvature_drawn(&[CURVE5[0], CURVE5[1], CURVE5[3]]);
+    assert_eq!(pen.draft(), drawn.draft(), "with nothing selected again, the last anchor goes, as today");
+}
+
+// Deleting at two and one anchor keeps today's edges: one anchor left, the draft open, and the next removal
+// ends it as Removed with a cancel. The clicked first anchor of two is the selected one.
+#[trial]
+fn the_curvature_delete_at_two_anchors_leaves_one_and_the_next_removal_ends_the_draft() {
+    let mut pen = curvature_drawn(&CURVE5[..2]);
+    pen.click_doc(CURVE5[0].0, CURVE5[0].1);
+    pen.delete_key(egui::Key::Delete);
+    let left = pen.draft();
+    assert_eq!(left.knots.len(), 1, "one anchor is left");
+    assert_eq!(left.knots[0].anchor, doc(125.0, 75.0), "the kept one is the unselected B");
+    assert!(pen.log.iter().all(|event| !matches!(event, PenEvent::Finished(_))), "the draft stays open");
+    pen.delete_key(egui::Key::Delete);
+    assert_eq!(pen.log.last(), Some(&PenEvent::Finished(PenEnd::Removed)), "the only anchor's removal ends the draft");
+    assert!(pen.kinds().ends_with(&["cancel", "finished"]), "{:?}", pen.kinds());
+    assert!(pen.draft().knots.is_empty());
+}
+
+#[trial]
+fn the_curvature_delete_of_the_only_anchor_discards_the_draft_as_today() {
+    let mut pen = curvature_drawn(&CURVE5[..1]);
+    pen.delete_key(egui::Key::Delete);
+    assert!(pen.kinds().ends_with(&["cancel", "finished"]), "{:?}", pen.kinds());
+    assert_eq!(pen.log.last(), Some(&PenEvent::Finished(PenEnd::Removed)));
+    assert!(pen.draft().knots.is_empty());
+}
+
+// A resumed draft: the removal never eats a carried anchor. The new anchor is the draft's own and goes; the
+// carried anchors keep their places and handles, and the draft stays open.
+#[trial]
+fn a_selected_curvature_deletion_spares_the_carried_anchors_of_a_resumed_draft() {
+    let mut pen = pen();
+    let carried = EditSubpath::new(vec![Knot::corner(doc(60.0, 60.0)), Knot::corner(doc(160.0, 60.0))], false);
+    {
+        let mut tool = pen.fixture.tool_mut();
+        tool.mode(PenMode::Curvature).kept(2).draft(Some(PenDraft::Own(&carried)));
+    }
+    pen.fixture.fixture().settle();
+    pen.click_doc(260.0, 160.0);
+    assert_eq!(pen.draft().knots.len(), 3, "the carried anchors and the new one");
+    pen.delete_key(egui::Key::Delete);
+    let draft = pen.draft();
+    assert_eq!(draft, carried, "the draft's own anchor is gone, the carried ones keep places and handles");
+    assert!(pen.log.iter().all(|event| !matches!(event, PenEvent::Finished(_))), "the draft stays open");
+}
+
+// The removal is one `Update` of the open gesture, which keeps its single Path-named history step; the `Update`
+// before the removal holds the whole draft, so the host handing that value back restores the five anchors.
+#[trial]
+fn a_selected_curvature_delete_is_one_undoable_update_of_the_open_gesture() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    let five = pen.draft();
+    pen.delete_key(egui::Key::Delete);
+    let labels: Vec<String> = pen
+        .log
+        .iter()
+        .filter_map(|event| match event {
+            PenEvent::Edit(EditEvent::Begin { label, .. }) => Some(label.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["Path"], "one history step, named by the pen's word");
+    let updates = pen.updates();
+    let (last, earlier) = updates.split_last().expect("the Updates so far");
+    let drawn = curvature_drawn(&CURVE4);
+    assert_eq!(last, &drawn.draft(), "the removal itself");
+    assert_eq!(earlier[earlier.len() - 1], five, "the previous Update holds the whole five-anchor draft");
+    assert!(pen.fixture.tool_mut().replace(&five));
+    pen.sync();
+    assert_eq!(pen.draft(), five, "handing that value back restores the draft: the host's Undo");
+}
+
+// The Pen mode is untouched: a click there selects no anchor, and Delete takes back the last anchor - here the
+// corner anchor a click on a middle one added.
+#[trial]
+fn the_pen_still_deletes_the_last_anchor_whatever_was_clicked() {
+    let mut pen = pen();
+    pen.click_doc(60.0, 60.0);
+    pen.click_doc(160.0, 60.0);
+    pen.click_doc(160.0, 160.0);
+    let three = pen.draft();
+    pen.click_doc(160.0, 60.0);
+    assert_eq!(pen.draft().knots.len(), 4, "a Pen click on a middle anchor adds one");
+    pen.delete_key(egui::Key::Delete);
+    assert_eq!(pen.draft(), three, "the Pen takes back the last anchor, as today");
+}
+
+// Auto Add/Delete stays off in Curvature mode: a press on a segment of the draft adds its anchor last, as the
+// mode always did, and the key takes it back.
+#[trial]
+fn auto_add_delete_stays_off_for_the_curvature_pen() {
+    let mut pen = pen();
+    {
+        let mut tool = pen.fixture.tool_mut();
+        tool.mode(PenMode::Curvature).auto_add_delete(true);
+    }
+    for (x, y) in [(60.0, 60.0), (160.0, 60.0), (260.0, 160.0)] {
+        pen.click_doc(x, y);
+    }
+    pen.click_doc(110.0, 55.0);
+    let draft = pen.draft();
+    assert_eq!(draft.knots.len(), 4, "a press on a segment adds a new last anchor, it does not insert there");
+    assert_eq!(draft.knots[3].anchor, doc(110.0, 55.0));
+    pen.delete_key(egui::Key::Delete);
+    assert_eq!(pen.draft().knots.len(), 3, "the key takes it back, as today");
+}
+
+// The host's Undo keeps today's rule while another anchor is selected: it takes back the draft's last anchor,
+// and with the selection spent the next key takes back the next-to-last as well.
+#[trial]
+fn remove_last_takes_back_the_last_anchor_even_with_another_one_selected() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    assert!(pen.fixture.tool_mut().remove_last());
+    pen.sync();
+    let drawn = curvature_drawn(&CURVE5[..4]);
+    assert_eq!(pen.draft(), drawn.draft(), "the Undo takes back E, not the selected C");
+    pen.delete_key(egui::Key::Delete);
+    let drawn = curvature_drawn(&CURVE5[..3]);
+    assert_eq!(pen.draft(), drawn.draft(), "and the key now takes back the next-to-last, D");
+}
+
+// The double-click toggle is a press on that anchor too: afterwards Delete removes the toggled anchor. Not a
+// measured row of the issue; it follows the selected-anchor rule the issue states for a click.
+#[trial]
+fn a_double_clicked_curvature_anchor_then_deletes_as_the_selected_one() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    let toggled = pen.draft();
+    assert_eq!(toggled.knots.len(), 5, "the toggle changes the anchor, not the count");
+    assert!(!toggled.knots[2].smooth, "C became a corner");
+    pen.delete_key(egui::Key::Delete);
+    assert_eq!(pen.draft().knots.len(), 4, "C is gone");
+    assert!(pen.draft().knots.iter().all(|k| k.smooth), "the toggled anchor is the one removed, the rest are smooth again");
+    let drawn = curvature_drawn(&CURVE4);
+    assert_eq!(pen.draft(), drawn.draft(), "the curve re-solves through A, B, D, E as always");
+}
+
 // ---- Path modes and Path Options ----
 
 /// A host that ended the draft itself hands in no draft: the pen drops its run without an event, and the next press
