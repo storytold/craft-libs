@@ -7175,6 +7175,7 @@ version = "0.1.0"
 name = "hayro-syntax"
 version = "0.7.2"
 dependencies = [
+ "craft-jpeg",
  "flate2",
  "hayro-ccitt",
  "hayro-jbig2",

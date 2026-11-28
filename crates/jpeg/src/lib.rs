@@ -222,6 +222,39 @@ pub fn finer_than_first(bytes: &[u8]) -> bool {
     (1..n).any(|k| sampling(k).is_some_and(|(h, v)| h > h0 || v > v0))
 }
 
+/// The number of components of an 8-bit sequential Huffman frame (SOF0, SOF1) whose first scan
+/// carries fewer of them than the frame has: its components are coded in more than one scan
+/// (one per component, say; T.81 A.2.2), read from the headers only. zune-jpeg 0.5.15, the
+/// decoder behind `image` and the PDF reader's DCT filter, decodes such a frame into stripes of
+/// the wrong colour (fixed in 0.5.16-rc3); this decoder reads it. `None` for any other stream.
+/// shortcut: remove this check (and its callers' routing) once `Cargo.lock` has zune-jpeg
+/// 0.5.16 or later.
+pub fn split_scan_components(bytes: &[u8]) -> Option<u8> {
+    let (marker, seg) = frame_segment(bytes)?;
+    // Length (2), precision (1), height (2), width (2), then the component count.
+    let components = *seg.get(7)?;
+    if !matches!(marker, 0xC0 | 0xC1) || *seg.get(2)? != 8 || components < 2 {
+        return None;
+    }
+    let mut i = 2;
+    loop {
+        if *bytes.get(i)? != 0xFF {
+            return None;
+        }
+        let m = *bytes.get(i + 1)?;
+        match m {
+            0xFF => i += 1,
+            0x01 | 0xD0..=0xD8 => i += 2,
+            0xD9 => return None,
+            0xDA => return (*bytes.get(i + 4)? < components).then_some(components),
+            _ => {
+                let len = usize::from(u16::from_be_bytes([*bytes.get(i + 2)?, *bytes.get(i + 3)?]));
+                i = i.checked_add(2 + len)?;
+            }
+        }
+    }
+}
+
 fn frame_segment(b: &[u8]) -> Option<(u8, &[u8])> {
     if b.get(..2) != Some(&[0xFF, 0xD8]) {
         return None;

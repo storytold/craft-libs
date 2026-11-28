@@ -14,13 +14,13 @@
       "path": "Cargo.toml",
       "source_sha256": "2520802133a82f9bfca9be7fe4a384af1bce05ada198fd9d637d99d877625333",
       "source_git_blob": "cc34e45f8745780a781c2bb2328fa79669998abf",
-      "sha256": "86349f42b6632812f9ea23eddf56075698dfabbee6c31a04bf1d96431a5cb810"
+      "sha256": "ea92699b1456d6dcf4f120cafd2e2ac334095bd76e4cb601c3adf8c5b8784b99"
     },
     {
       "path": "Cargo.toml.orig",
       "source_sha256": "4d011edd25ba0cd22252643cc8f9c967c64e3480735cabcba3d10b1798f72e83",
       "source_git_blob": "bbc9dcf3ebf210012f740790840d119b3e501d37",
-      "sha256": "4d011edd25ba0cd22252643cc8f9c967c64e3480735cabcba3d10b1798f72e83"
+      "sha256": "89241683865e267e8321901a70200cc9a9d37e3a3b91dc949af033da13098c34"
     },
     {
       "path": "LICENSE-APACHE",
@@ -152,7 +152,7 @@
       "path": "src/filter/dct.rs",
       "source_sha256": "48452c1817b0a95b079aff068c8a625078c90354978af1de4ff97142e6bb0dd2",
       "source_git_blob": "a4fbd1761ee2b1e16ac2848f0209f563ec529065",
-      "sha256": "48452c1817b0a95b079aff068c8a625078c90354978af1de4ff97142e6bb0dd2"
+      "sha256": "04dafdc2370c0130d7e48c39c2c67d5e069d1a2a5779b1ae08ff3b32c8ea20ad"
     },
     {
       "path": "src/filter/jbig2.rs",

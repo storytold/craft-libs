@@ -388,6 +388,19 @@ fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
 
+JPEGs with one scan per component (Craft patch, hayro-syntax `filter/dct.rs`, PdfCraft #7852):
+zune-jpeg 0.5.15 decodes an 8-bit sequential Huffman frame (SOF0, SOF1) of three components whose
+scans don't interleave them (T.81 A.2.2; `jpegtran -scans` writes them, as do some cameras and
+report generators) into stripes of the wrong colour. Such a frame, found from its headers
+(`craft_jpeg::split_scan_components`, which `craft-image-codecs` routes by as well), is decoded by
+craft-jpeg instead, converting YCbCr to RGB as the zune-jpeg branch does (not when
+`/ColorTransform` is 0, else as an Adobe marker says). hayro-syntax depends on `craft-jpeg`
+0.1, which is not on crates.io: consuming workspaces need a `craft-jpeg` patch entry beside the
+Hayro entries, pointing at this repository's `crates/jpeg`. Tests:
+`filter::dct::tests::a_baseline_frame_with_one_scan_per_component_keeps_its_colours` and
+`color_transform_0_keeps_the_stored_samples_for_one_scan_per_component`. Remove the routing once
+`Cargo.lock` has a zune-jpeg release that decodes these frames (0.5.16-rc3 does).
+
 ## Cooperative opening cancellation
 
 The syntax reader also supports cooperative cancellation scoped to one open operation through

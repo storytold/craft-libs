@@ -11,6 +11,8 @@ for backend in hayro hayro-interpret hayro-syntax hayro-jbig2 hayro-cmap hayro-p
   cp -R "$root/vendor/$backend" "$test_root/$backend"
   patches+=(--config "patch.crates-io.$backend.path=\"$test_root/$backend\"")
 done
+# hayro-syntax decodes some JPEGs with craft-jpeg, which builds in this workspace.
+patches+=(--config "patch.crates-io.craft-jpeg.path=\"$root/crates/jpeg\"")
 for backend in hayro-syntax hayro-interpret hayro hayro-jbig2 hayro-cmap hayro-postscript; do
   cargo test --manifest-path "$test_root/$backend/Cargo.toml" --lib "${patches[@]}"
 done

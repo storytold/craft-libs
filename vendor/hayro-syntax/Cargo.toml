@@ -34,6 +34,7 @@ default = [
 ]
 images = [
     "dep:zune-jpeg",
+    "dep:craft-jpeg",
     "dep:hayro-ccitt",
     "dep:hayro-jbig2",
     "dep:hayro-jpeg2000",
@@ -111,6 +112,12 @@ optional = true
 version = "0.5"
 optional = true
 default-features = false
+
+# Craft patch: decodes the sequential JPEGs zune-jpeg 0.5.15 gets wrong (see `filter/dct.rs`).
+# Not on crates.io: consuming workspaces patch it to craft-libs' `crates/jpeg`.
+[dependencies.craft-jpeg]
+version = "0.1"
+optional = true
 
 [dev-dependencies.aes]
 version = "0.8.4"

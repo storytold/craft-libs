@@ -490,12 +490,14 @@ fn first_component_subsampled(b: &[u8]) -> bool {
 }
 
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
-/// (SOF9–SOF11), lossless (SOF3), or a DCT frame whose precision isn't 8 bits (#4934, #5003).
-/// This includes 12-bit progressive Huffman (SOF2), which `craft-jpeg` supports.
+/// (SOF9–SOF11), lossless (SOF3), a DCT frame whose precision isn't 8 bits (#4934, #5003), or a
+/// sequential frame whose components are coded in separate scans, which zune-jpeg 0.5.15
+/// decodes wrongly ([`craft_jpeg::split_scan_components`], pdfcraft#7852). This includes 12-bit
+/// progressive Huffman (SOF2), which `craft-jpeg` supports.
 fn uses_craft_jpeg(bytes: &[u8]) -> bool {
     match craft_jpeg::frame(bytes) {
         Some(f) if (0xC9..=0xCB).contains(&f.marker) || f.marker == 0xC3 => true,
-        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8,
+        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8 || craft_jpeg::split_scan_components(bytes).is_some(),
         _ => false,
     }
 }
@@ -563,13 +565,17 @@ fn decode_whole(bytes: &[u8], limits: &Limits, meta: JpegMeta, end: DataEnd, sca
     if scan_bytes == 0 {
         return Err(err("the file has no scan data"));
     }
+    // Arithmetic coding (SOF9–SOF11) can spend well under a bit on a flat block, so a complete
+    // scan of it may be shorter than this bound: only a truncated one is held to it. An 8-bit
+    // Huffman frame (SOF0–SOF2) is held to it complete too, as on the `zune-jpeg` path (#8597):
+    // those come here with one scan per component, or where a panic aborts.
+    let huffman_8_bit = craft_jpeg::frame(bytes).is_some_and(|f| matches!(f.marker, 0xC0..=0xC2) && f.precision == 8);
     if let Some((w, h, _)) = meta.frame
-        && end == DataEnd::Truncated
-        // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
-        // a flat block, so a complete scan may be shorter than this bound.
+        && (end == DataEnd::Truncated || huffman_8_bit)
         && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
     {
-        return Err(err("the truncated scan is too short for the frame it declares"));
+        let what = if end == DataEnd::Truncated { "the truncated scan" } else { "the scan data" };
+        return Err(err(format!("{what} is too short for the frame it declares")));
     }
     let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform, meta.adobe_marker)?;
     img.icc = meta.icc;
