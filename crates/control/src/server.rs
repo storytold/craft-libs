@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use craft_control_protocol::ReadFailure;
@@ -60,10 +60,15 @@ pub struct Hub {
     /// Longest request line accepted.
     max_line: usize,
     waits: Waits,
+    clock: Clock,
     watch: &'static DocumentWatch,
     running: Arc<Running>,
     open: AtomicUsize,
 }
+
+/// The time a connection's token deadline is measured on: [`Instant::now`], or a clock a test
+/// moves.
+pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 impl Hub {
     /// A server for `protocol`'s requests; `wake` makes the window look at its requests now.
@@ -73,6 +78,7 @@ impl Hub {
             wake: Box::new(wake),
             max_line,
             waits: Waits::default(),
+            clock: Arc::new(Instant::now),
             watch: &DOCUMENT_WATCH,
             running: Arc::new(Running::new()),
             open: AtomicUsize::new(0),
@@ -82,6 +88,12 @@ impl Hub {
     /// Other waits (tests).
     pub fn with_waits(mut self, waits: Waits) -> Self {
         self.waits = waits;
+        self
+    }
+
+    /// Another clock for the token deadline than [`Instant::now`] (tests).
+    pub fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -187,12 +199,17 @@ impl Stop {
     }
 
     /// Stop accepting, close the port and end every connection it accepted. Returns once the
-    /// port is closed (at most a couple of seconds), so the same port can be bound again at once.
+    /// port is closed, so the same port can be bound again at once. When no connection can be
+    /// made to wake the listener, it waits at most two seconds for the port to close.
     pub fn stop(self) {
         self.shared.stopped.store(true, Ordering::SeqCst);
-        // The listener waits in `accept`: a connection of our own wakes it to see the flag.
-        let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
-        let _ = self.closed.recv_timeout(Duration::from_secs(2));
+        // The listener waits in `accept`: a connection of our own wakes it to see the flag. Once
+        // that connection is made, the listener accepts it and ends however busy the machine is.
+        if TcpStream::connect_timeout(&self.addr, Duration::from_secs(1)).is_ok() {
+            let _ = self.closed.recv();
+        } else {
+            let _ = self.closed.recv_timeout(Duration::from_secs(2));
+        }
         self.shared.close_all();
     }
 }
@@ -283,7 +300,8 @@ fn refuse(out: &mut TcpStream, reader: &mut BufReader<ClientInput>, docs: &str) 
     use std::io::Read;
     let _ = send(out, &unauthorized(docs));
     let _ = out.shutdown(std::net::Shutdown::Write);
-    reader.get_mut().deadline = Some(Instant::now() + Duration::from_millis(500));
+    let input = reader.get_mut();
+    input.deadline = Some((input.clock)() + Duration::from_millis(500));
     let _ = std::io::copy(&mut reader.by_ref().take(64 * 1024), &mut std::io::sink());
 }
 
@@ -293,6 +311,8 @@ fn refuse(out: &mut TcpStream, reader: &mut BufReader<ClientInput>, docs: &str) 
 struct ClientInput {
     socket: TcpStream,
     deadline: Option<Instant>,
+    /// What the deadline is measured on.
+    clock: Clock,
 }
 
 impl ClientInput {
@@ -306,7 +326,7 @@ impl ClientInput {
 impl std::io::Read for ClientInput {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if let Some(deadline) = self.deadline {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = deadline.saturating_duration_since((self.clock)());
             if left.is_zero() {
                 return Err(std::io::ErrorKind::TimedOut.into());
             }
@@ -402,6 +422,8 @@ fn cancel(pending: &mut Option<Pending>, late: Option<Value>, id: Option<&Value>
 /// a running request.
 struct Running {
     list: Mutex<Vec<InFlight>>,
+    /// Notified each time a request leaves the list.
+    left: Condvar,
     connections: AtomicU64,
     keys: AtomicU64,
 }
@@ -420,7 +442,7 @@ struct InFlight {
 
 impl Running {
     fn new() -> Self {
-        Running { list: Mutex::new(Vec::new()), connections: AtomicU64::new(0), keys: AtomicU64::new(0) }
+        Running { list: Mutex::new(Vec::new()), left: Condvar::new(), connections: AtomicU64::new(0), keys: AtomicU64::new(0) }
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<InFlight>> {
@@ -482,6 +504,7 @@ impl Drop for Listing {
     fn drop(&mut self) {
         let key = self.key;
         self.running.lock().retain(|e| e.key != key);
+        self.running.left.notify_all();
     }
 }
 
@@ -660,7 +683,8 @@ impl Hub {
         let connection = running.connections.fetch_add(1, Ordering::Relaxed) + 1;
         let Ok(read) = stream.try_clone() else { return };
         let mut out = stream;
-        let mut reader = BufReader::new(ClientInput { socket: read, deadline: Some(Instant::now() + waits.token) });
+        let clock = Arc::clone(&self.clock);
+        let mut reader = BufReader::new(ClientInput { socket: read, deadline: Some(clock() + waits.token), clock });
         let mut bad = 0usize;
         let mut authenticated = false;
         let mut pending: Option<Pending> = None;
@@ -844,6 +868,52 @@ mod tests {
         Arc::new(Hub::new(Plain, || {}, MAX_LINE).with_waits(waits).with_watch(watch))
     }
 
+    /// [`Plain`], except that only `slow` and `queued` take the short wait.
+    struct Holding;
+
+    impl Protocol for Holding {
+        fn summary(&self, method: &str, params: &Value) -> Summary {
+            Summary { long: !matches!(method, "slow" | "queued"), ..Plain.summary(method, params) }
+        }
+        fn document(&self) -> &'static str {
+            Plain.document()
+        }
+        fn change_event(&self) -> &'static str {
+            Plain.change_event()
+        }
+        fn revision_method(&self) -> &'static str {
+            Plain.revision_method()
+        }
+        fn docs(&self) -> &'static str {
+            Plain.docs()
+        }
+        fn capabilities(&self) -> Value {
+            Plain.capabilities()
+        }
+    }
+
+    /// A server for [`Holding`] whose test window holds `slow` and `queued` back: they time out at
+    /// once, as neither has its reply yet, and every other request waits for its reply. The hour
+    /// only stops a hung test.
+    fn holding_hub() -> Arc<Hub> {
+        let waits = Waits { short: Duration::ZERO, long: Duration::from_secs(3600), token: TOKEN_WAIT };
+        Arc::new(Hub::new(Holding, || {}, MAX_LINE).with_waits(waits))
+    }
+
+    /// Wait until `hub` lists no request in `control.running`. A request that timed out leaves the
+    /// list once its connection's `control.pending` has its reply. Each wait ends when the list
+    /// tells the test that a request left it; one that runs out its ten seconds fails the test,
+    /// even if the list has emptied since without telling it.
+    fn wait_until_nothing_runs(hub: &Hub) {
+        let mut list = hub.running.lock();
+        while !list.is_empty() {
+            let (now, waited) = hub.running.left.wait_timeout(list, Duration::from_secs(10)).unwrap_or_else(PoisonError::into_inner);
+            list = now;
+            assert!(!waited.timed_out(), "no request was reported leaving the list");
+        }
+        assert!(list.is_empty(), "a request still runs");
+    }
+
     /// The channel never goes on the network: a listener on any address but loopback is refused,
     /// and nothing is served on it.
     #[test]
@@ -863,55 +933,91 @@ mod tests {
     fn the_token_has_a_time_limit_and_an_authenticated_client_may_idle() {
         use std::io::Read;
         let token = "0123456789abcdef0123456789abcdef";
-        let limit = Duration::from_millis(500);
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let (tx, rx) = channel::<ControlRequest>();
-        std::thread::spawn(move || {
-            for req in rx {
-                let _ = req.reply.send(json!({"ok": true, "result": req.method}));
-            }
-        });
-        let waits = Waits { short: Duration::from_secs(10), long: Duration::from_secs(10), token: limit };
-        let hub = hub(waits, &DOCUMENT_WATCH);
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let (tx, hub) = (tx.clone(), Arc::clone(&hub));
-                std::thread::spawn(move || hub.serve(stream, token, tx, false));
-            }
-        });
-        let open = || {
-            let s = TcpStream::connect(addr).unwrap();
-            s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
-            s
-        };
-        // Sends `drip` every 50 ms until the server closes; what it read, and when it closed.
-        let closed_after = |drip: &[u8]| {
-            let mut s = open();
+        let limit = Duration::from_secs(3600);
+        // A server for one connection, whose clock stands still until the test moves it with the
+        // returned `at` (the time since the connection's deadline was set). It returns once that
+        // deadline is set: the clock's first reading.
+        let serve_one = |limit: Duration| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (tx, rx) = channel::<ControlRequest>();
+            std::thread::spawn(move || {
+                for req in rx {
+                    let _ = req.reply.send(json!({"ok": true, "result": req.method}));
+                }
+            });
             let start = Instant::now();
-            s.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+            let now = Arc::new(Mutex::new(start));
+            let (read_tx, read) = channel::<()>();
+            let clock: Clock = {
+                let now = Arc::clone(&now);
+                Arc::new(move || {
+                    let t = *now.lock().unwrap();
+                    // Told only once the time is read, so the test moves the clock after it.
+                    let _ = read_tx.send(());
+                    t
+                })
+            };
+            let waits = Waits { short: Duration::from_secs(3600), long: Duration::from_secs(3600), token: limit };
+            let hub = Arc::new(Hub::new(Plain, || {}, MAX_LINE).with_waits(waits).with_clock(clock));
+            std::thread::spawn(move || {
+                if let Some(stream) = listener.incoming().flatten().next() {
+                    hub.serve(stream, token, tx, false);
+                }
+            });
+            let s = TcpStream::connect(addr).unwrap();
+            // Only stops a hung test.
+            s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            read.recv_timeout(Duration::from_secs(20)).expect("the connection's deadline is set");
+            let at = move |after: Duration| *now.lock().unwrap() = start + after;
+            (s, at)
+        };
+        // What the server sent until it closed the connection.
+        let until_closed = |s: &mut TcpStream| {
             let mut got = Vec::new();
             loop {
                 let mut buf = [0u8; 256];
                 match s.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => got.extend_from_slice(buf.get(..n).unwrap()),
-                    Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
-                        assert!(start.elapsed() < Duration::from_secs(20), "still open");
-                        let _ = s.write_all(drip);
+                    Err(e) => {
+                        assert!(!matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut), "still open");
+                        break;
                     }
-                    Err(_) => break,
                 }
             }
-            (got, start.elapsed())
+            got
         };
-        for drip in [&b""[..], b"\n", b"\r\n \n", b" ", b"{"] {
-            let (got, took) = closed_after(drip);
+        // A connection that sends nothing is closed when the limit runs out on the socket's own
+        // read timeout, without a word.
+        let (mut s, _) = serve_one(Duration::from_millis(100));
+        let got = until_closed(&mut s);
+        assert!(got.is_empty(), "a silent connection was answered: {}", String::from_utf8_lossy(&got));
+        for drip in [&b"\n"[..], b"\r\n \n", b" ", b"{"] {
+            // Once the limit has passed, the next thing sent closes the connection without a
+            // word, however the time before it was filled.
+            let (mut s, at) = serve_one(limit);
+            s.write_all(drip).unwrap();
+            at(limit / 2);
+            s.write_all(drip).unwrap();
+            at(limit);
+            let _ = s.write_all(drip);
+            let got = until_closed(&mut s);
             assert!(got.is_empty(), "{drip:?} was answered: {}", String::from_utf8_lossy(&got));
-            assert!(took >= limit.saturating_sub(Duration::from_millis(50)), "{drip:?} closed after {took:?}");
+            // Before the limit, the connection is still open: a request finished then is answered.
+            // A `{` is the request's own first byte.
+            let request = format!("{}\n", json!({"id": 1, "method": "ui.view", "token": token}));
+            let rest = request.strip_prefix(std::str::from_utf8(drip).unwrap()).unwrap_or(&request);
+            let (mut s, at) = serve_one(limit);
+            s.write_all(drip).unwrap();
+            at(limit - Duration::from_secs(60));
+            s.write_all(rest.as_bytes()).unwrap();
+            let mut l = String::new();
+            BufReader::new(&s).read_line(&mut l).unwrap();
+            assert!(serde_json::from_str::<Value>(&l).is_ok_and(|r| r["ok"] == true), "{drip:?} closed before the limit: {l}");
         }
 
-        let mut s = open();
+        let (mut s, at) = serve_one(limit);
         let mut lines = BufReader::new(s.try_clone().unwrap());
         let mut ask = |line: Value| -> Value {
             writeln!(s, "{line}").unwrap();
@@ -920,11 +1026,11 @@ mod tests {
             serde_json::from_str(&l).unwrap()
         };
         assert_eq!(ask(json!({"id": 1, "method": "ui.view", "token": token}))["ok"], true);
-        std::thread::sleep(limit * 3);
+        at(limit * 3);
         assert_eq!(ask(json!({"id": 2, "method": "ui.view"}))["ok"], true, "idle for longer than the limit");
 
         // A wrong token is still answered, at once.
-        let mut wrong = open();
+        let (mut wrong, _) = serve_one(limit);
         writeln!(wrong, "{}", json!({"id": 1, "method": "ui.view", "token": "nope"})).unwrap();
         let mut l = String::new();
         BufReader::new(wrong).read_line(&mut l).unwrap();
@@ -942,6 +1048,8 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let (tx, rx) = channel::<ControlRequest>();
         let (gate_tx, gate_rx) = channel::<()>();
+        // `()` once the window has taken `slow` to run it.
+        let (started_tx, started) = channel::<()>();
         let ran = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let seen = ran.clone();
         // A stand-in for the window thread: `queued` waits behind the others (never taken until
@@ -958,6 +1066,7 @@ mod tests {
                 }
                 seen.lock().unwrap().push(req.method.clone());
                 if req.method == "slow" {
+                    let _ = started_tx.send(());
                     let _ = gate_rx.recv();
                 }
                 let _ = req.reply.send(json!({"ok": true, "result": req.method}));
@@ -970,11 +1079,11 @@ mod tests {
                 }
             }
         });
-        let waits = Waits { short: Duration::from_millis(100), long: Duration::from_millis(100), token: TOKEN_WAIT };
-        let hub = hub(waits, &DOCUMENT_WATCH);
+        let hub = holding_hub();
+        let server = Arc::clone(&hub);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (tx, hub) = (tx.clone(), Arc::clone(&hub));
+                let (tx, hub) = (tx.clone(), Arc::clone(&server));
                 std::thread::spawn(move || hub.serve(stream, token, tx, false));
             }
         });
@@ -1007,6 +1116,8 @@ mod tests {
         // Already running in the app: it can't be, and it still answers.
         let r = ask(&mut a, json!({"id": 4, "method": "slow"}));
         assert_eq!(r["running"], true, "{r}");
+        // The ten seconds only stop a hung test.
+        started.recv_timeout(Duration::from_secs(10)).expect("the window took `slow`");
         let r = ask(&mut b, json!({"id": 2, "method": "control.cancel", "params": {"id": 4}}));
         assert!(r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("its own requests")), "another connection's: {r}");
         let r = ask(&mut a, json!({"id": 5, "method": "control.cancel", "params": {"id": 99}}));
@@ -1015,14 +1126,8 @@ mod tests {
         assert!(r["ok"] == false && r["cancellable"] == false, "{r}");
         assert!(r["error"].as_str().is_some_and(|e| e.starts_with("cannot be cancelled") && e.contains("control.pending")), "{r}");
         gate_tx.send(()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let r = loop {
-            let r = ask(&mut a, json!({"id": 7, "method": "control.pending"}));
-            if r["result"]["done"] == true || Instant::now() > deadline {
-                break r;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        wait_until_nothing_runs(&hub);
+        let r = ask(&mut a, json!({"id": 7, "method": "control.pending"}));
         assert_eq!(r["result"]["reply"]["result"], "slow", "{r}");
         let r = ask(&mut a, json!({"id": 8, "method": "control.cancel"}));
         assert!(r["ok"] == true && r["result"]["cancelled"].is_null(), "{r}");
@@ -1052,11 +1157,11 @@ mod tests {
                 let _ = req.reply.send(json!({"ok": true, "result": req.method}));
             }
         });
-        let waits = Waits { short: Duration::from_millis(100), long: Duration::from_millis(100), token: TOKEN_WAIT };
-        let hub = hub(waits, &DOCUMENT_WATCH);
+        let hub = holding_hub();
+        let server = Arc::clone(&hub);
         std::thread::spawn(move || {
             if let Some(stream) = listener.incoming().flatten().next() {
-                hub.serve(stream, token, tx, false);
+                server.serve(stream, token, tx, false);
             }
         });
         let s = TcpStream::connect(addr).unwrap();
@@ -1076,14 +1181,8 @@ mod tests {
         let r = ask(json!({"id": 3, "method": "control.pending"}));
         assert_eq!((&r["result"]["pending"], &r["result"]["done"]), (&json!(1), &json!(false)), "{r}");
         gate_tx.send(()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let r = loop {
-            let r = ask(json!({"id": 4, "method": "control.pending"}));
-            if r["result"]["done"] == true || std::time::Instant::now() > deadline {
-                break r;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        wait_until_nothing_runs(&hub);
+        let r = ask(json!({"id": 4, "method": "control.pending"}));
         assert_eq!(
             (&r["result"]["pending"], &r["result"]["done"], &r["result"]["reply"]["result"]),
             (&json!(1), &json!(true), &json!("slow")),
@@ -1122,10 +1221,15 @@ mod tests {
             }
         });
         let hub = hub(Waits::default(), &WATCH);
+        // `()` each time a connection's own thread is done with it.
+        let (ended_tx, ended) = channel::<()>();
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (tx, hub) = (tx.clone(), Arc::clone(&hub));
-                std::thread::spawn(move || hub.serve(stream, token, tx, false));
+                let (tx, hub, ended) = (tx.clone(), Arc::clone(&hub), ended_tx.clone());
+                std::thread::spawn(move || {
+                    hub.serve(stream, token, tx, false);
+                    let _ = ended.send(());
+                });
             }
         });
         let open = || {
@@ -1176,18 +1280,10 @@ mod tests {
         assert_eq!(next(&mut lines), json!({"id": 3, "ok": true, "result": "ui.view"}));
         writeln!(quiet_out, "{}", json!({"id": 2, "method": "ui.view"})).unwrap();
         assert_eq!(next(&mut quiet), json!({"id": 2, "ok": true, "result": "ui.view"}), "no events without subscribing");
-        // Closed, it is no longer counted. Each publish asks the events thread for one more line,
-        // and its write to the closed connection is what retires the seat; that keeps the wait off
-        // the connection's own thread, which anything else this process is doing may hold up past
-        // the deadline (#7226).
+        // Closed, it is no longer counted once its own thread is done with it (the quiet one is
+        // still open). The ten seconds only stop a hung test.
         drop((out, lines));
-        let mut revision = 11;
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while WATCH.subscribed() && Instant::now() < deadline {
-            WATCH.publish("d-1", revision);
-            revision += 1;
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        ended.recv_timeout(Duration::from_secs(10)).expect("the closed connection ended");
         assert!(!WATCH.subscribed());
     }
 
@@ -1215,10 +1311,12 @@ mod tests {
             }
         });
         let hub = hub(Waits::default(), &WATCH);
+        // `()` once the connection's own thread is done with it.
+        let (ended_tx, ended) = channel::<()>();
         std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let (tx, hub) = (tx.clone(), Arc::clone(&hub));
-                std::thread::spawn(move || hub.serve(stream, token, tx, false));
+            if let Some(stream) = listener.incoming().flatten().next() {
+                hub.serve(stream, token, tx, false);
+                let _ = ended_tx.send(());
             }
         });
         let s = TcpStream::connect(addr).unwrap();
@@ -1231,16 +1329,45 @@ mod tests {
         let reply: Value = serde_json::from_str(&l).unwrap();
         assert!(reply["ok"] == true, "{reply}");
         assert!(WATCH.subscribed(), "the connection is subscribed");
-        // Let the events thread settle into its wait: the design stands still, so it has nothing
-        // to write, and only the end of the connection can retire it.
-        std::thread::sleep(Duration::from_millis(200));
-        // The client goes away without asking anything else.
+        // The client goes away without asking anything else. The design stands still, so the
+        // events thread has nothing to write: the seat must be gone when the connection's own
+        // thread is done, not when the events thread next wakes. The ten seconds only stop a hung
+        // test.
         drop((out, lines));
-        let deadline = Instant::now() + Duration::from_millis(400);
-        while WATCH.subscribed() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        ended.recv_timeout(Duration::from_secs(10)).expect("the closed connection ended");
         assert!(!WATCH.subscribed(), "a closed connection is not counted on the watch");
+    }
+
+    /// #7226: the events thread leaves the watch at the first write its socket refuses, while the
+    /// connection's own thread still holds the seat and has not seen the end of the stream.
+    #[test]
+    fn the_events_thread_leaves_the_watch_when_a_write_fails() {
+        static WATCH: DocumentWatch = DocumentWatch::new();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        // The socket takes no more writes, as one to a client that closed: the next line fails.
+        socket.shutdown(std::net::Shutdown::Write).unwrap();
+        let lines = Arc::new(Lines { socket, turn: Mutex::new(()) });
+        let stop = Arc::new(AtomicBool::new(false));
+        WATCH.publish("d-1", 3);
+        let seat = Arc::new(Seat::new(WATCH.join()));
+        // The connection's own thread, which keeps its share of the seat throughout.
+        let held = Arc::clone(&seat);
+        assert!(WATCH.subscribed(), "the connection is subscribed");
+        // `()` once the events thread has ended.
+        let (ended_tx, ended) = channel::<()>();
+        let (l, s) = (Arc::clone(&lines), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            send_events(&WATCH, "design.changed", &l, &s, ("d-1".to_string(), 3), seat);
+            let _ = ended_tx.send(());
+        });
+        WATCH.publish("d-1", 4);
+        // The ten seconds only stop a hung test.
+        ended.recv_timeout(Duration::from_secs(10)).expect("the events thread ended at the failed write");
+        assert!(!stop.load(Ordering::Relaxed), "nothing stopped the events thread but the write");
+        assert!(!WATCH.subscribed(), "the seat left with the events thread");
+        drop((held, client));
     }
 
     /// The token is read from a request object without building the rest of it: other fields,
@@ -1449,19 +1576,26 @@ mod tests {
     #[test]
     fn a_stopped_listener_closes_its_port_and_its_connections() {
         use std::io::Read;
+        let token = "0123456789abcdef0123456789abcdef";
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        let (tx, _rx) = channel();
-        let stop = hub(Waits::default(), &DOCUMENT_WATCH).listen_stoppable(listener, "0123456789abcdef0123456789abcdef".into(), tx, false).unwrap();
+        let (tx, rx) = channel::<ControlRequest>();
+        std::thread::spawn(move || {
+            for req in rx {
+                let _ = req.reply.send(json!({"ok": true, "result": req.method}));
+            }
+        });
+        let stop = hub(Waits::default(), &DOCUMENT_WATCH).listen_stoppable(listener, token.into(), tx, false).unwrap();
         assert_eq!(stop.port(), port);
         let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        client.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
-        // Wait until the server holds the connection, so stopping has one to close.
-        let held = Instant::now();
-        while stop.shared.lock().is_empty() && held.elapsed() < Duration::from_secs(4) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let started = Instant::now();
+        // Only stops a hung test.
+        client.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        // Once its first request is answered, the server holds the connection, so stopping has one
+        // to close. It has shown the token, so the token wait cannot end it: only stopping can.
+        writeln!(client, "{}", json!({"id": 1, "method": "ui.view", "token": token})).unwrap();
+        let mut l = String::new();
+        BufReader::new(&client).read_line(&mut l).unwrap();
+        assert!(serde_json::from_str::<Value>(&l).is_ok_and(|r| r["ok"] == true), "{l}");
         stop.stop();
         let mut byte = [0u8; 1];
         match client.read(&mut byte) {
@@ -1470,15 +1604,8 @@ mod tests {
                 assert!(!matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut), "the connection ends, not waits: {e}")
             }
         }
-        assert!(started.elapsed() < Duration::from_secs(3), "before the token wait runs out");
-        // The listener thread closes its socket when it notices the stop; on a loaded machine that can
-        // take a moment after `stop()` returns. Wait for the port to be free, not for one instant.
-        let freed = Instant::now();
-        let mut bound = TcpListener::bind(("127.0.0.1", port));
-        while bound.is_err() && freed.elapsed() < Duration::from_secs(2) {
-            std::thread::sleep(Duration::from_millis(10));
-            bound = TcpListener::bind(("127.0.0.1", port));
-        }
+        // `stop` returns once the port is closed.
+        let bound = TcpListener::bind(("127.0.0.1", port));
         assert!(bound.is_ok(), "the port is free again: {:?}", bound.err());
     }
 }
