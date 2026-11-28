@@ -499,10 +499,14 @@ impl Bvh {
 /// The point of triangle `t` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
 /// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5). Degenerate triangles give
 /// a non-finite distance and are never nearest. The region tests multiply four coordinates,
-/// which overflows f32 for finite inputs past about 1e9, so the test runs in f64.
+/// which overflows f32 for finite inputs past about 1e9, so the test runs in f64. The signed
+/// areas `va`, `vb` and `vc` are computed as `n.dot(x.cross(y))` with `n = ab.cross(ac)`, which equals
+/// Ericson's dot-product differences (Binet-Cauchy) but does not cancel two nearly equal
+/// products on long, thin triangles.
 fn closest_on_triangle(p: DVec3, t: [DVec3; 3]) -> (DVec3, f64, f64) {
     let [a, b, c] = t;
     let (ab, ac, ap) = (b - a, c - a, p - a);
+    let n = ab.cross(ac);
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
         return (a, 0.0, 0.0);
@@ -512,7 +516,7 @@ fn closest_on_triangle(p: DVec3, t: [DVec3; 3]) -> (DVec3, f64, f64) {
     if d3 >= 0.0 && d4 <= d3 {
         return (b, 1.0, 0.0);
     }
-    let vc = d1 * d4 - d3 * d2;
+    let vc = n.dot(ap.cross(bp));
     if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
         let v = d1 / (d1 - d3);
         return (a + ab * v, v, 0.0);
@@ -522,12 +526,12 @@ fn closest_on_triangle(p: DVec3, t: [DVec3; 3]) -> (DVec3, f64, f64) {
     if d6 >= 0.0 && d5 <= d6 {
         return (c, 0.0, 1.0);
     }
-    let vb = d5 * d2 - d1 * d6;
+    let vb = n.dot(cp.cross(ap));
     if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
         let w = d2 / (d2 - d6);
         return (a + ac * w, 0.0, w);
     }
-    let va = d3 * d6 - d5 * d4;
+    let va = n.dot(bp.cross(cp));
     if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
         let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
         return (b + (c - b) * w, 1.0 - w, w);
@@ -560,6 +564,16 @@ mod tests {
         let bvh = review_triangle([Vec3::ZERO, Vec3::X * 1e10, Vec3::Y * 1e10]);
         let hit = bvh.nearest(Vec3::new(2.5e9, 2.5e9, 1.0), 10.0, &|_| true).unwrap();
         assert!((hit.t - 1.0).abs() < 1e-3, "t = {}", hit.t);
+        assert!((hit.u - 0.25).abs() < 1e-6 && (hit.v - 0.25).abs() < 1e-6, "u = {}, v = {}", hit.u, hit.v);
+    }
+
+    #[test]
+    fn nearest_point_stays_inside_a_long_thin_triangle() {
+        // The dot-product form of vc cancels to zero here and projects onto AB at distance 0.25.
+        let s = 2.0_f32.powi(65);
+        let bvh = review_triangle([Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(s, 1.0, 0.0)]);
+        let hit = bvh.nearest(Vec3::new(s / 2.0, 0.25, 0.0), 0.125, &|_| true).unwrap();
+        assert!(hit.t.abs() < 1e-6, "t = {}", hit.t);
         assert!((hit.u - 0.25).abs() < 1e-6 && (hit.v - 0.25).abs() < 1e-6, "u = {}, v = {}", hit.u, hit.v);
     }
 

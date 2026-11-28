@@ -55,6 +55,18 @@ fn shares_edge_opposite(mesh: &Mesh, t: u32, e0: Vec2, e1: Vec2, opp: Vec2) -> b
     })
 }
 
+type UvKey = [[u32; 2]; 3];
+
+/// The UV corners of triangle `t` as sorted bit patterns. Two triangles with the same key have
+/// the same UV edges and opposite vertices, so `shares_edge_opposite` answers the same for both.
+fn uv_key(mesh: &Mesh, t: u32) -> Option<UvKey> {
+    let [a, b, c] = mesh.tri(t as usize)?;
+    let bits = |i: usize| mesh.uvs.get(i).map(|u| [u.x.to_bits(), u.y.to_bits()]);
+    let mut key = [bits(a)?, bits(b)?, bits(c)?];
+    key.sort_unstable();
+    Some(key)
+}
+
 impl UvGBuffer {
     /// Rasterize the triangles of material `material` at `width × height`.
     pub fn new(mesh: &Mesh, material: usize, width: u32, height: u32) -> UvGBuffer {
@@ -85,12 +97,14 @@ impl UvGBuffer {
             .enumerate()
             .map(|(bi, (tri, bary))| {
                 let mut overlaps = 0u32;
-                let mut writers: HashMap<usize, Vec<u32>> = HashMap::new();
+                // Earlier writers of each texel, one entry per distinct UV triangle.
+                let mut writers: HashMap<usize, Vec<(u32, Option<UvKey>)>> = HashMap::new();
                 let row0 = bi as u32 * BAND;
                 let rows = (tri.len() as u32) / w;
                 for &t in bins.get(bi).map(Vec::as_slice).unwrap_or(&[]) {
                     let Some([a, b, c]) = mesh.tri(t as usize) else { continue };
                     let (Some(&ua), Some(&ub), Some(&uc)) = (mesh.uvs.get(a), mesh.uvs.get(b), mesh.uvs.get(c)) else { continue };
+                    let key = uv_key(mesh, t);
                     let (pa, pb, pc) = (ua * size, ub * size, uc * size);
                     let area = edge(pa, pb, pc);
                     if area.abs() < 1e-12 {
@@ -113,15 +127,17 @@ impl UvGBuffer {
                                 // A center on an edge that two triangles share from opposite
                                 // sides is written by both and is not an overlap.
                                 if *slot != NO_TRI {
-                                    let earlier = writers.entry(i).or_insert_with(|| vec![*slot]);
+                                    let earlier = writers.entry(i).or_insert_with(|| vec![(*slot, uv_key(mesh, *slot))]);
                                     let on = [(w0, ub, uc, ua), (w1, uc, ua, ub), (w2, ua, ub, uc)];
-                                    let shared = earlier.iter().all(|&previous| {
+                                    let shared = earlier.iter().all(|&(previous, _)| {
                                         on.iter().any(|&(wk, e0, e1, opp)| wk <= -eps && shares_edge_opposite(mesh, previous, e0, e1, opp))
                                     });
                                     if !shared {
                                         overlaps += 1;
                                     }
-                                    earlier.push(t);
+                                    if key.is_none() || !earlier.iter().any(|&(_, k)| k == key) {
+                                        earlier.push((t, key));
+                                    }
                                 }
                                 *slot = t;
                                 let inv = 1.0 / area.abs();
@@ -226,6 +242,23 @@ mod tests {
             let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::ONE, Vec3::Y], None, uv, indices, "m").unwrap();
             assert_eq!(UvGBuffer::new(&m, 0, 1, 1).overlaps, 1);
         }
+    }
+
+    #[test]
+    fn many_duplicate_writers_keep_their_counts() {
+        // 10,000 copies of each half of a UV square, one half after the other. The first copy of
+        // the second half shares the diagonal with the first half; every later copy overlaps.
+        let copies = 10_000;
+        let mut indices = Vec::with_capacity(copies * 6);
+        for _ in 0..copies {
+            indices.extend([0, 1, 2]);
+        }
+        for _ in 0..copies {
+            indices.extend([0, 2, 3]);
+        }
+        let uv = vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::ONE, Vec3::Y], None, uv, indices, "m").unwrap();
+        assert_eq!(UvGBuffer::new(&m, 0, 1, 1).overlaps, 2 * (copies as u32 - 1));
     }
 
     #[test]
