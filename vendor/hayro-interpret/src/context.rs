@@ -38,10 +38,11 @@ std::thread_local! {
     // `InterpreterWarning::ContentTruncated`.
     static CONTENT_TRUNCATED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
     // PdfCraft patch (89): the form XObjects being drawn on this page, outermost first, across
-    // the contexts of the tiling patterns, Type 3 glyphs and groups painted while they draw; a
-    // soft mask's group draws within the forms where the mask was set (`drawing_within`). A form
-    // already on it draws itself and is skipped. Its length is bounded by the nesting limits:
-    // every form on it is nested in the ones before it.
+    // the contexts of the groups painted while they draw; a soft mask's group, a tiling pattern's
+    // cell and a Type 3 glyph's procedure draw within the forms where the mask or pattern was set
+    // or the glyph was shown (`drawing_within`). A form already on it draws itself and is
+    // skipped. Its length is bounded by the nesting limits: every form on it is nested in the
+    // ones before it.
     static FORMS_DRAWING: RefCell<Vec<hayro_syntax::object::ObjectIdentifier>> =
         const { RefCell::new(Vec::new()) };
 }
@@ -146,7 +147,9 @@ pub(crate) fn forms_drawing() -> Vec<hayro_syntax::object::ObjectIdentifier> {
 
 /// PdfCraft patch (89): runs `draw` with `forms` as the forms being drawn, then puts back the
 /// ones it replaced. A soft mask draws its group where the masked content paints, inside forms
-/// that only use the mask; it is nested in the forms drawing where it was set.
+/// that only use the mask; it is nested in the forms drawing where it was set. A tiling pattern's
+/// cell and a Type 3 glyph's procedure are likewise nested in the forms drawing where the pattern
+/// was set or the glyph was shown, wherever the device interprets them.
 pub(crate) fn drawing_within<R>(
     forms: &[hayro_syntax::object::ObjectIdentifier],
     draw: impl FnOnce() -> R,
@@ -402,7 +405,8 @@ impl<'a> Context<'a> {
     /// The forms being drawn are those of this page's context and of every context painting
     /// inside it (a tiling pattern, a Type 3 glyph, a soft mask or a group), so a form that
     /// reaches itself through one of those is skipped too, while a form drawn again after it
-    /// has finished draws as usual.
+    /// has finished draws as usual. A soft mask, tiling pattern or Type 3 glyph draws inside
+    /// the forms it was set in, wherever the device interprets it ([`drawing_within`]).
     pub(crate) fn enter_form(
         &mut self,
         id: Option<hayro_syntax::object::ObjectIdentifier>,

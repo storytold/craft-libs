@@ -14,6 +14,7 @@ use crate::interpret::state::State;
 use crate::{CMapResolverFn, CacheKey, FontResolverFn, InterpreterSettings, Paint};
 use bitflags::bitflags;
 use hayro_syntax::object::Name;
+use hayro_syntax::object::ObjectIdentifier;
 use hayro_syntax::object::dict::keys::SUBTYPE;
 use hayro_syntax::object::dict::keys::*;
 use hayro_syntax::object::{Dict, Stream};
@@ -222,11 +223,17 @@ pub struct Type3Glyph<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) nesting_depth: u32,
     pub(crate) char_code: u32,
+    /// PdfCraft patch (89): the forms being drawn where the glyph was shown; its procedure is
+    /// drawn nested in them, not in the forms the device is drawing when it interprets it.
+    pub(crate) forms_drawing: Vec<ObjectIdentifier>,
 }
 
 /// A glyph defined by PDF drawing instructions.
 impl<'a> Type3Glyph<'a> {
     /// Draw the type3 glyph to the given device.
+    ///
+    /// PdfCraft patch (89): the glyph procedure draws inside the forms the glyph was shown in,
+    /// wherever the device interprets it.
     pub fn interpret(
         &self,
         device: &mut impl Device<'a>,
@@ -234,8 +241,10 @@ impl<'a> Type3Glyph<'a> {
         glyph_transform: Affine,
         paint: &Paint<'a>,
     ) {
-        self.font
-            .render_glyph(self, transform, glyph_transform, paint, device);
+        crate::context::drawing_within(&self.forms_drawing, || {
+            self.font
+                .render_glyph(self, transform, glyph_transform, paint, device)
+        });
     }
 
     /// Returns the Unicode code point for this glyph, if available: the `ToUnicode` cmap, then
@@ -386,6 +395,7 @@ impl<'a> Font<'a> {
                     settings: ctx.settings.clone(),
                     nesting_depth,
                     char_code,
+                    forms_drawing: crate::context::forms_drawing(),
                 };
 
                 Glyph::Type3(Box::new(shape_glyph))

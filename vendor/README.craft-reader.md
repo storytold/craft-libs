@@ -95,6 +95,15 @@ colorants paint through their alternate space (`Plate::spots_as_process`) and no
 overprints. Masks in other color spaces are unchanged. A test in
 `crates/pdf/tests/plates.rs` checks process, spot, RGB and backdrop colors.
 
+The self-draw check of hayro-interpret patch 89 runs a soft mask's group, a tiling pattern's
+cell and a Type 3 glyph's procedure inside the forms being drawn where the mask or pattern was
+set or the glyph was shown (`context::forms_drawing`, `context::drawing_within`), not inside the
+forms the device is drawing when it calls `SoftMask::interpret`, `SoftMask::interpret_plate`,
+`TilingPattern::interpret` or `Type3Glyph::interpret`. A tiling pattern or Type 3 glyph set on
+the page and interpreted by a device while it draws a form draws that form; before, its copy of
+the form was skipped. A form that draws itself through a soft mask, tiling pattern or Type 3
+glyph set inside it is still skipped. Tests: `self_draw_tests.rs` in hayro-interpret.
+
 The output-intent conversion of patch 36 goes through a `color::CmykConversion` trait, so
 that callers can convert with their own color management. `CmykSimulation::new` keeps
 #2770's moxcms conversion as the default, and `CmykSimulation::with_conversion` takes a

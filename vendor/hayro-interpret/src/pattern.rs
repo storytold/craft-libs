@@ -2,7 +2,7 @@
 
 use crate::cache::Cache;
 use crate::color::{Color, ColorSpace, DefaultColorSpaces, Plate};
-use crate::context::{Context, InterpreterCache};
+use crate::context::{Context, InterpreterCache, drawing_within, forms_drawing};
 use crate::device::Device;
 use crate::font::Glyph;
 use crate::interpret::state::{ActiveTransferFunction, State};
@@ -13,6 +13,7 @@ use crate::{BlendMode, CacheKey, ClipPath, GlyphDrawMode, Image, PathDrawMode};
 use crate::{FillRule, InterpreterSettings, Paint, interpret};
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::object::Dict;
+use hayro_syntax::object::ObjectIdentifier;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::{
     BBOX, EXT_G_STATE, MATRIX, PAINT_TYPE, RESOURCES, SHADING, X_STEP, Y_STEP,
@@ -182,6 +183,9 @@ pub struct TilingPattern<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
     nesting_depth: u32,
+    /// PdfCraft patch (89): the forms being drawn where the pattern was set; its cell is drawn
+    /// nested in them, not in the forms that paint with it.
+    forms_drawing: Vec<ObjectIdentifier>,
 }
 
 impl TilingPattern<'_> {
@@ -280,11 +284,24 @@ impl<'a> TilingPattern<'a> {
             cache: ctx.interpreter_cache.clone(),
             xref: ctx.xref,
             nesting_depth,
+            forms_drawing: forms_drawing(),
         })
     }
 
     /// Interpret the contents of the pattern into the given device.
+    ///
+    /// PdfCraft patch (89): the cell draws inside the forms the pattern was set in, wherever the
+    /// device interprets it.
     pub fn interpret(
+        &self,
+        device: &mut impl Device<'a>,
+        initial_transform: Affine,
+        is_stroke: bool,
+    ) -> Option<()> {
+        drawing_within(&self.forms_drawing, || self.interpret_cell(device, initial_transform, is_stroke))
+    }
+
+    fn interpret_cell(
         &self,
         device: &mut impl Device<'a>,
         initial_transform: Affine,
