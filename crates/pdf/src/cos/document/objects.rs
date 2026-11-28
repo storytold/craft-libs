@@ -135,6 +135,27 @@ impl Document {
         notes.repaired.lines(|num| self.overlay.contains_key(&num), "was repaired")
     }
 
+    /// Record that stream `id`'s stored data, decrypted as it was read, is not whole AES ciphertext.
+    pub(crate) fn note_damaged_ciphertext(&self, id: ObjRef) {
+        // A poisoned lock only leaves the stream unrecorded, as before this was recorded.
+        if let Ok(mut damaged) = self.damaged_ciphertext.lock() {
+            damaged.insert(id);
+        }
+    }
+
+    /// Whether stream `id`, as read from the file, held AES data that is not a 16-byte
+    /// initialization vector followed by whole blocks (ISO 32000-2 §7.6.3.2): cut short or damaged,
+    /// so what it decrypted to lacks the rest. Known once the stream has been read; an edited
+    /// stream is this document's own and never is. Data that must be whole, such as an attachment
+    /// exported as a file, is refused on it; drawing tolerates it. Any reference that reaches the
+    /// stream asks about it: one read through a damaged xref row is recorded with its header's
+    /// generation, and one number holds one object.
+    pub fn ciphertext_damaged(&self, id: ObjRef) -> bool {
+        !self.overlay.contains_key(&id.num)
+            && self.reference_matches(id)
+            && self.damaged_ciphertext.lock().is_ok_and(|d| d.iter().any(|r| r.num == id.num))
+    }
+
     /// Record `num` as unreadable. `reason` is built only for an object not yet listed, so a file
     /// whose broken object is asked for again and again pays for it once.
     fn note_unreadable(&self, num: u32, reason: impl FnOnce() -> String) {
