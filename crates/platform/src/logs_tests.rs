@@ -308,3 +308,38 @@ fn a_sink_keeps_early_lines_bounded_and_stops_at_its_size_cap() {
     assert_eq!(read(&capped), at_cap, "nothing follows the note");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_poisoned_sink_still_logs() {
+    use log::Log;
+    let dir = temp_dir("poison");
+    let logger = std::sync::Arc::new(AppLogger::new(NAMES, Filter::parse("info"), false));
+    let l = std::sync::Arc::clone(&logger);
+    let _ = std::thread::spawn(move || {
+        let _guard = l.sink.lock().expect("lock");
+        panic!("poison the sink");
+    })
+    .join();
+    assert!(logger.sink.is_poisoned());
+    let path = logger.attach_dir(&dir).expect("attach");
+    logger.log(&log::Record::builder().level(log::Level::Warn).target("photocraft").args(format_args!("after the poison")).build());
+    assert!(read(&path).contains("photocraft: after the poison"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn attaching_to_an_unusable_directory_reports_an_error_and_keeps_logging() {
+    use log::Log;
+    let dir = temp_dir("unusable");
+    std::fs::create_dir_all(dir.parent().expect("parent")).expect("tmp");
+    std::fs::write(&dir, "not a directory").expect("block");
+    let logger = AppLogger::new(NAMES, Filter::parse("info"), false);
+    logger.log(&log::Record::builder().level(log::Level::Error).target("x").args(format_args!("early")).build());
+    assert!(logger.attach_dir(&dir).is_err());
+    logger.log(&log::Record::builder().level(log::Level::Error).target("x").args(format_args!("still fine")).build());
+    // Nothing waits in memory for a file that won't come.
+    let sink = logger.sink.lock().expect("sink");
+    assert!(sink.pending.is_empty() && sink.file.is_none());
+    drop(sink);
+    let _ = std::fs::remove_file(&dir);
+}
