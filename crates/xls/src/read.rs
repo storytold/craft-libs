@@ -66,13 +66,9 @@ fn root_stream(cf: &craft_cfb::CompoundFile<'_>, name: &str) -> Option<usize> {
 /// The Workbook stream of a compound file, or why there is none.
 fn workbook_stream(bytes: &[u8]) -> Result<Vec<u8>, Error> {
     let cf = craft_cfb::CompoundFile::open(bytes).map_err(|e| invalid(e.to_string()))?;
-    let Some(id) = root_stream(&cf, "Workbook") else {
-        return Err(if root_stream(&cf, "Book").is_some() {
-            Error::Biff5
-        } else {
-            invalid("the file has no Workbook stream, so it is not an Excel workbook")
-        });
-    };
+    let id = root_stream(&cf, "Workbook")
+        .or_else(|| root_stream(&cf, "Book"))
+        .ok_or_else(|| invalid("the file has no Workbook or Book stream, so it is not an Excel workbook"))?;
     cf.read_capped(id, MAX_STREAM).map_err(|e| match e {
         craft_cfb::Error::LimitExceeded(_) => Error::TooLarge("the Workbook stream is larger than 1 GiB".into()),
         e => invalid(e.to_string()),
@@ -166,6 +162,8 @@ struct Lbl {
 #[derive(Default)]
 struct Globals {
     sheets: Vec<BoundSheet>,
+    biff5: bool,
+    codepage: u16,
     date1904: bool,
     formats: HashMap<u16, String>,
     styles: styles::StyleRecords,
@@ -217,6 +215,10 @@ fn decrypt(stream: &mut [u8], password: Option<&str>) -> Result<(), Error> {
 
 fn read_stream(mut stream: Vec<u8>, limits: Limits, password: Option<&str>) -> Result<Read, Error> {
     if crate::crypt::filepass(&stream).is_some() {
+        let first = Records::new(&stream, 0).next_record()?.ok_or_else(|| invalid("empty Workbook stream"))?;
+        if bof(&first)?.0 == 0x0500 {
+            return Err(Error::UnsupportedEncryption("BIFF5 password protection".into()));
+        }
         decrypt(&mut stream, password)?;
     }
     let mut budget = Budget::new(limits);
@@ -284,13 +286,32 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
     let mut recs = Records::new(stream, 0);
     let first = recs.next_record()?.ok_or_else(|| invalid("empty Workbook stream"))?;
     let (vers, dt) = bof(&first)?;
-    if vers != BIFF8 {
-        return Err(if vers == 0x0500 { Error::Biff5 } else { invalid("unsupported BIFF version (only Excel 97-2003 BIFF8 files are read)") });
+    if !matches!(vers, BIFF8 | 0x0500) {
+        return Err(invalid("unsupported BIFF version (only BIFF5 and BIFF8 files are read)"));
     }
     if dt != 0x0005 {
         return Err(invalid("the Workbook stream does not start with the workbook globals"));
     }
-    let mut g = Globals::default();
+    let mut g = Globals { biff5: vers == 0x0500, codepage: 1252, ..Globals::default() };
+    if g.biff5 {
+        // CODEPAGE need not precede every text record. Find it before decoding any text.
+        let mut scan = Records::new(stream, 0);
+        let mut count = 0usize;
+        while let Some(rec) = scan.next_record()? {
+            count += 1;
+            if count > budget.limits.max_records {
+                return Err(Error::TooLarge("too many records".into()));
+            }
+            if rec.id == EOF {
+                break;
+            }
+            if rec.id == 0x0042 {
+                g.codepage = Cursor::new(&rec.parts).u16()?;
+            }
+        }
+        crate::biff5::check_codepage(g.codepage)?;
+        report.warn(Warning::Biff5Objects);
+    }
     let mut offsets = HashSet::new();
     let mut dgg: Vec<u8> = Vec::new();
     while let Some(rec) = recs.next_record()? {
@@ -310,7 +331,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
                 }
                 let state = c.u8()?;
                 let kind = c.u8()?;
-                let name = c.short_string()?;
+                let name = if g.biff5 { crate::biff5::short_string(&mut c, g.codepage)? } else { c.short_string()? };
                 let visibility = match state & 3 {
                     0 => Visibility::Visible,
                     1 => Visibility::Hidden,
@@ -321,6 +342,12 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
             }
             0x0022 => g.date1904 = c.u16()? == 1,
             0x000E => g.precision_as_displayed = c.u16()? == 0,
+            0x041E if g.biff5 => {
+                let ifmt = c.u16()?;
+                let code = crate::biff5::short_string(&mut c, g.codepage)?;
+                budget.text(code.len())?;
+                g.formats.insert(ifmt, code);
+            }
             0x041E => {
                 let ifmt = c.u16()?;
                 let cch = usize::from(c.u16()?);
@@ -341,19 +368,22 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
                 c.skip(10)?;
                 g.active_tab = Some(c.u16()?);
             }
+            0x00E0 if g.biff5 => g.styles.xf5(&mut c, MAX_XFS),
+            0x0031 | 0x0231 if g.biff5 => g.styles.font5(&mut c, g.codepage),
+            0x0293 if g.biff5 => {}
             0x00E0 => g.styles.xf(&mut c, MAX_XFS),
             0x0031 => g.styles.font(&mut c),
             0x0092 => g.styles.palette(&mut c),
             0x0293 => g.styles.style(&mut c),
             // MsoDrawingGroup: one buffer of drawing records, cut at MAX_DRAWING.
-            0x00EB if dgg.len() < MAX_DRAWING => dgg.extend(c.rest()),
-            0x00FC => g.sst = shared_strings(&mut c, budget)?,
-            0x01AE => {
+            0x00EB if !g.biff5 && dgg.len() < MAX_DRAWING => dgg.extend(c.rest()),
+            0x00FC if !g.biff5 => g.sst = shared_strings(&mut c, budget)?,
+            0x01AE if !g.biff5 => {
                 let _ctab = c.u16()?;
                 let cch = c.u16()?;
                 g.links.books.push(SupBook { internal: cch == 0x0401, addin: cch == 0x3A01, names: vec![] });
             }
-            0x0023 => {
+            0x0023 if !g.biff5 => {
                 // ExternName: flags, then an AddinUdf or ExternDocName body; both start with
                 // four bytes before the name.
                 c.u16()?;
@@ -365,7 +395,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
                     book.names.push(name);
                 }
             }
-            0x0017 => {
+            0x0017 if !g.biff5 => {
                 let n = usize::from(c.u16()?);
                 for _ in 0..n.min(c.remaining() / 6) {
                     let book = c.u16()?;
@@ -374,6 +404,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
                     g.links.xti.push(Xti { book, first, last });
                 }
             }
+            0x0018 if g.biff5 => report.warn(Warning::NameSkipped("BIFF5 defined names")),
             0x0018 => {
                 if g.names.len() >= MAX_NAMES {
                     continue;
@@ -521,7 +552,7 @@ impl SheetState<'_> {
 
     fn pos(&mut self, row: u16, col: u16) -> Option<CellRef> {
         let (r, c) = (u32::from(row), u32::from(col));
-        if r >= GRID_ROWS || c >= GRID_COLS {
+        if r >= if self.g.biff5 { 16_384 } else { GRID_ROWS } || c >= GRID_COLS {
             self.dropped += 1;
             return None;
         }
@@ -541,7 +572,12 @@ impl SheetState<'_> {
 
     /// Decodes a formula and attaches it to the cell at `pos`, or records why it can't be.
     fn attach(&mut self, pos: CellRef, p: &Parsed, mode: Mode, array: Option<Range>) {
-        match decode(&p.rgce, &p.rgcb, pos, mode, &self.g.links) {
+        let result = if self.g.biff5 {
+            crate::biff5::formula(&p.rgce, pos, self.g.codepage, &self.g.links)
+        } else {
+            decode(&p.rgce, &p.rgcb, pos, mode, &self.g.links)
+        };
+        match result {
             // A one-cell Ctrl+Shift+Enter array keeps its range: it evaluates as an array.
             Ok(e) => self.sheet.cells.entry(pos).or_default().formula = Some(Formula { text: crate::expr::print(&e), array }),
             Err(Unsupported(why)) => self.unsupported(why),
@@ -642,7 +678,7 @@ fn worksheet<'g>(
     let mut recs = Records::new(stream, bs.pos);
     let first = recs.next_record()?.ok_or_else(|| invalid("missing sheet substream"))?;
     let (vers, dt) = bof(&first)?;
-    if vers != BIFF8 || dt != 0x0010 {
+    if vers != if g.biff5 { 0x0500 } else { BIFF8 } || dt != 0x0010 {
         return Ok(None);
     }
     let mut st = SheetState {
@@ -768,7 +804,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         // Label, and RString (a label followed by formatting runs, which are skipped).
         0x0204 | 0x00D6 => {
             let (r, col, x) = (c.u16()?, c.u16()?, c.u16()?);
-            let s = c.string()?;
+            let s = if st.g.biff5 { crate::biff5::string(&mut c, st.g.codepage)? } else { c.string()? };
             budget.text(s.len())?;
             st.put(budget, r, col, x, Value::Text(Arc::from(s)))?;
         }
@@ -795,7 +831,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         0x0006 => formula_cell(&mut c, st, budget)?,
         0x0207 => {
             if let Some((pos, format)) = st.pending_string.take() {
-                let s = c.string()?;
+                let s = if st.g.biff5 { crate::biff5::string(&mut c, st.g.codepage)? } else { c.string()? };
                 budget.text(s.len())?;
                 let cell = st.sheet.cells.entry(pos).or_insert_with(|| Cell { value: Value::Empty, format, formula: None });
                 cell.value = Value::Text(Arc::from(s));
@@ -885,6 +921,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 right_to_left: on(0x0040),
             });
         }
+        0x005D | 0x01B6 | 0x001C | 0x00EC if st.g.biff5 => report.warn(Warning::Biff5Objects),
         0x005D | 0x01B6 | 0x001C | 0x00EC => match object_record(rec, &mut c, st, budget, report) {
             Err(Error::Invalid(_)) => {
                 if rec.id == 0x005D {

@@ -78,6 +78,64 @@ impl StyleRecords {
         }
     }
 
+    /// BIFF5 Font has the same fields but a byte string instead of a Unicode name.
+    pub(crate) fn font5(&mut self, c: &mut Cursor<'_, '_>, cp: u16) {
+        let mut data = Vec::new();
+        let result = (|| {
+            for _ in 0..14 {
+                data.push(c.u8()?);
+            }
+            let name = crate::biff5::short_string(c, cp)?;
+            let units: Vec<u16> = name.encode_utf16().collect();
+            data.push(units.len() as u8);
+            data.push(1);
+            for u in units {
+                data.extend(u.to_le_bytes());
+            }
+            Ok::<(), crate::Error>(())
+        })();
+        if result.is_err() {
+            self.short = true;
+        }
+        self.font(&mut Cursor::new(&[&data]));
+    }
+
+    /// BIFF5 XF (16 bytes), translated to the common formatting representation.
+    pub(crate) fn xf5(&mut self, c: &mut Cursor<'_, '_>, max: usize) {
+        let mut data = Vec::new();
+        let result = (|| {
+            for _ in 0..6 {
+                data.push(c.u8()?);
+            }
+            let align = c.u8()?;
+            let orient = c.u8()?;
+            let fill = c.u32()?;
+            let border = c.u32()?;
+            let rot = match orient & 3 {
+                1 => 255,
+                2 => 90,
+                3 => 180,
+                _ => 0,
+            };
+            data.extend([align, rot, 0, orient & 0xFC]);
+            let b1 = ((border >> 3) & 7)
+                | (((border >> 6) & 7) << 4)
+                | ((border & 7) << 8)
+                | (((fill >> 22) & 7) << 12)
+                | (((border >> 16) & 0x7F) << 16)
+                | (((border >> 23) & 0x7F) << 23);
+            let b2 = ((border >> 9) & 0x7F) | (((fill >> 25) & 0x7F) << 7) | (((fill >> 16) & 0x3F) << 26);
+            data.extend(b1.to_le_bytes());
+            data.extend(b2.to_le_bytes());
+            data.extend(((fill & 0x3FFF) as u16).to_le_bytes());
+            Ok::<(), crate::Error>(())
+        })();
+        if result.is_err() {
+            self.short = true;
+        }
+        self.xf(&mut Cursor::new(&[&data]), max);
+    }
+
     /// An XF record. A short record keeps the fields it has.
     pub(crate) fn xf(&mut self, c: &mut Cursor<'_, '_>, max: usize) {
         if self.xfs.len() >= max {

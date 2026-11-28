@@ -207,3 +207,10 @@ adapting code from [PiJellyPin's MaterialCraft](https://github.com/PiJellyPin/Ma
 `NOTICE` for the original attribution. This extraction retains vangel76's subsequent evaluator and GPU work.
 The format reference and tests are from the same TextureCraft source. The tests' numerical rule tables document
 their provenance in their headers.
+
+### BIFF5 test fixtures
+
+`crates/xls/tests/it/biff5.rs`: original synthetic workbooks assembled in Rust by this
+contribution from invented inputs and the published Excel file format specification
+(OpenOffice.org, revision 1.42). No user files or third-party assets. MIT OR Apache-2.0,
+the same terms as this repository.

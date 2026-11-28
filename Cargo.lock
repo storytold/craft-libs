@@ -4919,6 +4919,7 @@ name = "craft-xls"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-codepage",
  "craft-sheet",
  "craft-xls",
  "md-5 0.10.6",
