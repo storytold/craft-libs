@@ -114,6 +114,7 @@ craft-material-graph = { workspace = true, optional = true }
 craft-materialx = { workspace = true, optional = true }
 craft-math = { workspace = true, optional = true }
 craft-mesh = { workspace = true, optional = true }
+craft-mesh-ops = { workspace = true, optional = true }
 craft-metadata = { workspace = true, optional = true }
 craft-metafile = { workspace = true, optional = true }
 craft-midi = { workspace = true, optional = true }
@@ -674,6 +675,8 @@ mesh-obj = ["mesh", "craft-mesh/obj"]
 mesh-ply = ["mesh", "craft-mesh/ply"]
 mesh-stl = ["mesh", "craft-mesh/stl"]
 mesh-threemf = ["mesh", "craft-mesh/threemf"]
+
+mesh-ops = ["dep:craft-mesh-ops"]
 
 metadata = ["dep:craft-metadata"]
 
