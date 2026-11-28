@@ -16,6 +16,10 @@
 //!   AppKit's predefined ones, titled by the caller.
 //! - While a menu is open, changes wait until it closes: replacing or changing an `NSMenu` while
 //!   AppKit tracks it can leave the displayed menu stranded.
+//! - While a native panel has the keys (a Save or Open panel, the colour panel), an item with the
+//!   standard Undo, Redo, Cut, Copy, Paste or Select All shortcut acts on the panel's text field,
+//!   through a hidden menu of AppKit's own editing items ([`PANEL_EDIT_MENU`]), and the handler
+//!   doesn't hear of it.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -26,8 +30,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use objc2::{MainThreadMarker, sel};
-use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
+use objc2::rc::Retained;
+use objc2::{ClassType, MainThreadMarker, sel};
+use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType, NSMenuItem, NSPanel};
 use objc2_foundation::{NSBundle, NSLocale, NSObjectProtocol, NSString};
 
 use super::{Bar, Chosen, Handler, Held, Item, Menu, MenuKind, Node, Options, Platform, Shortcut, Wake};
@@ -70,6 +75,12 @@ static ROUTE: Mutex<Option<Handler>> = Mutex::new(None);
 /// muda keeps the first menu event handler set and ignores later ones, so it is set once.
 static HANDLER: OnceLock<()> = OnceLock::new();
 
+/// The items whose shortcut is a text field's own (⌘Z, ⌘C, …), by id: chosen while a native panel
+/// has the keys, they act on its field ([`panel_takes_edit`]). Published from the installed
+/// entries ([`publish_field_edits`]) only once a build has succeeded, so a failed rebuild, which
+/// keeps the old menu, keeps its routing too.
+static FIELD_EDITS: Mutex<Option<HashMap<String, FieldEdit>>> = Mutex::new(None);
+
 thread_local! {
     /// The minimal app menu ([`install_app_menu`]). muda's items must outlive the native menu
     /// that shows them.
@@ -101,6 +112,11 @@ fn handle_event(e: MenuEvent) {
             }
         })
         .unwrap_or_default();
+    // Undo, Copy, Paste, … while a native panel has the keys are its text field's.
+    let edit = lock(&FIELD_EDITS).as_ref().and_then(|edits| edits.get(e.id.as_ref()).copied());
+    if edit.is_some_and(panel_takes_edit) {
+        return;
+    }
     // A copy, so nothing is locked while the app's handler runs.
     let handler = lock(&ROUTE).clone();
     if let Some(handler) = handler {
@@ -202,6 +218,8 @@ struct Entry {
     handle: Handle,
     label: String,
     enabled: bool,
+    /// The text-field command the item's shortcut stands for in a native panel, if any.
+    edit: Option<FieldEdit>,
 }
 
 /// The native items by muda id.
@@ -258,7 +276,11 @@ impl Installed {
                     special.push((m.kind, sub));
                 }
             }
+            menu.append(&panel_edit_menu()?)?;
             menu.init_for_nsapp();
+            if let Some(item) = MainThreadMarker::new().and_then(panel_edit_item) {
+                item.setHidden(true);
+            }
             // Only once the menu is NSApp's: muda looks the submenus up in the installed main menu.
             for (kind, sub) in special {
                 match kind {
@@ -272,6 +294,7 @@ impl Installed {
             Ok(Ok((menu, entries, window))) => {
                 self.menu = Some(menu);
                 self.entries = entries;
+                publish_field_edits(&self.entries);
                 self.window = window;
                 self.structure = bar.structure;
                 self.failed = false;
@@ -323,6 +346,7 @@ impl Installed {
         match replaced {
             Ok(Ok(window)) => {
                 self.entries = entries;
+                publish_field_edits(&self.entries);
                 self.window = Some(window);
                 true
             }
@@ -432,11 +456,97 @@ fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node]) -> muda::Result<
                         Handle::Plain(h)
                     }
                 };
-                entries.insert(it.id.clone(), Entry { handle, label: it.label.clone(), enabled: it.enabled });
+                let edit = it.shortcut.as_ref().and_then(field_edit);
+                entries.insert(it.id.clone(), Entry { handle, label: it.label.clone(), enabled: it.enabled, edit });
             }
         }
     }
     Ok(())
+}
+
+/// Make the installed entries' text-field shortcuts the ones [`handle_event`] routes to a panel.
+fn publish_field_edits(entries: &Entries) {
+    let edits = entries.iter().filter_map(|(id, e)| Some((id.clone(), e.edit?))).collect();
+    *lock(&FIELD_EDITS) = Some(edits);
+}
+
+/// The text-editing commands a native panel's text field takes from the menu bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FieldEdit {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+/// The field command for an item with one of the Mac's standard editing shortcuts: ⌘Z, ⇧⌘Z, ⌘X,
+/// ⌘C, ⌘V or ⌘A.
+fn field_edit(s: &Shortcut) -> Option<FieldEdit> {
+    let h = s.held;
+    if !h.command || h.control || h.option {
+        return None;
+    }
+    match (s.code, h.shift) {
+        ("KeyZ", false) => Some(FieldEdit::Undo),
+        ("KeyZ", true) => Some(FieldEdit::Redo),
+        ("KeyX", false) => Some(FieldEdit::Cut),
+        ("KeyC", false) => Some(FieldEdit::Copy),
+        ("KeyV", false) => Some(FieldEdit::Paste),
+        ("KeyA", false) => Some(FieldEdit::SelectAll),
+        _ => None,
+    }
+}
+
+/// The title of a hidden menu of AppKit's standard Undo, Redo, Cut, Copy, Paste and Select All
+/// items ([`PANEL_EDITS`], in that order). Their actions (`undo:`, `copy:`, …) have no target, so
+/// AppKit sends them to the key window's first responder: the text field of a native panel, also
+/// when the panel runs in another process, as Save and Open panels do. The menu is hidden, so it
+/// is never shown and takes no key equivalents.
+const PANEL_EDIT_MENU: &str = "craft-window panel edit actions";
+
+/// The hidden menu's items, in order.
+const PANEL_EDITS: [FieldEdit; 6] = [FieldEdit::Undo, FieldEdit::Redo, FieldEdit::Cut, FieldEdit::Copy, FieldEdit::Paste, FieldEdit::SelectAll];
+
+/// The hidden menu of standard editing items, to append to the menu bar before it is NSApp's.
+fn panel_edit_menu() -> muda::Result<Submenu> {
+    let menu = Submenu::new(PANEL_EDIT_MENU, true);
+    menu.append_items(&[
+        &PredefinedMenuItem::undo(None),
+        &PredefinedMenuItem::redo(None),
+        &PredefinedMenuItem::cut(None),
+        &PredefinedMenuItem::copy(None),
+        &PredefinedMenuItem::paste(None),
+        &PredefinedMenuItem::select_all(None),
+    ])?;
+    Ok(menu)
+}
+
+/// The installed hidden menu's item in the menu bar ([`PANEL_EDIT_MENU`]).
+fn panel_edit_item(mtm: MainThreadMarker) -> Option<Retained<NSMenuItem>> {
+    NSApplication::sharedApplication(mtm).mainMenu()?.itemWithTitle(&NSString::from_str(PANEL_EDIT_MENU))
+}
+
+/// Whether a native panel (a Save or Open panel, the colour panel) has the keys and took `edit`.
+///
+/// AppKit offers ⌘Z, ⌘C, ⌘V and the like to the menu bar before the panel's text field sees them.
+/// A standard Edit menu sends them on to the field; the app's own items run the app's command, so
+/// typing a file name in the Save panel and pressing ⌘Z undid the document behind it. So the field
+/// gets the command instead, through the matching item of the hidden standard menu
+/// ([`PANEL_EDIT_MENU`]). The app doesn't hear of it even when the field has nothing to do, as a
+/// standard menu's greyed item would do nothing.
+fn panel_takes_edit(edit: FieldEdit) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    // The app's own windows are never panels.
+    if !NSApplication::sharedApplication(mtm).keyWindow().is_some_and(|w| w.isKindOfClass(NSPanel::class())) {
+        return false;
+    }
+    let index = PANEL_EDITS.iter().position(|e| *e == edit).and_then(|i| isize::try_from(i).ok());
+    if let (Some(menu), Some(index)) = (panel_edit_item(mtm).and_then(|item| item.submenu()), index) {
+        menu.performActionForItemAtIndex(index);
+    }
+    true
 }
 
 /// `&` marks a mnemonic in muda labels.
