@@ -515,6 +515,11 @@ impl AffixDict {
         self.check_except(w, self.excluded(false))
     }
 
+    /// Whether the normalized spelling names a stem explicitly excluded from spelling.
+    pub(crate) fn explicitly_forbidden(&self, word: &str) -> bool {
+        word.len() <= MAX_INPUT_BYTES && self.is_forbidden(&self.normalize(word))
+    }
+
     /// Whether a suggestion is correct in its displayed case and has an eligible stem.
     pub fn can_suggest(&self, w: &str) -> bool {
         self.check_except(w, self.excluded(true))

@@ -341,11 +341,32 @@ pub(crate) fn is_correct(word: &str, locale: PackLocale, opts: &crate::Options) 
     if locale.primary() == "fr" {
         return crate::fr::check(&d, w, opts);
     }
+    check_word(&d, word, w, locale.primary())
+}
+
+/// The hyphenated part of a Dutch elision such as `'s-Hertogenbosch`.
+pub(crate) fn dutch_elision(word: &str) -> bool {
+    matches!(word.as_bytes(), [b's' | b'S' | b't' | b'T', b'-', ..])
+}
+
+fn check_word(d: &AffixDict, original: &str, word: &str, language: &str) -> bool {
     let known = |w: &str| d.check(w) || crate::in_user_dictionary(&w.to_lowercase());
-    if w.contains('-') && !known(w) {
-        return w.split('-').all(|p| p.chars().count() <= 1 || known(p));
+    if known(word) {
+        return true;
     }
-    known(w)
+    if matches!(language, "ca" | "nl") && d.explicitly_forbidden(word) {
+        return false;
+    }
+    if language == "nl" && dutch_elision(word) {
+        let prefixed = format!("'{word}");
+        if original.starts_with(['\'', '’']) {
+            return known(&prefixed);
+        }
+        if known(&prefixed) {
+            return false;
+        }
+    }
+    word.contains('-') && word.split('-').all(|part| part.chars().count() <= 1 || known(part))
 }
 
 /// Suggestions for `word` in `locale`, best first, at most `max`.
@@ -354,7 +375,33 @@ pub(crate) fn suggest(word: &str, max: usize, locale: PackLocale) -> Vec<String>
     if d.is_empty() {
         return Vec::new();
     }
-    if locale.primary() == "fr" { crate::fr::suggest_in(&d, word, max) } else { crate::affix_suggest::suggest_in(&d, word, max, &Tuning::DEFAULT) }
+    match locale.primary() {
+        "fr" => crate::fr::suggest_in(&d, word, max),
+        "nl" => dutch_suggestions(&d, word, max),
+        _ => crate::affix_suggest::suggest_in(&d, word, max, &Tuning::DEFAULT),
+    }
+}
+
+fn dutch_suggestions(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
+    let apostrophe = word.chars().next().filter(|c| matches!(c, '\'' | '’'));
+    let body = word.trim_start_matches(['\'', '’']);
+    if !dutch_elision(body) || max == 0 || body.len() > crate::affix::MAX_WORD_BYTES {
+        return crate::affix_suggest::suggest_in(d, word, max, &Tuning::DEFAULT);
+    }
+    let full = format!("'{body}");
+    let mut found = crate::affix_suggest::suggest_in(d, &full, max, &Tuning::DEFAULT);
+    if apostrophe.is_none() && d.can_suggest(&full) {
+        found.insert(0, full);
+        found.truncate(max);
+    }
+    if apostrophe == Some('’') {
+        for suggestion in &mut found {
+            if let Some(rest) = suggestion.strip_prefix('\'') {
+                *suggestion = format!("’{rest}");
+            }
+        }
+    }
+    found
 }
 
 /// The pack locales whose hyphenation patterns serve a [`crate::ProofLang::Pack`] language: the locale,
@@ -369,6 +416,20 @@ mod tests {
 
     fn l(t: &str) -> PackLocale {
         PackLocale::new(t).unwrap()
+    }
+
+    #[test]
+    fn spelling_keeps_catalan_forbidden_compounds_and_dutch_apostrophes() {
+        let ca = AffixDict::from_hunspell("SET UTF-8\nFORBIDDENWORD Z\n", "3\ncol·legi\nhome\nhome-home/Z\n", &[]).unwrap();
+        assert!(check_word(&ca, "col·legi", "col·legi", "ca"));
+        assert!(!check_word(&ca, "home-home", "home-home", "ca"));
+
+        let nl = AffixDict::from_hunspell("SET UTF-8\nTRY acdefghijklmnopqrstuvwxyz\nREP 1\nREP bosh bosch\n", "1\n's-Hertogenbosch\n", &[]).unwrap();
+        assert!(check_word(&nl, "’s-Hertogenbosch", "s-Hertogenbosch", "nl"));
+        assert!(!check_word(&nl, "’s-Hertogenbosh", "s-Hertogenbosh", "nl"));
+        assert!(!check_word(&nl, "s-Hertogenbosch", "s-Hertogenbosch", "nl"));
+        assert!(dutch_suggestions(&nl, "’s-Hertogenbosh", 5).contains(&"’s-Hertogenbosch".into()));
+        assert!(dutch_suggestions(&nl, "s-Hertogenbosch", 5).contains(&"'s-Hertogenbosch".into()));
     }
 
     /// Review follow-up (craft-libs#485): a panic inside a check (caught by the app) doesn't leave
