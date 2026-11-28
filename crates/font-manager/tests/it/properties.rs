@@ -640,6 +640,40 @@ fn closed_field_wheel_from_a_host_row_to_a_family_picks_the_family() {
     host_then_family_steps(true);
 }
 
+/// Queued closed-field arrows that pass a family and stop on a host row report the host row and leave the family
+/// binding as it was: the family stepped past is not written.
+#[trial]
+fn closed_field_arrows_past_a_family_to_a_host_row_leave_the_family() {
+    use craft_font_manager::picker::{HostFontGroup, HostFontRow};
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let hosts = Rc::new(RefCell::new(Vec::<String>::new()));
+    let family = Rc::new(RefCell::new("Poster".to_owned()));
+    let (seen_hosts, seen_family) = (Rc::clone(&hosts), Rc::clone(&family));
+    let catalog = catalog_of(&[face("Book"), face("Poster")]);
+    let rows = [HostFontRow::face("a", "A", None)];
+    let mut filters = FontFilters::default();
+    filters.properties.height = Some(Grade::Medium);
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::bound(&mut *seen_family.borrow_mut()), &catalog)
+            .filters(Bind::bound(&mut filters))
+            .host(&[HostFontGroup::new(None, &rows)])
+            .show(ui);
+        seen_hosts.borrow_mut().extend(out.host_picked);
+    });
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    fx.host(Arc::new(host));
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.key(Key::Tab, Modifiers::NONE);
+    fx.key(Key::ArrowUp, Modifiers::NONE);
+    fx.key(Key::ArrowUp, Modifiers::NONE);
+    assert!(hosts.borrow().is_empty(), "the arrows wait for the outline reads");
+    jobs.run_all();
+    fx.settle();
+    assert_eq!(*hosts.borrow(), ["a"], "the host row the arrows stopped on is reported");
+    assert_eq!(family.borrow().as_str(), "Poster", "Book, stepped past, is not written");
+}
+
 /// Picks Heavy in the open list's Weight dropdown.
 fn pick_heavy(fx: &mut Fixture) {
     let weight = fx.by_label("Weight").expect("the weight dropdown");

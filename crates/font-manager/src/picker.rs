@@ -1009,6 +1009,29 @@ impl<'a> FontPicker<'a> {
         Some(host.chain(self.ordered(cx, settings, filters)?.into_iter().map(|row| Stop::Family(row.family))).collect())
     }
 
+    /// Applies the closed field's step onto `all[at]`: a host row is reported as `host_picked`; a family clears it and
+    /// is written, by the wheel's run when `phase` is given, otherwise as the pick. Arrows that end where they started
+    /// (`start`) apply nothing.
+    fn apply_stop(&mut self, cx: &mut Cx<'_, Self>, all: &[Stop], start: Option<usize>, last: Option<(usize, Option<WheelPhase>)>) {
+        let Some((at, phase)) = last else { return };
+        if phase.is_none() && start == Some(at) {
+            return;
+        }
+        match (all.get(at), phase) {
+            (Some(Stop::Host(key)), _) => self.host_picked = Some(key.clone()),
+            (Some(Stop::Family(family)), Some(phase)) => {
+                self.host_picked = None;
+                cx.wheel_run(phase, Some(family.clone()));
+            }
+            (Some(Stop::Family(family)), None) => {
+                self.host_picked = None;
+                self.picked = Some(family.clone());
+                cx.set(family.clone());
+            }
+            (None, _) => {}
+        }
+    }
+
     /// The families in the list's narrowed order (the bound filters and the host's sets apply) without the Recent
     /// group, which the arrows and the wheel step through.
     fn ordered(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Option<Vec<FamilyRow>> {
@@ -1244,6 +1267,11 @@ impl Component for FontPicker<'_> {
             Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
             None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
         };
+        // Queued inputs replay as one move: only the stop the last of them reaches is applied, so a family stepped
+        // past on the way to a host row (or the other way round) is neither written nor reported. `last` holds that
+        // stop, with the wheel phase when the wheel reached it (a run's start is kept).
+        let mut last: Option<(usize, Option<WheelPhase>)> = None;
+        let mut start = current;
         for ClosedInput { moves, wheel_along, wheel_ended } in inputs {
             if !moves.is_empty() {
                 let here = current;
@@ -1253,19 +1281,13 @@ impl Component for FontPicker<'_> {
                 }
                 current = to;
                 if to != here {
-                    match to.and_then(|at| all.get(at)) {
-                        Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
-                        Some(Stop::Family(family)) => {
-                            self.host_picked = None;
-                            self.picked = Some(family.clone());
-                            cx.set(family.clone());
-                        }
-                        None => {}
-                    }
+                    last = to.map(|at| (at, None));
                 }
             }
             // The wheel steps one stop a line down for a step forward, as one run the wheel's end commits.
             if wheel_ended {
+                self.apply_stop(cx, &all, start, last.take());
+                start = current;
                 cx.wheel_run(WheelPhase::End, None);
             } else if let Some((phase, along)) = wheel_along {
                 let mut stop = current;
@@ -1273,16 +1295,13 @@ impl Component for FontPicker<'_> {
                     stop = step_stop(&stops, stop, along < 0.0);
                 }
                 current = stop;
-                match stop.and_then(|at| all.get(at)) {
-                    Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
-                    Some(Stop::Family(family)) => {
-                        self.host_picked = None;
-                        cx.wheel_run(phase, Some(family.clone()));
-                    }
-                    None => {}
+                if let Some(at) = stop {
+                    let started = matches!(last, Some((_, Some(WheelPhase::Start))));
+                    last = Some((at, Some(if started { WheelPhase::Start } else { phase })));
                 }
             }
         }
+        self.apply_stop(cx, &all, start, last);
     }
 
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
