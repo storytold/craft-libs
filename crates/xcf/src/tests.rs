@@ -405,8 +405,11 @@ fn corrupted_files_never_panic() {
         let bytes = img.write();
         assert!(read_all(&bytes).is_ok());
         let mut state = 0x9e37_79b9_u32;
-        // The gate runs a divisor's fraction of the rounds; nightly runs all.
-        for _ in 0..2000 / craft_testkit::hostile::divisor() {
+        let rounds = 2_000;
+        // The native gate can sample the sweep. The divisor reads a process environment variable.
+        #[cfg(not(target_arch = "wasm32"))]
+        let rounds = rounds / craft_testkit::hostile::divisor();
+        for _ in 0..rounds {
             let mut b = bytes.clone();
             for _ in 0..3 {
                 state ^= state << 13;
@@ -1005,6 +1008,54 @@ fn the_pixel_budget_is_charged_before_decoding_and_decoding_can_be_cancelled() {
 }
 
 #[test]
+fn tile_tables_are_terminated_and_cannot_point_into_themselves() {
+    let mut img = TestImage::rgb8(1, 1);
+    img.compression = Compression::None;
+    img.layers.push(TestLayer::rgba("L", 1, 1, vec![22, 44, 66, 255]));
+    let mut file = W { out: img.write(), wide: true };
+    let xcf = open(&file.out).unwrap();
+    let hierarchy = xcf.image.layers[0].hierarchy;
+    let level = xcf.c.at(hierarchy + 12).ptr().unwrap();
+    let tile_slot = level + 8;
+    let terminator = tile_slot + 8;
+    assert_eq!(pixels(&xcf, 0).data[3], 1.0);
+
+    let valid = file.out.clone();
+    file.patch(terminator, 1);
+    assert!(read_all(&file.out).is_err(), "a nonzero tile-list terminator must be rejected");
+
+    file.out = valid;
+    file.patch(tile_slot, terminator);
+    assert!(read_all(&file.out).is_err(), "a tile cannot use the pointer table as pixel data");
+}
+
+#[test]
+fn nonincreasing_tile_offsets_are_rejected() {
+    let mut img = TestImage::rgb8(TILE + 1, 1);
+    img.compression = Compression::None;
+    img.layers.push(TestLayer::rgba("L", TILE + 1, 1, rgba(TILE + 1, 1, |_, _| [22, 44, 66, 255])));
+    let mut file = W { out: img.write(), wide: true };
+    let xcf = open(&file.out).unwrap();
+    let hierarchy = xcf.image.layers[0].hierarchy;
+    let level = xcf.c.at(hierarchy + 12).ptr().unwrap();
+    let first_tile = xcf.c.at(level + 8).ptr().unwrap();
+    assert!(read_all(&file.out).is_ok());
+    file.patch(level + 16, first_tile);
+    assert!(read_all(&file.out).is_err());
+}
+
+#[test]
+fn cancellation_precedes_drawable_traversal_and_budget_charge() {
+    let mut img = TestImage::rgb8(1, 1);
+    img.layers.push(TestLayer::rgba("L", 1, 1, vec![22, 44, 66, 255]));
+    let bytes = img.write();
+    let xcf = open(&bytes).unwrap();
+    let mut budget = 16;
+    assert_eq!(xcf.layer_pixels(0, &mut budget, &|| false), Err(Error::Cancelled));
+    assert_eq!(budget, 16);
+}
+
+#[test]
 fn parsing_layer_metadata_can_be_cancelled_between_records() {
     let mut img = TestImage::rgb8(3, 3);
     img.layers.push(TestLayer::rgba("first", 3, 3, rgba(3, 3, |_, _| [1, 2, 3, 255])));
@@ -1133,4 +1184,36 @@ fn channel_names_are_charged_to_the_metadata_budget() {
     let results: Vec<_> = (0..40).map(|i| xcf.channel(i, &mut budget, GO).map(|(c, _)| c.name.len())).collect();
     assert!(results[..32].iter().all(|r| *r == Ok(MAX_STRING - 1)), "32 copies fit the 32 MiB budget");
     assert!(results[32..].iter().all(|r| *r == Err(Error::Invalid("channel metadata exceeds the budget".into()))));
+}
+
+#[test]
+fn tiles_before_the_level_table_cannot_consume_its_dimensions() {
+    for complete in [false, true] {
+        let mut image = TestImage::rgb8(2, 1);
+        image.compression = Compression::None;
+        let mut file = W { out: image.write(), wide: true };
+        let hierarchy = file.out.len();
+        for value in [2, 1, 4] {
+            file.u32(value);
+        }
+        let level_slot = file.slot();
+        let pixels_at = file.out.len();
+        file.out.extend([22, 44, 66, 255]);
+        if complete {
+            file.out.extend([88, 110, 132, 255]);
+        }
+        let level = file.out.len();
+        file.patch(level_slot, level);
+        file.u32(2);
+        file.u32(1);
+        file.ptr(pixels_at);
+        file.ptr(0);
+        let xcf = open(&file.out).unwrap();
+        let result = xcf.hierarchy(hierarchy, 4, false, &mut 32, GO);
+        if complete {
+            assert_eq!(result.unwrap().data, [22_u8, 44, 66, 255, 88, 110, 132, 255].map(|v| f32::from(v) / 255.0));
+        } else {
+            assert!(result.is_err(), "level width bytes cannot become the second pixel");
+        }
+    }
 }
