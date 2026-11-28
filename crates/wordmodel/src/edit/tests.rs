@@ -452,17 +452,144 @@ fn pasted_box_copies_count_the_objects_they_copy() {
     assert!((1..64).contains(&added), "{added}");
     assert!(copied <= MAX_PASTED_BOX_BYTES, "{copied}");
     // Nested group members and equations count too.
-    let member = |obj| crate::para::GroupChild { x: 0.0, y: 0.0, obj };
+    let member = |obj| crate::para::GroupChild { link: None, x: 0.0, y: 0.0, obj };
     let deep = InlineObject::Opaque { format: String::new(), xml: "y".repeat(5000), text: String::new() };
     let inner = InlineObject::Group { w: 1.0, h: 1.0, float: Default::default(), ch_w: 1.0, ch_h: 1.0, children: vec![member(deep)], canvas: None };
     let outer = InlineObject::Group { w: 1.0, h: 1.0, float: Default::default(), ch_w: 1.0, ch_h: 1.0, children: vec![member(inner)], canvas: None };
     assert!(object_cost(&outer) >= 5000);
+    let mut linked = outer.clone();
+    if let InlineObject::Group { children, .. } = &mut linked {
+        children[0].link = Some("https://example.com/member/".repeat(40));
+    }
+    assert!(object_cost(&linked) >= object_cost(&outer) + "https://example.com/member/".len() * 40);
     let eq = InlineObject::Equation {
         linear: String::new(),
         display: false,
         math: crate::math::Math { nodes: crate::math::parse_linear(&"z".repeat(5000)), ..Default::default() },
     };
     assert!(object_cost(&eq) >= 5000);
+
+    // Retaining a linked subgroup must not hide its text box from fragment part
+    // collection or from the story-ID remapping when pasted into another document.
+    let mut source = doc(&[""]);
+    let direct = source.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Direct story", CharProps::default()))]);
+    let nested = source.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Nested story", CharProps::default()))]);
+    let group = |children| InlineObject::Group { w: 20.0, h: 10.0, float: Default::default(), ch_w: 20.0, ch_h: 10.0, children, canvas: None };
+    let subgroup = group(vec![member(box_shape(Some(nested)))]);
+    let object = group(vec![
+        member(box_shape(Some(direct))),
+        crate::para::GroupChild { x: 5.0, y: 0.0, obj: subgroup, link: Some("https://example.com/subgroup".into()) },
+    ]);
+    assert_eq!(object.text_boxes(), [direct, nested], "depth-first direct and nested stories");
+    source.insert_object(&Pos::body(0, 0), object, &CharProps::default()).unwrap();
+    let fragment = source.copy_range(&Pos::body(0, 0), &Pos::body(0, 3));
+    assert!(fragment.parts.contains_key(&direct), "the direct member's story is copied");
+    assert!(fragment.parts.contains_key(&nested), "the linked subgroup's story is copied");
+
+    let mut target = doc(&["target"]);
+    let direct_collision = target.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("First header", CharProps::default()))]);
+    let nested_collision = target.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Second header", CharProps::default()))]);
+    assert_eq!((direct_collision, nested_collision), (direct, nested));
+    target.insert_fragment(&Pos::body(0, 6), &fragment).unwrap();
+    let InlineObject::Group { children, .. } = &target.body[0].as_para().unwrap().objects[0] else { panic!() };
+    let copied_direct = children[0].obj.text_box().expect("the direct member keeps its story");
+    assert_eq!(children[1].link.as_deref(), Some("https://example.com/subgroup"));
+    let InlineObject::Group { children, .. } = &children[1].obj else { panic!("the linked subgroup remains nested") };
+    let copied_nested = children[0].obj.text_box().expect("the nested member keeps its story");
+    assert_ne!(copied_direct, direct_collision);
+    assert_ne!(copied_nested, nested_collision, "the nested slot must be remapped, not point at a header");
+    assert_ne!(copied_direct, copied_nested);
+    assert!(target.parts.contains_key(&copied_direct));
+    assert!(target.parts.contains_key(&copied_nested));
+    assert_eq!(target.plain_text(StoryRef::Part(copied_direct)), "Direct story");
+    assert_eq!(target.plain_text(StoryRef::Part(copied_nested)), "Nested story");
+    assert_eq!(target.plain_text(StoryRef::Part(direct_collision)), "First header");
+    assert_eq!(target.plain_text(StoryRef::Part(nested_collision)), "Second header");
+
+    fn check_deep_media_copy(group: impl Fn(Vec<crate::para::GroupChild>) -> InlineObject) {
+        let member = |obj| crate::para::GroupChild { x: 0.0, y: 0.0, obj, link: None };
+        // An original one-pixel RGBA PNG at the deepest imported group level must
+        // use copied media even when the destination already uses the source key.
+        // The four tiny PNGs below were built from distinct solid pixels with Python
+        // stdlib zlib/CRC, not obtained from an application or external asset.
+        fn image_key(mut object: &InlineObject, groups: usize) -> &str {
+            for _ in 0..groups {
+                let InlineObject::Group { children, .. } = object else { panic!("the linked group hierarchy must remain") };
+                object = &children[0].obj;
+            }
+            let InlineObject::Image { media, .. } = object else { panic!("the final member must remain a picture") };
+            media
+        }
+        let deep_png = vec![
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73,
+            68, 65, 84, 120, 156, 99, 56, 33, 167, 241, 31, 0, 4, 206, 2, 14, 189, 145, 134, 181, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        let sibling_png = vec![
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73,
+            68, 65, 84, 120, 156, 99, 16, 217, 98, 243, 31, 0, 3, 232, 2, 4, 40, 46, 23, 156, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        let collision_png = vec![
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73,
+            68, 65, 84, 120, 156, 99, 144, 179, 57, 241, 31, 0, 3, 192, 2, 34, 124, 230, 121, 187, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        let sibling_collision_png = vec![
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73,
+            68, 65, 84, 120, 156, 99, 184, 179, 79, 228, 63, 0, 6, 214, 2, 174, 179, 98, 244, 44, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        let mut media_source = doc(&[""]);
+        let source_key = media_source.add_media(deep_png.clone(), "png");
+        let sibling_key = media_source.add_media(sibling_png.clone(), "png");
+        let picture = |key: &str| InlineObject::Image {
+            media: key.to_string(),
+            w: 1.0,
+            h: 1.0,
+            alt: "original solid pixel".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
+        let chain = |mut object, groups| {
+            for level in 0..groups {
+                object =
+                    group(vec![crate::para::GroupChild { x: 0.0, y: 0.0, obj: object, link: Some(format!("https://example.com/group/{level}")) }]);
+            }
+            object
+        };
+        let accepted = chain(picture(&source_key), 8);
+        let beyond = chain(picture(&source_key), 9);
+        let root = group(vec![member(accepted), member(picture(&sibling_key)), member(beyond)]);
+        media_source.insert_object(&Pos::body(0, 0), root, &CharProps::default()).unwrap();
+        let mut media_target = doc(&[""]);
+        assert_eq!(media_target.add_media(collision_png.clone(), "png"), source_key);
+        assert_eq!(media_target.add_media(sibling_collision_png.clone(), "png"), sibling_key);
+        let fragment = media_target.adopt(media_source);
+        // The media collector copies complete entries; the separate object rewriter
+        // must then redirect both the shallow sibling and the deepest accepted leaf.
+        assert!(media_target.media.values().any(|bytes| bytes.as_slice() == deep_png.as_slice()));
+        assert!(media_target.media.values().any(|bytes| bytes.as_slice() == sibling_png.as_slice()));
+        media_target.insert_fragment(&Pos::body(0, 0), &fragment).unwrap();
+        let InlineObject::Group { children, .. } = &media_target.body[0].as_para().unwrap().objects[0] else { panic!() };
+        let copied_sibling = image_key(&children[1].obj, 0);
+        assert_ne!(copied_sibling, sibling_key);
+        assert_eq!(media_target.media[copied_sibling].as_slice(), sibling_png.as_slice());
+        let copied_deep = image_key(&children[0].obj, 8);
+        assert_ne!(copied_deep, source_key, "the deepest accepted picture must be relinked");
+        assert_eq!(media_target.media[copied_deep].as_slice(), deep_png.as_slice());
+        assert_eq!(media_target.media[&source_key].as_slice(), collision_png.as_slice());
+        assert_eq!(media_target.media[&sibling_key].as_slice(), sibling_collision_png.as_slice());
+        // A ninth subgroup is outside the accepted import depth. It still marks the
+        // finite recursion boundary; this does not claim support for that deeper tree.
+        assert_eq!(image_key(&children[2].obj, 9), source_key);
+        let saved = serde_json::to_string(&media_target).unwrap();
+        let restored: Document = serde_json::from_str(&saved).unwrap();
+        let InlineObject::Group { children, .. } = &restored.body[0].as_para().unwrap().objects[0] else { panic!() };
+        assert_eq!(image_key(&children[0].obj, 8), copied_deep, "saved model keeps the copied media ID");
+        assert_eq!(restored.media[copied_deep].as_slice(), deep_png.as_slice());
+        assert_eq!(image_key(&children[1].obj, 0), copied_sibling);
+        assert_eq!(restored.media[copied_sibling].as_slice(), sibling_png.as_slice());
+    }
+    check_deep_media_copy(group);
 }
 
 #[test]

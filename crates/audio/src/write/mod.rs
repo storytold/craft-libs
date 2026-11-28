@@ -449,8 +449,32 @@ impl EncodeOptions {
 /// ```
 #[cfg(feature = "pcm-encode")]
 pub fn wav_float_header(sample_rate: u32, channels: u16, frames: u64) -> Result<Vec<u8>> {
+    float_header(sample_rate, channels, None, frames)
+}
+
+/// [`wav_float_header`] with a BWF `bext` chunk holding `bwf` before the format chunk. The length
+/// still doesn't depend on `frames`, so the header is rewritten in place the same way.
+///
+/// ```
+/// use craft_audio::{BwfInfo, wav_float_header_with_bwf};
+///
+/// let bwf = BwfInfo::default().with_originator("Recorder").with_time_reference(48_000 * 3_600);
+/// let mut file = wav_float_header_with_bwf(48_000, 2, 0, &bwf).unwrap();
+/// let samples = [0.25f32, -0.25, 0.5, -0.5];
+/// file.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+/// let header = wav_float_header_with_bwf(48_000, 2, 2, &bwf).unwrap();
+/// file[..header.len()].copy_from_slice(&header);
+/// assert!(header.windows(4).any(|id| id == b"bext"));
+/// ```
+#[cfg(feature = "pcm-encode")]
+pub fn wav_float_header_with_bwf(sample_rate: u32, channels: u16, frames: u64, bwf: &crate::BwfInfo) -> Result<Vec<u8>> {
+    float_header(sample_rate, channels, Some(bwf), frames)
+}
+
+#[cfg(feature = "pcm-encode")]
+fn float_header(sample_rate: u32, channels: u16, bwf: Option<&crate::BwfInfo>, frames: u64) -> Result<Vec<u8>> {
     if channels == 0 || sample_rate == 0 {
         return Err(AudioError::Encode("a WAV needs channels and a sample rate".into()));
     }
-    wav::header(usize::from(channels), sample_rate, (32, true), None, None, frames, false)
+    wav::header(usize::from(channels), sample_rate, (32, true), bwf, None, frames, false)
 }

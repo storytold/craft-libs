@@ -130,6 +130,11 @@ impl EditorHandle {
         EditorHandle { widget: info.widget, rect: info.rect, purpose: info.purpose, focused: info.focused, read_only: info.read_only }
     }
 
+    /// Whether the editor part holds the key focus this pass, whether or not its window has the system's.
+    pub fn focused(&self) -> bool {
+        self.focused
+    }
+
     /// Reports the caret and composition to the input-method engine and puts the text facts in the running pass's
     /// editor record, which the owning component's report step reads in the same pass.
     pub fn report(&self, ctx: &egui::Context, state: EditorState<'_>) {

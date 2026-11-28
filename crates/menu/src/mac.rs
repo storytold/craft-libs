@@ -26,6 +26,9 @@
 //!   Hide Others and Minimize built-ins use the system's localized titles when the app supplies no
 //!   translation, that is when the label is still the English name.
 //! - While a menu is open, changes wait until it closes.
+//! - When AppKit refuses a rebuild, the menus as they were stay up and the same menus are tried
+//!   once more a second later ([`RebuildRetry`]), with no input needed; when that fails too, the
+//!   next change to the menus tries again.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -33,9 +36,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 use craft_ui::menu::Alternate;
+use craft_ui::runtime::{frame, motion};
 use craft_window::native_menu as native;
 
-use crate::driver::{Backend, Dispatch, Event, NativeMenu, native_ok};
+use crate::driver::{Attempt, Backend, Dispatch, Event, NativeMenu, RebuildRetry, native_ok};
 use crate::model::{Builtin, Item, ItemKind, Menu, MenuBar, MenuRole, Node, Standard, label_or_system, native_id, structure_key, window_key};
 
 /// Install the native menu bar for `bar` (a [`crate::mac_layout`] result) and return the driver
@@ -83,7 +87,8 @@ pub fn install_with(ctx: &egui::Context, bar: &MenuBar, options: MacOptions) -> 
     });
     let installed = native::NativeBar::install(&spec, native::Options::default().window_list(options.window_list), wake)?;
     let (tx, rx) = channel();
-    let backend = Native { ctx: ctx.clone(), bar: installed, targets: Arc::new(Mutex::new(targets)), tx, rx, pending: None };
+    let backend =
+        Native { ctx: ctx.clone(), bar: installed, targets: Arc::new(Mutex::new(targets)), tx, rx, pending: None, retry: RebuildRetry::default() };
     // `NativeMenu::new` attaches the driver's dispatch, which points the handler at this menu.
     Some(NativeMenu::new(Box::new(backend)))
 }
@@ -135,15 +140,32 @@ struct Native {
     targets: Targets,
     tx: Sender<Event>,
     rx: Receiver<Event>,
-    /// The latest menus, waiting for the open menu to close.
+    /// The latest menus, waiting for the open menu to close, or for the retry of a rebuild that
+    /// failed.
     pending: Option<MenuBar>,
+    /// Menus AppKit could not build, and when to try them again.
+    retry: RebuildRetry<native::Bar>,
 }
 
 impl Native {
+    /// Bring the native menus in step with `bar`. When the rebuild fails and a retry is to come,
+    /// `bar` waits in `pending` and egui is asked for a frame when the retry is due: the driver
+    /// does not sync the same menus again.
     fn update(&mut self, bar: &MenuBar) {
         let (spec, targets) = lower(bar);
-        if self.bar.apply(&spec) {
-            *lock(&self.targets) = targets;
+        let (native, live) = (&mut self.bar, &self.targets);
+        let attempt = self.retry.attempt(&spec, motion::now, || {
+            let rebuilt = native.apply(&spec);
+            if rebuilt {
+                *lock(live) = targets;
+            }
+            !native.failed()
+        });
+        // egui keeps no repaint delay from one pass to the next, so a frame before the retry is
+        // due asks again.
+        if let Attempt::Retry(wait) = attempt {
+            self.pending = Some(bar.clone());
+            frame::request_repaint_after(&self.ctx, wait.as_secs_f64());
         }
     }
 }

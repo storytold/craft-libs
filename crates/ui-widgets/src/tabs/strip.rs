@@ -29,7 +29,7 @@ use crate::menu::Menu;
 use crate::primitives::{PaintShape, StrokeWidth};
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use craft_behavior::fit::{FitItem, fit_items};
 use craft_behavior::{
     Flow, HitLevel, HitPriority, IconId, Insets, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection,
@@ -122,12 +122,15 @@ fn strip_lead(kind: TabKind, tokens: &crate::style::UiTokens) -> f32 {
     if kind == TabKind::Ribbon { tokens.space.pad.regular } else { 0.0 }
 }
 
-/// The look of a strip: it has none of its own; its row is as high as its tabs.
+/// The look of a strip: the focus ring of its end items and of the tab the keyboard is on; its row is as high as its
+/// tabs.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct TabStripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The text line a wheel notch given in lines counts.
     line: f32,
     /// The colour of the one underline a ribbon strip slides under its shown tab.
@@ -827,6 +830,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
         let (lead, side) = (strip_lead(key.kind, tokens), if ribbon { super::tab::ribbon_pad(tokens) - tokens.stroke.thick / 2.0 } else { 0.0 });
         TabStripStyle {
             metrics: Metrics::new().padding(Insets::new(lead, 0.0, 0.0, 0.0)),
+            focus: cx.focus_look(),
             line: tokens.typography.body.line_height,
             underline: cx.color(tokens.color.accent.solid),
             underline_inset: tokens.stroke.thick / 2.0,
@@ -856,6 +860,21 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
         self.more = None;
         let report = self.report();
         let flow = Flow::new(cx.content_rect, cx.flow.is_rtl());
+        // Alt+Down from the strip itself opens the first declared popup. Focused end items open their own menus.
+        if report.overflow > 0.0 {
+            let tabs = flow.take_end(report.ends_room).1;
+            let slot = match self.kind.overflow_place() {
+                OverflowPlace::StripEnd => tabs.take_end(report.overflow).0,
+                OverflowPlace::AfterTabs => tabs.take_start(report.tabs_end).1.take_start(report.overflow).0,
+            };
+            self.more = Some(slot);
+            cx.part(OVERFLOW, slot)
+                .sense(Sense::CLICK)
+                .priority(HitPriority::new(HitLevel::Edge, 0))
+                .over()
+                .toggles("menu")
+                .pointer_only("Alt+Down opens the overflow menu");
+        }
         for slot in &report.ends {
             let Some(end) = self.trailing.get(slot.item) else { continue };
             let enabled = end.enabled::<Self>(&**cx);
@@ -878,21 +897,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
                 let _ = cx.part(GHOST.at(at as u64), flow.span(start, width));
             }
         }
-        if report.overflow <= 0.0 {
-            return;
-        }
-        let tabs = flow.take_end(report.ends_room).1;
-        let slot = match self.kind.overflow_place() {
-            OverflowPlace::StripEnd => tabs.take_end(report.overflow).0,
-            OverflowPlace::AfterTabs => tabs.take_start(report.tabs_end).1.take_start(report.overflow).0,
-        };
-        self.more = Some(slot);
-        cx.part(OVERFLOW, slot)
-            .sense(Sense::CLICK)
-            .priority(HitPriority::new(HitLevel::Edge, 0))
-            .over()
-            .toggles("menu")
-            .pointer_only("Alt+Down opens the overflow menu");
     }
 
     /// A drag or a double click that starts on the empty room is reported; a drag of this strip's tabs that no target
@@ -955,11 +959,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
         }
     }
 
-    /// The overflow button and each end item are buttons named by their labels; an end item with a menu says so.
+    /// The overflow button and each end item are buttons named by their labels and announce the menus they open.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         if self.more.is_some() {
             let node = access.node(OVERFLOW, Role::BUTTON);
             node.name = Name::Text(cx.words::<StripWords>().more.as_str().to_owned());
+            node.has_popup(PopupKind::Menu);
         }
         for slot in self.report().ends {
             let Some(end) = self.trailing.get(slot.item) else { continue };
@@ -1067,6 +1072,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         // Shrinking document tabs stand apart by the inline gap; the other kinds and looks touch.
         let tab_gap = if self.kind.shrinks_in(look) { cx.tokens.space.gap.inline } else { 0.0 };
         StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
+    }
+
+    /// The tab the keyboard is on shows the focus ring, not the whole strip.
+    fn rings_lead(&self) -> bool {
+        true
     }
 
     /// Every tab takes the strip's kind, panel look and size.

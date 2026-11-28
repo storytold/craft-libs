@@ -116,6 +116,8 @@ pub enum SpaceAction {
     /// Picks the lead row in a collection that selects, else activates it.
     #[default]
     Activate,
+    /// Activates the lead like Enter, including when it is already selected.
+    ActivateLead,
     /// Flips the lead row's first enabled toggle cell; with several rows selected, the cell of every selected row.
     ToggleCell,
     /// Reports `CollectionEvent::Preview` for the lead row (Bridge's preview); Ctrl+Space still toggles the lead's pick.

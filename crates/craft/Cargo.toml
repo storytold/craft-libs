@@ -138,6 +138,7 @@ craft-raster-codecs = { workspace = true, optional = true }
 craft-raw = { workspace = true, optional = true }
 craft-rtf = { workspace = true, optional = true }
 craft-scraft-format = { workspace = true, optional = true }
+craft-scopes = { workspace = true, optional = true }
 craft-sf2 = { workspace = true, optional = true }
 craft-sheet = { workspace = true, optional = true }
 craft-silhouette-studio = { workspace = true, optional = true }
@@ -221,6 +222,7 @@ craft-geom = { workspace = true, optional = true }
 craft-suite-account = { workspace = true, optional = true }
 craft-xfa = { workspace = true, optional = true }
 craft-gpu = { workspace = true, optional = true }
+craft-gpu-device = { workspace = true, optional = true }
 craft-gpu-null = { workspace = true, optional = true }
 craft-gpu-providers = { workspace = true, optional = true }
 craft-gpu-wgpu = { workspace = true, optional = true }
@@ -229,6 +231,7 @@ craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
+craft-shared-vec = { workspace = true, optional = true }
 craft-ease = { workspace = true, optional = true }
 craft-i18n-build = { workspace = true, optional = true }
 craft-pbr = { workspace = true, optional = true }
@@ -532,6 +535,13 @@ gif-frames = ["gif", "craft-gif/frames"]
 gpu = ["dep:craft-gpu"]
 gpu-startup = ["gpu", "craft-gpu/startup"]
 
+gpu-device = ["dep:craft-gpu-device"]
+gpu-device-native-dx12 = ["gpu-device", "craft-gpu-device/native-dx12"]
+gpu-device-native-gles = ["gpu-device", "craft-gpu-device/native-gles"]
+gpu-device-native-metal = ["gpu-device", "craft-gpu-device/native-metal"]
+gpu-device-native-vulkan = ["gpu-device", "craft-gpu-device/native-vulkan"]
+gpu-device-serde = ["gpu-device", "craft-gpu-device/serde"]
+
 gpu-null = ["dep:craft-gpu-null"]
 
 gpu-providers = ["dep:craft-gpu-providers"]
@@ -812,6 +822,8 @@ rtf-outlook = ["rtf", "craft-rtf/outlook"]
 
 sbs = ["dep:craft-sbs"]
 
+scopes = ["dep:craft-scopes"]
+
 score = ["dep:craft-score"]
 
 scraft-format = ["dep:craft-scraft-format"]
@@ -821,6 +833,9 @@ settings-testing = ["settings", "craft-settings/testing"]
 
 sf2 = ["dep:craft-sf2"]
 sf2-test-support = ["sf2", "craft-sf2/test-support"]
+
+shared-vec = ["dep:craft-shared-vec"]
+shared-vec-serde = ["shared-vec", "craft-shared-vec/serde"]
 
 sheet = ["dep:craft-sheet"]
 

@@ -135,9 +135,19 @@ The module documentation lists every `Outcome`, `Options` and the words (`Shortc
 app translates. The dialog never opens a file dialog or touches the file system. Enable
 `screen-testing` for the stories and the `it` trials.
 
+Automation can select a command and set `replace` to `{"old":"Text: Cmd+B","new":"Cmd+K"}`
+through `ShortcutsDialog::set_json_field`. The old text must identify exactly one current binding;
+the new trigger keeps its scope and regular or Hold column. An equivalent trigger changes nothing,
+and a changed replacement has one Undo step. Ask mode leaves the original binding until the user
+answers the conflict bar; Steal and Keep follow the host's configured policy. A stale confirmation
+cannot replace bindings that changed after its prompt opened. Unavailable edits and replacements
+that cannot be stored return a refusal.
+
 ## Windows, Linux and web: the in-window bar
 
-`MenuBarUi` draws a laid-out bar and returns the titles' rect (`MenuBarOutput`). Show it inside a
+`MenuBarUi` draws a laid-out bar and returns the titles' rect and the width every title takes side by
+side (`MenuBarOutput`). A host that puts controls after the titles on the same row compares that
+width with the room it leaves the bar. Show it inside a
 `Stack` (a top panel's body) or the title bar's row: there the titles that don't fit its room fold
 into "…".
 Each item is a command row: its enabled state, check mark and chord follow the command in the
@@ -227,7 +237,8 @@ While a menu is open, a click or Escape in the window closes it and does not rea
 canvas gesture, no tool action); pointer moves pass through. Only one click is kept this way
 until the menu reports closed, so a menu wrongly reported open costs one click. Menu updates wait
 until the menu closes; the end of tracking wakes egui, and that frame applies them. A rebuild that
-fails keeps the menus as they were.
+fails keeps the menus as they were, and the same menus are tried once more a second later, with no
+input needed (`RebuildRetry`). When that fails too, the next change to the menus tries again.
 
 AppKit's `NSMenuDidBeginTracking` and `NSMenuDidEndTracking` notifications say whether a menu is
 open (`craft_window::native_menu::menu_tracking()`, safe from any thread). Each begin comes back
