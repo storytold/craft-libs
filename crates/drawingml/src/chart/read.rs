@@ -2231,7 +2231,15 @@ mod tests {
             assert_eq!(chart.series_kind(&chart.series[0]), ChartType::StackedColumn, "version{version}: explicit edit on unchanged raw chart kind");
             assert_eq!(chart.value_range(), (0.0, 10.0), "the imported explicit primary bound remains authoritative");
             chart.y_max = None;
-            assert_eq!(chart.value_range(), (0.0, 9.0));
+            assert_eq!(chart.value_range(), (0.0, if version >= 5 { 7.0 } else { 9.0 }), "version{version}: retained source groups remain independent");
+            if version >= 5 {
+                // Moving plots onto one axis does not itself merge imported stack membership.
+                let group = chart.series[0].source_group;
+                for series in &mut chart.series {
+                    series.source_group = group;
+                }
+                assert_eq!(chart.value_range(), (0.0, 9.0), "an explicit same-group edit still sums the stack");
+            }
             chart.kind = ChartType::Bar;
             assert_eq!(chart.series_kind(&chart.series[0]), ChartType::Bar, "version{version}: a real chart-wide edit overrides retained kinds");
             assert_eq!(read_chart_xml(&crate::chart::write::chart_xml(&chart).0).unwrap().kind, ChartType::Bar);
