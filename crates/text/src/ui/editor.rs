@@ -437,7 +437,7 @@ impl Outcome for TextEditorOutput {
 /// - Keys: Left and Right by char (a selection collapses to its edge), with Cmd or Alt by word, Up and Down by
 ///   line, Cmd+Up and Cmd+Down to the text's start or end, Home and End to the line's edges, Shift extends any of
 ///   them. Backspace and Delete by char, Alt by word, Cmd+Backspace to the line start. Cmd+A all, Cmd+C, Cmd+X and
-///   Cmd+V the clipboard. Enter a line break; Cmd+Enter commits; Esc commits or cancels; Cmd+. cancels;
+///   Cmd+V the clipboard. Enter a line break; Cmd+Enter or a distinct physical keypad Enter commits; Esc commits or cancels; Cmd+. cancels;
 ///   Cmd+T asks the host for its Character panel. In a form field ([`mode`](Self::mode)) Tab and Shift+Tab end the
 ///   session toward the next or previous field, a press that moves focus away commits, and in a one-line field Enter commits. The
 ///   [`TextEditorCommand`]s format. In vertical text the arrows turn with the flow, the formatting keys too: Alt+Up
@@ -618,6 +618,9 @@ fn apply_steps(
             }
             EditorInput::ImeCommit => ending = edits.session.preedit.take(),
             EditorInput::Text(text) => edits.done.changed |= edits.insert_typed(&text),
+            EditorInput::Newline { keypad: true, .. } if mode == EditorMode::Canvas => {
+                edits.command(TextEditorCommand::Commit, &mut character_panel);
+            }
             EditorInput::Newline { .. } if edits.session.preedit.is_none() && mode.multiline() => {
                 edits.done.changed |= edits.insert_text("\n", EditKind::Typed);
             }

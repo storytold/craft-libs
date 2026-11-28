@@ -156,7 +156,7 @@ pub(crate) fn stop_dragging(ctx: &Context) {
 /// One key event as the key stage reads it.
 pub(crate) enum KeyEvent {
     /// A key press, repeats included: the key as typed and everything the layout matcher reads.
-    Press { key: craft_keymap::Key, input: KeyInput, repeat: bool },
+    Press { key: craft_keymap::Key, input: KeyInput, repeat: bool, keypad_enter: bool },
     /// A key release.
     Release { input: KeyInput },
     /// Typed text.
@@ -188,8 +188,14 @@ pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)], held
     match event {
         Event::Key { physical_key: Some(egui::Key::AltRight), pressed, .. } => KeyEvent::RightAlt(*pressed),
         Event::WindowFocused(false) => KeyEvent::RightAlt(false),
-        Event::Key { pressed: true, repeat, .. } => match read(event) {
-            Some(input) => input.typed.map_or(KeyEvent::Other, |key| KeyEvent::Press { key, input, repeat: *repeat }),
+        Event::Key { key: logical, physical_key, pressed: true, repeat, .. } => match read(event) {
+            Some(input) => input.typed.map_or(KeyEvent::Other, |key| KeyEvent::Press {
+                key,
+                input,
+                repeat: *repeat,
+                // Backends that alias both positions to Enter do not distinguish the keypad.
+                keypad_enter: *logical == egui::Key::Enter && physical_key.is_some_and(|p| p.name() == "NumpadEnter"),
+            }),
             None => KeyEvent::Other,
         },
         Event::Key { pressed: false, .. } => read(event).map_or(KeyEvent::Other, |input| KeyEvent::Release { input }),

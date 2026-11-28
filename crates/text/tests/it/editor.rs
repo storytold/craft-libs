@@ -193,6 +193,41 @@ fn command_enter_commits_one_session_and_a_session_without_edits_commits_nothing
     assert_eq!(editor.text(), "abcd");
 }
 
+/// Only a separately reported physical keypad position ends a canvas edit. A field's own
+/// Enter policy, IME confirmation and an explicitly remapped physical key all keep their meaning.
+#[trial]
+fn keypad_enter_follows_the_physical_position_in_canvas_editors() {
+    let keypad = Key::from_name("NumpadEnter").unwrap();
+    let press = |logical, physical| Event::Key { key: logical, physical_key: physical, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    for physical in [None, Some(Key::Enter), Some(Key::A), Some(keypad)] {
+        let mut editor = session("abc", None);
+        editor.focus();
+        editor.fixture.frame(vec![press(Key::Enter, physical)]).settle();
+        if physical == Some(keypad) && keypad != Key::Enter {
+            assert_eq!(*editor.ends.borrow(), [EditorEnd::Commit]);
+            assert_eq!(editor.text(), "abc");
+        } else {
+            assert!(editor.ends.borrow().is_empty());
+            assert_eq!(editor.text(), "abc\n");
+        }
+    }
+    let mut composing = session("abc", None);
+    composing.focus();
+    composing.fixture.frame(vec![preedit("候")]).settle();
+    let marked = composing.text();
+    composing.fixture.frame(vec![press(Key::Enter, Some(keypad))]).settle();
+    assert!(composing.ends.borrow().is_empty());
+    assert_eq!(composing.text(), marked);
+    composing.fixture.frame(vec![Event::Ime(ImeEvent::Commit("字".into()))]).settle();
+    assert_eq!(composing.text(), "abc字");
+
+    let mut field = session_on(Host { text: "abc".into(), ..Host::default() }, None, false, EditorMode::FieldLines, false);
+    field.focus();
+    field.fixture.frame(vec![press(Key::Enter, Some(keypad))]).settle();
+    assert!(field.ends.borrow().is_empty());
+    assert_eq!(field.text(), "abc\n");
+}
+
 /// Typing that comes after Cmd+Enter in the same frame is not the committed session's.
 #[trial]
 fn command_enter_commits_the_typing_before_it_and_none_after_it_in_one_frame() {

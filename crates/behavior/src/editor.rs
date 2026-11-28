@@ -92,6 +92,8 @@ pub enum EditorInput {
         /// Shift was held: an editor that gives Shift+Enter its own meaning (a line break within the paragraph) tells
         /// it from a plain Enter.
         shift: bool,
+        /// A logical Enter delivered from a distinct physical keypad Enter.
+        keypad: bool,
     },
     /// Tab.
     Tab,
@@ -114,7 +116,12 @@ impl EditorInput {
 
     /// A `Newline`, with Shift held when `shift`.
     pub const fn newline(shift: bool) -> Self {
-        EditorInput::Newline { shift }
+        Self::newline_from_key(shift, false)
+    }
+
+    /// A newline from a key press, keeping its physical keypad position when available.
+    pub const fn newline_from_key(shift: bool, keypad: bool) -> Self {
+        EditorInput::Newline { shift, keypad }
     }
 
     /// A `DeleteSurrounding` of `before` and `after` characters.
