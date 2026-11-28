@@ -291,7 +291,15 @@ impl Conv {
             self.endnotes.push(Node::El(note));
         }
         let name = if foot { "w:footnoteReference" } else { "w:endnoteReference" };
-        Some(El { name: name.into(), attrs: vec![("w:id".into(), id)], kids: Vec::new() })
+        // A suppressed reference means the literal mark beside it is the note's custom mark
+        // (#7136): modern DOCX carries that on the reference, and the reader folds the adjacent
+        // text run into `NoteRef.custom`, so the writer can put `w:customMarkFollows` back.
+        let mut attrs = Vec::with_capacity(2);
+        if e.attr("w:suppressRef").is_some_and(|v| !matches!(v, "0" | "false" | "off")) {
+            attrs.push(("w:customMarkFollows".into(), "1".into()));
+        }
+        attrs.push(("w:id".into(), id));
+        Some(El { name: name.into(), attrs, kids: Vec::new() })
     }
 
     /// `aml:annotation`: bookmarks, comments and tracked insertions/deletions.

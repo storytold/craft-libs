@@ -283,3 +283,53 @@ fn word_2003_xml_with_windows_line_ends_reads_one_space_per_line_break() {
     let d = read_xml(xml.as_bytes()).unwrap();
     assert_eq!(paras(&d)[0].plain_text(), "a b");
 }
+
+/// A 2003 note with `w:suppressRef="on"` keeps its custom mark when saved as DOCX: the note
+/// reference carries `w:customMarkFollows="1"` with the literal `#` beside it, while the
+/// automatically numbered control notes stay plain (#7136).
+#[test]
+fn wordml2003_custom_note_flags_round_trip() {
+    use std::io::Read;
+
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml">
+  <w:body>
+    <w:p><w:r><w:footnote w:suppressRef="on"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space="preserve"> Custom body</w:t></w:r></w:p></w:footnote><w:t>#</w:t></w:r></w:p>
+    <w:p><w:r><w:footnote><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space="preserve"> Auto body</w:t></w:r></w:p></w:footnote></w:r></w:p>
+    <w:p><w:r><w:endnote w:suppressRef="on"><w:p><w:r><w:endnoteRef/></w:r><w:r><w:t xml:space="preserve"> Custom end body</w:t></w:r></w:p></w:endnote><w:t>#</w:t></w:r></w:p>
+    <w:p><w:r><w:endnote><w:p><w:r><w:endnoteRef/></w:r><w:r><w:t xml:space="preserve"> Auto end body</w:t></w:r></w:p></w:endnote></w:r></w:p>
+  </w:body>
+</w:wordDocument>"##;
+
+    let doc = read_xml(xml.as_bytes()).unwrap();
+    let bytes = craft_docx::write(&doc).unwrap();
+    let part = |name: &str| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let mut s = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+    let document = part("word/document.xml");
+    let footnotes = part("word/footnotes.xml");
+    let endnotes = part("word/endnotes.xml");
+
+    // Both note bodies and the automatic controls survive the import and save.
+    assert!(footnotes.contains("Custom body"), "footnote body: {footnotes}");
+    assert!(footnotes.contains("Auto body"), "automatic footnote body: {footnotes}");
+    assert!(endnotes.contains("Custom end body"), "endnote body: {endnotes}");
+    assert!(endnotes.contains("Auto end body"), "automatic endnote body: {endnotes}");
+
+    // Exactly the two suppressed references are custom-marked, with the literal mark next to them.
+    assert_eq!(document.matches(r#"w:customMarkFollows="1""#).count(), 2, "custom mark flags: {document}");
+    assert!(
+        document.contains(r#"<w:footnoteReference w:customMarkFollows="1" w:id="1"/><w:t xml:space="preserve">#</w:t>"#),
+        "custom footnote mark: {document}"
+    );
+    assert!(
+        document.contains(r#"<w:endnoteReference w:customMarkFollows="1" w:id="1"/><w:t xml:space="preserve">#</w:t>"#),
+        "custom endnote mark: {document}"
+    );
+    // The automatic controls keep ordinary, unflagged references.
+    assert!(document.contains(r#"<w:footnoteReference w:id="2"/>"#), "automatic footnote: {document}");
+    assert!(document.contains(r#"<w:endnoteReference w:id="2"/>"#), "automatic endnote: {document}");
+}
