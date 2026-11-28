@@ -36,6 +36,7 @@ pub mod story_kit;
 pub mod table;
 pub mod tabs;
 pub mod text;
+pub mod theme;
 pub mod tile_grid;
 pub mod value_drag;
 

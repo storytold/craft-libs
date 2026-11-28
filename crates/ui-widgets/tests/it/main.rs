@@ -35,6 +35,7 @@ pub(crate) mod suite_title;
 pub(crate) mod table;
 pub(crate) mod tabs;
 pub(crate) mod text;
+pub(crate) mod theme_glow;
 pub(crate) mod tile_grid;
 pub(crate) mod value_drag;
 pub(crate) mod values;

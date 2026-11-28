@@ -28,7 +28,7 @@ pub use craft_ui_contract::{InstallError, InstallSpec, contract, fonts, install,
 pub use craft_ui_panels::{docking, rails, sections};
 pub use craft_ui_shell::shell;
 pub use craft_ui_widgets::{
-    bars, buttons, choice, controls, display, edit, form, graph, layout_components, list, menu, notices, pickers, popover, table, tabs, text,
+    bars, buttons, choice, controls, display, edit, form, graph, layout_components, list, menu, notices, pickers, popover, table, tabs, text, theme,
     tile_grid, value_drag,
 };
 
