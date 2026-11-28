@@ -757,6 +757,41 @@ fn a_held_alt_key_is_in_the_wheels_modifiers_when_the_wheel_events_miss_it() {
 }
 
 #[trial]
+fn alt_pressed_while_a_finger_scroll_or_its_momentum_runs_leaves_it_a_pan() {
+    // The Alt key's press arrives as its key event and in the wheel events' modifiers after it, as macOS and Wayland
+    // report it.
+    let alt_down = egui::Event::Key { key: Key::AltLeft, physical_key: Some(Key::AltLeft), pressed: true, repeat: false, modifiers: Modifiers::ALT };
+    let event = |phase: TouchPhase, dy: f32, modifiers: Modifiers, source: egui::MouseWheelSource| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, dy),
+        phase,
+        modifiers,
+        source,
+    };
+    // macOS reports the fingers and the momentum run after them; Wayland reports the fingers' phases with no source.
+    for (os, fingers) in [(Platform::Mac, egui::MouseWheelSource::Trackpad), (Platform::Linux, egui::MouseWheelSource::Unknown)] {
+        let (mut fixture, view, _, _) = wheel_rig(os, NavigationOptions::default());
+        fixture.frame(vec![pointer::moved(view.get().rect.center())]);
+        let before = view.get();
+        fixture.frame(vec![event(TouchPhase::Start, -10.0, Modifiers::NONE, fingers)]);
+        fixture.frame(vec![event(TouchPhase::Move, -10.0, Modifiers::NONE, fingers)]);
+        fixture.hold(Modifiers::ALT);
+        fixture.frame(vec![alt_down.clone()]);
+        let pressed = view.get();
+        fixture.frame(vec![event(TouchPhase::Move, -10.0, Modifiers::ALT, fingers)]);
+        fixture.frame(vec![event(TouchPhase::End, 0.0, Modifiers::ALT, fingers)]);
+        if os == Platform::Mac {
+            for phase in [TouchPhase::Start, TouchPhase::Move, TouchPhase::Move] {
+                fixture.frame(vec![event(phase, -6.0, Modifiers::ALT, egui::MouseWheelSource::Momentum)]);
+            }
+            fixture.frame(vec![event(TouchPhase::End, 0.0, Modifiers::ALT, egui::MouseWheelSource::Momentum)]);
+        }
+        assert_eq!(view.get().zoom, before.zoom, "{os:?}: Alt pressed while the scroll runs does not zoom");
+        assert_ne!(view.get().center, pressed.center, "{os:?}: the scroll pans on after Alt went down");
+    }
+}
+
+#[trial]
 fn a_focused_field_takes_the_plain_wheel_over_the_canvas_and_leaves_it_the_view_keys() {
     let (mut fixture, view, number, _) = wheel_rig(Platform::Linux, NavigationOptions::default());
     let field = fixture.by_label("Smoothing").expect("the number field");

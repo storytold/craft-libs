@@ -5,7 +5,7 @@ use crate::runtime::commands::ClipContent;
 use crate::runtime::frame::PerViewport;
 use crate::runtime::pen::PenPass;
 use craft_behavior::one_press::split_after_first_press;
-use craft_behavior::{Buttons, PointerButton, PointerEvent, PointerKind, PointerSample, WheelPhase, WheelSource, WheelUnit};
+use craft_behavior::{Buttons, PointerButton, PointerEvent, PointerKind, PointerSample, WheelMods, WheelPhase, WheelSource, WheelUnit};
 use craft_host::target::Os;
 use craft_keymap::{KeyInput, Mods};
 use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
@@ -513,11 +513,14 @@ pub(crate) fn hit_targets(ctx: &Context) -> (Option<Id>, Option<Id>) {
 /// last event's unit, phase and modifiers, and the device: fingers when any event of the pass came from them. `None`
 /// when no wheel event arrived.
 ///
-/// A wheel event's modifiers are the windowing layer's modifier state, which on Windows can miss a held Alt while the
-/// Alt key's own press and release still arrive: Alt counts as held from its key's press to its release, starting from
-/// whether it was down before the pass's first Alt key event (egui's held keys when the pass has none).
+/// A wheel event's modifiers are the ones the raw-input step gave it (`keep_gesture_modifiers`). On Windows the
+/// windowing layer's modifier state can miss a held Alt while the Alt key's own press and release still arrive, and
+/// Windows reports no wheel phases: there Alt counts as held from its key's press to its release, starting from
+/// whether it was down before the pass's first Alt key event (egui's held keys when the pass has none). Elsewhere the
+/// event's own modifiers hold, so Alt pressed while a finger scroll runs does not join it.
 pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, WheelUnit, WheelPhase, Mods, WheelSource)> {
     let os = crate::runtime::windows::os_of(ctx);
+    let windows = os == Os::Windows;
     let zoom_modifier = ctx.options(|options| options.input_options.zoom_modifier);
     let is_alt = |key: &Key| matches!(key, Key::AltLeft | Key::AltRight);
     ctx.input(|input| {
@@ -544,22 +547,12 @@ pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, W
                     MouseWheelUnit::Line => (WheelUnit::Line, line),
                     MouseWheelUnit::Page => (WheelUnit::Page, page),
                 };
-                let phase = match phase {
-                    TouchPhase::Start => WheelPhase::Start,
-                    TouchPhase::Move => WheelPhase::Move,
-                    TouchPhase::End => WheelPhase::End,
-                    TouchPhase::Cancel => WheelPhase::Cancel,
-                };
+                let phase = wheel_phase(*phase);
                 // Wheel events under the zoom modifier zoom (`PointerFrame.zoom`) and never scroll.
                 let share = if modifiers.matches_any(zoom_modifier) { Vec2::ZERO } else { *delta * points };
                 let sum = read.map_or(Vec2::ZERO, |(sum, ..)| sum) + share;
-                let held = egui::Modifiers { alt: modifiers.alt || alt_key, ..*modifiers };
-                let source = match source {
-                    MouseWheelSource::Unknown => WheelSource::Unknown,
-                    MouseWheelSource::Wheel => WheelSource::Wheel,
-                    MouseWheelSource::Trackpad => WheelSource::Trackpad,
-                    MouseWheelSource::Momentum => WheelSource::Momentum,
-                };
+                let held = egui::Modifiers { alt: modifiers.alt || (windows && alt_key), ..*modifiers };
+                let source = wheel_source(*source);
                 let source = match read {
                     Some((.., before)) if before.fingers() && !source.fingers() => before,
                     _ => source,
@@ -569,6 +562,52 @@ pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, W
         }
         read
     })
+}
+
+/// egui's wheel phase as craft-behavior's.
+fn wheel_phase(phase: TouchPhase) -> WheelPhase {
+    match phase {
+        TouchPhase::Start => WheelPhase::Start,
+        TouchPhase::Move => WheelPhase::Move,
+        TouchPhase::End => WheelPhase::End,
+        TouchPhase::Cancel => WheelPhase::Cancel,
+    }
+}
+
+/// egui's wheel source as craft-behavior's.
+fn wheel_source(source: MouseWheelSource) -> WheelSource {
+    match source {
+        MouseWheelSource::Unknown => WheelSource::Unknown,
+        MouseWheelSource::Wheel => WheelSource::Wheel,
+        MouseWheelSource::Trackpad => WheelSource::Trackpad,
+        MouseWheelSource::Momentum => WheelSource::Momentum,
+    }
+}
+
+/// egui's wheel unit as craft-behavior's.
+fn wheel_unit(unit: MouseWheelUnit) -> WheelUnit {
+    match unit {
+        MouseWheelUnit::Point => WheelUnit::Point,
+        MouseWheelUnit::Line => WheelUnit::Line,
+        MouseWheelUnit::Page => WheelUnit::Page,
+    }
+}
+
+/// Gives each wheel event the modifiers it counts with ([`WheelMods`]): a finger scroll keeps those of its first event
+/// to its end and through its momentum run, and a wheel's notch keeps its own. Every reader after this step (the
+/// legacy pinch, the wheel speed, egui's zoom modifier, the wheel service's shares) then reads one finger scroll as one
+/// zoom or one scroll, whatever key goes down or up while it runs. The time is the one egui gives the pass: the input's
+/// own, else the window's last time and the predicted step (a host that sets none, such as a test harness).
+fn keep_gesture_modifiers(ctx: &Context, input: &mut RawInput) {
+    let now = input.time.unwrap_or_else(|| ctx.input_for(input.viewport_id, |i| i.time) + f64::from(input.predicted_dt));
+    let events = &mut input.events;
+    PerViewport::<RawState>::with(ctx, input.viewport_id, |state| {
+        for event in events.iter_mut() {
+            if let Event::MouseWheel { unit, phase, source, modifiers, .. } = event {
+                *modifiers = state.wheel_mods.read(wheel_phase(*phase), wheel_source(*source), wheel_unit(*unit), *modifiers, now);
+            }
+        }
+    });
 }
 
 /// The wheel motion of the pass that zooms instead of scrolling, in wheel lines (`Wheel::zoom_lines`): its wheel events
@@ -767,9 +806,12 @@ pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
     });
 }
 
-/// The raw-input state of one viewport that `prepare` keeps: the legacy pinch's run and the Control-click remap.
+/// The raw-input state of one viewport that `prepare` keeps: the modifiers of the running finger scroll, the legacy
+/// pinch's run and the Control-click remap.
 #[derive(Default)]
 pub(crate) struct RawState {
+    /// The modifiers the running finger scroll keeps (`keep_gesture_modifiers`).
+    wheel_mods: WheelMods<egui::Modifiers>,
     /// The input time of the last Ctrl+wheel folded into a pinch step.
     last_pinch: Option<f64>,
     /// The wheel lines of the Ctrl+wheel events folded into pinch steps in the running pass's input (`zoom_wheel_lines`).
@@ -783,13 +825,14 @@ pub(crate) struct RawState {
 }
 
 /// The input hook's raw-input step for every viewport, after the injected step joined the input and before the key
-/// stage and the one-press rule: folds a legacy pinch, scales the wheel by the user's speed, folds Alt+numpad codes
-/// into text, caps the text events, then turns a macOS Control-click into a secondary click. Injected input passes it
-/// as real input does.
+/// stage and the one-press rule: gives each wheel event the modifiers its finger scroll began with, folds a legacy
+/// pinch, scales the wheel by the user's speed, folds Alt+numpad codes into text, caps the text events, then turns a
+/// macOS Control-click into a secondary click. Injected input passes it as real input does.
 ///
-/// A frame's raw events reach only its first pass; a second pass's input holds none, so each wheel delta is scaled
-/// once and each digit folded once, with nothing to replay or remember between passes.
+/// A frame's raw events reach only its first pass; a second pass's input holds none, so each wheel event is read
+/// once, each wheel delta scaled once and each digit folded once, with nothing to replay between passes.
 pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
+    keep_gesture_modifiers(ctx, input);
     // This frame's `RootEnv`, which `set_input` stored before egui ran the input hook.
     let root = crate::runtime::frame::root_input(ctx);
     // Each pass's input folds its own steps: a later pass of the frame, whose input holds no events, reads none.

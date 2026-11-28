@@ -121,7 +121,9 @@ pub use value::{
     same_in_f32, same_in_f32_at,
 };
 pub use value_drag::{DragWarp, ValueDrag, wrap_value};
-pub use wheel::{GESTURE_GAP, Wheel, WheelEase, WheelFocus, WheelGesture, WheelNotch, WheelPhase, WheelRoom, WheelSource, WheelTaker, WheelUnit};
+pub use wheel::{
+    GESTURE_GAP, Wheel, WheelEase, WheelFocus, WheelGesture, WheelMods, WheelNotch, WheelPhase, WheelRoom, WheelSource, WheelTaker, WheelUnit,
+};
 
 #[cfg(test)]
 extern crate self as craft_behavior;

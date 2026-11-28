@@ -345,6 +345,68 @@ impl<O: Copy> WheelGesture<O> {
     }
 }
 
+/// The modifiers each wheel event counts with, so a key pressed or let go while a finger scroll runs neither turns
+/// the scroll into a zoom nor the zoom into a scroll. The input reads it once per event, before anything reads the
+/// event's modifiers.
+///
+/// - A finger scroll, a point-unit `Start` from no wheel, keeps the modifiers of that first event through its `Move`s
+///   to its `End` or `Cancel`.
+/// - A momentum run ([`WheelSource::Momentum`]) goes on with the scroll before it. One with no scroll before it counts
+///   with no modifiers: a momentum run never starts a zoom.
+/// - A wheel reports no phases: each notch (a line or page unit, or [`WheelSource::Wheel`]) counts with its own
+///   modifiers, as does any event outside a finger scroll. A notch also ends a scroll that never reported its end.
+/// - A scroll whose events stop for [`GESTURE_GAP`] seconds without an end is over: the next event counts with its own
+///   modifiers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WheelMods<M> {
+    /// The modifiers the latest finger scroll began with, while it runs or its momentum may still follow.
+    kept: Option<M>,
+    /// The scroll runs: from its `Start` to its `End` or `Cancel`, and again while its momentum runs.
+    running: bool,
+    /// The time of the scroll's last event, in seconds.
+    last: f64,
+}
+
+impl<M> Default for WheelMods<M> {
+    fn default() -> Self {
+        WheelMods { kept: None, running: false, last: f64::NEG_INFINITY }
+    }
+}
+
+impl<M: Copy + Default> WheelMods<M> {
+    /// The modifiers a wheel event in `phase` from `source`, in `unit`, at `now` seconds counts with; `held` are the
+    /// modifiers the event reports.
+    pub fn read(&mut self, phase: WheelPhase, source: WheelSource, unit: WheelUnit, held: M, now: f64) -> M {
+        // A clock that breaks (a NaN gap) ends the scroll too.
+        let gap = now - self.last;
+        if gap.is_nan() || gap >= GESTURE_GAP {
+            *self = WheelMods::default();
+        }
+        if source == WheelSource::Momentum {
+            let Some(kept) = self.kept else { return M::default() };
+            self.running = !matches!(phase, WheelPhase::End | WheelPhase::Cancel);
+            self.last = now;
+            return kept;
+        }
+        if source == WheelSource::Wheel || unit != WheelUnit::Point {
+            *self = WheelMods::default();
+            return held;
+        }
+        if phase == WheelPhase::Start {
+            *self = WheelMods { kept: Some(held), running: true, last: now };
+            return held;
+        }
+        match self.kept.filter(|_| self.running) {
+            Some(kept) => {
+                self.running = phase == WheelPhase::Move;
+                self.last = now;
+                kept
+            }
+            None => held,
+        }
+    }
+}
+
 /// A component that takes wheel input, as registered last pass.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -855,5 +917,32 @@ mod tests {
         }
         assert!(notch(&mut ease, -NOTCH, 2.0 + 11.0 * 0.02) < -NOTCH - 1.0, "precondition: the run is fast again");
         assert!(near(notch(&mut ease, -NOTCH, 5.0), -NOTCH), "an idle gap starts again at one notch");
+    }
+
+    #[test]
+    fn kept_modifiers_last_only_while_their_finger_scroll_does() {
+        use WheelPhase::{Cancel, End, Move, Start};
+        use WheelSource::{Momentum, Trackpad};
+        // The modifiers as a number: none, or the zoom key.
+        const NONE: u8 = 0;
+        const KEY: u8 = 1;
+        let point = WheelUnit::Point;
+        let mut mods = WheelMods::<u8>::default();
+        assert_eq!(mods.read(Move, Momentum, point, KEY, 0.0), NONE, "a momentum run with no scroll before it starts no zoom");
+
+        mods.read(Start, Trackpad, point, NONE, 1.0);
+        assert_eq!(mods.read(Move, Trackpad, point, KEY, 1.01 + GESTURE_GAP), KEY, "a scroll whose events stop for the gap is over");
+
+        mods.read(Start, Trackpad, point, NONE, 2.0);
+        assert_eq!(mods.read(Move, WheelSource::Wheel, WheelUnit::Line, KEY, 2.01), KEY, "a notch counts with its own keys");
+        assert_eq!(mods.read(Move, Trackpad, point, KEY, 2.02), KEY, "a notch ends a scroll that never reported its end");
+
+        mods.read(Start, Trackpad, point, NONE, 3.0);
+        assert_eq!(mods.read(Cancel, Trackpad, point, KEY, 3.01), NONE, "a cancel is the scroll's last event");
+        assert_eq!(mods.read(Move, Trackpad, point, KEY, 3.02), KEY, "after it an event counts with its own keys");
+
+        mods.read(Start, Trackpad, point, KEY, 4.0);
+        mods.read(End, Trackpad, point, KEY, 4.01);
+        assert_eq!(mods.read(Start, Momentum, point, KEY, 4.02 + GESTURE_GAP), NONE, "a momentum run after the gap starts no zoom");
     }
 }
