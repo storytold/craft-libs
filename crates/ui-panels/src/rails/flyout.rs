@@ -273,9 +273,20 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         let face = cx.part(FACE, rect).priority(HitPriority::new(HitLevel::Body, 0));
         let tipped = self.tips.is_some_and(|tips| tips.has(self.shown));
         if let Some(resolved) = self.lead(&laid).filter(|_| !tipped) {
-            face.tooltip(match &resolved.chord_text {
-                Some(chord) => Label::from(format!("{} ({chord})", resolved.label)),
-                None => Label::Shared(resolved.label.clone()),
+            // "Label (chord)", and the command's hint (its description) as the second line.
+            face.tooltip(match (&resolved.chord_text, &resolved.hint) {
+                (None, None) => Label::Shared(resolved.label.clone()),
+                (chord, hint) => {
+                    let mut text = resolved.label.to_string();
+                    if let Some(chord) = chord {
+                        text.push_str(&format!(" ({chord})"));
+                    }
+                    if let Some(hint) = hint {
+                        text.push('\n');
+                        text.push_str(hint);
+                    }
+                    Label::from(text)
+                }
             });
         }
         if self.has_flyout() {

@@ -306,7 +306,8 @@ impl CommandState {
     }
 
     /// Whether the command's content has something to show, such as comments on a panel. A rail marks the command's
-    /// button while the command is not checked (the panel is closed); the marker's description is the command's `hint`.
+    /// button while the command is not checked (the panel is closed); the marker's description is the frame's `hint`, else
+    /// the command's [`description`](CommandDef::description).
     #[must_use]
     pub fn marked(mut self, marked: bool) -> Self {
         self.marked = marked;
@@ -327,7 +328,8 @@ impl CommandState {
         self
     }
 
-    /// The accessible description and second tooltip line.
+    /// The accessible description, and a tool button's second tooltip line, in place of the command's
+    /// [`description`](CommandDef::description) for this frame.
     #[must_use]
     pub fn hint(mut self, hint: impl Into<Arc<str>>) -> Self {
         self.hint = Some(hint.into());
@@ -396,9 +398,10 @@ pub struct ResolvedCommand {
     pub enabled: bool,
     /// The checked state of a toggle or radio command.
     pub checked: Option<bool>,
-    /// The command's content has something to show; the marker's description is `hint`.
+    /// The command's content has something to show; the marker's description is [`hint`](Self::hint).
     pub marked: bool,
-    /// The accessible description and second tooltip line.
+    /// The accessible description, and a tool button's second tooltip line: the state's hint, else the command's
+    /// [`description`](CommandDef::description).
     pub hint: Option<Arc<str>>,
     /// The hint is the whole tooltip of a control whose label shows whole ([`CommandState::hint_alone`]).
     pub hint_alone: bool,

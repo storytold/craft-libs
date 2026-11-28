@@ -844,7 +844,10 @@ impl Board {
             refused,
             checked: flags.checked,
             marked: state.is_some_and(CommandState::is_marked),
-            hint: state.and_then(|s| s.hint_ref().cloned()),
+            // A frame's hint, else the command's description.
+            hint: state
+                .and_then(|s| s.hint_ref().cloned())
+                .or_else(|| def.and_then(|def| def.description.as_deref()).filter(|text| !text.is_empty()).map(Arc::from)),
             hint_alone: state.is_some_and(CommandState::is_hint_alone),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             edit: self.registry.edit_of(&command.id).is_some(),

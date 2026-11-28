@@ -82,6 +82,10 @@ pub struct CommandDef {
     /// Whether the command fires while a dialog is open.
     #[serde(default)]
     pub modal: ModalRule,
+    /// A sentence on what the command does, which surfaces show under its label: a tool button's second tooltip line,
+    /// and the accessible description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 impl CommandDef {
@@ -99,7 +103,14 @@ impl CommandDef {
             defaults: Vec::new(),
             icon: None,
             modal: ModalRule::default(),
+            description: None,
         }
+    }
+
+    /// Sets the [`description`](CommandDef::description).
+    pub fn with_description(mut self, description: impl Into<String>) -> CommandDef {
+        self.description = Some(description.into());
+        self
     }
 
     /// Sets the [`icon`](CommandDef::icon).

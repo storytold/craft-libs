@@ -6,10 +6,11 @@ pub(crate) mod locate;
 
 use craft_behavior::{GesturePhase, Mixed, PartKey};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind};
-use craft_ui::contract::{Props as _, Role, Show as _};
+use craft_ui::contract::tooltip::DELAY;
+use craft_ui::contract::{CommandSet, Props as _, Role, Show as _};
 use craft_ui::docking::{FloatingGroup, GroupDrag};
 use craft_ui::rails::{FlyoutButton, RailTool};
-use craft_ui::runtime::commands::EditCommands;
+use craft_ui::runtime::commands::{CommandState, EditCommands};
 use craft_ui::runtime::drag;
 use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::focus::AccessActionKind;
@@ -315,6 +316,44 @@ fn alt_click_steps_a_slot_and_a_modified_click_is_never_a_double_click() {
     assert_eq!(rig.doubles.get(), 0, "a plain click after an Alt-click starts a new run");
     rig.fixture.click(&target);
     assert_eq!(rig.doubles.get(), 1, "two plain clicks are a double click");
+}
+
+/// Two tools: one with a key and a description of what it does, one with neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "railTrial")]
+enum Described {
+    #[command(label = "Retouch Brush", description = "Paints a local correction.", kind = "tool", default = "J")]
+    Retouch,
+    #[command(label = "Plain Brush", kind = "tool")]
+    Plain,
+}
+
+/// The texts the pointer's rest on the button showing `shown` adds after the tooltip delay, with `hint` as the frame's
+/// hint for the shown tool when there is one.
+fn tooltip_of(shown: Described, hint: Option<&'static str>) -> Vec<String> {
+    let mut fixture = Fixture::new(move |ui| {
+        let all = [RailTool::new(Described::Retouch, Described::Retouch), RailTool::new(Described::Plain, Described::Plain)];
+        FlyoutButton::new(&all, &shown).show(ui);
+    });
+    if let Some(hint) = hint {
+        fixture.command_state(shown, CommandState::new().enabled(true).hint(hint));
+    }
+    fixture.settle();
+    let before: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+    let at = fixture.by_role(Role::BUTTON).into_iter().next().expect("the flyout button shows").center();
+    fixture.frame(vec![moved(at)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    fixture.texts().iter().map(|run| run.text.clone()).filter(|text| !before.contains(text)).collect()
+}
+
+/// A tool's description is its button's second tooltip line, under the label; a frame's hint takes its place; a tool
+/// without either keeps the label alone.
+#[trial]
+fn a_tools_description_is_the_second_line_of_its_buttons_tooltip() {
+    assert_eq!(tooltip_of(Described::Retouch, None), ["Retouch Brush (J)\nPaints a local correction."]);
+    assert_eq!(tooltip_of(Described::Retouch, Some("Paints with the last settings.")), ["Retouch Brush (J)\nPaints with the last settings."]);
+    assert_eq!(tooltip_of(Described::Plain, None), ["Plain Brush"]);
 }
 
 /// The name of the flyout's tear-off bar.
