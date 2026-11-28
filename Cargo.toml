@@ -353,3 +353,19 @@ opt-level = 3
 # 2 MiB stack of a test thread. The apps this reader came from build their crates at this level.
 [profile.dev.package.craft-affinity]
 opt-level = 1
+
+# SHA-2 in craft-pkcs7's PKCS#12 key derivation and craft-pdf's crypt tests.
+[profile.dev.package.sha2]
+opt-level = 3
+
+# Bignum arithmetic in RSA key generation: craft-openpgp's RSA key tests.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+# BLAKE3 tile hashes in craft-doc's `pcraft-pixels` tests.
+[profile.dev.package.blake3]
+opt-level = 3
+
+# Zstandard tile frames in craft-doc's `pcraft-pixels` tests.
+[profile.dev.package.ruzstd]
+opt-level = 3
