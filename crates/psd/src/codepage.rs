@@ -317,19 +317,25 @@ impl Name {
         let mut letters_from = vec![0usize; n + 1];
         let mut run = 0usize;
         for (slot, c) in letters_from.iter_mut().zip(&chars).rev() {
+            count_name_read();
             run = if c.is_alphabetic() { run.saturating_add(1) } else { 0 };
             *slot = run;
         }
-        let last_bang = chars.iter().rposition(|c| *c == '!');
+        let last_bang = chars.iter().rposition(|c| {
+            count_name_read();
+            *c == '!'
+        });
         let mut cyrillic_runs: Vec<(usize, usize)> = (0..n).map(|i| (i, i + 1)).collect();
         let mut start = 0;
         while start < n {
+            count_name_read();
             if !chars.get(start).is_some_and(|c| is_cyrillic(*c)) {
                 start += 1;
                 continue;
             }
             let mut end = start + 1;
             while chars.get(end).is_some_and(|c| is_cyrillic(*c)) {
+                count_name_read();
                 end += 1;
             }
             for slot in cyrillic_runs.get_mut(start..end).into_iter().flatten() {
@@ -339,6 +345,19 @@ impl Name {
         }
         Self { chars, letters_from, last_bang, cyrillic_runs }
     }
+}
+
+// Each character of a decoded name that `Name::new` and the position checks of `score` read on
+// this thread.
+#[cfg(test)]
+std::thread_local! {
+    static NAME_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn count_name_read() {
+    #[cfg(test)]
+    NAME_READS.with(|reads| reads.set(reads.get().saturating_add(1)));
 }
 
 /// Whether the character at `i` of `chars` is common in Western names, for weighing windows-1252
@@ -356,6 +375,7 @@ fn is_latin_common(name: &Name, i: usize) -> bool {
 /// Where the character at `i` of `name` sits: right after an ASCII letter or digit (inside a word
 /// or a number), and how many letters (accented ones too: "¡Ánimo!") follow it directly.
 fn position(name: &Name, i: usize) -> (bool, usize) {
+    count_name_read();
     let after_ascii = i.checked_sub(1).and_then(|k| name.chars.get(k)).is_some_and(|c| c.is_ascii_alphanumeric());
     let letters_after = name.letters_from.get(i.saturating_add(1)).copied().unwrap_or(0);
     (after_ascii, letters_after)
@@ -394,6 +414,7 @@ fn cyrillic_word(name: &Name, i: usize) -> bool {
 
 /// The run of Cyrillic letters around the Cyrillic letter at `i` (`start..end`).
 fn cyrillic_run(name: &Name, i: usize) -> (usize, usize) {
+    count_name_read();
     name.cyrillic_runs.get(i).copied().unwrap_or((i, i.saturating_add(1)))
 }
 
@@ -870,11 +891,16 @@ mod tests {
         // 64 KiB of one letter (é in windows-1252, й in windows-1251, Mac Roman's È), of
         // alternating Cyrillic letters, and of "¡ab" with no "!": every character used to rescan
         // the rest of the name, which took minutes.
-        for unit in [&[0xe9u8][..], &[0xe9, 0xea][..], &[0xa1, b'a', b'b'][..]] {
-            let name = unit.repeat(GUESS_SAMPLE / unit.len());
-            let started = std::time::Instant::now();
+        // A name four times as long must take about four times the reads, not sixteen.
+        let reads = |unit: &[u8], len: usize| {
+            let name = unit.repeat(len / unit.len());
+            NAME_READS.with(|reads| reads.set(0));
             let _ = guess(&[&name], "");
-            assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?} took {:?}", unit, started.elapsed());
+            NAME_READS.with(std::cell::Cell::get)
+        };
+        for unit in [&[0xe9u8][..], &[0xe9, 0xea][..], &[0xa1, b'a', b'b'][..]] {
+            let (quarter, full) = (reads(unit, GUESS_SAMPLE / 4), reads(unit, GUESS_SAMPLE));
+            assert!(full <= 5 * quarter, "{unit:?}: {quarter} reads for a quarter of the name, {full} for all of it");
         }
     }
 }
