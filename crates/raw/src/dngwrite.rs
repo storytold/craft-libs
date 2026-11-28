@@ -334,13 +334,23 @@ fn write_image(raw: &DngImage<'_>, opts: &DngWriteOptions, lossy: Option<LossyTi
     if !b.delta_v.is_empty() {
         ifd.set(t::BLACK_LEVEL_DELTA_V, Value::SRational(b.delta_v.iter().map(|&v| srational(v as f64)).collect()));
     }
-    let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s).round().clamp(0.0, u32::MAX as f32) as u32).collect();
-    let max_white = white.iter().copied().max().unwrap_or(0);
-    if matches!(raw.data, RawData::F32(_)) {
-        ifd.set(t::WHITE_LEVEL, rat_vec(&(0..cpp).map(|s| raw.white_at(s) as f64).collect::<Vec<_>>()));
-    } else {
-        ifd.set(t::WHITE_LEVEL, Value::Long(white));
+    // DNG Specification (Tag 50717 WhiteLevel): must be SHORT or LONG. Emitting RATIONAL
+    // for floating-point images was non-conformant and caused third-party decoders to reject
+    // files (#3191). Real-world float DNGs use whole-number saturation limits (e.g. 1, 15488).
+    // Fractional white levels are rejected rather than rescaled to avoid calibration and opcode
+    // table drift (e.g. OpcodeList1 gain maps).
+    if matches!(raw.data, RawData::F32(_)) && (0..cpp).any(|s| raw.white_at(s) >= u32::MAX as f32) {
+        return Err(RawError::Unsupported("white level above LONG range".into()));
     }
+    if !(0..cpp).all(|s| {
+        let w = raw.white_at(s);
+        w.is_finite() && w >= 1.0 && w.fract() == 0.0
+    }) {
+        return Err(RawError::Unsupported("fractional white level".into()));
+    }
+    let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s) as u32).collect();
+    let max_white = white.iter().copied().max().unwrap_or(0);
+    ifd.set(t::WHITE_LEVEL, Value::Long(white));
     // A table still to be applied (OpcodeList1 has to run on the stored codes first) is written
     // with the samples. Once the samples have been mapped, writing the tag would apply it twice
     // on the next read of a file without list 1.
