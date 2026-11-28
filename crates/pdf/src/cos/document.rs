@@ -65,6 +65,9 @@ pub struct Document {
     /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
     jbig2_globals: Arc<Mutex<HashMap<u32, Arc<Vec<u8>>>>>,
     stream_limit: usize,
+    /// See [`Self::generation_aliases`]. Shared by clones and reset with the index, as
+    /// `object_notes` is: it describes the source.
+    aliases: Arc<Mutex<state::Aliases>>,
     overlay: BTreeMap<u32, Slot>,
     next_num: u32,
     /// Position of the `%PDF-` header (some files have junk before it).
