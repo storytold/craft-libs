@@ -35,7 +35,24 @@ fn run(enc: OpusEncoder, planar: &[Vec<f32>], reference: &[Vec<f32>]) -> Vec<Run
 
 fn mono(mode: Mode, bw: Bandwidth, rate: u32, x: &[f32], fc: f64) -> Run {
     let reference = if fc < 20_000.0 { lowpass(x, fc) } else { x.to_vec() };
-    run(OpusEncoder::with_mode(1, rate, mode, bw).unwrap(), &[x.to_vec()], &[reference]).remove(0)
+    let enc = OpusEncoder::with_mode(1, rate, mode, bw).unwrap();
+    assert_eq!((enc.mode(), enc.bandwidth()), (mode, bw));
+    let config = match (mode, bw) {
+        (Mode::Silk, Bandwidth::Narrowband) => 1u8,
+        (Mode::Silk, Bandwidth::Mediumband) => 5,
+        (Mode::Silk, Bandwidth::Wideband) => 9,
+        (Mode::Hybrid, Bandwidth::SuperWideband) => 13,
+        (Mode::Hybrid, Bandwidth::Fullband) => 15,
+        (Mode::Celt, Bandwidth::Fullband) => 31,
+        _ => panic!("unsupported mono test mode/bandwidth: {mode:?}/{bw:?}"),
+    };
+    let r = run(enc, &[x.to_vec()], &[reference]).remove(0);
+    for p in &r.packets {
+        assert_eq!(p[0], config << 3, "TOC of {mode:?}/{bw:?}");
+        assert!(p.len() >= 3 && p.len() <= 1276);
+    }
+    assert!(r.delay.abs() <= 1, "{mode:?}/{bw:?}: residual delay {} (pre-skip mismatch)", r.delay);
+    r
 }
 
 /// Upper edge of the band a SILK bandwidth keeps (for band-limited references).
@@ -66,6 +83,9 @@ fn every_mode_and_bandwidth_decodes() {
         (Mode::Celt, Bandwidth::Fullband, 31, 64_000),
     ] {
         for c in [1usize, 2] {
+            if c == 1 && mode != Mode::Celt {
+                continue;
+            }
             let planar = if c == 1 { vec![left.clone()] } else { vec![left.clone(), right.clone()] };
             let reference: Vec<Vec<f32>> = planar.iter().map(|x| lowpass(x, band_edge(bw))).collect();
             let enc = OpusEncoder::with_mode(c as u8, rate * c as u32, mode, bw).unwrap();
