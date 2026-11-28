@@ -48,7 +48,7 @@ use bytes::Bytes;
 use canvas::Raw;
 pub use eof::ends_early;
 use geom::{Op, P};
-pub use pict::{is_pict, parse as parse_pict};
+pub use pict::{TruncationReason, is_pict, parse as parse_pict};
 pub use place::{MAX_BITMAP_SIDE, PlacedClip, PlacedItem, bez_path, crop_window};
 pub use size::size;
 pub use text::{Font, HAlign, SYMBOL_CHARSET, Text, VAlign};
@@ -86,6 +86,8 @@ pub struct Picture {
     /// the picture holds what came before. The limits that cut one path, string, region or dash
     /// pattern short do not set it.
     pub truncated: bool,
+    /// Granular reason why decoding halted early, distinguishing premature EOF from safety budget exhaustion.
+    pub truncation_reason: Option<TruncationReason>,
     /// Images the file asks to draw that the reader did not read: bitmaps past a size, item, byte or
     /// decode limit or in a form the reader cannot decode, EMF+ metafile images that do not parse or
     /// are nested deeper than 3 levels, and pattern or texture brushes whose bitmap was not read, a

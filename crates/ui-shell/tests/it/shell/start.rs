@@ -943,6 +943,97 @@ fn a_column_call_to_action_is_a_pill_that_opens_its_url() {
     assert!(fixture.opened().iter().any(|(url, _)| url == "https://example.com/chat"), "the pill opens its URL: {:?}", fixture.opened());
 }
 
+/// The fill under `link` in the painted frame of a start page in `layout` and a `room`, under `root`: the last filled
+/// rectangle that holds the link. Returns that fill, the panel's colour, and `accent.text` with the text minimum.
+fn ground_under_link(root: RootEnv, layout: StartLayout, room: egui::Vec2, link: &str) -> (egui::Color32, egui::Color32, f64, f64) {
+    use craft_ui::testing::Frames;
+    use egui::Color32;
+
+    let color = |c: craft_theme::Rgba| Color32::from(craft_theme::Srgba::from(c));
+    let links = vec![
+        StartLink::url("Join the community", None, "https://example.com/chat").primary(),
+        StartLink::url("Website", None, "https://example.com"),
+        StartLink::url("Docs", None, "https://example.test/docs"),
+    ];
+    let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
+    let contrast = craft_theme::text_contrast_min(root.appearance(&egui::Context::default()).contrast);
+    let mut frames = Frames::new();
+    frames.root(root);
+    frames.screen(room);
+    let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+    let (mut panel, mut ratio) = (Color32::TRANSPARENT, 0.0);
+    let mut show = |ui: &mut egui::Ui| {
+        let c = &Env::of(ui).tokens.color;
+        panel = color(c.surface.panel);
+        ratio = craft_theme::contrast_ratio(c.accent.text, c.surface.panel);
+        let _ = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files)
+            .layout(layout)
+            .links(&links)
+            .more_templates("More templates")
+            .show(ui);
+    };
+    frames.frame(Vec::new(), &mut show);
+    frames.record_paint();
+    frames.frame(Vec::new(), &mut show);
+    let tree = frames.tree();
+    let bounds = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some(link)).and_then(|key| tree.bounds_of(key)).expect("the link");
+    let paint = frames.take_paint().expect("the frame drew the page");
+    let mut fills = Vec::new();
+    for shape in &paint.shapes {
+        filled_rects(&shape.shape, &mut fills);
+    }
+    let ground = fills.into_iter().rev().find_map(|(rect, fill)| rect.contains_rect(bounds).then_some(fill)).expect("a fill under the link");
+    (ground, panel, ratio, contrast)
+}
+
+/// The filled rectangles of `shape` in paint order, those inside a `Shape::Vec` included.
+fn filled_rects(shape: &egui::Shape, out: &mut Vec<(egui::Rect, egui::Color32)>) {
+    match shape {
+        egui::Shape::Rect(rect) if rect.fill.a() != 0 => out.push((rect.rect, rect.fill)),
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| filled_rects(shape, out)),
+        _ => {}
+    }
+}
+
+/// The links a start page draws as `Link`s stand on the panel surface, where the theme holds link text to the text
+/// minimum, in every built-in theme, mode and contrast: on a Column page, in the rail, after the sections, and the
+/// Greeting page's more-templates link.
+#[trial]
+fn start_page_links_stand_on_the_panel_surface() {
+    use craft_theme::{Contrast, Mode, Variants};
+
+    let pages = [
+        (StartLayout::Column, egui::vec2(1600.0, 900.0), "Website"),
+        (StartLayout::Gallery, egui::vec2(1600.0, 900.0), "Website"),
+        (StartLayout::Gallery, egui::vec2(420.0, 1600.0), "Website"),
+        (StartLayout::Greeting, egui::vec2(1600.0, 900.0), "More templates"),
+    ];
+    let mut failures = Vec::new();
+    for theme in craft_theme::builtins() {
+        let modes: &[Mode] = match theme.variants {
+            Variants::Both => &[Mode::Light, Mode::Dark],
+            Variants::LightOnly => &[Mode::Light],
+            Variants::DarkOnly => &[Mode::Dark],
+        };
+        for &mode in modes {
+            for contrast in [Contrast::Standard, Contrast::High] {
+                for (layout, room, link) in pages {
+                    let root = RootEnv::default().theme(theme.id.clone()).mode(mode).contrast(contrast);
+                    let (ground, panel, ratio, min) = ground_under_link(root, layout, room, link);
+                    let case = format!("{} {mode:?} {contrast:?} {layout:?} {room:?} {link}", theme.id.as_str());
+                    if ground != panel {
+                        failures.push(format!("{case}: the link stands on {ground:?}, not the panel {panel:?}"));
+                    }
+                    if ratio < min {
+                        failures.push(format!("{case}: accent.text on the panel is {ratio:.2}:1"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// A Column page takes its room above the column and its call to action's height from the page sizes, which an app
 /// sets (VectorCraft's 60-point margin and 36-point pill).
 #[trial]

@@ -1,6 +1,7 @@
 //! The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`] and
 //! [`fit_whole`] assign tab widths (tabs shrink before they overflow, or keep their width); [`fit_items`] shortens
-//! items that have a short form, then drops command items and titles from the end. All of them read no egui types.
+//! items that have a short form, in the order their host ranks, and drops command items and titles from the end.
+//! All of them read no egui types.
 
 /// Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -230,17 +231,37 @@ pub struct FitItem {
     pub keep: FitKeep,
     /// The extent of the item's shorter form, if it has one.
     pub short: Option<f32>,
+    /// The rank of the item's short form: lower ranks shorten first, and equal ranks shorten the last item first.
+    pub short_order: u16,
+    /// Whether the item keeps its full form until no more free items can leave.
+    pub short_late: bool,
 }
 
 impl FitItem {
     /// An item `extent` long in `section`.
     pub const fn new(extent: f32, section: u16, keep: FitKeep) -> Self {
-        FitItem { extent, section, keep, short: None }
+        FitItem { extent, section, keep, short: None, short_order: 0, short_late: false }
     }
 
-    /// The item with a shorter form `extent` long, which it takes before any free item leaves.
+    /// The item with a shorter form `extent` long, which it takes before any free item leaves unless it is late.
+    /// An item marked [`FitItem::short_late`] takes that form only after no free item is left to leave.
     pub const fn short(mut self, extent: f32) -> Self {
         self.short = Some(extent);
+        self
+    }
+
+    /// The item with its short form ranked `order`: lower ranks shorten first, and the last item of a rank first.
+    /// Every item ranks 0 by default.
+    pub const fn short_order(mut self, order: u16) -> Self {
+        self.short_order = order;
+        self
+    }
+
+    /// The item takes its short form only after every free item that can leave has left.
+    /// The other items go to the overflow menu before this one shortens. A free item with a late short form leaves
+    /// in its turn instead.
+    pub const fn short_late(mut self) -> Self {
+        self.short_late = true;
         self
     }
 }
@@ -277,11 +298,13 @@ pub fn run_extent(items: &[FitItem], shown: &[bool], gap: f64, section_gap: f64)
 }
 
 /// Decides which items stay in a strip `available` long. Everything fits and no item is `Menu`: all items show.
-/// Otherwise the `Menu` items are in the menu, and the items with a [`FitItem::short`] form take it first, the last
-/// one first, until the run fits (listed in [`Fit::short`]); a `Pinned` item shortens as a `Free` one does. Only then
-/// does the last `Free` item leave, one at a time, until the rest and an overflow control `overflow_extent` long,
-/// set off by `gap`, fit; `Pinned` items stay even when they alone are longer than `available`. Items that leave are
-/// never listed as short. Negative and non-finite lengths count as zero.
+/// Otherwise the `Menu` items are in the menu, and the items with a [`FitItem::short`] form take it first, lowest
+/// [`FitItem::short_order`] first and the last item of a rank first, until the run fits (listed in [`Fit::short`]); a
+/// `Pinned` item shortens as a `Free` one does. Only then does the last `Free` item leave, one at a time, until the
+/// rest and an overflow control `overflow_extent` long, set off by `gap`, fit. When no `Free` item is left to go, the
+/// items marked [`FitItem::short_late`] take their short forms in the same order; items that left do not come back.
+/// `Pinned` items stay even when they alone are longer than `available`. Items that leave are never listed as short.
+/// Negative and non-finite lengths count as zero.
 pub fn fit_items(items: &[FitItem], available: f32, gap: f32, section_gap: f32, overflow_extent: f32) -> Fit {
     let (available, gap, section_gap, overflow_extent) =
         (item_extent(available), item_extent(gap), item_extent(section_gap), item_extent(overflow_extent));
@@ -302,19 +325,27 @@ pub fn fit_items(items: &[FitItem], available: f32, gap: f32, section_gap: f32, 
     // The shadow run holds each item at the extent it takes: shortened items at their `short` extent.
     let mut run: Vec<FitItem> = items.to_vec();
     let mut short = vec![false; items.len()];
-    while !fits(&run, &shown) {
-        let Some(last) = (0..items.len()).rev().find(|&at| shown[at] && !short[at] && items[at].short.is_some()) else {
-            break;
-        };
-        short[last] = true;
-        if let (Some(item), Some(extent)) = (run.get_mut(last), items[last].short) {
-            item.extent = extent;
+    // Takes the short forms of the shown items with this `late` mark, lowest rank first and the last item of a rank
+    // first (`min_by_key` keeps the first minimum, which is the last index in a reversed scan), until the run fits.
+    let shorten = |late: bool, run: &mut [FitItem], short: &mut [bool], shown: &[bool]| {
+        while !fits(run, shown) {
+            let next = (0..items.len())
+                .rev()
+                .filter(|&at| shown[at] && !short[at] && items[at].short.is_some() && items[at].short_late == late)
+                .min_by_key(|&at| items[at].short_order);
+            let Some(next) = next else { break };
+            short[next] = true;
+            if let (Some(item), Some(extent)) = (run.get_mut(next), items[next].short) {
+                item.extent = extent;
+            }
         }
-    }
+    };
+    shorten(false, &mut run, &mut short, &shown);
     while !fits(&run, &shown) {
         let Some(last) = (0..items.len()).rev().find(|&at| shown[at] && items[at].keep == FitKeep::Free) else { break };
         shown[last] = false;
     }
+    shorten(true, &mut run, &mut short, &shown);
     let (kept, left): (Vec<usize>, Vec<usize>) = (0..items.len()).partition(|&at| shown[at]);
     let short = kept.iter().copied().filter(|&at| short[at]).collect();
     Fit { shown: kept, overflow: left, short }

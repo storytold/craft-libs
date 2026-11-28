@@ -39,12 +39,20 @@ fn pass(windows: &mut Frames, mode: &mut ScreenMode, events: Vec<Event>) -> Seen
     windows.frame(events, |ui| {
         let out = AppShell::new(WindowKey::main())
             .screen_mode(Bind::bound(&mut *mode))
-            .start(Slot::new("tools").reveal(), |ui, _, _: &mut ()| {
-                Text::new("Tools").show(ui);
-            })
-            .options_bar(false, |ui, _, _: &mut ()| {
-                Text::new("Options").show(ui);
-            })
+            .start(
+                Slot::new("tools").reveal(),
+                |_| Some(0),
+                |ui, _, _: &mut ()| {
+                    Text::new("Tools").show(ui);
+                },
+            )
+            .options_bar(
+                false,
+                |_| Some(0),
+                |ui, _, _: &mut ()| {
+                    Text::new("Options").show(ui);
+                },
+            )
             .body(|ui, _, _| {
                 let canvas = ui.scope_id().with("document");
                 ui.interact(ui.max_rect(), canvas, Sense::click());

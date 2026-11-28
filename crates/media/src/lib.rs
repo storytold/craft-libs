@@ -9,6 +9,7 @@
 //! - `matroska` (feature `matroska`): a clean-room Matroska (MKV) and WebM demuxer and muxer.
 //! - `ogg` (feature `ogg`): a clean-room Ogg demuxer with Ogg Opus and Ogg Vorbis stream mapping.
 //! - `avi` (feature `avi`): a clean-room AVI (RIFF) and OpenDML demuxer.
+//! - `bink` (feature `bink`): a clean-room Bink 1 (BIK) demuxer.
 //! - `mxf` (feature `mxf`, enables `chrono`): a clean-room MXF demuxer and writer (OP1a, OP-Atom).
 //! - `mpegts` (feature `mpegts`): a clean-room MPEG-2 Systems demuxer (transport streams and
 //!   program streams) and transport stream writer.
@@ -20,11 +21,13 @@
 //! - `FileReader` (native): a pooled file `ByteSource` so many clips can be open without holding a
 //!   descriptor each.
 //!
-//! `bitstream` and `isobmff` are on by default; `matroska`, `ogg`, `avi`, `mxf`, `mpegts` and `vmd` are opt-in. A crate that needs
+//! `bitstream` and `isobmff` are on by default; `matroska`, `ogg`, `avi`, `bink`, `mxf`, `mpegts` and `vmd` are opt-in. A crate that needs
 //! only bit I/O uses `default-features = false, features = ["bitstream"]`.
 
 #[cfg(feature = "avi")]
 pub mod avi;
+#[cfg(feature = "bink")]
+pub mod bink;
 #[cfg(feature = "bitstream")]
 pub mod bitstream;
 #[cfg(not(target_arch = "wasm32"))]

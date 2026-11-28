@@ -80,9 +80,9 @@ impl<'a> EditorMock<'a> {
         let window = WindowKey::new(format!("mock-{:x}-{}", ui.scope_id().value(), label.as_str()));
         let shell = AppShell::embedded(window)
             .screen_mode(screen_mode)
-            .title_bar_if(true, |ui, _, state: &mut MockState| title_bar(ui, state))
-            .options_bar(true, |ui, _, state: &mut MockState| options_bar(ui, state))
-            .status(true, |ui, _, state: &mut MockState| status_bar(ui, state))
+            .title_bar_if(true, |_| None, |ui, _, state: &mut MockState| title_bar(ui, state))
+            .options_bar(true, |_| None, |ui, _, state: &mut MockState| options_bar(ui, state))
+            .status(true, |_| None, |ui, _, state: &mut MockState| status_bar(ui, state))
             .body_label(label)
             .body(|ui, cx, state: &mut MockState| body(ui, cx, state));
         match at {
@@ -309,7 +309,7 @@ fn status_bar(ui: &mut Ui, state: &mut MockState) {
             Link::new(words.cpu_rendering.clone()).tone(Tone::Warn).show(ui);
         })
         .show(ui, |ui, _| {
-            chosen = StatusReadout::new(craft_ui::contract::bind_tracked!(document.view), document.size, *status_item, &values).show(ui).item;
+            chosen = StatusReadout::new(craft_ui::contract::bind_tracked!(document.view => zoom), document.size, *status_item, &values).show(ui).item;
             Divider::vertical().show(ui);
             Text::new(words.color_mode.clone()).show(ui);
             Divider::vertical().show(ui);

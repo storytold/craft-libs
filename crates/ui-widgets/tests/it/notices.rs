@@ -4,6 +4,8 @@ use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Politeness, Props as _, Show as _};
 use craft_ui::notices::{Notice, NoticeAction, NoticeLayout};
+use craft_ui::testing::access::Declared;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Id, Rect, Vec2};
 use std::cell::Cell;
@@ -65,6 +67,46 @@ fn a_notice_reports_its_action_and_dismissal_in_a_frame_that_runs_twice() {
     let dismiss = fixture.by_label("Dismiss").expect("the dismiss button");
     fixture.click(&dismiss).settle();
     assert_eq!(taken.get().1, 1, "the dismissal is reported once");
+}
+
+#[trial]
+fn disabled_notice_actions_stay_visible_and_cannot_be_taken() {
+    for layout in [NoticeLayout::Inline, NoticeLayout::Centred] {
+        let taken = Rc::new(Cell::new(None));
+        let can_locate = Rc::new(Cell::new(false));
+        let (seen, available) = (taken.clone(), can_locate.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let out = Notice::new(Tone::Info, "A library file is missing.")
+                .layout(layout)
+                .action(NoticeAction::new("Locate library").enabled(available.get()))
+                .action(NoticeAction::new("Show details"))
+                .show(ui);
+            if let Some(action) = out.action {
+                seen.set(Some(action));
+            }
+        });
+        fixture.room(Vec2::new(600.0, 250.0)).settle();
+        let locate = fixture.by_label("Locate library").expect("the disabled action is still visible");
+        let tree = fixture.tree();
+        assert!(tree.is_disabled_key(locate.node));
+        assert!(!tree.declares_key(locate.node, Declared::Click));
+        assert!(!tree.declares_key(locate.node, Declared::Focus));
+
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+        assert_eq!(fixture.focused_stop().and_then(|(_, part)| part?.index), Some(1), "Tab skips the disabled action");
+        fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
+        assert_eq!(taken.replace(None), Some(1), "Enter activates the enabled action at its original index");
+
+        fixture.click(&locate).settle();
+        fixture.access(AccessActionKind::Click, &locate).settle();
+        assert_eq!(taken.get(), None, "pointer and accessibility clicks leave the disabled action inert");
+
+        can_locate.set(true);
+        fixture.settle();
+        assert!(!fixture.tree().is_disabled_key(locate.node));
+        fixture.click(&locate).settle();
+        assert_eq!(taken.get(), Some(0), "enabling the action restores activation");
+    }
 }
 
 #[trial]
@@ -218,6 +260,45 @@ fn a_toast_is_light_on_a_dark_theme_and_dark_on_a_light_one() {
             .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
             .expect("a card under the text");
         assert_eq!(luminance(card.1) > 128.0, light_card, "{mode:?}: the toast's card is {:?}", card.1);
+    }
+}
+
+/// The color the first vertex of the text run `label` is painted in.
+fn text_color(shapes: &[egui::Shape], label: &str) -> Option<egui::Color32> {
+    shapes.iter().find_map(|shape| match shape {
+        egui::Shape::Vec(inner) => text_color(inner, label),
+        egui::Shape::Text(text) if text.galley.job.text == label => {
+            text.galley.rows.iter().flat_map(|row| row.row.visuals.mesh.vertices.iter()).map(|vertex| vertex.color).next()
+        }
+        _ => None,
+    })
+}
+
+/// A toast's action link reads at the 4.5:1 text minimum on the toast's card, in a light and a dark theme at both
+/// contrasts.
+#[trial]
+fn a_toast_action_link_reads_on_the_card() {
+    use craft_theme::{Contrast, Mode, Rgba, contrast_ratio};
+    for mode in [Mode::Dark, Mode::Light] {
+        for contrast in [Contrast::Standard, Contrast::High] {
+            let mut fixture = Fixture::new(|ui| {
+                Notice::new(Tone::Neutral, "Pasted").layout(NoticeLayout::Toast).action(NoticeAction::new("Undo paste")).show(ui);
+            });
+            fixture.room(Vec2::new(600.0, 200.0));
+            fixture.theme(mode, contrast).settle();
+            let shapes = fixture.frame_shapes();
+            let mut fills = Vec::new();
+            rect_fills(&shapes, &mut fills);
+            let text = fixture.texts().iter().find(|run| run.text == "Undo paste").expect("the action is painted").rect;
+            let card = fills
+                .iter()
+                .filter(|(rect, _)| rect.contains_rect(text))
+                .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
+                .expect("a card under the action");
+            let ink = text_color(&shapes, "Undo paste").expect("the action's text color");
+            let ratio = contrast_ratio(Rgba::from(ink), Rgba::from(card.1));
+            assert!(ratio >= 4.5, "{mode:?} {contrast:?}: the action reads at {ratio:.2}:1 ({ink:?} on {:?})", card.1);
+        }
     }
 }
 
