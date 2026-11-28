@@ -20,6 +20,10 @@ parts become members, and repairs a loaded deck. This crate owns the bytes:
   inflates past it. `read_charged` charges a shared budget for every byte it inflates, including
   the bytes of a read that then fails its CRC.
 - `Budget` and the `MAX_*` constants are the format's limits: 2 GiB per member, 4 GiB of media and
-  chart parts, 100,000 items and a 256 MiB manifest.
+  chart parts, 100,000 items and a 256 MiB manifest. Before indexing a ZIP, the reader limits its
+  directory to 100,004 entries, including unreferenced members. The limit also applies to directories
+  the ZIP reader could try if its first choice fails. This can refuse a stored nested ZIP whose
+  own directory appears in the final ZIP search window and exceeds the limit. The shared reader
+  also limits ambiguous or ZIP64 end-record candidates to 16.
 
 There is no `unsafe` and no panics, and it builds for `wasm32-unknown-unknown`.

@@ -38,7 +38,7 @@ pub use archive::{Archive, Limits};
 pub use entry::{has_traversal_component, has_traversal_component_bytes, sanitize_path};
 #[cfg(any(test, feature = "test-support"))]
 pub use guard::zip64_entry_count_sample;
-pub use guard::{check_entry_count, check_entry_count_seekable};
+pub use guard::{check_entry_count, check_entry_count_seekable, check_fallback_entry_counts};
 pub use metadata_reader::{Indexing, MetadataReader};
 pub use seekable::{EntryReader, InspectError, SeekableArchive, SeekableLimits, inspect_seekable};
 pub use write::{Compression, Writer};

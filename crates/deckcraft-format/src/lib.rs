@@ -39,6 +39,9 @@ pub const MAX_ENTRY: u64 = 2 << 30;
 pub const MAX_TOTAL_MEDIA: u64 = 4 << 30;
 /// Media items and chart sidecar parts one file may list.
 pub const MAX_MEDIA_ITEMS: usize = 100_000;
+/// ZIP directory entries, including the manifest, mimetype, and optional
+/// directory records for `media/` and `chart-parts/`.
+pub const MAX_PACKAGE_ENTRIES: u64 = MAX_MEDIA_ITEMS as u64 + 4;
 /// Largest `presentation.json` we will inflate. The manifest holds no media bytes, so it is far
 /// smaller than a media entry may be; inflating and parsing one is what dominates memory.
 pub const MAX_MANIFEST: u64 = 256 << 20;
@@ -155,8 +158,13 @@ pub struct Package<'a> {
 }
 
 impl<'a> Package<'a> {
-    /// Index `bytes` as a ZIP.
+    /// Index `bytes` as a ZIP within the native package's entry budget.
     pub fn open(bytes: &'a [u8]) -> Result<Self> {
+        Self::open_with_entry_limit(bytes, MAX_PACKAGE_ENTRIES)
+    }
+
+    fn open_with_entry_limit(bytes: &'a [u8], max_entries: u64) -> Result<Self> {
+        craft_zip::check_fallback_entry_counts(bytes, max_entries).map_err(|e| FormatError::Damaged(e.to_string()))?;
         let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| FormatError::NotOurs(e.to_string()))?;
         Ok(Package { zip })
     }
