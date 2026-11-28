@@ -8,6 +8,7 @@ Import only: there is no `.ppt` writer.
 |---|---|
 | [MS-PPT] PowerPoint (.ppt) Binary File Format (Microsoft Open Specifications) | the Current User stream, the edit chain and persist directories, documents, masters, slides, notes, text and its styles, headers and footers |
 | [MS-ODRAW] Office Drawing Binary File Formats | shapes, their property tables and geometry, the BLIP store and its pictures |
+| [MS-OFFCRYPTO] Office Document Cryptography Structure | RC4 CryptoAPI encryption (§2.3.5), through `craft-offcrypto` |
 | [MS-CFB] Compound File Binary File Format | through `craft-cfb` |
 
 ```rust
@@ -17,7 +18,8 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
 ```
 
 - `sniff(bytes)`, `import(bytes, &defaults)` and `import_checked(bytes, &defaults)`, which also
-  names the slides the file lists but whose objects are gone.
+  names the slides the file lists but whose objects are gone; `import_with_password(bytes,
+  &defaults, password)` for a password-protected file.
 - Main masters become masters, with their colour scheme, fonts, text styles, background and
   decorative shapes. Title masters become layouts of their main master.
 - Slides keep their shapes (preset and freeform geometry, groups, rotation and flips), fills,
@@ -27,7 +29,13 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
 - Damaged files read as far as they can: a broken edit chain falls back to a scan of the edits,
   and unknown or damaged records are skipped. Sizes, counts, nesting and picture decoding are
   bounded.
-- Password-protected files are refused (`PptError::Encrypted`). Formats older than PowerPoint 95
+- Password-protected files (RC4 CryptoAPI, as PowerPoint 2002 and later write them) open with
+  their password: it is checked against the file's verifier before anything is decrypted, then
+  each persist object is decrypted with its own key and each field of the pictures with the
+  first block's ([MS-PPT] §2.3.7). Without a password they are `PptError::Encrypted`, with a
+  wrong one `PptError::WrongPassword`, and other schemes are `PptError::UnsupportedEncryption`.
+  How the pictures' fields split was checked against decks PowerPoint 2016 saved with and
+  without a password; those files are not in the repository. Formats older than PowerPoint 95
   aren't read: a compound file whose current user record has neither of [MS-PPT]'s tokens and
   that has no edit record is refused as too old (`PptError::TooOld`), and a file that isn't a
   compound file is `PptError::NotPpt`. No file from an earlier PowerPoint was tried.

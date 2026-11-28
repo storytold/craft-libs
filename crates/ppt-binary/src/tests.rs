@@ -640,7 +640,7 @@ fn nested_persist_directories_are_read_within_the_stream() {
     let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, prev, 0, 0]));
     // The streams are read directly: the test file builder can't hold a stream this size.
     let t = std::time::Instant::now();
-    let r = crate::doc::read(&cu, &stream);
+    let r = crate::doc::read(&cu, &stream, false);
     assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
     assert!(matches!(r, Err(crate::PptError::Damaged(_))));
 }
@@ -919,6 +919,182 @@ fn encryption_is_found_in_the_edit_and_the_persist_directory() {
     edit.extend_from_slice(&[0; 4]);
     crypt.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
     assert!(matches!(open(&crypt, &pics), Err(crate::PptError::Encrypted)));
+}
+
+/// The RC4 key of each block number.
+type BlockKey = Box<dyn Fn(u32) -> Vec<u8>>;
+
+/// An RC4 CryptoAPI encryption header for `password` ([MS-OFFCRYPTO] §2.3.5.1) with a `bits`-bit
+/// key and header flags `hflags`, and the key of each block number, derived here with `sha1`
+/// rather than through `craft-offcrypto`.
+fn crypt_header(password: &str, bits: u32, hflags: u32) -> (Vec<u8>, BlockKey) {
+    use sha1::{Digest, Sha1};
+    let sha1 = |parts: &[&[u8]]| {
+        let mut h = Sha1::new();
+        for p in parts {
+            h.update(p);
+        }
+        h.finalize().to_vec()
+    };
+    let salt = [5u8; 16];
+    let hash = sha1(&[&salt, &utf16(password)]);
+    let n = (bits / 8) as usize;
+    let key: BlockKey = Box::new(move |block| {
+        let mut k = sha1(&[&hash, &block.to_le_bytes()])[..n].to_vec();
+        if n == 5 {
+            k.resize(16, 0);
+        }
+        k
+    });
+    let verifier = *b"0123456789abcdef";
+    let mut enc = [verifier.to_vec(), sha1(&[&verifier])].concat();
+    craft_offcrypto::rc4::Rc4::new(&key(0)).apply(&mut enc);
+    let mut body = le32(&[hflags, 0, 0x6801, 0x8004, bits, 1, 0, 0]);
+    body.extend_from_slice(&utf16("Test provider\0"));
+    let mut h = vec![4, 0, 2, 0];
+    h.extend_from_slice(&le32(&[hflags, body.len() as u32]));
+    h.extend_from_slice(&body);
+    h.extend_from_slice(&le32(&[16]));
+    h.extend_from_slice(&salt);
+    h.extend_from_slice(&enc[..16]);
+    h.extend_from_slice(&le32(&[20]));
+    h.extend_from_slice(&enc[16..]);
+    (h, key)
+}
+
+/// The test presentation encrypted as [MS-PPT] §2.3.7 describes: a `CryptSession10Container`
+/// with `header` as a new persist object, a new persist directory and a 32-byte edit naming it,
+/// each other persist object encrypted with the key of its persist id, and each field of the
+/// picture (header, UID, tag, data) with the key of block 0.
+fn encrypted_with(header: &[u8], key: &dyn Fn(u32) -> Vec<u8>) -> Vec<u8> {
+    let rc4 = |k: Vec<u8>, b: &mut [u8]| craft_offcrypto::rc4::Rc4::new(&k).apply(b);
+    let (cu, stream, pics) = streams(0xE391_C05F);
+    let u32_at = |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+    let edit_at = u32_at(&cu, 16) as usize;
+    let dir_at = u32_at(&stream, edit_at + 8 + 12) as usize;
+    let count = (u32_at(&stream, dir_at + 8) >> 20) as usize;
+    let offsets: Vec<u32> = (0..count).map(|k| u32_at(&stream, dir_at + 12 + 4 * k)).collect();
+    let mut out = stream[..dir_at].to_vec();
+    let session_id = count as u32 + 1;
+    let session_at = out.len() as u32;
+    out.extend_from_slice(&[0x0F, 0x00]);
+    out.extend_from_slice(&rt::CRYPT_SESSION.to_le_bytes());
+    out.extend_from_slice(&le32(&[header.len() as u32]));
+    out.extend_from_slice(header);
+    let new_dir = out.len() as u32;
+    let mut dir = vec![1 | ((count as u32 + 1) << 20)];
+    dir.extend_from_slice(&offsets);
+    dir.push(session_at);
+    out.extend_from_slice(&atom(rt::PERSIST_DIRECTORY, 0, &le32(&dir)));
+    let new_edit = out.len() as u32;
+    let mut edit = le32(&[0, 0x0300_03F4, 0, new_dir, 1, session_id]);
+    edit.extend_from_slice(&[0; 4]);
+    edit.extend_from_slice(&session_id.to_le_bytes());
+    out.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
+    for (k, &at) in offsets.iter().enumerate() {
+        let at = at as usize;
+        let end = at + 8 + u32_at(&out, at + 4) as usize;
+        rc4(key(k as u32 + 1), &mut out[at..end]);
+    }
+    let mut pictures = pics.clone();
+    let (head, rest) = pictures.split_at_mut(8);
+    let (uid, rest) = rest.split_at_mut(16);
+    let (tag, data) = rest.split_at_mut(1);
+    for field in [head, uid, tag, data] {
+        rc4(key(0), field);
+    }
+    let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xF3D1_C4DF, new_edit, 0, 0]));
+    build(&[("Current User", &cu), ("PowerPoint Document", &out), ("Pictures", &pictures)])
+}
+
+fn encrypted(password: &str, bits: u32) -> Vec<u8> {
+    let (header, key) = crypt_header(password, bits, 0x04);
+    encrypted_with(&header, &*key)
+}
+
+/// A password-protected presentation opens with its password as the same presentation, picture
+/// and all; without one, or with a wrong one, it is refused, never read garbled.
+#[test]
+fn a_password_protected_presentation_opens_with_its_password() {
+    let (plain, _) = import_checked(&file()).unwrap();
+    for bits in [128, 40] {
+        let f = encrypted("battery staple", bits);
+        assert!(matches!(import(&f), Err(crate::PptError::Encrypted)));
+        for wrong in ["battery stapl", ""] {
+            let r = crate::import_with_password(&f, &AppDefaults, wrong);
+            assert!(matches!(r, Err(crate::PptError::WrongPassword)), "{:?}", r.err());
+        }
+        let (p, lost) = crate::import_with_password(&f, &AppDefaults, "battery staple").unwrap();
+        assert!(lost.is_empty());
+        assert_eq!(format!("{:?}", p.slides), format!("{:?}", plain.slides), "{bits}-bit");
+        check_picture(&p, &p.slides[0]);
+    }
+    // A presentation that isn't encrypted ignores the password.
+    assert!(crate::import_with_password(&file(), &AppDefaults, "anything").is_ok());
+}
+
+/// Encryption that isn't RC4 CryptoAPI is named, not reported as a wrong password.
+#[test]
+fn unsupported_encryption_is_named() {
+    for hflags in [0x04 | 0x20, 0x10] {
+        let (header, key) = crypt_header("pw", 128, hflags);
+        let r = crate::import_with_password(&encrypted_with(&header, &*key), &AppDefaults, "pw");
+        assert!(matches!(r, Err(crate::PptError::UnsupportedEncryption(_))), "{:?}", r.err());
+    }
+    // Plain RC4 (version 1.1), which a presentation never uses, with a verifier that matches.
+    let (header, key) = rc4_header("pw");
+    let f = encrypted_with(&header, &*key);
+    for password in ["pw", "not it"] {
+        let r = crate::import_with_password(&f, &AppDefaults, password);
+        assert!(matches!(r, Err(crate::PptError::UnsupportedEncryption(_))), "{:?}", r.err());
+    }
+}
+
+/// A plain RC4 encryption header for `password` ([MS-OFFCRYPTO] §2.3.6.1) and the key of each
+/// block number, as Word and Excel use it.
+fn rc4_header(password: &str) -> (Vec<u8>, BlockKey) {
+    use craft_offcrypto::rc4::{Rc4, md5};
+    let salt = [7u8; 16];
+    let h0 = md5(&utf16(password));
+    let base: Vec<u8> = md5(&(0..16).flat_map(|_| h0[..5].iter().chain(&salt).copied()).collect::<Vec<u8>>())[..5].to_vec();
+    let key: BlockKey = Box::new(move |block| md5(&[&base[..], &block.to_le_bytes()].concat()).to_vec());
+    let verifier = *b"0123456789abcdef";
+    let mut enc = [verifier.to_vec(), md5(&verifier).to_vec()].concat();
+    Rc4::new(&key(0)).apply(&mut enc);
+    let mut h = vec![1, 0, 1, 0];
+    h.extend_from_slice(&salt);
+    h.extend_from_slice(&enc);
+    (h, key)
+}
+
+/// A damaged encrypted presentation never panics or reads past its streams: every 4-byte word
+/// of its document stream set to hostile values, and truncations of the stream and its
+/// encryption header, read with the right password.
+#[test]
+fn hostile_encrypted_documents_never_panic() {
+    let f = encrypted("pw", 128);
+    let comp = craft_cfb::CompoundFile::open(&f).unwrap();
+    let cu = comp.read_path_capped("Current User", 1 << 20).unwrap();
+    let doc = comp.read_path_capped("PowerPoint Document", 1 << 20).unwrap();
+    let pics = comp.read_path_capped("Pictures", 1 << 20).unwrap();
+    let open = |doc: &[u8], pics: &[u8]| {
+        let _ = crate::import_with_password(&build(&[("Current User", &cu), ("PowerPoint Document", doc), ("Pictures", pics)]), &AppDefaults, "pw");
+    };
+    for at in (0..doc.len().saturating_sub(4)).step_by(5) {
+        for v in [0u32, 1, 0x7FFF_FFFF, 0xFFFF_FFFF] {
+            let mut d = doc.clone();
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            open(&d, &pics);
+        }
+    }
+    for cut in (0..doc.len()).step_by(7) {
+        open(&doc[..cut], &pics[..cut.min(pics.len())]);
+    }
+    for at in (0..pics.len().saturating_sub(4)).step_by(3) {
+        let mut p = pics.clone();
+        p[at..at + 4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        open(&doc, &p);
+    }
 }
 
 /// A colour scheme record whose fill colour (index 4) is `fill`, the rest as the test master's.

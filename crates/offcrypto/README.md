@@ -1,13 +1,15 @@
 # craft-offcrypto
 
-Clean-room Office document cryptography: password-encrypted OOXML packages and the password
-hashes of document and sheet protection. No `unsafe`. No third-party implementation was
+Clean-room Office document cryptography: password-encrypted OOXML packages, the RC4
+encryption of the Office 97-2003 binary formats, and the password hashes of document and sheet
+protection. No `unsafe`. No third-party implementation was
 consulted; some expected keys in the tests were computed with msoffcrypto-tool and Python's
 hashlib as independent checks.
 
 | Document | Used for |
 |---|---|
-| [MS-OFFCRYPTO] Office Document Cryptography Structure (Microsoft Open Specifications) | §2.1 data spaces; §2.3.2, §2.3.3, §2.3.4.5-§2.3.4.9 standard encryption; §2.3.4.10-§2.3.4.15 agile encryption; §2.4.2.4 the ISO write-protection hash |
+| [MS-OFFCRYPTO] Office Document Cryptography Structure (Microsoft Open Specifications) | §2.1 data spaces; §2.3.2, §2.3.3, §2.3.4.5-§2.3.4.9 standard encryption; §2.3.4.10-§2.3.4.15 agile encryption; §2.3.5 RC4 CryptoAPI and §2.3.6 RC4 encryption of binary files; §2.4.2.4 the ISO write-protection hash |
+| RFC 1321 | MD5, on which the RC4 scheme is defined |
 | ECMA-376 Part 1 §17.15.1.29, §18.2.29; Part 4 §14.8.1 | where protection hashes are stored; the legacy 32-bit password key |
 | [MS-CFB] | the compound file, through `craft-cfb` |
 
@@ -29,10 +31,29 @@ let file = craft_offcrypto::encrypt(&package, password)?;
 |---|---|---|
 | Agile (Office 2010 and later): AES-128/192/256 CBC in 4096-byte segments, SHA-1/256/384/512 | yes; the HMAC over the encrypted stream is required and checked | AES-256, SHA-512, 100,000 spins, with the data-spaces streams Office expects |
 | Standard (Office 2007): AES-128/192/256 ECB, SHA-1, 50,000 spins | yes | for tests only (`encrypt_standard`) |
-| RC4, extensible, certificate-only, rights management | refused by name (`Error::Unsupported`) | no |
+| RC4, extensible, certificate-only, rights management | refused by name (`Error::Unsupported`); RC4 is for the binary formats, below | no |
 
 `decrypt(bytes, None)` returns `Error::PasswordRequired` once it knows the file is one it can
 decrypt; `check` is that question on its own.
+
+## RC4 in the binary formats
+
+A password-protected `.doc`, `.xls` or `.ppt` keeps its usual streams and encrypts their
+contents in place: a `.doc` or `.xls` with RC4 (header version 1.1) or RC4 CryptoAPI (2.2, 3.2
+or 4.2), a `.ppt` with RC4 CryptoAPI only. The `rc4`
+module reads the encryption header, checks the password against its verifier and gives the key
+of each block; which bytes are encrypted, and with which block number, is the format's business.
+
+```rust
+use craft_offcrypto::rc4::Key;
+let (key, header_len) = Key::open(&table_stream, password)?;   // WrongPassword, Unsupported, Malformed
+key.decrypt_blocks(&mut word_stream, 68);       // Word's 512-byte blocks, numbered from 0
+key.cipher(block).apply(&mut bytes);            // any one block number (Excel's 1024-byte blocks, PowerPoint's objects)
+```
+
+RC4 CryptoAPI keys of 40 to 128 bits are read; AES, external providers and other versions are
+refused by name. `rc4::Rc4` and `rc4::md5` are the primitives, public so a format's tests can
+encrypt a file of their own.
 
 ## Protection passwords
 
@@ -58,4 +79,5 @@ it reads both schemes, writes agile encryption and has the protection hashes. Fr
 `crates/xlsx/src/crypto.rs` (at `5cf52c5f`) come `check`, the naming of unsupported schemes
 (`Error::Unsupported`), rights-managed files, choosing the password key encryptor by its URI,
 and the independent key vectors in the tests. DeckCraft's `crates/pptx/src/cfb.rs` only
-detected encrypted files, which `is_encrypted` does.
+detected encrypted files, which `is_encrypted` does. The `rc4` module moved from
+`craft-doc-binary`'s `crypt.rs`, where Word's XOR obfuscation stays.

@@ -72,7 +72,7 @@ pub mod rt {
 }
 
 /// `headerToken` of a `CurrentUserAtom` for an encrypted document.
-const ENCRYPTED_TOKEN: u32 = 0xF3D1_C4DF;
+pub(crate) const ENCRYPTED_TOKEN: u32 = 0xF3D1_C4DF;
 /// `headerToken` of an unencrypted PowerPoint 97+ document.
 const PLAIN_TOKEN: u32 = 0xE391_C05F;
 /// Edits followed at most along the `offsetLastEdit` chain.
@@ -100,8 +100,10 @@ pub struct Doc<'a> {
     pub lost: Vec<String>,
 }
 
-/// Read the structure from the `Current User` and `PowerPoint Document` streams.
-pub fn read<'a>(current_user: &[u8], stream: &'a [u8]) -> Result<Doc<'a>, PptError> {
+/// Read the structure from the `Current User` and `PowerPoint Document` streams. `decrypted` says
+/// `stream` is an encrypted presentation's, decrypted ([`crate::crypt`]); any other sign of
+/// encryption is [`PptError::Encrypted`].
+pub fn read<'a>(current_user: &[u8], stream: &'a [u8], decrypted: bool) -> Result<Doc<'a>, PptError> {
     let damaged = |s: &str| PptError::Damaged(s.to_string());
     // The current user names the newest edit; without it (some writers omit the stream), scan
     // for the last UserEditAtom in the stream.
@@ -111,8 +113,8 @@ pub fn read<'a>(current_user: &[u8], stream: &'a [u8]) -> Result<Doc<'a>, PptErr
     let mut unknown_token = false;
     if let Some(cu) = Rec::at(current_user, 0).filter(|r| r.kind == rt::CURRENT_USER) {
         match cu.u32(4) {
-            Some(ENCRYPTED_TOKEN) => return Err(PptError::Encrypted),
-            Some(PLAIN_TOKEN) => edit_at = cu.u32(8).map(|v| v as usize),
+            Some(ENCRYPTED_TOKEN) if !decrypted => return Err(PptError::Encrypted),
+            Some(PLAIN_TOKEN | ENCRYPTED_TOKEN) => edit_at = cu.u32(8).map(|v| v as usize),
             _ => unknown_token = true,
         }
     }
@@ -146,7 +148,7 @@ pub fn read<'a>(current_user: &[u8], stream: &'a [u8]) -> Result<Doc<'a>, PptErr
         if doc_ref.is_none() {
             doc_ref = edit.u32(16);
             // An encryptSessionPersistIdRef follows only in encrypted documents.
-            if edit.data.len() >= 32 {
+            if edit.data.len() >= 32 && !decrypted {
                 return Err(PptError::Encrypted);
             }
         }
@@ -186,7 +188,7 @@ pub fn read<'a>(current_user: &[u8], stream: &'a [u8]) -> Result<Doc<'a>, PptErr
     }
     let lookup = |id: u32| persist.get(&id).and_then(|&o| Rec::at(stream, o));
     let document = doc_ref.and_then(lookup).filter(|r| r.kind == rt::DOCUMENT).ok_or_else(|| damaged("no document container"))?;
-    if lookup_kind(&persist, stream, rt::CRYPT_SESSION) {
+    if !decrypted && lookup_kind(&persist, stream, rt::CRYPT_SESSION) {
         return Err(PptError::Encrypted);
     }
     let mut doc = Doc { document, masters: vec![], slides: vec![], notes: vec![], lost: vec![] };
@@ -236,6 +238,35 @@ pub fn read<'a>(current_user: &[u8], stream: &'a [u8]) -> Result<Doc<'a>, PptErr
         }
     }
     Ok(doc)
+}
+
+/// The persist directories of the edit at `edit_at` and the edits before it, newest first, and
+/// the offsets of those edit and directory records. Used for an encrypted presentation: its other
+/// records can't be read until they are decrypted, so a broken chain isn't recovered by a scan.
+pub(crate) fn persist_directories(stream: &[u8], edit_at: usize) -> (HashMap<u32, usize>, Vec<usize>) {
+    let mut persist = HashMap::new();
+    let mut plain = Vec::new();
+    let mut words = stream.len() / 4;
+    let mut seen = HashSet::new();
+    let mut at = edit_at;
+    for _ in 0..MAX_EDITS {
+        if !seen.insert(at) {
+            break;
+        }
+        let Some(edit) = Rec::at(stream, at).filter(|r| r.kind == rt::USER_EDIT) else { break };
+        plain.push(at);
+        if let Some(dir) = edit.u32(12).and_then(|o| Rec::at(stream, o as usize)).filter(|r| r.kind == rt::PERSIST_DIRECTORY)
+            && !plain.contains(&dir.offset)
+        {
+            plain.push(dir.offset);
+            read_persist_directory(dir.data, &mut persist, &mut words);
+        }
+        match edit.u32(8) {
+            Some(0) | None => break,
+            Some(prev) => at = prev as usize,
+        }
+    }
+    (persist, plain)
 }
 
 /// Read one persist directory into `persist`, taking each word read from `words`.

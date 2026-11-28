@@ -5,7 +5,8 @@
 //! [`import`] reads a presentation leniently into a [`craft_pptx::Presentation`]: unknown records
 //! are skipped, damaged ones are left out, and every size, count and depth is bounded. The caller's
 //! [`Defaults`] supply each master's layouts and placeholders, which the file's masters then
-//! place and style. There is no `.ppt` writer.
+//! place and style. There is no `.ppt` writer. A password-protected presentation (RC4
+//! CryptoAPI, [MS-PPT] §2.3.7 on `craft-offcrypto`) opens with [`import_with_password`].
 //!
 //! PowerPoint 95 files (a different record framing, learned from files PowerPoint 95 wrote) read
 //! as far as their slide size, masters with their colour schemes, backgrounds, placeholder boxes
@@ -24,6 +25,7 @@ struct ReadmeExamples;
 
 mod blip;
 mod convert;
+mod crypt;
 mod doc;
 mod draw;
 mod geom;
@@ -41,8 +43,17 @@ const DOCUMENT_STREAM: &str = "PowerPoint Document";
 pub enum PptError {
     #[error("not a PowerPoint 95 or 97-2003 presentation")]
     NotPpt,
+    /// The presentation is password-protected and no password was given: read it with
+    /// [`import_with_password`].
     #[error("the presentation is password-protected")]
     Encrypted,
+    /// The password does not open the presentation.
+    #[error("the password is incorrect")]
+    WrongPassword,
+    /// The presentation is encrypted in a way that isn't read (AES, an external provider, another
+    /// version or key size), named.
+    #[error("the presentation uses {0} encryption, which isn't read")]
+    UnsupportedEncryption(String),
     #[error("the presentation is in a PowerPoint format older than PowerPoint 95")]
     TooOld,
     #[error("the presentation is damaged: {0}")]
@@ -65,6 +76,19 @@ pub fn import(bytes: &[u8], defaults: &dyn Defaults) -> Result<Presentation, Ppt
 /// in the presentation; for a PowerPoint 95 file, the slides its DocumentAtom counts past those it
 /// holds, by position.
 pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presentation, Vec<String>), PptError> {
+    import_inner(bytes, defaults, None)
+}
+
+/// [`import_checked`] for a password-protected presentation (RC4 CryptoAPI, as PowerPoint 2002
+/// and later write it). The password is checked before anything is decrypted:
+/// [`PptError::WrongPassword`] when it doesn't match, [`PptError::UnsupportedEncryption`] for a
+/// scheme that isn't read. A presentation that isn't encrypted is read as it is, the password
+/// unused.
+pub fn import_with_password(bytes: &[u8], defaults: &dyn Defaults, password: &str) -> Result<(Presentation, Vec<String>), PptError> {
+    import_inner(bytes, defaults, Some(password))
+}
+
+fn import_inner(bytes: &[u8], defaults: &dyn Defaults, password: Option<&str>) -> Result<(Presentation, Vec<String>), PptError> {
     let file = CompoundFile::open(bytes).map_err(|e| match e {
         CfbError::NotCfb => PptError::NotPpt,
         other => PptError::Damaged(other.to_string()),
@@ -86,7 +110,12 @@ pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presenta
     let current_user = file.read_path_capped("Current User", cap).unwrap_or_default();
     // A damaged or missing picture stream costs the pictures, not the presentation.
     let pictures = file.read_path_capped("Pictures", cap).unwrap_or_default();
-    let d = doc::read(&current_user, &stream)?;
+    // An encrypted presentation is decrypted into copies, which are then read as any other.
+    let (stream, pictures, decrypted) = match crypt::decrypt(&current_user, &stream, &pictures, password)? {
+        Some(d) => (d.stream, d.pictures, true),
+        None => (stream, pictures, false),
+    };
+    let d = doc::read(&current_user, &stream, decrypted)?;
     Ok((convert::convert(&d, &pictures, defaults), d.lost.clone()))
 }
 

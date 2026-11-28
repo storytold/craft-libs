@@ -15,6 +15,8 @@
 //!   which is required and checked) and *standard* encryption (Office 2007: AES-ECB, SHA-1).
 //!   RC4, extensible, certificate-only and rights-managed files are refused by name
 //!   ([`Error::Unsupported`]).
+//! - [`rc4`] is the RC4 and RC4 CryptoAPI encryption of the Office 97-2003 binary formats
+//!   (`.doc`, `.xls`, `.ppt`): the header and password check, and the key of each block.
 //! - [`encrypt`] writes agile encryption as Office does: AES-256, SHA-512, 100,000 spins.
 //! - [`protection`] has the password hashes of document, sheet and workbook protection.
 //!
@@ -36,6 +38,7 @@
 
 mod package;
 pub mod protection;
+pub mod rc4;
 
 pub use package::{
     DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, check, check_password, decrypt, decrypt_streams, encrypt, encrypt_standard, encrypt_with_spin_count,

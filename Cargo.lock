@@ -2468,6 +2468,7 @@ dependencies = [
  "chrono",
  "craft-cfb",
  "craft-codepage",
+ "craft-offcrypto",
  "craft-wordmodel",
  "image",
  "log",
@@ -3821,10 +3822,12 @@ dependencies = [
  "craft-cfb",
  "craft-codepage",
  "craft-drawingml",
+ "craft-offcrypto",
  "craft-pptx",
  "image",
  "log",
  "miniz_oxide 0.8.9",
+ "sha1 0.11.0",
  "thiserror 2.0.21",
 ]
 

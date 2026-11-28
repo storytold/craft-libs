@@ -14,6 +14,7 @@ workspace = true
 craft-cfb = { workspace = true }
 craft-codepage = { workspace = true }
 craft-drawingml = { workspace = true }
+craft-offcrypto = { workspace = true }
 craft-pptx = { workspace = true }
 log = { workspace = true }
 miniz_oxide = { workspace = true }
@@ -22,3 +23,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 # Pictures in the tests: a PNG to embed, and the BMP a DIB blip becomes.
 image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
+# The RC4 CryptoAPI key derivation of the encrypted test presentations, written independently of
+# craft-offcrypto's.
+sha1 = "0.11"
