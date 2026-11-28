@@ -457,6 +457,33 @@ fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
     }
 }
 
+/// `PageUp`/`PageDown` on a multiline field move its caret to the start or the end, as the framework's own text
+/// editor does. `takes` holds only for a focused multiline field with no list, completion, step value or live
+/// composition; every other part keeps its own Page behavior. A Page is rewritten only when its own event carries
+/// no modifier, so a modified Page stays with the app or the framework. A plain Page is rewritten as Command+Up /
+/// Command+Down before the widget runs, so it keeps its place among the pass's other caret keys and the last Page
+/// in a pass wins.
+fn page_keys(ctx: &Context, takes: bool) {
+    if takes {
+        egui_input::translate_plain_pages_to_text_bounds(ctx);
+    }
+}
+
+/// Whether a Page on this part moves its caret: a focused multiline field with no list, completion, step value or
+/// live composition. The Page's own event decides whether it is plain; every other part keeps its own behavior.
+fn pages_move_caret(input: &AdapterIn<'_>, state: &TextState, multiline: bool) -> bool {
+    input.focused && multiline && state.preedit.is_none() && !input.list_open && !state.completions.open && !input.options.steps_value
+}
+
+/// A secondary press inside the selection keeps it for the edit menu it opens: egui's widget moves the caret to
+/// any press, so the selection from before the press is put back once the widget has run.
+fn restore_kept_selection(ctx: &Context, widget: Id, kept: Option<(usize, usize)>) {
+    let Some((caret, anchor)) = kept else { return };
+    if selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at)) {
+        select(ctx, widget, anchor, caret);
+    }
+}
+
 /// The modifiers held in this pass, which are the Enter press's.
 fn held_mods(ctx: &Context) -> Mods {
     let os = crate::runtime::windows::os_of(ctx);
@@ -567,7 +594,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let env = crate::runtime::env::Env::of(input.ui);
     let multiline = input.options.multiline();
     let scroll = if multiline { scroll_before(ctx, widget) } else { 0.0 };
-    let filter = egui_focus::event_filter(input.keys.keep, false);
+    // A multiline field keeps Tab for the widget but needs all four arrows: KeepKeys::Tab sets both
+    // arrow flags false. BlockArrows already has them true.
+    let mut filter = egui_focus::event_filter(input.keys.keep, false);
+    if multiline {
+        filter.horizontal_arrows = true;
+        filter.vertical_arrows = true;
+    }
     // A single line sits on the baseline of its control's line, whatever its face: a number field's mono digits on
     // the body text's.
     let baseline = (!input.options.multiline()).then(|| {
@@ -603,17 +636,17 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         line_break: line_break(input.options.submit_key),
         colors: input.options.color_ranges.as_deref(),
     };
-    // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
-    // egui's widget moves the caret to any press, so the selection from before the press is put back.
+    // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do.
     let secondary = crate::runtime::pointer::frame_raw(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
+    // Page Up/Down move a multiline field's caret to the start/end, as the framework's own text editor does.
+    // egui's TextEdit has no Page handler, so a plain Page is rewritten as Command+Up / Command+Down before the
+    // widget runs; the widget's own caret handling then applies it in event order with the pass's other keys. A
+    // list, a step field, a live composition, or a modified Page (which belongs to the app/framework) keeps its behavior.
+    page_keys(ctx, pages_move_caret(&input, state, multiline));
     let shown = text_edit::show(input.ui, &env, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
-    if let Some((caret, anchor)) = kept
-        && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
-    {
-        select(ctx, widget, anchor, caret);
-    }
+    restore_kept_selection(ctx, widget, kept);
     // A single line keeps its caret in view through egui's own line offset; a multi-line part scrolls its text itself.
     // The caret is revealed only when it moved (against last pass's, `state.caret`), so a wheel that scrolled it out of
     // view stays where it put the text.

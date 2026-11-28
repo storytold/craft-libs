@@ -2,11 +2,13 @@
 //! room and scrolls its text inside; a bound caret goes both ways.
 
 use craft_behavior::PartKey;
+use craft_host::target::Os;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Stack;
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::text::TextField;
-use egui::{Id, Key, Modifiers, Rect, Vec2};
+use craft_ui_contract::testing::input;
+use egui::{Event, Id, Key, Modifiers, Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -238,7 +240,7 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     let mut fixture = Fixture::new(move |ui| {
         let mut at = bound.get();
         let mut held = shown.borrow_mut();
-        let field = TextField::new("Notes", Bind::bound(&mut *held)).lines(2).max_lines(2).caret(Bind::bound(&mut at));
+        let field = TextField::new("Notes", Bind::bound(&mut *held)).lines(2).max_lines(2).tab_inserts(true).caret(Bind::bound(&mut at));
         seen.set(field.show(ui).response.rect);
         drop(held);
         bound.set(at);
@@ -274,6 +276,89 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     fixture.key(Key::ArrowRight, Modifiers::NONE);
     fixture.idle(2);
     assert_eq!(caret.get(), 4, "the user's caret move past the two-byte \"é\" writes its byte offset back");
+
+    // Tab still inserts into a field that keeps the arrows.
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(*text.borrow(), "aXé\t\nb\nc\nd\ne\nf", "Tab inserts a tab at the caret and changes nothing else");
+    assert_eq!(caret.get(), 5, "the caret advances past the inserted tab");
+
+    // Page keys move the caret to the framework editor's ends and change no text.
+    let before = text.borrow().clone();
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len(), "PageDown moves the caret to the end");
+    let field = rect.get();
+    let last = run_with(&fixture, "\nf");
+    assert!(last.bottom() <= field.bottom() + SNAP, "PageDown scrolls the last line into view: {last:?} in {field:?}");
+    fixture.key(Key::PageUp, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "PageUp moves the caret to the start");
+    let first = run_with(&fixture, "aX");
+    assert!(first.top() >= field.top() - SNAP, "PageUp scrolls the first line into view: {first:?} in {field:?}");
+    assert_eq!(*text.borrow(), before, "the Page keys change no text");
+
+    // A Page keeps its place among the pass's other caret keys: a caret move before it is erased by the
+    // Page, and the last Page in one pass wins.
+    fixture.frame(vec![input::key_press(Key::ArrowLeft, Modifiers::NONE), input::key_press(Key::PageDown, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len(), "PageDown after ArrowLeft ends at the text end, not one character before");
+
+    fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::NONE), input::key_press(Key::PageUp, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "the last Page in one pass wins");
+
+    fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::NONE), input::key_press(Key::ArrowLeft, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len() - 1, "an arrow after a Page continues from the Page's end");
+
+    fixture.frame(vec![input::key_press(Key::ArrowRight, Modifiers::NONE), input::key_press(Key::PageUp, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "PageUp after ArrowRight ends at the text start, not one character in");
+    assert_eq!(*text.borrow(), before, "the Page keys and arrows change no text");
+
+    // A modified Page belongs to the app or the framework, not to the field.
+    fixture.key(Key::PageDown, Modifiers::COMMAND);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "a modified PageDown leaves the caret alone");
+
+    // The modifier's release can follow the Page in the same pass, so the pass reports no modifier held while the
+    // Page's own event still carries one: that Page was modified, whatever the frame reports.
+    fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::COMMAND), Event::ModifiersChanged(Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "a PageDown event carrying Cmd leaves the caret alone when the pass reports no modifier");
+
+    // The modifier can go down after the Page in the same pass: the Page's own event still carries none,
+    // so the field moves the caret even though the frame now reports Shift.
+    fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::NONE), Event::ModifiersChanged(Modifiers::SHIFT)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len(), "a plain PageDown moves to the end when Shift goes down after it");
+}
+
+#[trial]
+fn page_keys_reach_the_text_bounds_on_macos() {
+    let text = Rc::new(RefCell::new("a\nb\nc".to_owned()));
+    let caret = Rc::new(Cell::new(0usize));
+    let (shown, bound) = (text.clone(), caret.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut at = bound.get();
+        let mut held = shown.borrow_mut();
+        TextField::new("Notes", Bind::bound(&mut *held)).lines(2).caret(Bind::bound(&mut at)).show(ui);
+        drop(held);
+        bound.set(at);
+    });
+    fixture.os(Os::Mac);
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len(), "PageDown reaches the end on macOS");
+
+    fixture.key(Key::PageUp, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "PageUp reaches the start on macOS");
 }
 
 /// The clear part empties the field in the pass that takes its click: the field's node reads empty after that one pass,

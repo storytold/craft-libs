@@ -8,7 +8,7 @@ use craft_behavior::one_press::split_after_first_press;
 use craft_behavior::{Buttons, PointerButton, PointerEvent, PointerKind, PointerSample, WheelPhase, WheelSource, WheelUnit};
 use craft_host::target::Os;
 use craft_keymap::{KeyInput, Mods};
-use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
+use egui::{Context, Event, Id, ImeEvent, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
 use std::sync::Arc;
 
 pub use egui::RawInput;
@@ -858,6 +858,25 @@ pub(crate) fn held_press_origin(ctx: &Context) -> Option<Pos2> {
 /// A plain Left or Right arrow press reached egui this pass, with no modifier held.
 pub(crate) fn plain_horizontal_arrow_pressed(ctx: &Context) -> bool {
     ctx.input(|input| input.modifiers.is_none() && (input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::ArrowRight)))
+}
+
+/// Rewrites this pass's plain Page Up and Page Down presses as Command+Up and Command+Down. egui's text widget moves
+/// the caret to the text's start or end for those chords on every platform (Ctrl+Home/End is not handled on macOS),
+/// so a Page keeps its place among the pass's other caret keys and the last Page in a pass wins. A Page whose own
+/// event carries a modifier is left for the app or framework: the frame's modifiers can disagree with the Page when
+/// the modifier's press or release is in the same pass.
+pub(crate) fn translate_plain_pages_to_text_bounds(ctx: &Context) {
+    ctx.input_mut(|input| {
+        for event in &mut input.events {
+            if let Event::Key { key, pressed: true, modifiers, .. } = event
+                && modifiers.is_none()
+                && matches!(*key, Key::PageUp | Key::PageDown)
+            {
+                *key = if *key == Key::PageUp { Key::ArrowUp } else { Key::ArrowDown };
+                *modifiers = Modifiers { command: true, ctrl: false, ..Modifiers::NONE };
+            }
+        }
+    });
 }
 
 /// An Up, Down, Page Up or Page Down press reached egui this pass.
