@@ -207,15 +207,22 @@ pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: 
         let (x, y) = (x.clamp(0, iw as i64 - 1) as usize, y.clamp(0, ih as i64 - 1) as usize);
         image.pixels.get(y * iw + x).map_or([0.0; 4], |c| c.to_array().map(f32::from))
     };
-    // The area of a pixel inside the box along one axis: `t` texels in from the near edge of `n`, whose gradient
-    // `(gx, gy)` (texels per work pixel) gives the distance in pixels and the edge's direction, so the outline is
-    // antialiased over one work pixel at any scale, as the commit draws it.
-    let cover = |t: f64, n: f64, (gx, gy): (f64, f64)| -> f32 {
-        let len = gx.hypot(gy);
+    // The area of the work pixel at `(px, py)` inside one of the box's boundaries: the line `a x + b y + c = 0` over
+    // the work pixels (positive inside, on the box's side of the horizon), at its true distance from the pixel's
+    // centre, so the outline is antialiased over one work pixel at any scale and under a perspective, as the commit
+    // draws it. A boundary with no direction (a collapsed map) covers all or nothing.
+    let inside_line = |[a, b, c]: [f64; 3], px: f64, py: f64| -> f64 {
+        let (len, at) = (a.hypot(b), (a * px + b * py + c) * side);
         if !(len.is_finite() && len > 1e-12) {
-            return if (0.0..=n).contains(&t) { 1.0 } else { 0.0 };
+            return if at >= 0.0 { 1.0 } else { 0.0 };
         }
-        edge_coverage(t.min(n - t) / len, gx / len, gy / len) as f32
+        edge_coverage(at / len, a / len, b / len)
+    };
+    // The area inside the box along one axis: what its near boundary (the unit coordinate's own row, zero on it) and
+    // its far one (the horizon's row less that row) both leave, so a box narrower than a pixel covers its width.
+    let cover = |near: [f64; 3], px: f64, py: f64| -> f32 {
+        let far = [m6 - near[0], m7 - near[1], m8 - near[2]];
+        (inside_line(near, px, py) + inside_line(far, px, py) - 1.0).max(0.0) as f32
     };
     let straight = |p: [f32; 4]| -> [f32; 4] {
         let c = Color32::from_rgba_premultiplied(p[0].round() as u8, p[1].round() as u8, p[2].round() as u8, p[3].round() as u8);
@@ -241,9 +248,7 @@ pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: 
                 }
                 continue;
             }
-            // The gradient of a texel coordinate `t` (of `n`) along the work pixels: d/dx (a x + b y + c) / w.
-            let grad = |a: f64, b: f64, t: f64, n: f64| ((a - t / n * m6) / w * n, (b - t / n * m7) / w * n);
-            let cover = cover(tx, tw, grad(m0, m1, tx, tw)) * cover(ty, th, grad(m3, m4, ty, th));
+            let cover = cover([m0, m1, m2], px, py) * cover([m3, m4, m5], px, py);
             if cover <= 0.0 {
                 continue;
             }

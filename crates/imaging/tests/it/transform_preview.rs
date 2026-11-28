@@ -652,3 +652,30 @@ fn a_styled_preview_keeps_an_edge_on_the_pixel_grid_crisp_at_any_scale() {
     let half = out.texels[((14 - 8) * 12 + (17 - 8)) as usize][3];
     assert!((half - 0.5).abs() < 1e-6, "half the pixel inside: {half}");
 }
+
+/// A box narrower than a work pixel covers its own width of it: both of its sides cut the pixel, and the nearer one
+/// alone would leave four tenths of it.
+#[trial]
+fn a_styled_preview_covers_a_box_narrower_than_a_pixel_by_its_width() {
+    // A 4 × 4 opaque frame over x = 0.6..0.7 and y = -4..4: the pixel at (0, 0) holds a tenth of a pixel of it.
+    let image = ColorImage::new([4, 4], vec![Color32::WHITE; 16]);
+    let to_unit = craft_behavior::geometry::Homography::from_rows([[10.0, 0.0, -6.0], [0.0, 0.125, 0.5], [0.0, 0.0, 1.0]]);
+    let rect = PixelRect::new(-1, 0, 2, 1);
+    let out = craft_imaging::ui::transform_preview::resample(&image, [1.0, 1.0], &to_unit, Point::new(0.65, 0.5), rect, false);
+    let alpha: Vec<f32> = out.texels.iter().map(|t| t[3]).collect();
+    assert!((alpha[1] - 0.1).abs() < 1e-6, "a tenth of the pixel: {alpha:?}");
+    assert!(alpha[0].abs() < 1e-6 && alpha[2].abs() < 1e-6, "none beside it: {alpha:?}");
+}
+
+/// Under a perspective a pixel's cover is measured to the box's side itself: the side at x = 0.2 leaves eight tenths of
+/// the pixel at (0, 0), whose centre is 0.3 px inside it. Read off the unit coordinate's slope at the pixel's centre,
+/// the distance came to 0.375 px and the cover to 0.875.
+#[trial]
+fn a_styled_preview_measures_cover_to_the_side_under_a_perspective() {
+    let image = ColorImage::new([4, 4], vec![Color32::WHITE; 16]);
+    let to_unit = craft_behavior::geometry::Homography::from_rows([[1.5, 0.0, -0.3], [0.5, 0.1, 0.45], [1.0, 0.0, 1.0]]);
+    let rect = PixelRect::new(0, 0, 1, 1);
+    let out = craft_imaging::ui::transform_preview::resample(&image, [1.0, 1.0], &to_unit, Point::new(0.5, 0.5), rect, false);
+    let alpha = out.texels[0][3];
+    assert!((alpha - 0.8).abs() < 1e-6, "eight tenths of the pixel: {alpha}");
+}
