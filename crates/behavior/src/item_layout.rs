@@ -528,8 +528,10 @@ fn column_under(widths: impl Iterator<Item = f32>, x: f64) -> Option<usize> {
 pub struct TileLayout {
     /// The size of one tile.
     pub tile: Vec2,
-    /// The space between tiles, on both axes.
+    /// The space between tiles across a row, and between the rows unless `rows_apart` sets it.
     pub gap: f32,
+    /// The space between rows of tiles.
+    pub row_gap: f32,
     /// Number of tiles.
     pub count: usize,
     /// The width the tiles wrap in.
@@ -541,12 +543,18 @@ pub struct TileLayout {
 impl TileLayout {
     /// One tile of `tile` per entry of `source`, `gap` apart, wrapping at `width`.
     pub fn new<K>(source: &dyn DisplayOrder<K>, width: f32, tile: Vec2, gap: f32) -> Self {
-        Self { tile, gap, count: source.len(), width, fixed_columns: None }
+        Self { tile, gap, row_gap: gap, count: source.len(), width, fixed_columns: None }
     }
 
     /// Exactly `columns` tiles per row, whatever the width (a user setting; at least one).
     pub fn in_columns(mut self, columns: usize) -> Self {
         self.fixed_columns = Some(columns.max(1));
+        self
+    }
+
+    /// The rows `gap` apart, in place of the gap between the tiles across a row.
+    pub fn rows_apart(mut self, gap: f32) -> Self {
+        self.row_gap = gap;
         self
     }
 
@@ -563,14 +571,14 @@ impl TileLayout {
     }
 
     fn pitch(&self) -> Vec2 {
-        Vec2::new(self.tile.x + self.gap, self.tile.y + self.gap)
+        Vec2::new(self.tile.x + self.gap, self.tile.y + self.row_gap)
     }
 }
 
 impl ItemLayout for TileLayout {
     fn content_size(&self) -> ScrollPos {
         let rows = self.rows() as f64;
-        let height = if rows == 0.0 { 0.0 } else { rows * f64::from(self.pitch().y) - f64::from(self.gap) };
+        let height = if rows == 0.0 { 0.0 } else { rows * f64::from(self.pitch().y) - f64::from(self.row_gap) };
         ScrollPos { x: f64::from(self.width), y: height }
     }
 

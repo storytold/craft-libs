@@ -270,6 +270,11 @@ pub struct Swatch<T: Value + 'static = ()> {
     #[style_key]
     #[prop(flag)]
     stroke: bool,
+    /// The well's outline is a hairline, one physical pixel in the border colour, in place of the thin line: the cells of a grid of colours
+    /// that sit apart, where a thin line round each cell reads as a heavy grid.
+    #[style_key]
+    #[prop(flag)]
+    hairline: bool,
     /// The face the well shows over its checker instead of the colour; ring, mark and mixed look unchanged.
     #[prop]
     face: Option<FacePaint>,
@@ -303,6 +308,7 @@ impl Swatch<()> {
             well: false,
             marks: CellMarks::default(),
             stroke: false,
+            hairline: false,
             face: None,
             shape: SwatchShape::default(),
             picker: None,
@@ -336,6 +342,7 @@ impl<T: Value + 'static> Swatch<T> {
             well: self.well,
             marks: self.marks,
             stroke: self.stroke,
+            hairline: self.hairline,
             face: self.face,
             shape: self.shape,
             picker: self.picker,
@@ -445,7 +452,9 @@ impl<T: Value + 'static> Component for Swatch<T> {
         let colors = &cx.tokens.color;
         let metrics = SwatchMetrics::of(cx);
         let clear = cx.color(Rgba::TRANSPARENT);
-        let rest = cx.color(colors.line.control_edge);
+        // A hairline cell sits apart from its neighbours in a grid of colours: its pixel outline takes the border colour, so
+        // the grid reads as colours, not grey frames, and a white cell still shows its edge.
+        let rest = cx.color(if key.hairline { colors.line.border } else { colors.line.control_edge });
         let accent = cx.color(colors.accent.solid);
         SwatchStyle {
             metrics: Metrics::new(),
@@ -543,6 +552,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
             fill: &self.fill,
             face: self.face.as_ref(),
             stroke: self.stroke,
+            hairline: self.hairline,
             marks: self.marks,
             glyph: self.icon.as_ref(),
             shape: self.shape,
@@ -571,6 +581,8 @@ struct Face<'a> {
     fill: &'a SwatchFill,
     face: Option<&'a FacePaint>,
     stroke: bool,
+    /// The outline is a hairline in place of the thin line.
+    hairline: bool,
     marks: CellMarks,
     glyph: Option<&'a IconId>,
     shape: SwatchShape,
@@ -616,7 +628,10 @@ impl Face<'_> {
                     let inner = well.shrink(draw.width(StrokeWidth::Thin));
                     paint_ring(draw, inner, color, style, self.state, self.radius(inner));
                 }
-                None => draw.stroke(&edge, StrokeWidth::Thin, self.state.resolve(&style.edge)),
+                None => {
+                    let width = if self.hairline { StrokeWidth::Hairline } else { StrokeWidth::Thin };
+                    draw.stroke(&edge, width, self.state.resolve(&style.edge));
+                }
             }
             self.paint_marks(draw, well);
             draw.stroke(&edge, StrokeWidth::Thick, self.state.resolve(&style.ring));
@@ -836,6 +851,7 @@ impl SwatchFace {
             fill: &fill,
             face: None,
             stroke: false,
+            hairline: false,
             marks: CellMarks::default(),
             glyph: None,
             shape: SwatchShape::Square,
