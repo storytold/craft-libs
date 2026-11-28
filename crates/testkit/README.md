@@ -402,6 +402,37 @@ test binary again as a child process with that variable set.
 
 The tests use channel handshakes and contain no sleeps or time limits.
 
+## prop
+
+The `prop` feature adds the `prop` module and the `proptest` dependency. The module is not built for
+`wasm32`.
+
+`prop::config(cases)` returns a `proptest::test_runner::Config` with failure persistence off. It
+reads proptest's own variables:
+
+| Variable | Not set | Set |
+|---|---|---|
+| `PROPTEST_CASES` | `cases` | The value as a `u32`. Any other value makes `config` panic. |
+| `PROPTEST_RNG_SEED` | `prop::SEED` (`0x5eed_9a7f`) | The value as a `u64`. Any other value makes `config` panic. |
+
+A suite under `prop::config` repeats the same cases on every run. To run it with other cases, set
+`PROPTEST_RNG_SEED` to another number. No file under `proptest-regressions/` is read
+or written, so a minimal failure found with other seeds or counts is kept as a named regression test
+in the suite.
+
+```rust
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(craft_testkit::prop::config(64))]
+
+    #[test]
+    fn parse_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
+        let _ = my_crate::parse(&bytes);
+    }
+}
+```
+
 ## Origin
 
 ### serial
@@ -482,6 +513,12 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 | `rng` (`XorShift64`) | storytold/filmcraft | `crates/dnx/tests/it/fuzz_hostile.rs:9-20` | `0a881266` |
 | `rng` (`XorShift64`) | storytold/craft-libs | `crates/video/tests/dnx/fuzz_hostile.rs:9-20` | `9f10d434` |
 | `rng` (`XorShift64Star`) | storytold/craft-libs | `crates/jpeg/tests/mutation.rs:28-46` | `97c83dc9` |
+
+### prop
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `config` and `SEED` | storytold/vectorcraft | `crates/pathops/tests/common/mod.rs:3-20` | `34627134` |
 
 ## Migration
 
@@ -578,3 +615,14 @@ Each adoption says which values change and keeps the variable name.
 | DeckCraft | `serial` | No |
 | EffectCraft | `serial` | No |
 | PdfCraft | `serial` | No |
+
+### prop
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| VectorCraft `pathops` | the `Config` of `tests/props.rs` and `tests/prop_pathops.rs` | Pending |
+| craft-libs | the 34 `Config` values that set `cases` directly, and the seven committed `proptest-regressions` files outside `vendor/` | Pending |
+| LightCraft, FilmCraft | the property suites that set their case count | Pending |
+
+Each adoption names every suite whose seed changes from random to pinned, and turns committed
+regression cases into named tests.

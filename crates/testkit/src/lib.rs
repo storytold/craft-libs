@@ -45,6 +45,11 @@
 //! corpus folder against them: `corpus::Manifest`, `corpus::verify` and the test gate
 //! `corpus::pinned`, which skips or fails under the rule of `skip`.
 //!
+//! With the `prop` feature, on targets other than `wasm32`, `prop::config` returns a proptest
+//! configuration with a pinned seed and failure persistence off. `PROPTEST_CASES` and
+//! `PROPTEST_RNG_SEED` override the case count and the seed, and `config` panics on a value it cannot
+//! parse.
+//!
 //! With the `mcp` feature, on targets other than `wasm32`, `mcp::McpChild` runs an MCP server as a
 //! child process and talks to it over stdin and stdout, with a deadline on every wait and a length
 //! limit on every line it reads.
@@ -74,6 +79,8 @@ pub mod guards;
 pub mod hostile;
 #[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
 pub mod mcp;
+#[cfg(all(feature = "prop", not(target_arch = "wasm32")))]
+pub mod prop;
 pub mod rng;
 pub mod sample_damage;
 #[cfg(not(target_arch = "wasm32"))]
