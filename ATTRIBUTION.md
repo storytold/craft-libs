@@ -207,3 +207,13 @@ adapting code from [PiJellyPin's MaterialCraft](https://github.com/PiJellyPin/Ma
 `NOTICE` for the original attribution. This extraction retains vangel76's subsequent evaluator and GPU work.
 The format reference and tests are from the same TextureCraft source. The tests' numerical rule tables document
 their provenance in their headers.
+
+## Lenient ZIP local member identity
+
+The local-header consistency checks and their original mutation regression are ported from
+Afloat16's Craft Anything commit `741564268305ac2ab03cc6e74b9b26f8c46d9726`
+([PR #1138](https://github.com/storytold/craft-anything/pull/1138), MIT OR Apache-2.0).
+Afloat16 is the original contributor of that fix. The extended name, Unicode Path and seekable-read
+regressions in `crates/zip/src/lenient/tests.rs` generate their archives in Rust from synthetic
+names and payloads using the existing test builders; they contain no external files or personal data.
+They are original test inputs contributed by Afloat16 under this repository's Apache-2.0 licence.

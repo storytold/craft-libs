@@ -153,6 +153,16 @@ fn build_named_entry(name: &[u8], flags: u16) -> Vec<u8> {
     zip
 }
 
+fn assert_named_entry_reads(bytes: &[u8], expected: &str) {
+    let archive = parse(bytes, 10).unwrap();
+    let entry = &archive.entries[0];
+    assert_eq!(entry.name, expected);
+    assert_eq!(raw_entry_data(bytes, entry).unwrap(), b"");
+    assert_eq!(read_entry(bytes, entry, 0).unwrap(), b"");
+    assert_eq!(read_entry_unverified(bytes, entry, 0).unwrap(), b"");
+    assert_eq!(file::read_named_entry(&mut std::io::Cursor::new(bytes), expected, 0).unwrap(), Some(Vec::new()));
+}
+
 #[test]
 fn verified_unicode_path_overrides_a_legacy_zip_name() {
     let raw = b"notes.txt";
@@ -171,7 +181,11 @@ fn verified_unicode_path_overrides_a_legacy_zip_name() {
         zip[central + 30..central + 32].copy_from_slice(&(extra.len() as u16).to_le_bytes());
         zip[end + 12..end + 16].copy_from_slice(&((end - central + extra.len()) as u32).to_le_bytes());
         zip.splice(end..end, extra);
-        assert_eq!(parse(&zip, 1).unwrap().entries[0].name, expected);
+        assert_named_entry_reads(&zip, expected);
+        let entry = &parse(&zip, 1).unwrap().entries[0];
+        zip[30] = b'x';
+        assert!(matches!(raw_entry_data(&zip, entry), Err(ZipError::Corrupt(_))), "a Unicode Path alias must not hide a changed local name");
+        assert!(matches!(file::read_named_entry(&mut std::io::Cursor::new(&zip), expected, 0), Err(ZipError::Corrupt(_))));
     }
 }
 
@@ -204,31 +218,54 @@ fn directory_markers_do_not_require_a_trailing_slash() {
 #[test]
 fn a_cp437_name_without_the_utf8_flag_is_decoded() {
     let zip = build_named_entry(b"caf\x82.txt", 0);
-    assert_eq!(parse(&zip, 10).unwrap().entries[0].name, "café.txt");
+    assert_named_entry_reads(&zip, "café.txt");
 }
 
 #[test]
 fn a_cp437_box_drawing_name_without_the_utf8_flag_is_decoded() {
     let zip = build_named_entry(b"\xc9.txt", 0);
-    assert_eq!(parse(&zip, 10).unwrap().entries[0].name, "╔.txt");
+    assert_named_entry_reads(&zip, "╔.txt");
 }
 
 #[test]
 fn a_utf8_name_with_the_utf8_flag_is_preserved() {
     let zip = build_named_entry("한글/é.txt".as_bytes(), 0x0800);
-    assert_eq!(parse(&zip, 10).unwrap().entries[0].name, "한글/é.txt");
+    assert_named_entry_reads(&zip, "한글/é.txt");
 }
 
 #[test]
 fn a_valid_utf8_name_without_the_utf8_flag_is_preserved() {
     let zip = build_named_entry("é.txt".as_bytes(), 0);
-    assert_eq!(parse(&zip, 10).unwrap().entries[0].name, "é.txt");
+    assert_named_entry_reads(&zip, "é.txt");
 }
 
 #[test]
 fn an_ascii_name_is_preserved() {
     let zip = build_named_entry(b"dir/file.txt", 0);
-    assert_eq!(parse(&zip, 10).unwrap().entries[0].name, "dir/file.txt");
+    assert_named_entry_reads(&zip, "dir/file.txt");
+}
+
+#[test]
+fn normalized_slashes_do_not_change_local_entry_identity() {
+    let mut zip = build_named_entry(b"dir\\file.txt", 0);
+    let central = 30 + b"dir\\file.txt".len();
+    zip[central + 46 + 3] = b'/';
+    assert_named_entry_reads(&zip, "dir/file.txt");
+}
+
+#[test]
+fn mismatched_local_entries_do_not_supply_bytes() {
+    let bytes = build(&[("ab", b"payload")]);
+    let entry = &parse(&bytes, 1).unwrap().entries[0];
+    assert_eq!(read_entry(&bytes, entry, 7).unwrap(), b"payload");
+    for (offset, value) in [(6, 1), (8, 8), (31, b'c')] {
+        let mut bad = bytes.clone();
+        bad[offset] = value;
+        assert!(matches!(raw_entry_data(&bad, entry), Err(ZipError::Corrupt(_))), "raw read accepted a mismatched local header at {offset}");
+        assert!(matches!(read_entry(&bad, entry, 7), Err(ZipError::Corrupt(_))));
+        assert!(matches!(read_entry_unverified(&bad, entry, 7), Err(ZipError::Corrupt(_))));
+        assert!(matches!(file::read_named_entry(&mut std::io::Cursor::new(&bad), "ab", 7), Err(ZipError::Corrupt(_))));
+    }
 }
 
 #[test]
@@ -297,9 +334,13 @@ fn zstandard_members_are_read_with_their_limits_and_checks() {
     frame.extend(body);
     let mut file = vec![0u8; 30];
     file[..4].copy_from_slice(b"PK\x03\x04");
+    file[8..10].copy_from_slice(&93u16.to_le_bytes());
+    file[26] = 1;
+    file.push(b'x');
     file.extend(&frame);
     let mut e = ZipEntry {
         name: "x".into(),
+        header_name: None,
         method: 93,
         flags: 0,
         crc32: crc32(body),
@@ -322,6 +363,7 @@ fn deflate_round_trip_and_crc_check() {
     let comp = miniz_oxide::deflate::compress_to_vec(&body, 6);
     let e = ZipEntry {
         name: "x".into(),
+        header_name: None,
         method: 8,
         flags: 0,
         crc32: crc32(&body),
@@ -334,6 +376,9 @@ fn deflate_round_trip_and_crc_check() {
     };
     let mut z = b"PK\x03\x04".to_vec();
     z.extend_from_slice(&[0; 26]);
+    z[8..10].copy_from_slice(&8u16.to_le_bytes());
+    z[26] = 1;
+    z.push(b'x');
     z.extend_from_slice(&comp);
     assert_eq!(read_entry(&z, &e, 1 << 20).unwrap(), body);
     // A lying uncompressed size can't make us exceed the cap.
@@ -379,6 +424,7 @@ fn listings_serialize_without_empty_warnings_or_unix_mode() {
     assert!(value.get("warnings").is_none());
     assert_eq!(value["entries"][0]["name"], "a.txt");
     assert!(value["entries"][0].get("unix_mode").is_none());
+    assert!(value["entries"][0].get("header_name").is_none());
 }
 
 #[cfg(not(feature = "lenient-zstd"))]

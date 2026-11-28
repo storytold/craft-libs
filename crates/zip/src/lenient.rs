@@ -56,6 +56,11 @@ pub struct ZipEntry {
     /// Entry name as stored (forward slashes). Bit 11 selects lossy UTF-8; otherwise
     /// a valid Unicode Path extra field takes precedence over the UTF-8/CP437 fallback.
     pub name: String,
+    /// Decoded, slash-normalized header name when a Unicode Path field changes [`Self::name`].
+    /// Entry reads compare this with the local header; `None` means to compare `name` itself.
+    /// Constructed entries without a Unicode Path alias should set this to `None`.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub header_name: Option<String>,
     pub method: u16,
     pub flags: u16,
     pub crc32: u32,
@@ -357,13 +362,22 @@ fn parse_directory(
         if let Some(records) = raw_records.as_deref_mut() {
             records.push((pos, name_bytes.to_vec()));
         }
-        let name = unicode_name.map(str::to_owned).unwrap_or_else(|| decode_name(name_bytes, flags)).replace('\\', "/");
+        let name = decode_name(name_bytes, flags).replace('\\', "/");
+        let (name, header_name) = match unicode_name {
+            Some(alias) => {
+                let alias = alias.replace('\\', "/");
+                let header_name = (name != alias).then_some(name);
+                (alias, header_name)
+            }
+            None => (name, None),
+        };
         if name_filter.is_none_or(|wanted| wanted == name) {
             entries.push(ZipEntry {
                 is_dir: name.ends_with('/')
                     || unix_mode.is_some_and(|m| m & 0o170000 == 0o040000)
                     || (matches!(host, 0 | 10 | 14) && attrs & 0x10 != 0),
                 name,
+                header_name,
                 method,
                 flags,
                 crc32,
@@ -428,7 +442,7 @@ pub fn find_eocd(data: &[u8]) -> Option<usize> {
     }
 }
 
-/// The raw (possibly compressed) bytes of an entry.
+/// The raw (possibly compressed) bytes of an entry, after checking its local name and decoding fields.
 pub fn raw_entry_data<'a>(data: &'a [u8], e: &ZipEntry) -> Result<&'a [u8], ZipError> {
     let r = Reader::new(data);
     let off = usize::try_from(e.local_header_offset).map_err(|_| ZipError::Corrupt("local header offset".into()))?;
@@ -437,6 +451,15 @@ pub fn raw_entry_data<'a>(data: &'a [u8], e: &ZipEntry) -> Result<&'a [u8], ZipE
     }
     let n = usize::from(r.u16_le(off + 26).ok_or(ZipError::Truncated("local header"))?);
     let x = usize::from(r.u16_le(off + 28).ok_or(ZipError::Truncated("local header"))?);
+    let flags = r.u16_le(off + 6).ok_or(ZipError::Truncated("local header"))?;
+    if (flags ^ e.flags) & 1 != 0 || r.u16_le(off + 8) != Some(e.method) {
+        return Err(ZipError::Corrupt(format!("local decoding fields disagree for {}", e.name)));
+    }
+    let local_name = r.slice(off + 30, n).ok_or(ZipError::Truncated("local entry name"))?;
+    let expected_name = e.header_name.as_deref().unwrap_or(&e.name);
+    if decode_name(local_name, flags).replace('\\', "/") != expected_name {
+        return Err(ZipError::Corrupt(format!("local name disagrees with {}", e.name)));
+    }
     let start = off.checked_add(30 + n + x).ok_or(ZipError::Truncated("local header"))?;
     let len = usize::try_from(e.compressed_size).map_err(|_| ZipError::TooLarge(e.compressed_size))?;
     r.slice(start, len).ok_or(ZipError::Truncated("entry data"))
