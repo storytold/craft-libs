@@ -24,7 +24,7 @@ use craft_ui::dialog::{
     ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
 use craft_ui::layout::{CellAlign, GridFit};
-use craft_ui::layout_components::{Grid, Stack};
+use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
 use craft_ui::pickers::Select;
@@ -41,7 +41,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::picker::TWO_COLUMNS;
-use super::{ColorPicker, ColorPickerLayout, ColorWarning, Gamut, PickedColor, ScreenPickGesture, SwatchPalette};
+use super::{ColorPicker, ColorPickerLayout, ColorPickerWords, ColorWarning, CompareSwatch, Gamut, PickedColor, ScreenPickGesture, SwatchPalette};
 use crate::{AreaMode, CmykModel, not_web_safe, web_safe};
 
 type StandardColors = (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>);
@@ -318,26 +318,46 @@ impl TabbedBody<'_> {
         let (cells, greys) = self.standard.map_or((&[][..], &[][..]), |(cells, greys)| (cells.as_slice(), greys.as_slice()));
         let current = held.same().map(|picked| picked.color);
         let mut pick = None;
-        Stack::new().show(ui, |ui, _| {
-            let honeycomb = SwatchTable::new(self.words.standard_colors.clone(), cells)
-                .arrangement(SwatchArrangement::Honeycomb)
-                .tips(true)
-                .selection(Bind::given(chosen(cells, current)))
-                .show_all(ui);
-            if let Some(at) = honeycomb.selected {
-                pick = cells.get(at).map(|(_, color)| *color);
-            }
-            let row = SwatchTable::new(self.words.greys.clone(), greys)
-                .per_row(greys.len().max(1))
-                .tips(true)
-                .selection(Bind::given(chosen(greys, current)))
-                .show_all(ui);
-            if let Some(at) = row.selected {
-                pick = greys.get(at).map(|(_, color)| *color);
+        let mut restore = None;
+        // The compare block stands beside the honeycomb, as it does beside the Custom page's area.
+        Row::new().show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                let honeycomb = SwatchTable::new(self.words.standard_colors.clone(), cells)
+                    .arrangement(SwatchArrangement::Honeycomb)
+                    .tips(true)
+                    .selection(Bind::given(chosen(cells, current)))
+                    .show_all(ui);
+                if let Some(at) = honeycomb.selected {
+                    pick = cells.get(at).map(|(_, color)| *color);
+                }
+                let row = SwatchTable::new(self.words.greys.clone(), greys)
+                    .per_row(greys.len().max(1))
+                    .tips(true)
+                    .selection(Bind::given(chosen(greys, current)))
+                    .show_all(ui);
+                if let Some(at) = row.selected {
+                    pick = greys.get(at).map(|(_, color)| *color);
+                }
+            });
+            if let Some(compare) = self.compare {
+                let new = held.same().map_or(Mixed::Mixed, |picked| Mixed::Same(picked.color));
+                let current = match compare {
+                    Mixed::Same(current) => Mixed::Same(current.color),
+                    Mixed::Mixed => Mixed::Mixed,
+                };
+                let label = Env::of(ui).words::<ColorPickerWords>().new_color.clone();
+                if CompareSwatch::new(label, new, current).show(ui).restore
+                    && let Mixed::Same(current) = compare
+                {
+                    restore = Some(current);
+                }
             }
         });
         if let Some(color) = pick {
             *held = Mixed::Same(PickedColor::rgb(color));
+        }
+        if let Some(current) = restore {
+            *held = Mixed::Same(current);
         }
     }
 

@@ -2,6 +2,7 @@
 
 use crate::contract::{
     Bind, BodyCx, CollectionEvent, NoValue, Outcome, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    Sizing,
 };
 use crate::dialog::{ButtonPlace, Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog};
 use crate::display::{Shade, Text};
@@ -321,6 +322,10 @@ impl StackDialog for HostedListManager {
     }
 }
 
+/// The fewest rows the list is tall, and the most it shows before it scrolls.
+const MIN_ROWS: u16 = 8;
+const MAX_ROWS: u16 = 12;
+
 /// The name box's text in `bind`: empty while a kept binding holds none.
 fn text_of(bind: &mut Bind<'_, String>, cx: &mut BodyCx<'_>) -> String {
     match bind.reborrow().read(cx) {
@@ -556,6 +561,11 @@ impl<'a> ListManager<'a> {
                         .id(list_id)
                         .select(SelectMode::Single)
                         .allow_empty(true)
+                        // A capped list is sized from its rows: without a cap it takes no height in a dialog that sizes to its
+                        // content, and the empty message or the first rows are drawn over the section under it.
+                        .sizing(Sizing::Content)
+                        .min_rows(MIN_ROWS)
+                        .max_rows(MAX_ROWS)
                         .deletable(true)
                         .selection(Bind::bound(&mut selection));
                     if let Some(empty) = &empty {

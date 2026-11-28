@@ -267,3 +267,21 @@ fn a_hosted_list_manager_hands_over_kept_open_choices_and_answers_with_the_closi
     let answered = host.borrow_mut().take::<HostedListManager>();
     assert!(matches!(&answered, Some(DialogResult::Ok(run)) if run.action == "run" && run.entry.as_deref() == Some("a")), "{answered:?}");
 }
+
+// #7979: with no entries the empty message stands in the list's own box, above the section under it, not over it.
+#[trial]
+fn an_empty_list_keeps_its_box_above_the_section_under_it() {
+    let mut fixture = Fixture::new(|ui| {
+        let actions = vec![ListManagerAction::new("add", "Add", ActionEnabled::OnNewName).keeps_open()];
+        let _ = ListManager::new("Marks", "Name:", Vec::new(), actions)
+            .empty(craft_ui::runtime::env::Label::Static("No marks yet."))
+            .under_list(|ui| {
+                Text::new("Under the list").show(ui);
+            })
+            .show(ui);
+    });
+    fixture.idle(10);
+    let empty = fixture.by_label("No marks yet.").expect("the empty message");
+    let under = fixture.by_label("Under the list").expect("the section under the list");
+    assert!(empty.rect.max.y <= under.rect.min.y, "the message {:?} clears the section {:?}", empty.rect, under.rect);
+}

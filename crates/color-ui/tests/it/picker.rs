@@ -558,6 +558,15 @@ fn the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page() {
     fixture.click(&cell);
     fixture.idle(4);
     assert_eq!(dialog_color(&dialogs).as_deref(), Some("#0000ff"), "a honeycomb pick is the colour");
+    // #7984: the Standard page shows the compare block too, and its current half restores the opening colour.
+    assert!(fixture.by_label("New color").is_some(), "the Standard page shows the compare block");
+    let restore = fixture.by_label("Restore current color").expect("the compare block's current half");
+    fixture.click(&restore);
+    fixture.idle(4);
+    assert_eq!(dialog_color(&dialogs).as_deref(), Some("#123456"), "the current half restores the opening colour");
+    let cell = fixture.by_label("Standard 2").expect("the honeycomb shows its cells");
+    fixture.click(&cell);
+    fixture.idle(4);
 
     assert!(dialogs.borrow_mut().confirm::<ColorPickerDialog>(&ctx), "OK answers");
     let answered = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).map(|result| result.picked.color.to_hex());
