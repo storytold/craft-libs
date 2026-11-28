@@ -50,8 +50,12 @@ pub(crate) fn valid_time(t: NaiveDateTime) -> NaiveDateTime {
 /// A date from `YYYY-MM-DD` or `YYYYMMDD`, years 1 to 9999.
 fn parse_iso_date(s: &str) -> Option<NaiveDate> {
     let s = s.trim();
-    let digits: String = s.chars().filter(char::is_ascii_digit).collect();
-    if digits.len() != 8 || s.chars().any(|c| !c.is_ascii_digit() && c != '-') {
+    let digits: String = match s.len() {
+        8 => s.to_string(),
+        10 if s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-') => s.chars().filter(char::is_ascii_digit).collect(),
+        _ => return None,
+    };
+    if digits.len() != 8 || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let year: i32 = digits.get(0..4)?.parse().ok()?;
@@ -293,6 +297,11 @@ mod tests {
             "20261312",
             "20260230",
             "00000101",
+            "2026-1011",
+            "-20261012",
+            "20-261012",
+            "20261012-",
+            "2026101-2T090000",
             "20261012T",
             "20261012T25",
             "20261012T240000",
