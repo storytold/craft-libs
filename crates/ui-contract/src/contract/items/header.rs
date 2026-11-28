@@ -448,8 +448,11 @@ impl Header {
                     .pointer_only("Resize Column… resizes from the keyboard");
             }
             let remove = spec.remove.as_ref().map(|remove| {
-                let side = self.height.min(rect.width());
-                let end = if rtl { rect.min.x + grip } else { rect.max.x - grip };
+                // Only a resizable column keeps room for its grip, and at most half its width, so the control keeps a
+                // press area in a column narrower than the grip.
+                let reserve = if spec.resizable { grip.min(rect.width() / 2.0) } else { 0.0 };
+                let side = self.height.min(rect.width() - reserve);
+                let end = if rtl { rect.min.x + reserve } else { rect.max.x - reserve };
                 let place = if rtl { within(end, end + side) } else { within(end - side, end) };
                 pcx.part(REMOVE.at(hash), shown(place))
                     .sense(Sense::CLICK | Sense::FOCUS)

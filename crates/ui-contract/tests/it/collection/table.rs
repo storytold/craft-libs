@@ -205,18 +205,20 @@ fn header_cells_past_the_view_have_bounds_only_inside_it() {
 }
 
 /// Removable columns that the app makes narrower than the header's height: each remove control's bounds stay inside its
-/// own header cell, so its node and its press area do not reach into the cell before it.
+/// own header cell, so its node and its press area do not reach into the cell before it. A column narrower than the
+/// resize grip still gives its remove control a press area, whether it is resizable or not.
 #[trial]
 fn a_narrow_column_keeps_its_remove_control_in_its_cell() {
     const NAMES: [&str; 3] = ["a", "b", "c"];
-    const NARROW: f32 = 8.0;
+    const NARROW: f32 = 4.0;
     let columns = || {
         let specs = NAMES
             .iter()
             .enumerate()
             .map(|(at, name)| {
                 let width = if at == 0 { COL } else { NARROW };
-                ColumnSpec::new(ColumnKey::new(name), *name, ColumnWidth::Fixed(width)).removable(format!("Remove {name}"), true)
+                let spec = ColumnSpec::new(ColumnKey::new(name), *name, ColumnWidth::Fixed(width)).removable(format!("Remove {name}"), true);
+                if at == 2 { spec.resizable() } else { spec }
             })
             .collect();
         CollectionProps::new().columns(specs)
@@ -244,6 +246,7 @@ fn a_narrow_column_keeps_its_remove_control_in_its_cell() {
             remove.min.x >= cell.min.x - SAME && remove.max.x <= cell.max.x + SAME,
             "the remove control of {name} has bounds {remove:?} inside its header cell {cell:?}"
         );
+        assert!(remove.width() > SAME, "the remove control of {name} has a press area, not the bounds {remove:?}");
     }
 }
 
