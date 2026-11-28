@@ -150,7 +150,7 @@ fn pictures_convert_to_rgb_video_frames() {
             }
             let f = VideoFrame::try_from(&decoder).unwrap();
             assert_eq!((f.width(), f.height(), f.family(), f.bit_depth()), (w as u32, h as u32, ColorFamily::Rgb, 8));
-            assert_eq!(f.color.matrix, 0);
+            assert_eq!((f.color.matrix, f.color.full_range), (0, true));
             let plane = |p: usize| match f.plane(p).map(|p| p.samples()) {
                 Some(Samples::U8(s)) => s.clone(),
                 other => panic!("plane {p}: {other:?}"),

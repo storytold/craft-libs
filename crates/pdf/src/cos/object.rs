@@ -859,6 +859,23 @@ mod tests {
         }
         let small = zero_stream(1000);
         assert_eq!(&small.decoded().unwrap()[..], &[0u8; 1000][..], "the hand-written stream is a valid one");
+        assert_eq!(crate::cos::MAX_PAGE_DECODED, 256 << 20);
+        let max = 4096;
+        let mut data = vec![0u8; max];
+        let stream = Stream::flate(Dict::new(), &data);
+        assert_eq!(stream.decoded_within(max).ok().as_deref(), Some(data.as_slice()));
+        data.push(0);
+        let stream = Stream::flate(Dict::new(), &data);
+        assert!(matches!(stream.decoded_within(max), Err(CosError::Filter(_))));
+        // Keep the default-cap wiring at full size in the existing native nightly convention.
+        // wasm32 has no divisor and always runs the small controls above.
+        #[cfg(not(target_arch = "wasm32"))]
+        let full = craft_testkit::hostile::divisor() == 1;
+        #[cfg(target_arch = "wasm32")]
+        let full = false;
+        if !full {
+            return;
+        }
         let stream = zero_stream((256 << 20) + 1);
         assert!(matches!(stream.decoded(), Err(CosError::Filter(_))));
     }

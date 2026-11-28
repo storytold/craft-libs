@@ -411,8 +411,9 @@ impl PrefixDetector {
 /// magic and is recognized last, by header plausibility.
 ///
 /// JPEG-LS is told from JPEG by the frame header that follows the marker segments, so `bytes`
-/// must reach that header; a buffer that ends before it is reported as [`Format::Jpeg`]. Use
-/// [`detect_prefix`] on a buffer that may hold only the start of a file.
+/// must reach that header; a buffer that ends before it is reported as [`Format::Jpeg`] when it
+/// starts with `FF D8 FF`, and a buffer of only `FF D8` matches no format. Use [`detect_prefix`] on
+/// a buffer that may hold only the start of a file: for `FF D8` it asks for a 4-byte prefix.
 pub fn detect(bytes: &[u8]) -> Option<Format> {
     let b = bytes;
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {

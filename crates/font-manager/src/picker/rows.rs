@@ -810,7 +810,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                             }
                         });
                     over_rows = rows.response.contains_pointer();
-                    let pointer = ui.ctx().pointer_hover_pos();
+                    let pointer = craft_ui::runtime::pointer::hover_point_in(ui.ctx(), rows.response.rect);
                     under_pointer = pointer.and_then(|at| rows.shown.iter().find(|row| row.rect.contains(at)).map(|row| row.key.clone()));
                     events = rows.events;
                 });

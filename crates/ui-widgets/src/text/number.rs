@@ -352,6 +352,16 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
+    /// Identifies the target of this field's edit, for a control reused across drawings or selections.
+    /// Changing the key discards the previous draft, editor Undo/Redo and input-method composition even when the
+    /// two bound values are equal. Late composition commits cannot enter the new target's draft.
+    /// The field keeps its identity and focus.
+    #[must_use]
+    pub fn edit_target(mut self, key: impl egui::AsIdSalt) -> Self {
+        self.options.edit_target = Some(egui::IdSalt::new(key));
+        self
+    }
+
     /// Zoom typing: a Tab rewrites the draft (with no draft it moves focus) and a press on the field's other parts
     /// keeps it unapplied.
     #[must_use]
@@ -764,8 +774,13 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.leading = Self::before_text(cx, self.step_arrows);
         self.trailing = self.after_text(cx, &chevrons);
         let names = self.names(|row| cx.env.resolve(&row.label().clone()));
+        // A derived value is measured as it shows at rest, in parentheses with its unit, so its reading takes the
+        // padding it needs as a longer number does.
         self.value_width = cx.value().map_or(0.0, |value| {
-            let text = self.ruled(&cx.env, false, names).format(value);
+            let mut text = self.ruled(&cx.env, false, names).format(value);
+            if self.derives(Some(value)) {
+                text = self.derived_text(&text, &cx.env.units());
+            }
             cx.field_text(&TextRun::new(&text).role(self.value_role())).x
         });
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);

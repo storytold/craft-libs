@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Runtime, style, fonts, primitives, the component contract, layout and the test kit of the craft UI library, on egui"
 
+[package.metadata.craft]
+reads = ["crates/font-subset/tests/data/orbitron/Orbitron[wght].ttf"]
+
 [lib]
 # Every test lives in the `it` integration binary.
 test = false

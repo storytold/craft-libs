@@ -642,7 +642,11 @@ pub(super) fn panel_source<'a>(
     } else {
         entries().filter_map(|e| e.color().map(|color| (e.name.as_str(), color.to_srgb(cmyk)))).collect()
     };
-    PresetSource::new(SwatchInputs { groups, drawn, icons, host }, PresetFns::new(source_rows).thumb(paint_swatch))
+    let fns = PresetFns::new(source_rows).thumb(paint_swatch).accepts(|_, drag, _, _| {
+        let groups = matches!(drag.grabbed, SwatchKey::Group(_));
+        drag.keys.iter().all(|key| matches!(key, SwatchKey::Group(_)) == groups)
+    });
+    PresetSource::new(SwatchInputs { groups, drawn, icons, host }, fns)
 }
 
 fn source_rows(inputs: &SwatchInputs<'_>, env: &Env) -> Vec<PresetRow<SwatchKey>> {
