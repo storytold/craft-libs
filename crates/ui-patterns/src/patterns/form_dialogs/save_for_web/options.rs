@@ -138,7 +138,9 @@ pub(super) fn show(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, 
         if let Some(on) = check(ui, &words.convert_srgb, "srgb", options.convert_srgb) {
             options.convert_srgb = on;
         }
-        metadata_row(ui, words, options);
+        if options.has_metadata() {
+            metadata_row(ui, words, options);
+        }
         if vector {
             output_row(ui, words, options);
         }
@@ -171,10 +173,13 @@ fn preset_rows(names: &&[String], _: &Env) -> Vec<PresetRow<String>> {
 /// The Preset row: pick, save under a new name, rename and delete. The host stores the presets, so the row reports
 /// events in `asked` and the host gives the list back.
 fn preset_row(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, live: &mut Live, asked: &mut Asked) {
-    let Kit { words, presets, .. } = *kit;
+    let Kit { words, presets, formats, .. } = *kit;
+    // A preset in a format the host does not encode is not listed, but its name is still taken.
+    let offered = || presets.iter().filter(|preset| formats.contains(&preset.options.format));
     let names: Vec<String> = presets.iter().map(|preset| preset.name.clone()).collect();
-    let rows = PresetSource::new(names.as_slice(), PresetFns::new(preset_rows));
-    let held = presets.iter().find(|preset| preset.is_set_in(options)).map(|preset| preset.name.clone());
+    let listed: Vec<String> = offered().map(|preset| preset.name.clone()).collect();
+    let rows = PresetSource::new(listed.as_slice(), PresetFns::new(preset_rows));
+    let held = offered().find(|preset| preset.is_set_in(options)).map(|preset| preset.name.clone());
     let picker = PresetPicker::new(words.preset.clone(), Bind::given(held), &rows, Bind::bound(&mut live.preset))
         .field(PickerField::Name)
         .placeholder(words.unnamed.clone());
@@ -188,7 +193,7 @@ fn preset_row(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, live:
     for event in named.events {
         match event {
             NamedPresetEvent::Apply(key) => {
-                if let Some(preset) = presets.iter().find(|preset| preset.name == key) {
+                if let Some(preset) = offered().find(|preset| preset.name == key) {
                     apply_preset(options, preset);
                 }
             }
@@ -322,6 +327,13 @@ fn format_options(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions) {
             if let Some(on) = check(ui, &words.embed_profile, "profile", options.embed_profile) {
                 options.embed_profile = on;
             }
+        }
+        WebFormat::Avif => {
+            quality_row(ui, words, options);
+            if let Some(on) = check(ui, &words.transparency, "transparency", options.transparency) {
+                options.transparency = on;
+            }
+            Text::new(words.avif_note.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
         }
         WebFormat::Wbmp => dither_row(ui, words, options, false),
         WebFormat::Png24 => {

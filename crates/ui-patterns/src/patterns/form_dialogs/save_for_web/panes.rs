@@ -54,6 +54,8 @@ pub(super) struct Panes<'p> {
     pub(super) slices: &'p [WebSlice],
     /// The numbers of the selected slices.
     pub(super) chosen: &'p [u32],
+    /// The formats the host can write.
+    pub(super) formats: &'p [WebFormat],
     /// Whether the zoom row has Preview in Browser.
     pub(super) browser: &'p BrowserPreview,
     /// The Download speed of the captions, in Kbps.
@@ -272,7 +274,7 @@ fn captions(panes: &Panes<'_>, pane: WebPane) -> (String, String) {
             let Some(variant) = panes.pictures.variants.get(index).and_then(Option::as_ref) else {
                 return (words.pane_pending.as_str().to_owned(), String::new());
             };
-            let format = pane_format(panes.options, index);
+            let format = pane_format(panes.options, panes.formats, index);
             let mut first = words
                 .encoded_caption
                 .fill(&[("format", format.extension().to_uppercase().as_str()), ("size", panes.units.file_size(variant.bytes).as_str())]);
@@ -292,9 +294,9 @@ fn captions(panes: &Panes<'_>, pane: WebPane) -> (String, String) {
 }
 
 /// The format the encoded pane `index` is encoded in.
-fn pane_format(options: &SaveForWebOptions, index: usize) -> WebFormat {
+fn pane_format(options: &SaveForWebOptions, formats: &[WebFormat], index: usize) -> WebFormat {
     match index {
         0 => options.format,
-        _ => four_up_variants(options)[(index - 1).min(1)].format,
+        _ => four_up_variants(options, formats)[(index - 1).min(1)].format,
     }
 }

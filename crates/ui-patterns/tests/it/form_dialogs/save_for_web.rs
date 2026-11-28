@@ -5,8 +5,8 @@ use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    Animation, ColorTableEdit, ColorTableEvent, HostedSaveForWeb, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions, WebFormat,
-    WebPictures, WebPreset, WebSlice, WebSlices, WebVariant,
+    Animation, ColorTableEdit, ColorTableEvent, HostedSaveForWeb, OptimizeAnswer, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog,
+    SaveForWebOptions, WebFormat, WebPictures, WebPreset, WebSlice, WebSlices, WebVariant, WebView,
 };
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
@@ -320,6 +320,23 @@ fn enter_in_the_optimize_rows_files_the_search_and_never_saves() {
     assert!(host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::pick_path).is_some(), "with the rows closed Enter saves");
 }
 
+/// An Optimize answer in a format the host doesn't offer never reaches the previews or the file.
+#[trial]
+fn an_optimize_answer_in_a_format_not_offered_is_kept_to_one_that_is() {
+    let formats = vec![WebFormat::Jpeg, WebFormat::Gif];
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).optimize().formats(formats));
+    wanted_formats(&host);
+    let mut found = SaveForWebOptions::default();
+    found.format = WebFormat::Avif;
+    found.quality = 33;
+    let answer = OptimizeAnswer::new(Some(found), 1024, 2048, true);
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").answer_optimize(Ok(answer));
+    fixture.idle(4);
+    assert_eq!((current(&host).format, current(&host).quality), (WebFormat::Jpeg, 33));
+    assert!(wanted_formats(&host).iter().all(|wanted| *wanted == WebFormat::Jpeg), "the previews asked for");
+    assert_eq!(saved_format(&host, &mut fixture), WebFormat::Jpeg);
+}
+
 /// The frame the animation shows after the host's passes.
 fn frame_of(host: &Rc<RefCell<DialogHost>>) -> u32 {
     host.borrow_mut().get_mut::<HostedSaveForWeb>().map(|web| web.frame()).expect("the dialog is open")
@@ -399,6 +416,167 @@ fn four_up_webp_halves_the_quality_until_lossless() {
     fixture.click(&lossless).idle(4);
     let [half, quarter] = four_up_options(&host);
     assert_eq!((half.format, quarter.format), (WebFormat::Png8, WebFormat::Gif));
+}
+
+/// AVIF is offered only by a host that names it. It has Quality and Transparency, no Metadata row and no matte while
+/// transparency is kept, its 4-Up panes halve the quality, and its settings in a dialog that doesn't offer it open
+/// as JPEG.
+#[trial]
+fn avif_is_offered_when_the_host_names_it() {
+    const NOTE: &str = "The preview shows the image before compression. AVIF files carry no color profile or metadata.";
+    let mut options = SaveForWebOptions::default();
+    options.format = WebFormat::Avif;
+    options.quality = 80;
+    let formats = [WebFormat::Jpeg, WebFormat::Avif].to_vec();
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(options.clone()).formats(formats));
+    assert_eq!(current(&host).format, WebFormat::Avif);
+    assert!(fixture.by_label(NOTE).is_some(), "the AVIF note shows");
+    assert!(fixture.by_label("Quality").is_some(), "AVIF has Quality");
+    assert!(fixture.by_label("Transparency").is_some(), "AVIF has Transparency");
+    assert!(fixture.by_label("Metadata").is_none(), "AVIF offers no Metadata choice");
+    assert!(fixture.by_label("Matte").is_none(), "AVIF keeps transparency, so no matte");
+    let four_up = fixture.by_label("4-Up").expect("the 4-Up view");
+    fixture.click(&four_up).idle(4);
+    let [half, quarter] = four_up_options(&host);
+    assert_eq!((half.format, half.quality, quarter.quality), (WebFormat::Avif, 40, 20));
+
+    let (host, fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(options));
+    assert_eq!(current(&host).format, WebFormat::Jpeg, "a dialog without AVIF opens its settings as JPEG");
+    assert!(fixture.by_label(NOTE).is_none());
+    assert!(fixture.by_label("Metadata").is_some());
+    assert!(fixture.by_label("Matte").is_some(), "JPEG has a matte");
+}
+
+/// The formats the host was asked to encode since it last asked.
+fn wanted_formats(host: &Rc<RefCell<DialogHost>>) -> Vec<WebFormat> {
+    let wanted = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::wanted_variants).expect("the dialog is open");
+    wanted.iter().map(|variant| variant.request.options.format).collect()
+}
+
+/// Presses Save…, answers the file dialog and gives the format the host is to write.
+fn saved_format(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture) -> WebFormat {
+    let save = fixture.by_label("Save…").expect("the Save button");
+    fixture.click(&save).idle(4);
+    let request = host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::pick_path).expect("Save asks for a path");
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").answer_path(request.key.clone(), PathBuf::from("/tmp/poster"));
+    fixture.idle(6);
+    host.borrow_mut().take::<HostedSaveForWeb>().and_then(DialogResult::ok).expect("the path finishes the dialog").options.format
+}
+
+/// A host that names its formats without JPEG is asked for, and given, only those: the default settings open in the
+/// first one, 4-Up's extra panes included. An empty list names none, so the standard formats are offered.
+#[trial]
+fn a_format_list_without_jpeg_is_kept_to() {
+    for format in [WebFormat::Avif, WebFormat::Png24] {
+        let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).formats(vec![format]));
+        assert_eq!(current(&host).format, format, "the only format offered");
+        assert!(wanted_formats(&host).iter().all(|wanted| *wanted == format), "the previews asked for");
+        let four_up = fixture.by_label("4-Up").expect("the 4-Up view");
+        fixture.click(&four_up).idle(4);
+        assert_eq!(wanted_formats(&host), vec![format; 3], "4-Up asks for no other format");
+        assert_eq!(saved_format(&host, &mut fixture), format);
+    }
+    let (host, _) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).formats(Vec::new()));
+    assert_eq!(current(&host).format, WebFormat::Jpeg, "an empty list offers the standard formats");
+}
+
+/// Settings remembered in a format the host doesn't offer open in one it does, before any preview is asked for.
+#[trial]
+fn a_remembered_format_not_offered_opens_as_one_that_is() {
+    let mut options = SaveForWebOptions::default();
+    options.format = WebFormat::Avif;
+    let formats = vec![WebFormat::Gif, WebFormat::Png8];
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(options).formats(formats));
+    assert_eq!(current(&host).format, WebFormat::Gif);
+    let wanted = wanted_formats(&host);
+    assert!(!wanted.is_empty() && wanted.iter().all(|wanted| *wanted == WebFormat::Gif), "{wanted:?}");
+    assert_eq!(saved_format(&host, &mut fixture), WebFormat::Gif);
+}
+
+/// The panes a dialog asked for, as (index, format), gathered across passes.
+type Asked = Rc<RefCell<Vec<(usize, WebFormat)>>>;
+
+/// A dialog shown directly, in `view`, offering whatever `formats` holds at each pass. The returned list gathers the
+/// panes asked for, as (index, format), since it was last emptied.
+fn shown_offering(options: SaveForWebOptions, view: WebView, formats: &Rc<RefCell<Vec<WebFormat>>>) -> (Fixture, Asked) {
+    let options = Rc::new(RefCell::new(options));
+    let view = Rc::new(RefCell::new(view));
+    let offered = Rc::clone(formats);
+    let asked: Asked = Rc::default();
+    let gathered = Rc::clone(&asked);
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut options, mut view, offered) = (options.borrow_mut(), view.borrow_mut(), offered.borrow());
+        let output = SaveForWebDialog::new("poster.psd", IMAGE, WebPictures::new().original(texture()), Bind::bound(&mut *options))
+            .view(Bind::bound(&mut *view))
+            .formats(&offered)
+            .show(ui);
+        gathered.borrow_mut().extend(output.wanted_variants.iter().map(|wanted| (wanted.index, wanted.request.options.format)));
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(10);
+    (fixture, asked)
+}
+
+/// A host that stops offering the shown format while the dialog is open gets a new encode in the format it falls back
+/// to, not the old one's preview under the new format's settings.
+#[trial]
+fn a_format_no_longer_offered_asks_for_the_fallback() {
+    let mut options = SaveForWebOptions::default();
+    options.format = WebFormat::Avif;
+    let formats = Rc::new(RefCell::new(vec![WebFormat::Avif, WebFormat::Jpeg]));
+    let (mut fixture, asked) = shown_offering(options, WebView::TwoUp, &formats);
+    assert_eq!(asked.take(), vec![(0, WebFormat::Avif)], "the open asks for the remembered format");
+    *formats.borrow_mut() = vec![WebFormat::Jpeg];
+    fixture.idle(4);
+    assert_eq!(asked.take(), vec![(0, WebFormat::Jpeg)], "the fallback is encoded");
+}
+
+/// 4-Up's extra panes are encoded again when a change of the offered formats changes them alone, and not when the
+/// change leaves them as they were.
+#[trial]
+fn four_up_asks_again_when_the_offered_formats_change_its_panes() {
+    let mut options = SaveForWebOptions::default();
+    options.format = WebFormat::Png24;
+    let formats = Rc::new(RefCell::new(vec![WebFormat::Png24, WebFormat::Png8, WebFormat::Gif]));
+    let (mut fixture, asked) = shown_offering(options, WebView::FourUp, &formats);
+    let opened = asked.take();
+    assert!(opened.contains(&(1, WebFormat::Png8)) && opened.contains(&(2, WebFormat::Gif)), "{opened:?}");
+    formats.borrow_mut().push(WebFormat::Jpeg);
+    fixture.idle(4);
+    assert_eq!(asked.take(), Vec::new(), "a list that keeps the panes asks for nothing");
+    *formats.borrow_mut() = vec![WebFormat::Png24];
+    fixture.idle(4);
+    assert_eq!(asked.take(), vec![(0, WebFormat::Png24), (1, WebFormat::Png24), (2, WebFormat::Png24)]);
+}
+
+/// A preset in a format the host doesn't offer is not in the list, so choosing one never asks for that format; one it
+/// offers still applies.
+#[trial]
+fn presets_in_a_format_not_offered_are_not_listed() {
+    let mut avif = SaveForWebOptions::default();
+    avif.format = WebFormat::Avif;
+    avif.quality = 33;
+    let presets = vec![WebPreset::new("AVIF 33", avif), WebPreset::new("GIF 16", gif(16))];
+    let formats = vec![WebFormat::Jpeg, WebFormat::Gif];
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).presets(presets.clone()).formats(formats));
+    wanted_formats(&host);
+    let select = fixture.by_label("Preset").expect("the Preset list");
+    fixture.click(&select).idle(4);
+    assert!(fixture.by_label("AVIF 33").is_none(), "an unoffered preset is not listed");
+    let entry = fixture.by_label("GIF 16").expect("the offered preset");
+    fixture.click(&entry).idle(4);
+    assert_eq!((current(&host).format, current(&host).colors), (WebFormat::Gif, 16));
+    assert_eq!(wanted_formats(&host), vec![WebFormat::Gif]);
+    assert_eq!(saved_format(&host, &mut fixture), WebFormat::Gif);
+
+    // Automation's `preset` and `format` fields take only what is offered.
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let id = host.borrow_mut().open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).presets(presets).formats(vec![WebFormat::Gif]));
+    let ctx = egui::Context::default();
+    let set = |field: &str, value: serde_json::Value| host.borrow_mut().set_json_field(&ctx, id, field, value);
+    assert!(set("preset", "AVIF 33".into()).is_err(), "an unoffered preset is refused");
+    assert!(set("format", serde_json::to_value(WebFormat::Avif).unwrap()).is_err(), "an unoffered format is refused");
+    set("preset", "GIF 16".into()).expect("an offered preset applies");
+    assert_eq!((current(&host).format, current(&host).colors), (WebFormat::Gif, 16));
 }
 
 /// A palette answer that arrives as the child dialog that picked it closes and the room changes, so the dialog measures

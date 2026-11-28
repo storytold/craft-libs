@@ -106,7 +106,9 @@ impl HostedSaveForWeb {
         self
     }
 
-    /// The formats the host encodes, in list order.
+    /// The formats the host encodes, in list order: [`WebFormat::STANDARD`] unless set or when empty. Add
+    /// [`WebFormat::Avif`] only when the app can write it. The dialog asks for no others: see
+    /// [`SaveForWebDialog::formats`].
     #[must_use]
     pub fn formats(mut self, formats: Vec<WebFormat>) -> Self {
         self.formats = formats;
@@ -206,6 +208,7 @@ impl HostedSaveForWeb {
             size,
             options: SaveForWebOptions::default(),
             presets: Vec::new(),
+            formats: WebFormat::STANDARD.to_vec(),
             animation: None,
             remember: None,
             pictures: WebPictures::new().original(original),
@@ -220,7 +223,6 @@ impl HostedSaveForWeb {
             view: WebView::default(),
             path: None,
             document: WebDocument::default(),
-            formats: WebFormat::ALL.to_vec(),
             color_tables: COLOR_TABLES.to_vec(),
             marks: TableMarks::default(),
             browser: BrowserPreview::default(),
@@ -338,6 +340,7 @@ impl StackDialog for HostedSaveForWeb {
     /// answered the save request with a path, as the dialog's own Save… does: without a path it asks for the file
     /// dialog as Save… does and answers none.
     fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
+        self.options.keep_to(WebFormat::offered(&self.formats));
         if std::mem::take(&mut self.done) {
             return Some(result_of(self.options.clone(), None, self.options.output_size(self.size), self.view, self.remember.clone()));
         }
@@ -440,7 +443,9 @@ impl StackDialog for HostedSaveForWeb {
             }
             "preset" => {
                 let name = value.as_str().ok_or_else(rejected)?;
-                let preset = self.presets.iter().find(|preset| preset.name == name).ok_or_else(rejected)?;
+                let offered = WebFormat::offered(&self.formats);
+                let listed = |preset: &&WebPreset| preset.name == name && offered.contains(&preset.options.format);
+                let preset = self.presets.iter().find(listed).ok_or_else(rejected)?;
                 apply_preset(&mut self.options, preset);
                 self.restore_if_reduced(before);
                 Ok(())
@@ -493,6 +498,16 @@ impl StackDialog for HostedSaveForWeb {
                 let mut link = LinkedSize::new(self.size);
                 self.options.apply_size(&mut link);
                 self.options.constrain(&mut link, constrain);
+                Ok(())
+            }
+            // Only a format the list offers.
+            "format" => {
+                let format = parsed(field, &value)?;
+                if !WebFormat::offered(&self.formats).contains(&format) {
+                    return Err(rejected());
+                }
+                self.options.format = format;
+                self.restore_if_reduced(before);
                 Ok(())
             }
             "percent" => {
