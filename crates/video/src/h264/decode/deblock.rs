@@ -55,13 +55,16 @@ fn same_motion(p: &MbState, rp: usize, q: &MbState, rq: usize) -> bool {
     p.ref_idx[0][bp] == q.ref_idx[0][bq] && p.ref_idx[1][bp] == q.ref_idx[1][bq] && p.mv[0][rp] == q.mv[0][rq] && p.mv[1][rp] == q.mv[1][rq]
 }
 
+/// Motion vectors differ by 4 or more quarter luma frame samples horizontally or vertically.
+/// `ylim` is the vertical limit in the vectors' own units: 4 in frame macroblocks, 2 in field
+/// macroblocks, whose vertical units are quarter field samples (8.7.2.1, NOTE 3).
 #[inline(always)]
-fn mv_far(a: [i16; 2], b: [i16; 2]) -> bool {
-    (a[0] as i32 - b[0] as i32).abs() >= 4 || (a[1] as i32 - b[1] as i32).abs() >= 4
+fn mv_far(a: [i16; 2], b: [i16; 2], ylim: i32) -> bool {
+    (a[0] as i32 - b[0] as i32).abs() >= 4 || (a[1] as i32 - b[1] as i32).abs() >= ylim
 }
 
 #[inline]
-fn motion_bs(p: &Motion, q: &Motion) -> u8 {
+fn motion_bs(p: &Motion, q: &Motion, ylim: i32) -> u8 {
     if p.ids == q.ids && p.mv == q.mv {
         return 0;
     }
@@ -74,7 +77,7 @@ fn motion_bs(p: &Motion, q: &Motion) -> u8 {
         if pi != qi {
             return 1;
         }
-        return mv_far(pm, qm) as u8;
+        return mv_far(pm, qm, ylim) as u8;
     }
     if p.count == 0 {
         return 0;
@@ -87,13 +90,14 @@ fn motion_bs(p: &Motion, q: &Motion) -> u8 {
     if p.ids[0] != p.ids[1] {
         // two different reference pictures: compare mvs referring to the same picture
         if p.ids[0] == q.ids[0] {
-            (mv_far(p.mv[0], q.mv[0]) || mv_far(p.mv[1], q.mv[1])) as u8
+            (mv_far(p.mv[0], q.mv[0], ylim) || mv_far(p.mv[1], q.mv[1], ylim)) as u8
         } else {
-            (mv_far(p.mv[0], q.mv[1]) || mv_far(p.mv[1], q.mv[0])) as u8
+            (mv_far(p.mv[0], q.mv[1], ylim) || mv_far(p.mv[1], q.mv[0], ylim)) as u8
         }
     } else {
         // both mvs refer to the same picture
-        ((mv_far(p.mv[0], q.mv[0]) || mv_far(p.mv[1], q.mv[1])) && (mv_far(p.mv[0], q.mv[1]) || mv_far(p.mv[1], q.mv[0]))) as u8
+        ((mv_far(p.mv[0], q.mv[0], ylim) || mv_far(p.mv[1], q.mv[1], ylim)) && (mv_far(p.mv[0], q.mv[1], ylim) || mv_far(p.mv[1], q.mv[0], ylim)))
+            as u8
     }
 }
 
@@ -306,12 +310,19 @@ fn filter_horizontal<const N: usize>(pix: &mut [u8], stride: usize, x: usize, y:
 /// Boundary strengths `[dir][edge][segment]`; dir 0 = vertical edges (x), 1 = horizontal edges (y).
 type MbBs = [[[u8; 4]; 4]; 2];
 
+/// bS of a macroblock edge next to an intra macroblock: 4, except for horizontal edges of field
+/// macroblocks, which get 3 (8.7.2.1).
+#[inline(always)]
+fn intra_edge_bs(dir: usize, field: bool) -> u8 {
+    if dir == 1 && field { 3 } else { 4 }
+}
+
 /// Boundary strengths of an intra macroblock (8.7.2.1).
-fn intra_mb_bs(t8: bool, left: Option<usize>, top: Option<usize>) -> MbBs {
+fn intra_mb_bs(t8: bool, left: Option<usize>, top: Option<usize>, field: bool) -> MbBs {
     let mut bs = [[[0u8; 4]; 4]; 2];
     for (dir, neighbor) in [left, top].into_iter().enumerate() {
         if neighbor.is_some() {
-            bs[dir][0] = [4; 4];
+            bs[dir][0] = [intra_edge_bs(dir, field); 4];
         }
         for e in 1..4 {
             if !(t8 && e % 2 == 1) {
@@ -323,10 +334,11 @@ fn intra_mb_bs(t8: bool, left: Option<usize>, top: Option<usize>) -> MbBs {
 }
 
 /// Boundary strengths of the macroblock edge between neighbour `p` and the inter macroblock `q`.
-fn inter_outer_edge_bs(pic: &PicState, p: &MbState, q: &MbState, qm: &mut MbMotion, dir: usize) -> [u8; 4] {
+fn inter_outer_edge_bs(pic: &PicState, p: &MbState, q: &MbState, qm: &mut MbMotion, dir: usize, field: bool) -> [u8; 4] {
     if p.kind.is_intra() {
-        return [4; 4];
+        return [intra_edge_bs(dir, field); 4];
     }
+    let ylim = if field { 2 } else { 4 };
     let same_slice = p.slice_num == q.slice_num;
     let mut pm = MbMotion::new(p, &pic.slices[p.slice_num as usize]);
     let mut out = [0u8; 4];
@@ -337,14 +349,14 @@ fn inter_outer_edge_bs(pic: &PicState, p: &MbState, q: &MbState, qm: &mut MbMoti
         } else if same_slice && same_motion(p, rp, q, rq) {
             0
         } else {
-            motion_bs(&pm.block(rp), &qm.block(rq))
+            motion_bs(&pm.block(rp), &qm.block(rq), ylim)
         };
     }
     out
 }
 
 /// Boundary strengths of internal edge `e` (1..4) of the inter macroblock `q`.
-fn inter_inner_edge_bs(q: &MbState, qm: &mut MbMotion, dir: usize, e: usize) -> [u8; 4] {
+fn inter_inner_edge_bs(q: &MbState, qm: &mut MbMotion, dir: usize, e: usize, ylim: i32) -> [u8; 4] {
     let mut out = [0u8; 4];
     for (k, o) in out.iter_mut().enumerate() {
         let (rq, rp) = if dir == 0 { (k * 4 + e, k * 4 + e - 1) } else { (e * 4 + k, e * 4 + k - 4) };
@@ -353,7 +365,7 @@ fn inter_inner_edge_bs(q: &MbState, qm: &mut MbMotion, dir: usize, e: usize) -> 
         } else if same_motion(q, rp, q, rq) {
             0
         } else {
-            motion_bs(&qm.block(rp), &qm.block(rq))
+            motion_bs(&qm.block(rp), &qm.block(rq), ylim)
         };
     }
     out
@@ -362,6 +374,7 @@ fn inter_inner_edge_bs(q: &MbState, qm: &mut MbMotion, dir: usize, e: usize) -> 
 /// Boundary strengths of an inter macroblock (8.7.2.1).
 fn inter_mb_bs(pic: &PicState, q: &MbState, sq: &SliceInfo, left: Option<usize>, top: Option<usize>) -> MbBs {
     let mut bs = [[[0u8; 4]; 4]; 2];
+    let ylim = if sq.field { 2 } else { 4 };
     let t8 = q.transform_8x8;
     let q_uniform = (0..2).all(|l| {
         let r = q.ref_idx[l];
@@ -370,7 +383,7 @@ fn inter_mb_bs(pic: &PicState, q: &MbState, sq: &SliceInfo, left: Option<usize>,
     let mut qm = MbMotion::new(q, sq);
     for (dir, neighbor) in [left, top].into_iter().enumerate() {
         if let Some(n) = neighbor {
-            bs[dir][0] = inter_outer_edge_bs(pic, &pic.mbs[n], q, &mut qm, dir);
+            bs[dir][0] = inter_outer_edge_bs(pic, &pic.mbs[n], q, &mut qm, dir, sq.field);
         }
         if q_uniform && q.nz_mask == 0 {
             // one motion for the whole MB and no coefficients: all internal edges have bS 0
@@ -378,7 +391,7 @@ fn inter_mb_bs(pic: &PicState, q: &MbState, sq: &SliceInfo, left: Option<usize>,
         }
         for e in 1..4 {
             if !(t8 && e % 2 == 1) {
-                bs[dir][e] = inter_inner_edge_bs(q, &mut qm, dir, e);
+                bs[dir][e] = inter_inner_edge_bs(q, &mut qm, dir, e, ylim);
             }
         }
     }
@@ -485,7 +498,7 @@ pub fn deblock_mb(pic: &mut PicState, addr: usize, mb_w: usize) {
     };
     let left = usable(if mx > 0 { Some(addr - 1) } else { None });
     let top = usable(if my > 0 { Some(addr - mb_w) } else { None });
-    let bs = if q.kind.is_intra() { intra_mb_bs(q.transform_8x8, left, top) } else { inter_mb_bs(pic, q, sq, left, top) };
+    let bs = if q.kind.is_intra() { intra_mb_bs(q.transform_8x8, left, top, sq.field) } else { inter_mb_bs(pic, q, sq, left, top) };
     let qp_of = |st: &MbState| if st.kind == MbKind::IPcm { 0 } else { st.qp as i32 };
     let neighbor_qp = |n: Option<usize>| n.map(|n| (qp_of(&pic.mbs[n]), pic.mbs[n].qpc));
     let edges = MbEdges {
