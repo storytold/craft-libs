@@ -711,6 +711,89 @@ mod color_replacement_render_tests {
     }
 }
 
+/// PdfCraft patch (31): a fill that meets a small part of a large tiling cell draws that part of
+/// the cell, not the whole cell, and shows the same pixels.
+#[cfg(test)]
+mod tiling_cell_crop_tests {
+    use super::{InterpreterSettings, Pdf, RenderCache, RenderSettings, offscreen_draws, render};
+
+    /// A one-page 800 × 800 pt PDF that fills a 40 × 2 pt strip through a pattern whose cell is
+    /// the whole page and red throughout; the cell's step is a little larger than the cell, so
+    /// the strip meets one cell.
+    fn fixture() -> Vec<u8> {
+        let content = "/Pattern cs /P1 scn 100 100 40 2 re f";
+        let cell = "1 0 0 rg 0 0 800 800 re f";
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 800 800] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R >> >> >>".to_vec(),
+            format!("<< /Length {} >>
+stream
+{content}
+endstream", content.len()).into_bytes(),
+            format!(
+                "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 800 800]                  /XStep 802 /YStep 802 /Resources << >> /Length {} >>
+stream
+{cell}
+endstream",
+                cell.len()
+            )
+            .into_bytes(),
+        ];
+        let mut out = b"%PDF-1.7
+".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj
+", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"
+endobj
+");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref
+0 {}
+0000000000 65535 f 
+", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n 
+").as_bytes());
+        }
+        out.extend_from_slice(
+            format!("trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+", objs.len() + 1).as_bytes(),
+        );
+        out
+    }
+
+    #[test]
+    fn a_thin_fill_draws_a_small_part_of_a_page_sized_cell() {
+        let pdf = Pdf::new(fixture()).unwrap();
+        let settings = RenderSettings { x_scale: 1.0, y_scale: 1.0, ..RenderSettings::default() };
+        let before = offscreen_draws();
+        let pixmap = render(
+            pdf.pages().get(0).expect("the fixture has one page"),
+            &RenderCache::new(),
+            &InterpreterSettings::default(),
+            &settings,
+        );
+        let drawn = offscreen_draws().pixels - before.pixels;
+        let cell = 800 * 800;
+        assert!(drawn < cell / 4, "{drawn} pixels drawn offscreen for a cell of {cell}");
+        // The strip is red, as with the whole cell; beside it nothing is painted.
+        let strip = pixmap.sample(120, 699);
+        assert!(strip.r > 200 && strip.g < 50 && strip.b < 50 && strip.a == 255, "{strip:?}");
+        let beside = pixmap.sample(120, 650);
+        assert_eq!(beside.a, 0, "{beside:?}");
+    }
+}
+
 /// PdfCraft patch (#3296): a mesh shading paints its triangles alone (`EncodedShadingPattern::extent`),
 /// and one with no triangle on the canvas paints nothing.
 #[cfg(test)]

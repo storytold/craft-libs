@@ -881,8 +881,12 @@ pub(crate) struct Renderer {
 /// cell is 3.5 MB) drew and kept a cell per fill, which ran out of memory; the fills now share
 /// one. A handful of entries covers a run of fills with one pattern, and bounds what the cache
 /// keeps besides what the scene holds anyway.
+///
+/// PdfCraft patch (31): the second list holds the patterns whose cell was drawn cropped to one
+/// fill (see [`one_cell_crop`]), so that a pattern filled again gets the whole cell, which is
+/// drawn once and shared.
 #[derive(Default)]
-struct TilingCells(Vec<(TilingCellKey, Arc<Pixmap>)>);
+struct TilingCells(Vec<(TilingCellKey, Arc<Pixmap>)>, Vec<u64>);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct TilingCellKey {
@@ -892,10 +896,26 @@ struct TilingCellKey {
     is_stroke: bool,
     pixels: (u16, u16),
     scale: (u64, u64),
+    /// The first pixel of the cell that a cropped cell starts at (patch (31)); `(0, 0)` otherwise.
+    crop: (u32, u32),
 }
 
 impl TilingCells {
     const MAX_ENTRIES: usize = 8;
+    /// The patterns remembered by [`Self::first_crop`].
+    const MAX_CROPPED: usize = 64;
+
+    /// Whether `instance` has not been drawn cropped before; remembers that it now has.
+    fn first_crop(&mut self, instance: u64) -> bool {
+        if self.1.contains(&instance) {
+            return false;
+        }
+        if self.1.len() >= Self::MAX_CROPPED {
+            self.1.remove(0);
+        }
+        self.1.push(instance);
+        true
+    }
 
     fn get(&self, key: &TilingCellKey) -> Option<Arc<Pixmap>> {
         self.0.iter().find(|(k, _)| k == key).map(|(_, cell)| cell.clone())
@@ -2035,6 +2055,50 @@ impl Renderer {
                                 is_stroke,
                                 pixels: (pix_width, pix_height),
                                 scale: (u64::from(xs.to_bits()), u64::from(ys.to_bits())),
+                                crop: (0, 0),
+                            });
+                            let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
+                            paint_transform = path_transform.inverse() * t.matrix * initial_transform.inverse();
+                            let image = Image {
+                                image: ImageSource::Pixmap(pix),
+                                sampler: ImageSampler {
+                                    x_extend: peniko::Extend::Pad,
+                                    y_extend: peniko::Extend::Pad,
+                                    quality: ImageQuality::Medium,
+                                    alpha: 1.0,
+                                },
+                            };
+                            self.ctx.set_paint_transform(paint_transform);
+                            self.ctx.set_paint(PaintType::Image(image));
+                            return PaintSetup::Clip(clip_path);
+                        }
+                        // PdfCraft patch (31): a large cell that the fill meets only a small part of
+                        // is drawn for that part alone, bordered like the one-cell case above. Chrome
+                        // underlines a link with a 1-point strip filled through a page-sized pattern
+                        // cell holding a function-based shading, so a page with 18 links evaluated
+                        // the shading's function 18 times over the whole page (13 s). A pattern
+                        // filled again falls back to the whole cell, which is drawn once and shared.
+                        if usable_cell_scale(xs, ys)
+                            && let Some(crop) = one_cell_crop(&t.matrix, path_transform, path, reach, bbox, t.x_step, t.y_step, xs, ys)
+                            && (!t.is_coloured() || self.tiling_cells.first_crop(t.instance()))
+                        {
+                            const BORDER: f64 = 1.0;
+                            // At most the cell's pixels, which `max_x_scale` keeps within MAX_PIXMAP_SIZE.
+                            let pix_width = (crop.width as u16).saturating_add(2);
+                            let pix_height = (crop.height as u16).saturating_add(2);
+                            let initial_transform = Affine::translate((BORDER, BORDER))
+                                * Affine::scale_non_uniform(xs as f64, ys as f64)
+                                * Affine::translate((
+                                    -bbox.x0 - f64::from(crop.x) / f64::from(xs),
+                                    -bbox.y0 - f64::from(crop.y) / f64::from(ys),
+                                ));
+                            let key = t.is_coloured().then(|| TilingCellKey {
+                                instance: t.instance(),
+                                one_cell: true,
+                                is_stroke,
+                                pixels: (pix_width, pix_height),
+                                scale: (u64::from(xs.to_bits()), u64::from(ys.to_bits())),
+                                crop: (crop.x, crop.y),
                             });
                             let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
                             paint_transform = path_transform.inverse() * t.matrix * initial_transform.inverse();
@@ -2078,6 +2142,7 @@ impl Renderer {
                             is_stroke,
                             pixels: (pix_width, pix_height),
                             scale: (xs.to_bits(), ys.to_bits()),
+                            crop: (0, 0),
                         });
                         let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
 
@@ -3146,6 +3211,62 @@ pub(crate) fn shows_one_cell(matrix: &Affine, path_transform: &Affine, path: &Be
         && bounds.y0 > bbox.y1 - sy
 }
 
+/// The pixels of a tiling cell (at the cell's scale, from its `/BBox` corner) that
+/// [`one_cell_crop`] keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CellCrop {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+/// A cell smaller than this many pixels is drawn whole: cropping it saves little.
+const MIN_CROPPED_CELL_PIXELS: f64 = 512.0 * 512.0;
+
+/// PdfCraft patch (31): the part of a tiling cell that a fill can show, for a cell of
+/// `/BBox` `bbox` drawn at scale `(xs, ys)` pixels per pattern unit. `None` unless the fill meets
+/// only the first cell ([`shows_one_cell`]), the cell is large (see [`MIN_CROPPED_CELL_PIXELS`])
+/// and the part is at most a quarter of it. The part is whole cell pixels with a pixel of margin,
+/// so the cropped cell holds the same pixels as the whole one.
+pub(crate) fn one_cell_crop(
+    matrix: &Affine,
+    path_transform: &Affine,
+    path: &BezPath,
+    reach: f64,
+    bbox: Rect,
+    x_step: f32,
+    y_step: f32,
+    xs: f32,
+    ys: f32,
+) -> Option<CellCrop> {
+    if !shows_one_cell(matrix, path_transform, path, reach, bbox, x_step, y_step) {
+        return None;
+    }
+    let device = (*path_transform * path.clone()).bounding_box().inflate(reach, reach);
+    let bounds = (matrix.inverse() * device.to_path(0.1)).bounding_box();
+    let (xs, ys) = (f64::from(xs), f64::from(ys));
+    let (cell_w, cell_h) = ((bbox.width() * xs).ceil(), (bbox.height() * ys).ceil());
+    let span = |from: f64, to: f64, origin: f64, scale: f64, cell: f64| {
+        let first = (((from - origin) * scale).floor() - 1.0).max(0.0).min(cell);
+        let end = (((to - origin) * scale).ceil() + 1.0).max(0.0).min(cell);
+        (first, end - first)
+    };
+    let (x, width) = span(bounds.x0, bounds.x1, bbox.x0, xs, cell_w);
+    let (y, height) = span(bounds.y0, bounds.y1, bbox.y0, ys, cell_h);
+    let finite = [x, y, width, height, cell_w, cell_h].iter().all(|v| v.is_finite());
+    // Nothing of the cell is reached: the whole-cell path draws nothing visible there either.
+    if !finite || width < 1.0 || height < 1.0 {
+        return None;
+    }
+    (cell_w * cell_h >= MIN_CROPPED_CELL_PIXELS && width * height * 4.0 <= cell_w * cell_h).then_some(CellCrop {
+        x: x as u32,
+        y: y as u32,
+        width: width as u32,
+        height: height as u32,
+    })
+}
+
 /// PdfCraft patch: the scale for a tiling cell, lowered so that the cell pixmap (`|step| ×
 /// scale` pixels a side) stays within `max_pixels`. Geometry is unchanged (the pattern transform
 /// is derived from the scale); an over-large step only renders at lower resolution.
@@ -3179,6 +3300,62 @@ pub fn tiling_cell_pixels(scale: f32, step: f32, max_pixels: f32) -> (u16, f64) 
     // `pixels` is in 1..=u16::MAX, so the cast is exact; `step` is positive and finite here
     // (`exact` is), so the division is too.
     (pixels as u16, pixels / step)
+}
+
+#[cfg(test)]
+mod one_cell_crop_tests {
+    use super::*;
+
+    const BBOX: Rect = Rect::new(0.0, 56.0, 595.0, 785.0);
+
+    fn crop(matrix: Affine, device: Rect, bbox: Rect, scale: f32) -> Option<CellCrop> {
+        one_cell_crop(&matrix, &Affine::IDENTITY, &device.to_path(0.1), 0.0, bbox, 597.0, 731.0, scale, scale)
+    }
+
+    /// Chrome's link underline: a 38 × 1 point strip through a page-sized cell keeps the pixels
+    /// around the strip, a pixel more on each side.
+    #[test]
+    fn a_thin_fill_in_a_page_sized_cell_keeps_only_its_pixels() {
+        let strip = Rect::new(334.0, 1278.0, 410.0, 1280.0);
+        let got = crop(Affine::scale(2.0), strip, BBOX, 2.0).expect("a 76 × 2 pixel strip in a 1190 × 1458 cell is cropped");
+        // The strip lies at cell pixels x 334..410, y 1166..1168 (the cell starts at y = 56 points).
+        assert!(got.x < 334 && got.x + got.width > 410, "{got:?}");
+        assert!(got.y < 1166 && got.y + got.height > 1168, "{got:?}");
+        assert!(got.width <= 80 && got.height <= 6, "{got:?}");
+    }
+
+    #[test]
+    fn a_fill_covering_the_cell_is_not_cropped() {
+        let all = Rect::new(0.0, 112.0, 1190.0, 1570.0);
+        assert_eq!(crop(Affine::scale(2.0), all, BBOX, 2.0), None);
+    }
+
+    #[test]
+    fn a_small_cell_is_drawn_whole() {
+        let tile = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let strip = Rect::new(2.0, 2.0, 4.0, 3.0);
+        assert_eq!(one_cell_crop(&Affine::IDENTITY, &Affine::IDENTITY, &strip.to_path(0.1), 0.0, tile, 20.0, 20.0, 1.0, 1.0), None);
+    }
+
+    /// A fill that reaches the next cell shows more than the first one.
+    #[test]
+    fn a_fill_reaching_another_cell_is_not_cropped() {
+        let wide = Rect::new(0.0, 112.0, 3000.0, 114.0);
+        assert_eq!(crop(Affine::scale(2.0), wide, BBOX, 2.0), None);
+    }
+
+    #[test]
+    fn a_matrix_that_cannot_be_inverted_is_not_cropped() {
+        let strip = Rect::new(334.0, 1278.0, 410.0, 1280.0);
+        assert_eq!(crop(Affine::scale_non_uniform(2.0, 0.0), strip, BBOX, 2.0), None);
+    }
+
+    /// A fill outside the cell's `/BBox` shows nothing of it.
+    #[test]
+    fn a_fill_outside_the_cell_is_not_cropped() {
+        let away = Rect::new(-500.0, 1278.0, -400.0, 1280.0);
+        assert_eq!(crop(Affine::scale(2.0), away, BBOX, 2.0), None);
+    }
 }
 
 #[cfg(test)]
