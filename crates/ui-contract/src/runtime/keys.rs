@@ -23,8 +23,10 @@ pub use claims::claim;
 #[doc(hidden)]
 pub use claims::take_claimed;
 #[doc(hidden)]
+pub use claims::take_first_claimed;
+#[doc(hidden)]
 pub use claims::{claim_alt_tap, take_alt_tap};
-pub(crate) use claims::{fire_claimed, hold_escape, take_first_claimed};
+pub(crate) use claims::{fire_claimed, hold_escape};
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 pub use input::held;
