@@ -366,7 +366,7 @@ impl StackDialog for HostedLayerStyle {
             .show(ui, |ui, cx, draft| {
                 if let Some(canvas) = *canvas {
                     cx.keep_view_open(canvas);
-                    if draft.drags_shadow() || draft.drags_gradient() {
+                    if draft.drags_on_canvas() {
                         cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                     }
                 }

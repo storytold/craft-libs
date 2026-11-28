@@ -8,8 +8,7 @@ use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
 
-/// The value one step from a value in a direction: the up arrow, the wheel and the Page keys of a field whose values
-/// lie on a ladder instead of a grid (`NumberField::stepper`). The direction is `1` up and `-1` down.
+/// A custom step for a number field or slider whose values lie on a ladder instead of a grid.
 pub struct NumberStepper<'a>(Box<dyn Fn(f64, i32, f64) -> f64 + 'a>);
 
 impl<'a> NumberStepper<'a> {
@@ -19,7 +18,7 @@ impl<'a> NumberStepper<'a> {
         NumberStepper(Box::new(next))
     }
 
-    pub(super) fn next(&self, from: f64, direction: i32, scale: f64) -> f64 {
+    pub(crate) fn next(&self, from: f64, direction: i32, scale: f64) -> f64 {
         (self.0)(from, direction, scale)
     }
 }

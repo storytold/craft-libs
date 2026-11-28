@@ -47,19 +47,22 @@ fn window(width: f32, pixels_per_point: f32) -> Fixture {
     let mut fixture = Fixture::new(move |ui| {
         let bar = Rc::clone(&bar);
         AppShell::new(WindowKey::main())
-            .title_bar(move |ui, _, _: &mut ()| {
-                let bar = Rc::clone(&bar);
-                let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-                TitleBar::new().frame(Frame::Integrated(Captions { family: CaptionFamily::Windows, layout })).show_titled(
-                    ui,
-                    Title::new(DOCUMENT),
-                    move |ui, _| {
-                        Picture::new("", 7, &brand).show(ui);
-                        MenuBarUi::new(&bar).target(Target::Windows).mnemonics(&PREFERRED).help_search(true).show(ui);
-                    },
-                    |_, _| {},
-                );
-            })
+            .title_bar(
+                |_| None,
+                move |ui, _, _: &mut ()| {
+                    let bar = Rc::clone(&bar);
+                    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+                    TitleBar::new().frame(Frame::Integrated(Captions { family: CaptionFamily::Windows, layout })).show_titled(
+                        ui,
+                        Title::new(DOCUMENT),
+                        move |ui, _| {
+                            Picture::new("", 7, &brand).show(ui);
+                            MenuBarUi::new(&bar).target(Target::Windows).mnemonics(&PREFERRED).help_search(true).show(ui);
+                        },
+                        |_, _| {},
+                    );
+                },
+            )
             .body(|ui, _, _| {
                 ui.label("Document");
             })

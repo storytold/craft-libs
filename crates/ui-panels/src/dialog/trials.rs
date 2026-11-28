@@ -598,7 +598,8 @@ fn a_dialog_moves_by_the_padding_around_its_title() {
     };
     let start = dialog(&fixture);
     let line = title(&fixture);
-    assert!(line.top() > start.top(), "the title lies inside the frame's padding: {line:?} in {start:?}");
+    let padding = crate::runtime::env::Env::of_root(fixture.ctx()).tokens.space.pad.dialog;
+    assert!(line.top() - start.top() >= padding, "the title lies inside the frame's padding: {line:?} in {start:?}");
     let points = [
         ("above the title", Pos2::new(line.center().x, (start.top() + line.top()) / 2.0)),
         ("before the title", Pos2::new((start.left() + line.left()) / 2.0, line.center().y)),

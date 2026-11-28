@@ -217,6 +217,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   averages the part of the source it covers. The crate also has the render passes for a caller's
   own encoder, read-back layouts with unpacking to a packed frame, and the same conversion on the
   CPU. Encoders and scopes stay in each app.
+- [`craft-gpu-device`](crates/gpu-device/README.md): choosing and opening a wgpu device: Auto,
+  low power, a named adapter that survives a reordered list and a driver update, or software;
+  corrections for drivers that crash; the next adapter and then a software one when a device fails
+  to open; a capability report; device-loss and error recording without panics; and what to reopen
+  after a loss. Settings pages and the window stay in each app.
 - [`craft-gridcraft-format`](crates/gridcraft-format/README.md): GridCraft's native JSON workbook
   (`.json`, `.scjson`): the extensions, the reader, the pretty writer, and newer entries kept
   unread and written back into a list. The workbook model and what follows a read stay in GridCraft.
@@ -383,8 +388,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   with a password. Salvages damaged files. Bounded and panic-free on hostile input. What an item
   means stays in each app.
 
-- [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
-  app menu. Unsaved-document decisions and save prompts stay in each app.
+- [`craft-quit`](crates/quit/README.md): native macOS quit, a window close held for unsaved
+  documents, the Quit menu item id and the unsaved-changes question one document at a time
+  (`CloseGuard`). The prompt and the saving stay in each app.
 - [`craft-rtf`](crates/rtf/README.md): Rich Text Format: a tokenizer, text decoding in the file's code pages
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer
   for a small neutral model (paragraphs, character formatting, outline levels, tables).
@@ -421,7 +427,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
   replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
   copies of a valid input, and fails the test with the case that panicked or did not finish. Its `rng`
-  module holds two seeded generators for repeatable test input. Not published.
+  module holds two seeded generators for repeatable test input. Its `skip` module prints a `SKIPPED:`
+  line when a test lacks a program, a corpus or the craft-fonts faces, or fails the test when the
+  variable the caller names is `1`. Any other value of that variable except empty fails the test as a
+  configuration error. Its `corpus` module (the `corpus` feature) checks a corpus folder against a
+  pinned SHA-256 list. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each). With `ui`, the canvas text editor, Character and

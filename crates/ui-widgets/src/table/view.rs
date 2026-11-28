@@ -211,6 +211,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
         &self.items
     }
 
+    fn shows_row_focus(&self) -> bool {
+        true
+    }
+
     fn selection(&mut self) -> Option<BindMut<'_, Selection<K>>> {
         self.selection.as_mut().map(Bind::reborrow)
     }

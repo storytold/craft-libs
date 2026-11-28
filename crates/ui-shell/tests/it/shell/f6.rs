@@ -1,4 +1,5 @@
-//! F6 through the app shell: the pane move visits the shell's slots in their order, then the body, then wraps.
+//! F6 through the app shell: the pane move visits the shell's slots in their order, then the body, then wraps, with the
+//! slots replaying their last run.
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::Show as _;
@@ -14,8 +15,8 @@ use std::rc::Rc;
 /// The key the trial gives the body pane beside the slot keys.
 const BODY: &str = "body";
 
-/// What the shell showed in its last pass: the id of the one button in each pane, and the slot keys in the order the
-/// shell laid them out.
+/// What the shell showed: the id of the one button in each pane, as the pane's last run showed it, and the slot keys in
+/// the order the shell laid them out in its last pass.
 #[derive(Default)]
 struct Seen {
     buttons: Vec<(&'static str, Id)>,
@@ -30,8 +31,8 @@ impl Seen {
     }
 }
 
-/// A shell with a slot at every edge, added out of the shell's order (end before start, a bottom slot before a top
-/// one), each holding one button, and a body holding one button.
+/// A shell with a versioned slot at every edge, added out of the shell's order (end before start, a bottom slot before
+/// a top one), each holding one button, and a body holding one button.
 fn shell(seen: &Rc<RefCell<Seen>>) -> impl FnMut(&mut Ui) {
     let seen = Rc::clone(seen);
     move |ui: &mut Ui| {
@@ -41,14 +42,18 @@ fn shell(seen: &Rc<RefCell<Seen>>) -> impl FnMut(&mut Ui) {
             buttons.borrow_mut().push((key, id));
         };
         let shown = AppShell::new(WindowKey::main())
-            .end(Slot::new("inspector"), |ui, _, _: &mut ()| button(ui, "inspector"))
-            .status(true, |ui, _, _| button(ui, "status"))
-            .start(Slot::new("tools"), |ui, _, _| button(ui, "tools"))
-            .options_bar(true, |ui, _, _| button(ui, "options"))
+            .end(Slot::new("inspector"), |_| Some(0), |ui, _, _: &mut ()| button(ui, "inspector"))
+            .status(true, |_| Some(0), |ui, _, _| button(ui, "status"))
+            .start(Slot::new("tools"), |_| Some(0), |ui, _, _| button(ui, "tools"))
+            .options_bar(true, |_| Some(0), |ui, _, _| button(ui, "options"))
             .body(|ui, _, _| button(ui, BODY))
             .show(ui, &mut ());
         let mut seen = seen.borrow_mut();
-        seen.buttons = buttons.into_inner();
+        // A replayed slot shows the button of its last run, with that run's id.
+        for (key, id) in buttons.into_inner() {
+            seen.buttons.retain(|(kept, _)| *kept != key);
+            seen.buttons.push((key, id));
+        }
         seen.order = shown.regions.slots.iter().map(|(key, _)| *key).collect();
     }
 }

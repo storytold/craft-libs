@@ -202,7 +202,7 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
         .zip(&labels.menus)
         .map(|((menu, title), level)| {
             // The commands the title holds, for the palette's callout; a built-in has no command of the app.
-            let held = menu.children.iter().flat_map(node_commands).filter(|command| Builtin::of(command).is_none()).collect();
+            let held = menu.children.iter().flat_map(node_commands).filter(|command| Builtin::of(command).is_none()).collect::<Vec<_>>();
             let row = MenuTitle::new(title.label.clone(), move |ui| shared.show(ui, &menu.children, level)).holds(held);
             match title.hidden {
                 Some(letter) => row.mnemonic(letter),
