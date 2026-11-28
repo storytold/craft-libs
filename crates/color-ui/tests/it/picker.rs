@@ -564,6 +564,34 @@ fn the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page() {
     assert_eq!(answered.as_deref(), Some("#0000ff"));
 }
 
+/// Asked to (WordCraft's custom colour field), the tabbed dialog's hex field also takes a colour written as `0x` digits,
+/// `rgb(r, g, b)` or three channel values; written text that is no colour leaves the colour as it was.
+#[trial]
+fn the_hex_field_takes_written_colours_when_the_host_asks() {
+    let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&dialogs);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(vec2(900.0, 700.0));
+    fixture.host(std::sync::Arc::new(Host::builder(AppInfo { id: "picker-test", name: "Picker test", version: "0" }).build()));
+    let colour = |hex: &str| Srgba::from_hex(hex).expect("a colour");
+    dialogs.borrow_mut().open(
+        ColorPickerDialog::new("fill", "Fill", colour("#123456"))
+            .layout(ColorPickerDialogLayout::Tabbed)
+            .tab(ColorPickerTab::Custom)
+            .web_colors_remembered(false)
+            .hex_notations(true),
+    );
+    fixture.idle(6);
+    for (typed, expected) in [("0xFF8800", "#ff8800"), ("rgb(12, 34, 56)", "#0c2238"), ("336699", "#336699"), ("12, 34, 56", "#0c2238")] {
+        type_into(&mut fixture, "Hex color", typed);
+        assert_eq!(dialog_color(&dialogs).as_deref(), Some(expected), "{typed} is the colour");
+    }
+    type_into(&mut fixture, "Hex color", "rgb(1, 2)");
+    assert_eq!(dialog_color(&dialogs).as_deref(), Some("#0c2238"), "two channel values are no colour");
+    type_into(&mut fixture, "Hex color", "12.5, 34, 56");
+    assert_eq!(dialog_color(&dialogs).as_deref(), Some("#0c2238"), "a channel value with a decimal point is no colour");
+}
+
 /// The Full dialog opens with its hex field focused and selected; digits typed there and Enter commit the colour and
 /// confirm the dialog, as in the reference image editor's Color Picker (the tabbed Colors dialog keeps Enter in the
 /// field instead).

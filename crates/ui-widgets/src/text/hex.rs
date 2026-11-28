@@ -18,7 +18,8 @@ use std::borrow::Cow;
 ///
 /// Typed text reads with or without a leading `#`, in either case: three digits per channel count (`F80` is #FF8800
 /// with one digit), and with `alpha` four. A colour typed without alpha digits keeps the alpha it had when editing
-/// began. A draft applies as soon as it is a colour.
+/// began. A draft applies as soon as it is a colour. With [`notations`](Self::notations) it also reads the other common
+/// ways of writing a colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct HexCodec {
@@ -26,11 +27,13 @@ pub struct HexCodec {
     digits: usize,
     /// Whether the alpha digits are shown and read.
     alpha: bool,
+    /// Whether text may also be `0x` digits, `rgb(r, g, b)` or three channel values.
+    notations: bool,
 }
 
 impl Default for HexCodec {
     fn default() -> Self {
-        HexCodec { digits: 2, alpha: false }
+        HexCodec { digits: 2, alpha: false, notations: false }
     }
 }
 
@@ -47,15 +50,40 @@ impl HexCodec {
         self
     }
 
+    /// Whether typed text may also be a colour written another common way: hex digits after `0x`, `rgb(r, g, b)`, or three
+    /// channel values 0 to 255 separated by commas or spaces (`12, 34, 56`). Off by default. A colour written with channel
+    /// values keeps the alpha it had and applies on commit, as a shorthand does.
+    pub fn notations(mut self, on: bool) -> Self {
+        self.notations = on;
+        self
+    }
+
     /// The channels the text has: three, or four with the alpha.
     fn channels(&self) -> usize {
         if self.alpha { 4 } else { 3 }
     }
 
-    /// The digits of `text`: trimmed and less one `#`.
-    fn digits_of(text: &str) -> &str {
+    /// The digits of `text`: trimmed and less one `#`, and with `notations` less one `0x`.
+    fn digits_of<'t>(&self, text: &'t str) -> &'t str {
         let text = text.trim();
-        text.strip_prefix('#').unwrap_or(text)
+        let text = text.strip_prefix('#').unwrap_or(text);
+        match self.notations {
+            true => text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")).unwrap_or(text),
+            false => text,
+        }
+    }
+
+    /// With `notations`, the channels of a colour written as `rgb(r, g, b)` or as three values 0 to 255 separated by
+    /// commas or spaces.
+    fn written(&self, text: &str) -> Option<[u8; 3]> {
+        if !self.notations {
+            return None;
+        }
+        let lower = text.trim().to_ascii_lowercase();
+        let inner = lower.strip_prefix("rgb").map_or(lower.as_str(), |rest| rest.trim().trim_start_matches('(').trim_end_matches(')'));
+        let parts: Vec<&str> = inner.split(|c: char| c == ',' || c.is_whitespace()).filter(|part| !part.is_empty()).collect();
+        let [r, g, b] = parts.as_slice() else { return None };
+        Some([r.parse().ok()?, g.parse().ok()?, b.parse().ok()?])
     }
 
     /// Whether `digits` are the shorthand of a two-digit codec: one digit a channel, each read doubled.
@@ -76,9 +104,10 @@ impl Codec for HexCodec {
     }
 
     fn parse(&self, text: &str, start: &Rgba) -> Result<Rgba, NotAValue> {
-        let digits = Self::digits_of(text);
+        let digits = self.digits_of(text);
         if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(NotAValue);
+            let [.., alpha] = start.0;
+            return self.written(text).map(|[r, g, b]| Rgba([r, g, b, alpha])).ok_or(NotAValue);
         }
         let doubled: String;
         let digits = if self.is_shorthand(digits) {
@@ -104,13 +133,17 @@ impl Codec for HexCodec {
         }
     }
 
-    /// A shorthand's digits are the start of a full colour (`336` of `336699`): they apply on commit only.
+    /// A shorthand's digits are the start of a full colour (`336` of `336699`): they apply on commit only, as channel
+    /// values do (`12, 34, 5` of `12, 34, 56`).
     fn applies_as_typed(&self, text: &str) -> bool {
-        !self.is_shorthand(Self::digits_of(text))
+        let digits = self.digits_of(text);
+        digits.bytes().all(|byte| byte.is_ascii_hexdigit()) && !self.is_shorthand(digits)
     }
 
     fn filter(&self, c: char) -> bool {
-        c == '#' || c.is_ascii_hexdigit()
+        c == '#'
+            || c.is_ascii_hexdigit()
+            || (self.notations && matches!(c, 'x' | 'X' | 'r' | 'R' | 'g' | 'G' | '(' | ')' | ',' | ' ' | '.' | '-' | '+'))
     }
 
     fn caret_on_focus(&self, _text: &str) -> Caret {
@@ -160,6 +193,14 @@ impl<'a> TextField<'a, HexCodec> {
     #[must_use]
     pub fn alpha(mut self, on: bool) -> Self {
         self.codec = self.codec.alpha(on);
+        self
+    }
+
+    /// Whether the field also takes a colour written as `0x` digits, `rgb(r, g, b)` or three channel values; off by
+    /// default ([`HexCodec::notations`]).
+    #[must_use]
+    pub fn notations(mut self, on: bool) -> Self {
+        self.codec = self.codec.notations(on);
         self
     }
 }

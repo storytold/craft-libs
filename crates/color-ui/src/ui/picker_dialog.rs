@@ -264,6 +264,8 @@ pub struct ColorPickerDialog {
     /// The request asked to open on the Color Swatches view ([`ColorRequest::on_swatches`]); it wins over the
     /// remembered view, once.
     on_swatches: bool,
+    /// Whether the hex fields also take `0x` digits, `rgb(r, g, b)` and three channel values.
+    hex_notations: bool,
 }
 
 /// What the tabbed body shows besides the memory and the colour it edits.
@@ -273,6 +275,7 @@ struct TabbedBody<'a> {
     words: &'a ColorPickerDialogWords,
     standard: Option<&'a StandardColors>,
     compare: Option<Mixed<PickedColor>>,
+    hex_notations: bool,
 }
 
 /// The built-in models `on` takes, the host's working RGB in place of the built-in RGB.
@@ -348,7 +351,8 @@ impl TabbedBody<'_> {
         let mut picker = ColorPicker::new(self.title.clone(), Bind::bound_mixed(held))
             .layout(ColorPickerLayout::Compact)
             .models(models)
-            .shown_model(Bind::bound(&mut model));
+            .shown_model(Bind::bound(&mut model))
+            .hex_notations(self.hex_notations);
         if let Some(compare) = self.compare {
             picker = picker.compare(compare);
         }
@@ -416,6 +420,7 @@ impl ColorPickerDialog {
             standard: None,
             tab: None,
             on_swatches: false,
+            hex_notations: false,
         }
     }
 
@@ -511,6 +516,14 @@ impl ColorPickerDialog {
     #[must_use]
     pub fn working_rgb(mut self, model: impl ColorModel + Send + Sync + 'static) -> ColorPickerDialog {
         self.working_rgb = Some(Box::new(model));
+        self
+    }
+
+    /// Whether the hex fields also take a colour written as `0x` digits, `rgb(r, g, b)` or three channel values, as
+    /// WordCraft's custom colour field did; off by default.
+    #[must_use]
+    pub fn hex_notations(mut self, on: bool) -> ColorPickerDialog {
+        self.hex_notations = on;
         self
     }
 
@@ -750,6 +763,7 @@ impl StackDialog for ColorPickerDialog {
         let arm = self.sampling.then_some(self.canvas).flatten();
         let keep_open = self.canvas;
         let screen = self.eyedropper && full && env.view().shell().caps.contains(Caps::SCREEN_CAPTURE);
+        let hex_notations = self.hex_notations;
         // The Full picker keeps a cell for the buttons; the tabbed body has none, so they stand in the side column, as in
         // Word's Colors dialog.
         let place = if full { ButtonPlace::Body } else { ButtonPlace::Side };
@@ -776,7 +790,8 @@ impl StackDialog for ColorPickerDialog {
                     cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                 }
                 if *layout == ColorPickerDialogLayout::Tabbed {
-                    let body = TabbedBody { title: &title, working_rgb, words: &words, standard: standard.as_ref(), compare: compare_with };
+                    let body =
+                        TabbedBody { title: &title, working_rgb, words: &words, standard: standard.as_ref(), compare: compare_with, hex_notations };
                     body.show(ui, &mut *memory, &mut held);
                     return;
                 }
@@ -808,7 +823,8 @@ impl StackDialog for ColorPickerDialog {
                     .web_colors(Bind::bound(&mut memory.web_colors))
                     .warnings(warnings)
                     .eyedropper(screen)
-                    .eyedropper_busy(busy);
+                    .eyedropper_busy(busy)
+                    .hex_notations(hex_notations);
                 if let Some(sampled) = sampled {
                     picker = picker.sampled(sampled);
                 }
