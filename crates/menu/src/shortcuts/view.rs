@@ -23,6 +23,7 @@ use craft_ui::contract::{BodyCx, CollectionEvent, Props as _, Scroll, Show as _,
 use craft_ui::display::Icon;
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::primitives::IconSpec;
+use craft_ui::runtime::env::Label;
 use craft_ui::runtime::motion::Animate as _;
 use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use egui::Ui;
@@ -111,10 +112,10 @@ impl DisplayOrder<usize> for Titles<'_> {
 
 impl ItemSource<usize> for Titles<'_> {}
 
-/// A strip of text tabs over `titles` with `shown` selected; the tab picked this pass.
-pub(super) fn tab_strip(ui: &mut Ui, name: &'static str, titles: &[String], shown: usize) -> Option<usize> {
+/// A strip of text tabs named `name`, keyed by `id`, over `titles` with `shown` selected; the tab picked this pass.
+pub(super) fn tab_strip(ui: &mut Ui, id: &'static str, name: impl Into<Label>, titles: &[String], shown: usize) -> Option<usize> {
     let strip = TabStrip::new(name)
-        .id_salt(name)
+        .id_salt(id)
         .kind(TabKind::Text)
         .shown(shown)
         .show_items(ui, &Titles(titles), &mut |key, _| Tab::new(titles[*key].clone()).id_salt(("tab", *key)));
@@ -139,7 +140,13 @@ fn app_tabs(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> Option<u
         state.set_tab(None);
     }
     let shown = current.map_or(0, |i| i + 1);
-    let picked = Stack::new().fill_width().enabled(!state.modal()).show(ui, |ui, _| tab_strip(ui, "shortcuts.tab", &titles, shown)).inner.flatten();
+    let name = env.title();
+    let picked = Stack::new()
+        .fill_width()
+        .enabled(!state.modal())
+        .show(ui, |ui, _| tab_strip(ui, "shortcuts.tab", name.clone(), &titles, shown))
+        .inner
+        .flatten();
     let shown = match picked {
         Some(i) => {
             state.set_tab(i.checked_sub(1).and_then(|k| ids.get(k).copied()));

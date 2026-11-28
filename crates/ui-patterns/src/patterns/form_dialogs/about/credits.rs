@@ -1,5 +1,5 @@
-//! The credits data: contributors, the credited AI models and the About tab's contents. The app bakes the tables at
-//! build time and passes them in; nothing here carries interface text.
+//! The credits data: contributors, the credited AI models, the About tab's contents and the third-party licenses. The
+//! app bakes the tables at build time and passes them in; nothing here carries interface text.
 
 use crate::runtime::env::Label;
 use std::borrow::Cow;
@@ -148,6 +148,23 @@ impl AboutInfo {
     pub fn icon(mut self, image: Arc<egui::ColorImage>) -> Self {
         self.icon = Some(image);
         self
+    }
+}
+
+/// A license on the Licenses tab: the name the tab lists it by and its full text.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AboutLicense {
+    /// The name in the tab's license picker, such as "Apache License 2.0" or a bundled font's name.
+    pub name: Label,
+    /// The full text, shown as written in a monospace face.
+    pub text: Cow<'static, str>,
+}
+
+impl AboutLicense {
+    /// A license listed as `name` with its full `text`.
+    pub fn new(name: impl Into<Label>, text: impl Into<Cow<'static, str>>) -> Self {
+        AboutLicense { name: name.into(), text: text.into() }
     }
 }
 

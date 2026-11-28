@@ -15,6 +15,8 @@
 //! - A change of [`Bar::structure`] rebuilds every menu; a change of [`Bar::windows`] rebuilds only
 //!   the [`MenuKind::Windows`] menu, because AppKit adds its own items there. Anything else is
 //!   updated in place (label, enabled, checked).
+//! - When a rebuild fails, the menus stay as they were and [`NativeBar::failed`] reports it, so
+//!   the caller can apply the same bar again later.
 //! - While a menu is open ([`NativeBar::tracking`]) the caller waits to apply changes: replacing a
 //!   menu the platform is tracking can leave it stranded on screen.
 //! - Only items with a [`Shortcut`] become key equivalents; the caller decides which shortcuts
@@ -286,6 +288,12 @@ impl NativeBar {
     /// whether menus were rebuilt, in which case the ids of the items may have changed.
     pub fn apply(&mut self, bar: &Bar) -> bool {
         self.0.apply(bar)
+    }
+
+    /// Whether the last [`NativeBar::apply`] had to rebuild menus and could not. The menus stay as
+    /// they were, and applying the same bar again tries the rebuild again.
+    pub fn failed(&self) -> bool {
+        self.0.failed()
     }
 
     /// Whether one of the menus is open.

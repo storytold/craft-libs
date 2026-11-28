@@ -59,7 +59,7 @@ pub enum ChosenColor {
 pub struct ColorChoiceOutput {
     /// The choice's response.
     pub response: Response,
-    /// The row chosen this pass; the host stores it.
+    /// The row committed this pass; the host stores it. Navigating an open popup reports no choice.
     pub chosen: Option<ChosenColor>,
     /// "Select Custom Color…" was chosen, for this pass only: the app opens its colour picker from the request (key
     /// [`ColorChoice::CUSTOM_KEY`], the custom colour) and, on OK, stores the colour and chooses
@@ -151,7 +151,7 @@ impl<'a> ColorChoice<'a> {
         entries.push(Entry::separator());
         entries.push(Entry::new(Row::SelectCustom, words.select_custom.as_str().to_owned()));
         let shown = Select::new(self.label.clone(), Bind::given(row), &entries).enabled(self.enabled).show(ui);
-        let picked = shown.value().cloned();
+        let picked = shown.events.committed().cloned();
         let mut pick_color = None;
         let chosen = match picked {
             Some(Row::Named(id)) => Some(ChosenColor::Named(id)),

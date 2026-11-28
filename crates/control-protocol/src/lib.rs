@@ -1,12 +1,24 @@
 //! Authenticated JSON-lines request framing and dispatch for local control services.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 /// Whether a session token has the control protocol's 64 hexadecimal character form.
 pub fn valid_token(token: &str) -> bool {
     token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// A new session token that [`valid_token`] accepts: 32 bytes from the operating system's random
+/// source, as lowercase hexadecimal. `None` when the system cannot supply random bytes.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn new_token() -> Option<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Encode one client request, including its terminating newline.
@@ -103,9 +115,112 @@ pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usiz
 /// Serve requests from `read`, answering on `out`, until the peer closes, sends something that is
 /// not a request, or `handle` returns `None` (app gone). `handle` gets `(method, params)` and
 /// returns the reply object (the request's `id` is added here).
-pub fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: &str, max_line: usize, mut handle: impl FnMut(String, Value) -> Option<Value>) {
-    let mut reader = BufReader::new(read);
+pub fn serve_lines<R: Read, W: Write>(read: R, out: W, token: &str, max_line: usize, handle: impl FnMut(String, Value) -> Option<Value>) {
+    serve(BufReader::new(read), out, token, max_line, |_| Ok(()), |_| false, handle);
+}
+
+/// Serve one TCP connection as [`serve_lines`] does, but give the peer `first_request` from now
+/// to send its first authenticated request. Until then every read shares that one deadline, so
+/// blank lines or a line sent a byte at a time do not extend it; when it passes, the connection
+/// closes without a reply and nothing is dispatched. After the first authenticated request, each
+/// read waits at most `idle` (`None` waits without limit). A `first_request` too long for the
+/// clock to represent waits without limit. The connection is closed when this returns.
+///
+/// Returns an `InvalidInput` error, before reading anything, when `first_request` or `idle` is
+/// zero, and any error from setting the socket's read timeout.
+pub fn serve_tcp(
+    stream: TcpStream,
+    token: &str,
+    max_line: usize,
+    first_request: Duration,
+    idle: Option<Duration>,
+    handle: impl FnMut(String, Value) -> Option<Value>,
+) -> std::io::Result<()> {
+    if first_request.is_zero() || idle.is_some_and(|d| d.is_zero()) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "control wait times must be longer than zero"));
+    }
+    let deadline = Instant::now().checked_add(first_request);
+    if deadline.is_none() {
+        // No deadline to apply on each read: clear any read timeout the stream already has.
+        stream.set_read_timeout(None)?;
+    }
+    let timeout_error = Cell::new(None);
+    let input = FirstRequestDeadline { socket: &stream, deadline, timeout_error: &timeout_error };
+    serve(
+        BufReader::new(input),
+        &stream,
+        token,
+        max_line,
+        |input: &mut FirstRequestDeadline<'_>| input.admit(idle),
+        FirstRequestDeadline::expired,
+        handle,
+    );
+    timeout_error.take().map_or(Ok(()), Err)
+}
+
+/// A TCP connection's input whose reads share one deadline until the peer is admitted.
+struct FirstRequestDeadline<'a> {
+    socket: &'a TcpStream,
+    deadline: Option<Instant>,
+    /// The error from setting the socket's read timeout, which [`serve_tcp`] returns.
+    timeout_error: &'a Cell<Option<std::io::Error>>,
+}
+
+impl FirstRequestDeadline<'_> {
+    fn set_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.socket.set_read_timeout(timeout).map_err(|e| {
+            let kind = e.kind();
+            self.timeout_error.set(Some(e));
+            kind.into()
+        })
+    }
+
+    /// The peer sent an authenticated request: from now on each read waits at most `idle`. A
+    /// request admitted after the first-request deadline returns `TimedOut` instead, and the
+    /// deadline stays in place.
+    fn admit(&mut self, idle: Option<Duration>) -> std::io::Result<()> {
+        if self.expired() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.deadline = None;
+        self.set_timeout(idle)
+    }
+
+    /// Whether the first-request deadline has passed and no request was admitted before it.
+    fn expired(&self) -> bool {
+        self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
+    }
+}
+
+impl Read for FirstRequestDeadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(deadline) = self.deadline {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+            self.set_timeout(Some(left))?;
+        }
+        let mut socket = self.socket;
+        socket.read(buf)
+    }
+}
+
+/// The request loop of [`serve_lines`] and [`serve_tcp`]: `admit` runs once, on the input, after
+/// the first authenticated request and before it is dispatched; an error from it closes the
+/// connection. Before the first request is admitted, a rejection closes the connection without a
+/// reply when `expired` returns true for the input.
+fn serve<R: Read, W: Write>(
+    mut reader: BufReader<R>,
+    mut out: W,
+    token: &str,
+    max_line: usize,
+    mut admit: impl FnMut(&mut R) -> std::io::Result<()>,
+    expired: impl Fn(&R) -> bool,
+    mut handle: impl FnMut(String, Value) -> Option<Value>,
+) {
     let mut buf = Vec::new();
+    let mut admitted = false;
     loop {
         let reject = match read_bounded_line(&mut reader, &mut buf, max_line) {
             Ok(false) => return,
@@ -117,6 +232,12 @@ pub fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: &str, max_line
                 Line::Blank => continue,
                 Line::Reject(e) => e,
                 Line::Request { id, method, params } => {
+                    if !admitted {
+                        if admit(reader.get_mut()).is_err() {
+                            return;
+                        }
+                        admitted = true;
+                    }
                     let Some(mut r) = handle(method, params) else { return };
                     if let Some(o) = r.as_object_mut() {
                         o.insert("id".into(), id);
@@ -128,6 +249,9 @@ pub fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: &str, max_line
                 }
             },
         };
+        if !admitted && expired(reader.get_ref()) {
+            return;
+        }
         let _ = write_line(&mut out, &json!({"ok": false, "error": reject}));
         return;
     }
@@ -249,6 +373,19 @@ mod tests {
         assert!(!valid_token(&"g".repeat(64)));
     }
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new_tokens_are_valid_and_distinct() {
+        let first = new_token().unwrap();
+        let second = new_token().unwrap();
+        assert!(valid_token(&first));
+        assert!(valid_token(&second));
+        assert_ne!(first, second);
+        let input = request_line(1, Some(&first), "status", &json!({}));
+        let mut output = Vec::new();
+        serve_lines(input.as_bytes(), &mut output, &first, 4096, |_, _| Some(json!({"ok": true})));
+        assert_eq!(serde_json::from_slice::<Value>(&output).unwrap(), json!({"ok": true, "id": 1}));
+    }
+    #[test]
     fn authenticates_each_request_and_closes_after_failure() {
         let input =
             b"{\"id\":1,\"method\":\"first\",\"token\":\"secret\"}\n{\"id\":2,\"method\":\"second\"}\n{\"method\":\"third\",\"token\":\"secret\"}\n";
@@ -262,6 +399,115 @@ mod tests {
         let lines: Vec<Value> = std::str::from_utf8(&output).unwrap().lines().map(|s| serde_json::from_str(s).unwrap()).collect();
         assert_eq!(lines[0], json!({"ok": true, "id": 1}));
         assert_eq!(lines[1]["error"], "control authentication failed; closing the connection");
+    }
+    /// The serving thread: what `serve_tcp` returned and the methods it dispatched.
+    type Server = std::thread::JoinHandle<(std::io::Result<()>, Vec<String>)>;
+    /// A loopback connection whose client sent `input` before `serve_tcp` starts serving it on
+    /// another thread, so the server has read everything the client sends when a wait runs out.
+    fn tcp_session(input: &[u8], first_request: Duration, idle: Option<Duration>) -> (TcpStream, Server) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        // Guards the test against a server that never closes; the assertions do not depend on it.
+        client.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        client.write_all(input).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut calls = Vec::new();
+            let result = serve_tcp(stream, "secret", 1024, first_request, idle, |method, _| {
+                calls.push(method);
+                Some(json!({"ok": true}))
+            });
+            (result, calls)
+        });
+        (client, server)
+    }
+    #[test]
+    fn tcp_peer_without_a_request_loses_the_connection() {
+        let (mut client, server) = tcp_session(b"\n{\"method\":", Duration::from_millis(50), None);
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).expect("the server closes the connection");
+        assert!(rest.is_empty());
+        let (result, calls) = server.join().unwrap();
+        assert!(result.is_ok());
+        assert!(calls.is_empty());
+    }
+    #[test]
+    fn tcp_input_waiting_after_the_deadline_is_not_read() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.write_all(b"\n\n").unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let timeout_error = Cell::new(None);
+        let mut input = FirstRequestDeadline { socket: &stream, deadline: Some(Instant::now()), timeout_error: &timeout_error };
+        assert_eq!(input.read(&mut [0; 8]).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        assert!(timeout_error.take().is_none());
+    }
+    #[test]
+    fn tcp_request_read_after_the_deadline_is_not_admitted() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let timeout_error = Cell::new(None);
+        let mut input = FirstRequestDeadline { socket: &stream, deadline: Some(Instant::now()), timeout_error: &timeout_error };
+        assert_eq!(input.admit(None).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        assert!(input.deadline.is_some());
+        assert!(timeout_error.take().is_none());
+    }
+    #[test]
+    fn rejection_read_after_the_deadline_gets_no_reply() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let timeout_error = Cell::new(None);
+        let mut input = FirstRequestDeadline { socket: &stream, deadline: Some(Instant::now()), timeout_error: &timeout_error };
+        assert!(input.expired());
+        input.deadline = None;
+        assert!(!input.expired());
+        let long = format!("{}\n", "x".repeat(100));
+        for line in [&b"{broken}\n"[..], &b"{\"method\":\"x\",\"token\":\"wrong\"}\n"[..], long.as_bytes()] {
+            let mut out = Vec::new();
+            serve(BufReader::new(line), &mut out, "secret", 64, |_| Ok(()), |_| true, |_, _| panic!("must not dispatch"));
+            assert!(out.is_empty());
+        }
+    }
+    #[test]
+    fn tcp_peer_waits_idle_time_after_its_first_request() {
+        let input = b"{\"id\":1,\"method\":\"first\",\"token\":\"secret\"}\n";
+        let (mut client, server) = tcp_session(input, Duration::from_secs(600), Some(Duration::from_millis(50)));
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).expect("the server closes the idle connection");
+        assert_eq!(serde_json::from_slice::<Value>(&rest).unwrap(), json!({"ok": true, "id": 1}));
+        let (result, calls) = server.join().unwrap();
+        assert!(result.is_ok());
+        assert_eq!(calls, ["first"]);
+    }
+    #[test]
+    fn tcp_peer_sending_blank_lines_still_loses_the_connection_at_the_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let server =
+            std::thread::spawn(move || serve_tcp(stream, "secret", 1024, Duration::from_millis(200), None, |_, _| panic!("must not dispatch")));
+        // Every read finds a new line, so a deadline that restarted on each read would never expire.
+        // The loop ends when the server closes the connection; the guard only stops a hung test.
+        client.set_write_timeout(Some(Duration::from_secs(30))).unwrap();
+        let guard = Instant::now() + Duration::from_secs(30);
+        while client.write_all(b"\n").is_ok() {
+            assert!(Instant::now() < guard, "the server kept reading past the first-request deadline");
+            std::thread::yield_now();
+        }
+        assert!(Instant::now() < guard, "the server stopped reading but kept the connection open");
+        assert!(server.join().unwrap().is_ok());
+    }
+    #[test]
+    fn tcp_rejects_zero_wait_times() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        for (first, idle) in [(Duration::ZERO, None), (Duration::from_secs(1), Some(Duration::ZERO))] {
+            let err = serve_tcp(stream.try_clone().unwrap(), "secret", 1024, first, idle, |_, _| panic!("must not dispatch")).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        }
     }
     #[test]
     fn bounds_requests_and_preserves_last_unterminated_line() {

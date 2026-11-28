@@ -3,7 +3,7 @@ name: App updates
 on:
   workflow_dispatch:
   push:
-    branches: [main, next]
+    branches: [main]
     paths: ['crates/update/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'clippy.toml', '.github/workflows/update.yml']
   pull_request:
     paths: ['crates/update/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'clippy.toml', '.github/workflows/update.yml']

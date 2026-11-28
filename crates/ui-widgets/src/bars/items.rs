@@ -11,7 +11,7 @@ use crate::menu::{Menu, MenuItem};
 use crate::primitives::IconSpec;
 use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, GlyphRole, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, GlyphRole, StyleCx};
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
 use craft_behavior::{Axis, IconId, Metrics, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
 use craft_theme::Variant;
@@ -89,11 +89,13 @@ impl BarItem {
 
 /// The style of a bar item strip: the gap between items, the space around the rule of a section change and the
 /// space between the groups of a vertical strip.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct BarItemsStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// Between an item and the rule of a section change.
     joint: f32,
     /// The clear space of a section change, on both sides of its rule together.
@@ -305,6 +307,7 @@ impl Component for BarItems {
         let gap = cx.tokens.space.gap.inline;
         BarItemsStyle {
             metrics: Metrics::new().gap(gap),
+            focus: cx.focus_look(),
             joint: gap,
             section_gap: gap * 2.0,
             stack_gap: gap + cx.tokens.space.gap.stack,
