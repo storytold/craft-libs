@@ -20,7 +20,8 @@ use self::pager::wheel_turn;
 use self::pictures::{PageMetrics, PagePictures, page_stores, picture_options};
 use super::access::AccessDescriber;
 use crate::layout::{
-    Fit, LayoutOptions, PageDisplay, PageSpacing, PagedLayout, SCREEN_POINTS_PER_POINT, ViewDefaults, ZOOM_RANGE, fit_scale, place_pages, shown_row,
+    Fit, LayoutOptions, PageDisplay, PageSpacing, PagedLayout, SCREEN_POINTS_PER_POINT, ViewDefaults, ZOOM_RANGE, fit_scale, place_pages,
+    place_pages_on_sides, shown_row,
 };
 use craft_behavior::geometry::{SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
@@ -75,6 +76,14 @@ pub trait PageSource: ThumbSource<usize> {
     /// accessibility tree call it. 1-based number by default.
     fn page_label(&self, page: usize) -> String {
         (page + 1).to_string()
+    }
+
+    /// Whether page `page` is a right-hand page in print (in a left-to-right book, an odd page number), when the
+    /// source knows: [`PageDisplay::Columns`] with a cover puts it on that side of its spread
+    /// ([`place_pages_on_sides`](crate::place_pages_on_sides)). `None` by default: by its place, the first page alone
+    /// on the right, then pairs.
+    fn right_hand_page(&self, _page: usize) -> Option<bool> {
+        None
     }
 }
 
@@ -707,6 +716,12 @@ impl<'a> PageView<'a> {
         };
         let count = source.page_count();
         let sizes: Vec<Size> = (0..count).map(|page| source.page_size(page)).collect();
+        // A book's sides, only where the layout reads them.
+        let right: Vec<bool> = if state.cover && state.display == PageDisplay::Columns {
+            (0..count).map(|page| source.right_hand_page(page).unwrap_or(page % 2 == 0)).collect()
+        } else {
+            Vec::new()
+        };
         // With rulers the canvas shows inside the strips, so its view lies inside them. Its body is clipped to its view
         // (`ContainerProps::scroll_owner`), so the app's body runs with the clip opened over the strips again, where
         // its `PageRulers` show. The canvas's own `with_rulers` would show the general rulers there instead.
@@ -724,7 +739,8 @@ impl<'a> PageView<'a> {
         // The canvas is given the view of the state as the pass will read it.
         let mut start = state.clone();
         start.normalise();
-        let build = Geometry { sizes: &sizes, viewport, options, spacing, bodies, go_to_place, fill_screen, cache: RefCell::new(None) };
+        let build =
+            Geometry { sizes: &sizes, right: &right, viewport, options, spacing, bodies, go_to_place, fill_screen, cache: RefCell::new(None) };
         let geo = build.of(&start);
         let frame = Frame::of(&geo);
         let given = frame.view(rect, start.offset, geo.scale / SCREEN_POINTS_PER_POINT);
@@ -1672,6 +1688,8 @@ impl Placed {
 #[derive(Clone, Debug, PartialEq)]
 struct LayoutKey {
     sizes: Vec<Size>,
+    /// Each page's side, with a book's spreads.
+    right: Vec<bool>,
     viewport: Size,
     options: LayoutOptions,
     spacing: PageSpacing,
@@ -1701,6 +1719,8 @@ impl LayoutKey {
 /// What a layout is made from.
 struct Geometry<'a> {
     sizes: &'a [Size],
+    /// Each page's side, with a book's spreads ([`PageSource::right_hand_page`]); empty otherwise.
+    right: &'a [bool],
     viewport: Size,
     options: LayoutOptions,
     spacing: PageSpacing,
@@ -1722,6 +1742,7 @@ impl Geometry<'_> {
         let options = self.layout_options(state);
         LayoutKey {
             sizes: self.sizes.to_vec(),
+            right: self.right.to_vec(),
             viewport: self.viewport,
             options,
             spacing: self.spacing,
@@ -1758,7 +1779,7 @@ impl Geometry<'_> {
         let scale = fitted
             .unwrap_or(state.zoom * SCREEN_POINTS_PER_POINT)
             .clamp(ZOOM_RANGE.start() * SCREEN_POINTS_PER_POINT, ZOOM_RANGE.end() * SCREEN_POINTS_PER_POINT);
-        let mut layout = place_pages(self.sizes, scale, self.viewport, &options, &self.spacing);
+        let mut layout = place_pages_on_sides(self.sizes, self.right, scale, self.viewport, &options, &self.spacing);
         if spread {
             centre_row(&mut layout, row, self.viewport.width);
         }

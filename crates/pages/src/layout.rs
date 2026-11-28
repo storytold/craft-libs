@@ -93,7 +93,9 @@ pub enum Fit {
 pub struct LayoutOptions {
     #[allow(missing_docs)]
     pub display: PageDisplay,
-    /// [`PageDisplay::TwoUp`]: the first page alone, as a cover.
+    /// [`PageDisplay::TwoUp`]: the first page alone, as a cover. [`PageDisplay::Columns`]: a
+    /// printed book's spreads, as many across as fit: right-hand pages in the right column of
+    /// each pair, the first page alone on the right ([`place_pages_on_sides`]).
     pub cover: bool,
     /// Every page scrolls past; off shows one row (a page or a spread) at a time ([`shown_row`]).
     pub continuous: bool,
@@ -163,6 +165,7 @@ pub struct PagedLayout {
 /// - [`PageDisplay::Columns`]: rows of as many slots as fit (`(width - gap) / (slot + gap)`,
 ///   at least `min_columns`, at most the page count), each slot as wide as the widest page plus
 ///   the markup area; a narrower page is centred in its slot, keeping its markup area beside it.
+///   With a cover, whole spreads of a printed book ([`place_pages_on_sides`]).
 ///
 /// Sizes that aren't finite or are below 1 pt count as 72 pt (WordCraft's `sane_dim`); the scale
 /// is clamped to [`ZOOM_RANGE`] × [`SCREEN_POINTS_PER_POINT`], so every zoom the view offers lays
@@ -170,6 +173,24 @@ pub struct PagedLayout {
 // pdfcraft: crates/ui-egui/src/canvas/zoom.rs:306 `layout`; wordcraft:
 // crates/ui-egui/src/canvas/geometry.rs:126 `columns_for`, :139 `place_pages`.
 pub fn place_pages(sizes: &[Size], scale: f64, viewport: Size, options: &LayoutOptions, spacing: &PageSpacing) -> PagedLayout {
+    place_pages_on_sides(sizes, &[], scale, viewport, options, spacing)
+}
+
+/// [`place_pages`] with each page's side in a printed book: `right[i]` is whether page `i` is a
+/// right-hand page (in a left-to-right book, one with an odd number). Only
+/// [`PageDisplay::Columns`] with [`LayoutOptions::cover`] reads it: the columns come in pairs, at
+/// least one pair whatever fits, and each page takes the next slot on its side, so a right-hand
+/// page that follows another (numbering that starts again in a new section) leaves the left slot
+/// before it empty, as a blank page would in print. A page `right` doesn't cover is on the right
+/// when its index is even (the first page alone, then pairs).
+pub fn place_pages_on_sides(
+    sizes: &[Size],
+    right: &[bool],
+    scale: f64,
+    viewport: Size,
+    options: &LayoutOptions,
+    spacing: &PageSpacing,
+) -> PagedLayout {
     let scale = sane_scale(scale);
     let vw = sane_extent(viewport.width);
     let vh = sane_extent(viewport.height);
@@ -223,16 +244,31 @@ pub fn place_pages(sizes: &[Size], scale: f64, viewport: Size, options: &LayoutO
             let widest = dims.iter().map(|d| d.width).fold(0.0, f64::max);
             let slot = (widest + markup) * scale;
             let fit = ((vw - gap) / (slot + gap)).floor().max(1.0) as usize;
-            columns = fit.max(options.min_columns).min(dims.len().max(1)).max(1);
+            // Each page's slot, counted across the rows: in order, or on its side in a book.
+            let slots = if options.cover { book_slots(dims.len(), right) } else { (0..dims.len()).collect() };
+            let used = slots.last().map_or(1, |last| last + 1);
+            columns = if options.cover {
+                // Whole spreads: the pairs that fit, at least `min_columns` and one pair, no more than there are
+                // pages for.
+                let pairs = (fit / 2).max(options.min_columns.div_ceil(2)).min(used.div_ceil(2)).max(1);
+                pairs * 2
+            } else {
+                fit.max(options.min_columns).min(used).max(1)
+            };
             let row_w = columns as f64 * slot + (columns as f64 - 1.0) * gap;
             content_w = (row_w + 2.0 * gap).max(vw);
-            for row in shown.chunks(columns).zip(dims.chunks(columns)) {
-                let row_h = row.0.iter().map(|s| s.height).fold(0.0, f64::max);
-                for (i, (size, dim)) in row.0.iter().zip(row.1).enumerate() {
-                    let centred = ((widest - dim.width) * scale / 2.0).max(0.0);
-                    let x = (content_w - row_w) / 2.0 + i as f64 * (slot + gap) + centred;
-                    rects.push(Rect::from_origin_size(Point::new(x, y), *size));
+            let (mut row, mut row_h) = (0, 0.0_f64);
+            for ((size, dim), &at) in shown.iter().zip(&dims).zip(&slots) {
+                if at / columns > row {
+                    y += row_h + gap;
+                    (row, row_h) = (at / columns, 0.0);
                 }
+                let centred = ((widest - dim.width) * scale / 2.0).max(0.0);
+                let x = (content_w - row_w) / 2.0 + (at % columns) as f64 * (slot + gap) + centred;
+                rects.push(Rect::from_origin_size(Point::new(x, y), *size));
+                row_h = row_h.max(size.height);
+            }
+            if !rects.is_empty() {
                 y += row_h + gap;
             }
         }
@@ -240,6 +276,23 @@ pub fn place_pages(sizes: &[Size], scale: f64, viewport: Size, options: &LayoutO
     let bottom = if rects.is_empty() { 0.0 } else { y - gap + spacing.margin };
     let bands = rects.iter().map(|r| (0.0, r.height())).collect();
     PagedLayout { rects, size: Size::new(content_w, bottom.max(vh)), columns, bands }
+}
+
+/// Each page's slot in a book's spreads, counted across rows of pairs (left, right): the page
+/// takes the next slot on its side (`right`, else right for an even index), skipping one when
+/// the side is wrong. Increasing, so pages never share a slot.
+fn book_slots(count: usize, right: &[bool]) -> Vec<usize> {
+    let mut next = 0;
+    (0..count)
+        .map(|page| {
+            let on_right = right.get(page).copied().unwrap_or(page % 2 == 0);
+            if (next % 2 == 1) != on_right {
+                next += 1;
+            }
+            next += 1;
+            next - 1
+        })
+        .collect()
 }
 
 impl PagedLayout {
@@ -310,8 +363,9 @@ pub fn page_at(layout: &PagedLayout, p: Point) -> Option<usize> {
 /// - The page fitted is the largest page (so the zoom holds still while pages of other sizes
 ///   scroll past), except a single page shown on its own, which fits that page.
 /// - Width: `(width - 2 × side - gap × (n - 1)) / (page width × n)` with n the pages per row
-///   (2 for spreads); Page: the smaller of that and `(height - 2 × margin) / page height`;
-///   Height: the second alone. The width is at least 100.
+///   (2 for spreads; `min_columns` for columns, rounded up to whole spreads with a cover); Page:
+///   the smaller of that and `(height - 2 × margin) / page height`; Height: the second alone. The
+///   width is at least 100.
 /// - Clamped to [`ZOOM_RANGE`] × [`SCREEN_POINTS_PER_POINT`].
 // pdfcraft: crates/ui-egui/src/canvas/zoom.rs:259 `fit_zoom`; wordcraft:
 // crates/ui-egui/src/canvas/geometry.rs:178 (pageWidth, onePage, multiplePages).
@@ -327,6 +381,8 @@ pub fn fit_scale(sizes: &[Size], viewport: Size, fit: Fit, options: &LayoutOptio
     let per_row = match options.display {
         PageDisplay::Single => 1.0,
         PageDisplay::TwoUp => 2.0,
+        // A book's spreads fit whole: `min_columns` rounded up to pairs, at least one.
+        PageDisplay::Columns if options.cover => (options.min_columns.div_ceil(2).max(1) * 2) as f64,
         PageDisplay::Columns => options.min_columns.max(1) as f64,
     };
     let gap = if options.page_gaps { spacing.gap } else { 0.0 };

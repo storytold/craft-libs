@@ -76,4 +76,30 @@ fn a_page_fit_two_up_row_fits_the_spread_with_and_without_a_cover() {
     }
 }
 
+#[trial]
+fn columns_with_a_cover_put_page_one_alone_on_the_right_then_as_many_spreads_as_fit() {
+    let book = LayoutOptions { cover: true, ..LayoutOptions::WORD };
+    // Zoomed out, the five pages fit in one row: 1 on the right of its pair, then 2–3 and 4–5.
+    let laid = place_pages(&[LETTER; 5], 0.25, Size::new(1400.0, 800.0), &book, &SPACING);
+    let r = &laid.rects;
+    assert_eq!(laid.columns % 2, 0, "whole spreads across: {}", laid.columns);
+    assert!(r.iter().all(|p| p.y0 == r[0].y0), "several spreads share the row: {r:?}");
+    assert!(r.windows(2).all(|w| w[1].x0 > w[0].x1), "1, 2–3, 4–5 from left to right: {r:?}");
+    // The row is centred with page 1's left side in it, empty.
+    let pitch = r[2].x0 - r[1].x0;
+    assert!(((r[0].x0 - pitch + r[4].x1) / 2.0 - laid.size.width / 2.0).abs() < 1.0, "an empty side left of page 1: {r:?}");
+}
+
+#[trial]
+fn a_right_hand_page_after_another_starts_a_spread_with_its_left_side_empty() {
+    let book = LayoutOptions { cover: true, ..LayoutOptions::WORD };
+    // Numbered 1, 2, 3, then a section from 1, 2: the second page 1 follows a right-hand page.
+    let sides = [true, false, true, true, false];
+    let laid = place_pages_on_sides(&[LETTER; 5], &sides, 0.25, Size::new(450.0, 800.0), &book, &SPACING);
+    let r = &laid.rects;
+    assert!(r[3].y0 > r[2].y1 && (r[3].x0 - r[0].x0).abs() < 1.0, "the second page 1 is on the right: {r:?}");
+    assert!(!r.iter().any(|p| p.y0 == r[3].y0 && p.x1 < r[3].x0), "nothing faces it on the left: {r:?}");
+    assert!(r[4].y0 > r[3].y1 && (r[4].x0 - r[1].x0).abs() < 1.0, "its page 2 opens the next spread on the left: {r:?}");
+}
+
 // Every zoom the view offers lays out as shown: 6400 % is not cut to a smaller scale.
