@@ -1,8 +1,10 @@
 //! Property writers, in ECMA-376 schema element order.
 
+use craft_wordmodel::Rgb;
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, Kashida, LineSpacing, ParaProps, RowProps,
-    TabAlign, TabLeader, TableFloat, TableLook, TableProps, TextColor, ThemeFont, VAlign, VMerge, VertAlign,
+    Align, BlockColorSources, Border, BorderColorSources, BorderStyle, Borders, CellProps, CharProps, ColorSource, EastAsianLayout, HeightRule,
+    Highlight, Kashida, LineSpacing, ParaProps, RowProps, SHADING_PATTERNS, ShadingSource, TabAlign, TabLeader, TableFloat, TableLook, TableProps,
+    TextColor, ThemeFont, ThemeRef, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -30,6 +32,40 @@ impl Drop for ThemeFontsGuard {
     }
 }
 
+thread_local! {
+    /// Whether theme colour references are written (`w:themeColor`…): off while a package is
+    /// written for a format without them (Word 2003 XML), which then gets the colours shown.
+    static THEME_COLORS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Writes colours as they are shown, without their theme colours, while held; restores the
+/// previous setting on drop.
+pub(crate) struct ShownColorsGuard(bool);
+
+impl ShownColorsGuard {
+    pub(crate) fn set() -> ShownColorsGuard {
+        ShownColorsGuard(THEME_COLORS.with(|t| t.replace(false)))
+    }
+}
+
+impl Drop for ShownColorsGuard {
+    fn drop(&mut self) {
+        let prev = self.0;
+        THEME_COLORS.with(|t| t.set(prev));
+    }
+}
+
+/// `source`, when theme colours are written and it still stands for its colour, now `now`
+/// ([`ColorSource::holds`]).
+pub(crate) fn held(source: Option<&ColorSource>, now: Option<TextColor>) -> Option<&ColorSource> {
+    source.filter(|s| THEME_COLORS.with(std::cell::Cell::get) && s.holds(now))
+}
+
+/// [`held`] for a shading.
+pub(crate) fn held_shading(source: Option<&ShadingSource>, now: Option<Rgb>) -> Option<&ShadingSource> {
+    source.filter(|s| THEME_COLORS.with(std::cell::Cell::get) && s.holds(now))
+}
+
 /// A Latin theme slot worth writing: it names `font` in the theme being saved. Otherwise (the
 /// font was changed, or the theme was, or no theme is known) it is left out, so Word shows
 /// `font` as WordCraft does.
@@ -40,6 +76,95 @@ fn latin_slot(slot: Option<ThemeFont>, font: Option<&String>) -> Option<&'static
         !named.is_empty() && named.eq_ignore_ascii_case(font)
     };
     THEME_FONTS.with(|t| t.borrow().as_ref().is_some_and(names)).then_some(slot.as_str())
+}
+
+/// The attributes of a colour's theme colour (`w:themeColor`, `w:themeTint`, `w:themeShade`).
+const THEME_COLOR: [&str; 3] = ["w:themeColor", "w:themeTint", "w:themeShade"];
+/// The attributes of a shading's fill's theme colour.
+const THEME_FILL: [&str; 3] = ["w:themeFill", "w:themeFillTint", "w:themeFillShade"];
+
+/// `auto`, or the colour in hex (`ST_HexColor`).
+fn hex_color(c: TextColor) -> String {
+    match c {
+        TextColor::Auto => "auto".into(),
+        TextColor::Rgb(rgb) => rgb.hex(),
+    }
+}
+
+/// A theme colour's attributes, named by `names` (the colour, its tint, its shade): the tint and
+/// the shade as the two hex digits of `ST_UcharHexNumber`.
+fn theme_attrs(a: &mut Vec<(&'static str, String)>, r: &ThemeRef, [color, tint, shade]: [&'static str; 3]) {
+    a.push((color, r.color.ooxml().to_string()));
+    if let Some(t) = r.tint {
+        a.push((tint, format!("{t:02X}")));
+    }
+    if let Some(s) = r.shade {
+        a.push((shade, format!("{s:02X}")));
+    }
+}
+
+/// A colour as its theme colour record gives it: the fixed colour it stores (in `value`, when it
+/// stores one), then the theme colour.
+fn source_attrs(a: &mut Vec<(&'static str, String)>, s: &ColorSource, value: &'static str) {
+    if let Some(v) = s.value {
+        a.push((value, hex_color(v)));
+    }
+    theme_attrs(a, &s.theme, THEME_COLOR);
+}
+
+fn refs<'a>(a: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    a.iter().map(|(k, v)| (*k, v.as_str())).collect()
+}
+
+/// `w:shd` for a shading shown as `shown`: as its theme colour record `source` gives it while the
+/// shading is still the one it was shown as (pattern, both colours and their theme colours, a
+/// colour the pattern doesn't show included), else a clear pattern over the fill.
+pub(crate) fn shading(w: &mut W, shown: Option<Rgb>, source: Option<&ShadingSource>) {
+    match held_shading(source, shown) {
+        Some(s) => {
+            let pattern = s.pattern.as_deref().filter(|p| SHADING_PATTERNS.contains(p)).unwrap_or("clear");
+            let mut a: Vec<(&str, String)> = vec![("w:val", pattern.to_string())];
+            if let Some(c) = s.color {
+                a.push(("w:color", hex_color(c)));
+            }
+            if let Some(r) = &s.color_theme {
+                theme_attrs(&mut a, r, THEME_COLOR);
+            }
+            if let Some(f) = s.fill {
+                a.push(("w:fill", hex_color(f)));
+            }
+            if let Some(r) = &s.fill_theme {
+                theme_attrs(&mut a, r, THEME_FILL);
+            }
+            w.empty("w:shd", &refs(&a));
+        }
+        None => {
+            if let Some(fill) = shown {
+                w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &fill.hex())]);
+            }
+        }
+    }
+}
+
+/// `w:background`'s colour attributes: as its theme colour record `source` gives them, when it
+/// holds, else the colour (`CT_Background`, §17.2.1).
+pub(crate) fn background_attrs(color: Option<Rgb>, source: Option<&ColorSource>) -> Vec<(&'static str, String)> {
+    let mut a = Vec::new();
+    match source {
+        Some(s) => source_attrs(&mut a, s, "w:color"),
+        None => a.extend(color.map(|c| ("w:color", c.hex()))),
+    }
+    a
+}
+
+/// `holder`'s shading record.
+fn block_shading(holder: &Option<Box<BlockColorSources>>) -> Option<&ShadingSource> {
+    holder.as_deref().and_then(|s| s.shading.as_ref())
+}
+
+/// `holder`'s borders' records.
+fn block_borders(holder: &Option<Box<BlockColorSources>>) -> Option<&BorderColorSources> {
+    holder.as_deref().map(|s| &s.borders)
 }
 
 fn toggle(w: &mut W, name: &str, v: Option<bool>) {
@@ -107,10 +232,19 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     toggle(w, "w:snapToGrid", c.snap_to_grid);
     toggle(w, "w:vanish", c.hidden);
     toggle(w, "w:webHidden", c.web_hidden);
-    match c.color {
-        Some(TextColor::Auto) => w.val("w:color", "auto"),
-        Some(TextColor::Rgb(rgb)) => w.val("w:color", &rgb.hex()),
-        None => {}
+    let sources = c.color_sources.as_deref();
+    match (c.color, held(sources.and_then(|s| s.color.as_ref()), c.color)) {
+        (shown, Some(s)) => {
+            // `w:val` is required (`CT_Color`): a reference read without one stores the colour
+            // it is shown in.
+            let stored = ColorSource { value: s.value.or(Some(shown.unwrap_or(TextColor::Auto))), ..*s };
+            let mut a = Vec::new();
+            source_attrs(&mut a, &stored, "w:val");
+            w.empty("w:color", &refs(&a));
+        }
+        (Some(TextColor::Auto), None) => w.val("w:color", "auto"),
+        (Some(TextColor::Rgb(rgb)), None) => w.val("w:color", &rgb.hex()),
+        (None, None) => {}
     }
     if let Some(s) = c.spacing {
         w.val("w:spacing", &twips(s.clamp(-1584.0, 1584.0)));
@@ -134,19 +268,24 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(h) = c.highlight {
         w.val("w:highlight", if h == Highlight::None { "none" } else { h.ooxml() });
     }
-    match (c.underline, c.underline_color) {
-        (Some(u), Some(col)) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
-        (Some(u), None) => w.val("w:u", u.ooxml()),
+    let underline_source = held(sources.and_then(|s| s.underline.as_ref()), c.underline_color.map(TextColor::Rgb));
+    match (c.underline, c.underline_color, underline_source) {
+        // In its theme colour (a colour-only one too, as read).
+        (u, _, Some(s)) => {
+            let mut a: Vec<(&str, String)> = u.map(|u| ("w:val", u.ooxml().to_string())).into_iter().collect();
+            source_attrs(&mut a, s, "w:color");
+            w.empty("w:u", &refs(&a));
+        }
+        (Some(u), Some(col), None) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
+        (Some(u), None, None) => w.val("w:u", u.ooxml()),
         // A colour-only w:u, as read: keep it without inventing an underline
-        (None, Some(col)) => w.empty("w:u", &[("w:color", &col.hex())]),
-        (None, None) => {}
+        (None, Some(col), None) => w.empty("w:u", &[("w:color", &col.hex())]),
+        (None, None, None) => {}
     }
     if let Some(b) = &c.border {
-        border_el(w, "w:bdr", b);
+        border_el(w, "w:bdr", b, sources.and_then(|s| s.border.as_ref()));
     }
-    if let Some(s) = c.shading {
-        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
-    }
+    shading(w, c.shading, sources.and_then(|s| s.shading.as_ref()));
     if let Some(v) = c.vert_align {
         w.val(
             "w:vertAlign",
@@ -274,38 +413,46 @@ pub fn tab_leader(l: TabLeader) -> &'static str {
     }
 }
 
-fn border_el(w: &mut W, name: &str, b: &Border) {
+/// One border; its colour in the theme colour `source` records while the border still has the
+/// colour it was shown in.
+fn border_el(w: &mut W, name: &str, b: &Border, source: Option<&ColorSource>) {
     let sz = n(round(b.width.clamp(0.0, 12.0) * 8.0));
     let space = n(round(b.space.clamp(0.0, 31.0)));
-    let color = b.color.map(|c| c.hex()).unwrap_or_else(|| "auto".into());
     let style = if b.style == BorderStyle::None { "nil" } else { b.style.ooxml() };
-    w.empty(name, &[("w:val", style), ("w:sz", &sz), ("w:space", &space), ("w:color", &color)]);
+    let mut a: Vec<(&str, String)> = vec![("w:val", style.to_string()), ("w:sz", sz), ("w:space", space)];
+    match held(source, b.color.map(TextColor::Rgb)) {
+        Some(s) => source_attrs(&mut a, s, "w:color"),
+        None => a.push(("w:color", b.color.map(|c| c.hex()).unwrap_or_else(|| "auto".into()))),
+    }
+    w.empty(name, &refs(&a));
 }
 
 /// Borders element. `inner` names the between/insideH element (`w:between` for paragraphs,
-/// `w:insideH` for tables/cells; `None` for page borders).
-pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[(&str, &str)]) {
+/// `w:insideH` for tables/cells; `None` for page borders). `sources` are the theme colours of
+/// the sides ([`border_el`]).
+pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[(&str, &str)], sources: Option<&BorderColorSources>) {
+    let side = |f: fn(&BorderColorSources) -> &Option<ColorSource>| sources.and_then(|s| f(s).as_ref());
     w.open(tag, extra);
     if let Some(x) = &b.top {
-        border_el(w, "w:top", x);
+        border_el(w, "w:top", x, side(|s| &s.top));
     }
     if let Some(x) = &b.left {
-        border_el(w, "w:left", x);
+        border_el(w, "w:left", x, side(|s| &s.left));
     }
     if let Some(x) = &b.bottom {
-        border_el(w, "w:bottom", x);
+        border_el(w, "w:bottom", x, side(|s| &s.bottom));
     }
     if let Some(x) = &b.right {
-        border_el(w, "w:right", x);
+        border_el(w, "w:right", x, side(|s| &s.right));
     }
     if let Some(name) = inner {
         if let Some(x) = &b.between {
-            border_el(w, name, x);
+            border_el(w, name, x, side(|s| &s.between));
         }
         if name == "w:insideH"
             && let Some(x) = &b.inside_v
         {
-            border_el(w, "w:insideV", x);
+            border_el(w, "w:insideV", x, side(|s| &s.inside_v));
         }
     }
     w.close(tag);
@@ -337,11 +484,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     }
     toggle(w, "w:suppressLineNumbers", p.suppress_line_numbers);
     if let Some(b) = &p.borders {
-        borders(w, "w:pBdr", b, Some("w:between"), &[]);
+        borders(w, "w:pBdr", b, Some("w:between"), &[], block_borders(&p.color_sources));
     }
-    if let Some(s) = p.shading {
-        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
-    }
+    shading(w, p.shading, block_shading(&p.color_sources));
     write_tabs(w, p);
     write_text_flow(w, p);
     write_spacing(w, p);
@@ -594,11 +739,9 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
     }
     if let Some(b) = &t.borders {
-        borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+        borders(w, "w:tblBorders", b, Some("w:insideH"), &[], block_borders(&t.color_sources));
     }
-    if let Some(s) = t.shading {
-        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
-    }
+    shading(w, t.shading, block_shading(&t.color_sources));
     if t.fixed {
         w.empty("w:tblLayout", &[("w:type", "fixed")]);
     }
@@ -649,11 +792,9 @@ fn tblprex(w: &mut W, t: &TableProps) {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
     }
     if let Some(b) = &t.borders {
-        borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+        borders(w, "w:tblBorders", b, Some("w:insideH"), &[], block_borders(&t.color_sources));
     }
-    if let Some(s) = t.shading {
-        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
-    }
+    shading(w, t.shading, block_shading(&t.color_sources));
     if t.fixed {
         w.empty("w:tblLayout", &[("w:type", "fixed")]);
     }
@@ -717,11 +858,9 @@ fn tcpr_inner(w: &mut W, c: &CellProps) {
         VMerge::None => {}
     }
     if let Some(b) = &c.borders {
-        borders(w, "w:tcBorders", b, Some("w:insideH"), &[]);
+        borders(w, "w:tcBorders", b, Some("w:insideH"), &[], block_borders(&c.color_sources));
     }
-    if let Some(s) = c.shading {
-        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
-    }
+    shading(w, c.shading, block_shading(&c.color_sources));
     if c.no_wrap {
         w.empty("w:noWrap", &[]);
     }

@@ -79,7 +79,8 @@ fn table_style_tblpr(w: &mut W, t: &TableStyleParts) {
         w.empty("w:tblInd", &[("w:w", &crate::units::twips(i)), ("w:type", "dxa")]);
     }
     if let Some(b) = &t.borders {
-        props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+        let sources = t.regions.get(&TablePart::WholeTable).and_then(|f| f.color_sources.as_deref()).map(|s| &s.borders);
+        props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[], sources);
     }
     if let Some(m) = &t.cell_margins {
         props::margins(w, "w:tblCellMar", m);
@@ -150,7 +151,9 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
             let has_rpr = props::has_rpr(&f.chr);
             // The whole table's borders are its table borders (`w:tblPr` above).
             let borders = f.borders.filter(|_| part != TablePart::WholeTable);
-            let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
+            let sources = f.color_sources.as_deref();
+            let shading = props::held_shading(sources.and_then(|s| s.shading.as_ref()), f.fill);
+            let has_tc = f.fill.is_some() || shading.is_some() || borders.is_some() || f.v_align.is_some();
             if !has_rpr && !has_tc && f.align.is_none() {
                 continue;
             }
@@ -168,11 +171,9 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
             if has_tc {
                 w.open("w:tcPr", &[]);
                 if let Some(bs) = borders {
-                    props::borders(w, "w:tcBorders", &bs, Some("w:insideH"), &[]);
+                    props::borders(w, "w:tcBorders", &bs, Some("w:insideH"), &[], sources.map(|s| &s.borders));
                 }
-                if let Some(c) = f.fill {
-                    w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
-                }
+                props::shading(w, f.fill, shading);
                 if let Some(v) = f.v_align {
                     w.val(
                         "w:vAlign",

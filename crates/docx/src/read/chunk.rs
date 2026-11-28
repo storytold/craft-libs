@@ -119,7 +119,7 @@ impl Reader<'_> {
             .map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}"))
             .ok()?;
         self.chunks.bytes = self.chunks.bytes.saturating_sub(pkg.size());
-        let state = ChunkState { nesting: self.chunks.nesting + 1, depth: depth + 1, ..self.chunks };
+        let state = ChunkState { nesting: self.chunks.nesting + 1, depth: depth + 1, theme: self.pc.theme_key(), ..self.chunks };
         let read = super::read_opened_in(&pkg, state);
         // A parsed main part can still fail semantic validation (for example, a non-Word
         // root). Charge its elements before returning that error, so later siblings cannot
@@ -162,6 +162,9 @@ pub(crate) struct ChunkState<'a> {
     pub nesting: u8,
     /// The XML depth its stories start at (a nested document's: that of the chunk naming it).
     pub depth: usize,
+    /// The theme a nested document's container resolves theme colours through
+    /// ([`super::props::PropCtx::theme_key`]); unused at the top.
+    pub theme: Option<super::props::ThemeKey>,
     pub import: Option<ChunkImporter<'a>>,
 }
 
@@ -174,6 +177,7 @@ impl<'a> ChunkState<'a> {
             elements: crate::xml::MAX_ELEMENTS_TOTAL,
             nesting: 0,
             depth: 0,
+            theme: None,
             import,
         }
     }
