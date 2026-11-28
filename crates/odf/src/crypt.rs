@@ -5,6 +5,10 @@
 //! start key, PBKDF2 with HMAC-SHA-1 and a salt of its own for each file, a SHA-256 checksum of
 //! the first 1024 bytes of each deflated file.
 //!
+//! LibreOffice 24.2 and later encrypt the whole package instead (ODF 1.4 Part 2): one file,
+//! `encrypted-package`, the deflated plain package encrypted with AES-256-GCM, its key derived
+//! with Argon2id. Read: that inner package is the plain one.
+//!
 //! Blowfish (the old default, §3.4.2) isn't supported: such files say so.
 //!
 //! [`decrypt`] gives a plain package, which a reader opens as any other; [`encrypt`] takes a
@@ -12,14 +16,15 @@
 
 use std::io::{Read, Write};
 
-use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
+use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt};
+use aes_gcm::aead::{Aead, KeyInit};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hmac::Mac;
 use sha2::Digest;
 use zeroize::Zeroizing;
 
-use crate::manifest::{Encryption as Params, MANIFEST_PATH, Manifest};
+use crate::manifest::{Argon2Costs, Encryption as Params, MANIFEST_PATH, Manifest};
 use crate::{Limits, zip_guard};
 
 /// Most bytes one file of a package decrypts or inflates to.
@@ -48,7 +53,17 @@ impl std::fmt::Display for CryptError {
 }
 
 const AES256_CBC: &str = "http://www.w3.org/2001/04/xmlenc#aes256-cbc";
+const AES256_GCM: &str = "http://www.w3.org/2009/xmlenc11#aes256-gcm";
 const SHA256: &str = "http://www.w3.org/2000/09/xmldsig#sha256";
+/// SHA-256 by its XML Encryption name, as LibreOffice 24.2+ names the start key.
+const SHA256_XMLENC: &str = "http://www.w3.org/2001/04/xmlenc#sha256";
+/// The one file of a package encrypted whole (ODF 1.4 Part 2).
+const WHOLE_PACKAGE: &str = "encrypted-package";
+/// Argon2id limits read (hostile values would exhaust memory or hang): memory in KiB (four times
+/// LibreOffice's 64 MiB), passes and lanes.
+const MAX_ARGON2_MEMORY: u32 = 256 << 10;
+const MAX_ARGON2_PASSES: u32 = 16;
+const MAX_ARGON2_LANES: u32 = 16;
 const SHA256_1K: &str = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0#sha256-1k";
 /// PBKDF2 iterations written (LibreOffice's), and most read (a hostile count would hang).
 const ITERATIONS: u32 = 100_000;
@@ -61,13 +76,27 @@ const MAX_FILES: usize = 10_000;
 const MAX_WORK: u64 = 200_000_000;
 
 /// `p`'s key derivation added to `spent`, an error once the package's work passes [`MAX_WORK`].
+/// An Argon2id derivation counts its memory (KiB) times its passes, which takes about as long as
+/// that many PBKDF2 blocks. The derivation charged is the one [`file_key`] runs: chosen by its name.
 fn charge(spent: &mut u64, p: &Params) -> Result<(), CryptError> {
-    let blocks = p.key_size.unwrap_or(16).clamp(16, 32).div_ceil(20) as u64;
-    *spent = spent.saturating_add(u64::from(p.iterations.min(MAX_ITERATIONS)).saturating_mul(blocks));
+    let cost = match p.argon2 {
+        Some(a) if is_argon2id(&p.derivation) => {
+            u64::from(a.memory.min(MAX_ARGON2_MEMORY)).saturating_mul(u64::from(a.passes.min(MAX_ARGON2_PASSES)))
+        }
+        // Argon2id without its costs is refused before deriving: nothing to charge.
+        None if is_argon2id(&p.derivation) => 0,
+        _ => u64::from(p.iterations.min(MAX_ITERATIONS)).saturating_mul(p.key_size.unwrap_or(16).clamp(16, 32).div_ceil(20) as u64),
+    };
+    *spent = spent.saturating_add(cost);
     if *spent > MAX_WORK {
         return Err(CryptError::Unsupported("the package's key derivations would take too long".into()));
     }
     Ok(())
+}
+
+/// Is `name` an Argon2id key derivation: LibreOffice's extension name or ODF 1.4's?
+fn is_argon2id(name: &str) -> bool {
+    name == "urn:org:documentfoundation:names:experimental:office:manifest:argon2id" || name.ends_with("#argon2id")
 }
 
 /// Each encrypted file's parameters and declared size, by path, from a manifest.
@@ -109,7 +138,7 @@ pub fn is_encrypted(bytes: &[u8]) -> bool {
 /// The start key: the password's UTF-8 digest (§4.16.6), `size` bytes of it.
 fn start_key(name: &str, size: Option<usize>, password: &str) -> Result<Zeroizing<Vec<u8>>, CryptError> {
     let mut k = match name {
-        SHA256 | "SHA256" => sha2::Sha256::digest(password.as_bytes()).to_vec(),
+        SHA256 | SHA256_XMLENC | "SHA256" => sha2::Sha256::digest(password.as_bytes()).to_vec(),
         "SHA1" | "http://www.w3.org/2000/09/xmldsig#sha1" => sha1::Sha1::digest(password.as_bytes()).to_vec(),
         other => return Err(CryptError::Unsupported(format!("a start key made with {other} isn't supported"))),
     };
@@ -143,9 +172,33 @@ fn pbkdf2(password: &[u8], salt: &[u8], iterations: u32, len: usize) -> Result<Z
     Ok(out)
 }
 
+/// Argon2id (RFC 9106, version 0x13) of the start key: `len` bytes.
+fn argon2id(start: &[u8], salt: &[u8], c: Argon2Costs, len: usize) -> Result<Zeroizing<Vec<u8>>, CryptError> {
+    let out_of_range = |what: &str| CryptError::Unsupported(format!("the key derivation's Argon2id {what} is out of range"));
+    if c.memory > MAX_ARGON2_MEMORY {
+        return Err(out_of_range("memory"));
+    }
+    if !(1..=MAX_ARGON2_PASSES).contains(&c.passes) {
+        return Err(out_of_range("iteration count"));
+    }
+    if !(1..=MAX_ARGON2_LANES).contains(&c.lanes) {
+        return Err(out_of_range("lane count"));
+    }
+    let params = argon2::Params::new(c.memory, c.passes, c.lanes, Some(len)).map_err(|e| CryptError::Unsupported(format!("Argon2id: {e}")))?;
+    let mut key = Zeroizing::new(vec![0u8; len]);
+    argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
+        .hash_password_into(start, salt, &mut key)
+        .map_err(|e| CryptError::Unsupported(format!("Argon2id: {e}")))?;
+    Ok(key)
+}
+
 /// The key for a file with parameters `p`.
 fn file_key(p: &Params, password: &str) -> Result<Zeroizing<Vec<u8>>, CryptError> {
     let start = start_key(&p.start_key, p.start_key_size, password)?;
+    if is_argon2id(&p.derivation) {
+        let costs = p.argon2.ok_or_else(|| CryptError::Unsupported("the Argon2id key derivation doesn't give its costs".into()))?;
+        return argon2id(&start, &p.salt, costs, p.key_size.unwrap_or(32).clamp(16, 32));
+    }
     if !(p.derivation == "PBKDF2" || p.derivation.ends_with("#pbkdf2")) {
         return Err(CryptError::Unsupported(format!("key derivation {:?} isn't supported", p.derivation)));
     }
@@ -194,20 +247,35 @@ fn checksum(kind: &str, deflated: &[u8]) -> Result<Vec<u8>, CryptError> {
 
 /// One encrypted file decrypted and inflated.
 fn decrypt_file(data: &[u8], p: &Params, size: Option<usize>, password: &str) -> Result<Vec<u8>, CryptError> {
-    if p.algorithm != AES256_CBC {
+    if p.algorithm != AES256_CBC && p.algorithm != AES256_GCM {
         let what = if p.algorithm.to_ascii_lowercase().contains("blowfish") { "Blowfish".to_string() } else { format!("{:?}", p.algorithm) };
         return Err(CryptError::Unsupported(format!("this file is encrypted with {what}, which isn't supported")));
     }
     let key = file_key(p, password)?;
-    let plain = Zeroizing::new(cbc(&key, &p.iv, data, false)?);
-    // W3C XML Encryption padding: the last byte says how many bytes were added.
-    let pad = usize::from(plain.last().copied().unwrap_or(0));
-    let deflated = (1..=16).contains(&pad).then(|| plain.get(..plain.len().saturating_sub(pad))).flatten().ok_or(CryptError::WrongPassword)?;
-    if !p.checksum.is_empty() && checksum(&p.checksum_type, deflated)? != p.checksum {
+    let deflated = if p.algorithm == AES256_GCM {
+        gcm_decrypt(&key, data)?
+    } else {
+        let plain = Zeroizing::new(cbc(&key, &p.iv, data, false)?);
+        // W3C XML Encryption padding: the last byte says how many bytes were added.
+        let pad = usize::from(plain.last().copied().unwrap_or(0));
+        let unpadded = (1..=16).contains(&pad).then(|| plain.get(..plain.len().saturating_sub(pad))).flatten().ok_or(CryptError::WrongPassword)?;
+        Zeroizing::new(unpadded.to_vec())
+    };
+    if !p.checksum.is_empty() && checksum(&p.checksum_type, &deflated)? != p.checksum {
         return Err(CryptError::WrongPassword);
     }
     let limit = size.unwrap_or(MAX_ENTRY as usize).min(MAX_ENTRY as usize);
-    inflate(deflated, limit).ok_or(CryptError::WrongPassword)
+    inflate(&deflated, limit).ok_or(CryptError::WrongPassword)
+}
+
+/// AES-256-GCM (XML Encryption 1.1 section 5.2.4): the cipher value is the 96-bit initialisation
+/// vector, the encrypted data, then the 128-bit tag. A tag that doesn't match is a wrong password
+/// (or a changed file).
+fn gcm_decrypt(key: &[u8], data: &[u8]) -> Result<Zeroizing<Vec<u8>>, CryptError> {
+    let gcm = aes_gcm::Aes256Gcm::new_from_slice(key).map_err(|_| CryptError::Unsupported("the key isn't 256 bits".into()))?;
+    let (iv, sealed) = data.split_at_checked(12).ok_or(CryptError::WrongPassword)?;
+    let nonce = aes_gcm::Nonce::try_from(iv).map_err(|_| CryptError::WrongPassword)?;
+    gcm.decrypt(&nonce, sealed).map(Zeroizing::new).map_err(|_| CryptError::WrongPassword)
 }
 
 /// Raw deflate data inflated, `None` when it is damaged or longer than `limit`.
@@ -244,6 +312,9 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
     let mut z = open_zip(bytes)?;
     let manifest = read_entry(&mut z, MANIFEST_PATH).unwrap_or_default();
     let encrypted = read_manifest(&manifest);
+    if let Some((_, p, size)) = encrypted.iter().find(|(n, ..)| n == WHOLE_PACKAGE) {
+        return decrypt_whole(&mut z, p, *size, password);
+    }
     let mut w = craft_zip::Writer::new();
     let mut checked = false;
     let mut work = 0u64;
@@ -267,6 +338,28 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
         return Err(CryptError::Unsupported("no encrypted file could be read".into()));
     }
     w.finish().map_err(broken)
+}
+
+/// A package encrypted whole (`encrypted-package`): the plain package inside it.
+fn decrypt_whole(z: &mut craft_zip::Archive<'_>, p: &Params, size: Option<usize>, password: &str) -> Result<Vec<u8>, CryptError> {
+    let data = z
+        .read(WHOLE_PACKAGE, MAX_ENTRY)
+        .map_err(|e| CryptError::Unsupported(format!("not a valid package ({e})")))?
+        .ok_or_else(|| CryptError::Unsupported("the encrypted package is missing".into()))?;
+    charge(&mut 0, p)?;
+    let inner = decrypt_file(&data, p, size, password)?;
+    // The inside is a plain package (its entry count checked before it is indexed); one encrypted
+    // again inside it isn't opened. Its manifest is read strictly: a lenient read stops at
+    // `MAX_ENTRIES` and could miss an encrypted entry past them, and one that can't be read
+    // (damaged, or past `MAX_ENTRY`) can't show there is none. No manifest at all is a plain package.
+    let not_plain = || CryptError::Unsupported("the encrypted package doesn't hold a plain document".into());
+    let mut z = open_zip(&inner).map_err(|_| not_plain())?;
+    let Some(m) = z.read(MANIFEST_PATH, MAX_ENTRY).map_err(|_| not_plain())? else { return Ok(inner) };
+    let m = Manifest::parse_strict(&m).map_err(|_| not_plain())?;
+    if m.entries.iter().any(|e| e.encryption.is_some()) {
+        return Err(not_plain());
+    }
+    Ok(inner)
 }
 
 /// An attribute value's text (the manifest's own entity escapes).
@@ -391,5 +484,21 @@ mod work_tests {
         let mut spent = 0;
         let ok = (0..30).take_while(|_| charge(&mut spent, &hostile).is_ok()).count();
         assert_eq!(ok, 20);
+    }
+
+    /// The derivation charged is the one that runs, chosen by its name: Argon2id costs on a
+    /// PBKDF2 derivation don't make PBKDF2's work look small, and Argon2id is charged by its own.
+    #[test]
+    fn the_key_derivation_that_runs_is_the_one_charged() {
+        let small = Some(Argon2Costs { passes: 1, memory: 64, lanes: 1 });
+        let pbkdf2 = Params { derivation: "PBKDF2".into(), iterations: MAX_ITERATIONS, key_size: Some(32), argon2: small, ..Default::default() };
+        let (mut with_costs, mut without) = (0, 0);
+        charge(&mut with_costs, &pbkdf2).unwrap();
+        charge(&mut without, &Params { argon2: None, ..pbkdf2.clone() }).unwrap();
+        assert_eq!(with_costs, without);
+        let argon = Params { derivation: "urn:org:documentfoundation:names:experimental:office:manifest:argon2id".into(), ..pbkdf2 };
+        let mut spent = 0;
+        charge(&mut spent, &argon).unwrap();
+        assert!(spent < without, "Argon2id is charged by its own costs");
     }
 }

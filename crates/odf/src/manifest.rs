@@ -13,6 +13,8 @@ use crate::Error;
 pub const MANIFEST_PATH: &str = "META-INF/manifest.xml";
 /// The manifest's XML namespace.
 pub const MANIFEST_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
+/// LibreOffice's extension namespace: its Argon2id costs (`loext:argon2-*`) are in it.
+const LOEXT_NS: &str = "urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0";
 
 /// Most file entries read from a manifest (as many as a package may hold by default).
 pub const MAX_ENTRIES: usize = 20_000;
@@ -40,6 +42,21 @@ pub struct Encryption {
     pub salt: Vec<u8>,
     /// The derived key's `manifest:key-size`.
     pub key_size: Option<usize>,
+    /// The Argon2id costs the key derivation gives (`loext:argon2-*` as LibreOffice 24.2+
+    /// writes them, or `manifest:argon2-*`): all three, or `None`. Read only: the manifest
+    /// writer leaves them out.
+    pub argon2: Option<Argon2Costs>,
+}
+
+/// Argon2id's costs (RFC 9106 section 3.1), as a manifest gives them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Argon2Costs {
+    /// Passes over the memory (`argon2-iterations`).
+    pub passes: u32,
+    /// Memory in KiB (`argon2-memory`).
+    pub memory: u32,
+    /// Lanes (`argon2-lanes`).
+    pub lanes: u32,
 }
 
 /// One `manifest:file-entry`.
@@ -71,7 +88,7 @@ impl Manifest {
     /// can't be read is left out: damaged XML gives the entries before the damage, and entries
     /// past `MAX_ENTRIES` are dropped.
     pub fn parse(xml: &[u8]) -> Manifest {
-        let canonical = Canonical::new(&[("manifest", MANIFEST_NS)]);
+        let canonical = Canonical::new(&[("manifest", MANIFEST_NS), ("loext", LOEXT_NS)]);
         let (root, _) = Options::canonical(&canonical).parse_streaming_partial(xml, &[], |_| Ok::<(), craft_xml::Error>(()));
         let Some(root) = root.filter(|r| named(r, "manifest")) else { return Manifest::default() };
         let entries = root.elements().filter(|e| named(e, "file-entry")).take(MAX_ENTRIES).filter_map(file_entry).collect();
@@ -85,7 +102,7 @@ impl Manifest {
     /// that refuses a damaged package rather than open what it can.
     pub fn parse_strict(xml: &[u8]) -> Result<Manifest, Error> {
         let bad = |why: String| Error::Manifest(why);
-        let canonical = Canonical::new(&[("manifest", MANIFEST_NS)]);
+        let canonical = Canonical::new(&[("manifest", MANIFEST_NS), ("loext", LOEXT_NS)]);
         let opts = Options { doctype: Doctype::Reject, ..Options::canonical(&canonical).strict() };
         let root = opts.parse(xml).map_err(|e| bad(e.to_string()))?;
         if root.name != "manifest:manifest" {
@@ -205,6 +222,11 @@ fn file_entry(e: &El) -> Option<FileEntry> {
             c.iterations = num(k, "iteration-count").unwrap_or(1024);
             c.salt = b64(k, "salt");
             c.key_size = num(k, "key-size");
+            let cost = |n: &str| k.attr(&format!("loext:argon2-{n}")).and_then(|s| s.trim().parse().ok()).or_else(|| num(k, &format!("argon2-{n}")));
+            c.argon2 = match (cost("iterations"), cost("memory"), cost("lanes")) {
+                (Some(passes), Some(memory), Some(lanes)) => Some(Argon2Costs { passes, memory, lanes }),
+                _ => None,
+            };
         }
         c
     });

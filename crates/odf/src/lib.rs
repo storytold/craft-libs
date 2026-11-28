@@ -6,7 +6,8 @@
 //!   [`Manifest`] and its files. [`PackageWriter`] writes one: the `mimetype` first and stored,
 //!   the manifest, then the files.
 //! - [`crypt`] opens and saves password-protected packages (AES-256-CBC with PBKDF2, as
-//!   LibreOffice writes them).
+//!   LibreOffice writes them), and opens packages LibreOffice 24.2+ encrypts whole (AES-256-GCM
+//!   with Argon2id).
 //! - [`flat`] turns a flat single-file document (`.fodt`, `.fods`, `.fodp`, `.fodg`) into a
 //!   package and back.
 //! - [`zip_guard`] refuses a ZIP that declares too many entries before `zip` parses them.
@@ -42,7 +43,7 @@ mod package;
 pub mod text;
 pub mod zip_guard;
 
-pub use manifest::{Encryption, FileEntry, MANIFEST_NS, MANIFEST_PATH, Manifest};
+pub use manifest::{Argon2Costs, Encryption, FileEntry, MANIFEST_NS, MANIFEST_PATH, Manifest};
 pub use package::{Limits, Package, PackageWriter};
 
 /// The media types of OpenDocument files (ODF 1.3 Part 3 section 3.3, and the `mimetype` file of
