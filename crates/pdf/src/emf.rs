@@ -16,6 +16,7 @@ use hayro_interpret::{
 };
 use kurbo::{Affine, BezPath, Rect};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Bounds on one page's picture.
 #[derive(Debug, Clone, Copy)]
@@ -28,11 +29,19 @@ pub struct Limits {
     pub max_path_elements: usize,
     /// The most image pixels over all images.
     pub max_image_pixels: u64,
+    /// The most clips in force at once (each is a saved device context in the picture).
+    pub max_clip_depth: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_input_bytes: 512 * 1024 * 1024, max_ops: 500_000, max_path_elements: 8_000_000, max_image_pixels: 100_000_000 }
+        Self {
+            max_input_bytes: 512 * 1024 * 1024,
+            max_ops: 500_000,
+            max_path_elements: 8_000_000,
+            max_image_pixels: 100_000_000,
+            max_clip_depth: 1024,
+        }
     }
 }
 
@@ -47,6 +56,10 @@ pub enum Error {
     PageIndex { index: usize },
     #[error("the page's picture would exceed the configured limits")]
     OutputLimit,
+    /// The interpreter left part of the page out (a content or decoding budget ran out, or a
+    /// content stream could not be decoded), so neither a picture nor pixels would be complete.
+    #[error("the page's content was cut short by the interpreter")]
+    ContentTruncated,
     #[error("the page has an empty or unusable size")]
     EmptyPage,
     /// The page uses something GDI cannot draw; draw it as pixels instead.
@@ -97,18 +110,34 @@ impl Pictures {
         let cache = InterpreterCache::new();
         let initial = page.initial_transform(true).to_kurbo();
         let crop = page.intersected_crop_box().to_kurbo();
-        let mut context = hayro_interpret::Context::new(initial, crop, &cache, self.pdf.xref(), InterpreterSettings::default());
+        let truncated = Arc::new(AtomicBool::new(false));
+        let flag = truncated.clone();
+        let settings = InterpreterSettings {
+            warning_sink: Arc::new(move |warning| {
+                if matches!(warning, hayro_interpret::InterpreterWarning::ContentTruncated) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }),
+            ..InterpreterSettings::default()
+        };
+        let mut context = hayro_interpret::Context::new(initial, crop, &cache, self.pdf.xref(), settings);
         let mut device = Emitter::new(self.limits);
         crate::read::interpret_page(page, &mut context, &mut device)?;
-        if let Some(reason) = device.refused {
-            return Err(Error::NeedsRaster(reason));
+        // Clips still in force at the end are closed within the same budget as the rest.
+        for _ in 0..device.clips {
+            device.push(Op::Unclip);
         }
+        // Once a limit is passed nothing more is recorded, so a refusal after it says nothing.
         if device.exceeded {
             return Err(Error::OutputLimit);
         }
-        let mut ops = device.ops;
-        ops.extend(std::iter::repeat_n(Op::Unclip, device.clips));
-        let emf = craft_metafile::write::emf(&ops, Rect::new(0.0, 0.0, size.0, size.1), app, title).ok_or(Error::EmptyPage)?;
+        if truncated.load(Ordering::Relaxed) {
+            return Err(Error::ContentTruncated);
+        }
+        if let Some(reason) = device.refused {
+            return Err(Error::NeedsRaster(reason));
+        }
+        let emf = craft_metafile::write::emf(&device.ops, Rect::new(0.0, 0.0, size.0, size.1), app, title).ok_or(Error::EmptyPage)?;
         Ok(PageEmf { bytes: emf, size })
     }
 }
@@ -187,15 +216,21 @@ impl Emitter {
         }
         match uniform_scale(transform) {
             Some(scale) => {
-                let width = f64::from(props.line_width) * scale;
                 let dash = dash(props, scale);
-                let pen = Pen { rgb, width, cap: cap(props.line_cap), join: join(props.line_join), miter: f64::from(props.miter_limit), dash };
-                self.push(Op::Stroke { path: transform * path.clone(), pen });
+                // A pattern a pen can't draw would be cut into dashes by the writer, past this
+                // page's path budget.
+                if dash.as_ref().is_some_and(|d| d.pattern.iter().any(|v| *v > 0.0) && !d.emf_pen_draws()) {
+                    return self.refuse("a dash pattern a pen cannot draw");
+                }
+                self.push(Op::Stroke { path: transform * path.clone(), pen: pen(rgb, props, f64::from(props.line_width) * scale, dash) });
             }
             // A pen is round in the picture's space; under a squashed or skewed transform the
             // stroke's outline is filled instead. Dashing that outline has no bound on the number of
             // dashes, so a dashed stroke is handed back.
             None if !props.dash_array.is_empty() => self.refuse("a dashed stroke under a squashed or skewed transform"),
+            // A zero-width line is the thinnest line the printer draws, whatever the transform;
+            // its outline would have no area.
+            None if props.line_width == 0.0 => self.push(Op::Stroke { path: transform * path.clone(), pen: pen(rgb, props, 0.0, None) }),
             None => {
                 let outline = kurbo::stroke(path.iter(), &stroke_style(props), &kurbo::StrokeOpts::default(), 0.01);
                 self.push(Op::Fill { path: transform * outline, even_odd: false, rgb });
@@ -204,12 +239,24 @@ impl Emitter {
     }
 
     fn image(&mut self, image: Image<'_, '_>, transform: Affine) {
+        // The pixels are counted before they are copied, so an image past the budget is never built.
+        let left = self.limits.max_image_pixels.saturating_sub(self.pixels);
+        let fits = |width: u32, height: u32| u64::from(width) * u64::from(height) <= left;
+        let mut over = false;
+        let mut mask_finer = false;
         let mut decoded: Option<(Bitmap, (f32, f32))> = None;
         match image {
             Image::Raster(raster) => raster.with_rgba(
                 |data, alpha| {
                     let (width, height, factors) = (data.width(), data.height(), data.scale_factors());
-                    decoded = rgba(&data, alpha.as_ref()).map(|rgba| (Bitmap { width, height, rgba }, factors));
+                    if !fits(width, height) {
+                        over = true;
+                    } else if alpha.as_ref().is_some_and(|a| a.width > width || a.height > height) {
+                        // Sampling a finer mask down to the image's pixels would lose its detail.
+                        mask_finer = true;
+                    } else {
+                        decoded = rgba(&data, alpha.as_ref()).map(|rgba| (Bitmap { width, height, rgba }, factors));
+                    }
                 },
                 None,
             ),
@@ -221,7 +268,9 @@ impl Emitter {
                             Paint::Color(c) => Ok(c.to_rgba().to_rgba8()),
                             Paint::Pattern(_) => Err(()),
                         });
-                        if let Some(Ok([r, g, b, 255])) = paint_rgb {
+                        if !fits(luma.width, luma.height) {
+                            over = true;
+                        } else if let Some(Ok([r, g, b, 255])) = paint_rgb {
                             let rgba = luma.data.iter().flat_map(|&a| [r, g, b, a]).collect();
                             decoded = Some((Bitmap { width: luma.width, height: luma.height, rgba }, luma.scale_factors));
                         }
@@ -235,21 +284,24 @@ impl Emitter {
                 }
             }
         }
+        if over {
+            self.exceeded = true;
+            return;
+        }
+        if mask_finer {
+            return self.refuse("a soft mask finer than its image");
+        }
         let Some((bitmap, (sx, sy))) = decoded else {
             return self.refuse("an image that could not be decoded");
         };
         self.pixels = self.pixels.saturating_add(u64::from(bitmap.width) * u64::from(bitmap.height));
-        if self.pixels > self.limits.max_image_pixels {
-            self.exceeded = true;
-            return;
-        }
         let xf = transform * Affine::scale_non_uniform(f64::from(sx), f64::from(sy));
         self.push(Op::Image { image: Arc::new(bitmap), xf, opacity: 1.0 });
     }
 }
 
-/// Straight-alpha RGBA of an image and its alpha (resampled to the image's size when it has
-/// another); `None` when the samples don't fill the image.
+/// Straight-alpha RGBA of an image and its alpha (stretched to the image's size when it is
+/// coarser); `None` when the samples don't fill the image.
 fn rgba(data: &hayro_interpret::ImageData, alpha: Option<&LumaData>) -> Option<Vec<u8>> {
     let (width, height) = (data.width() as usize, data.height() as usize);
     let count = width.checked_mul(height)?;
@@ -294,6 +346,10 @@ fn uniform_scale(t: Affine) -> Option<f64> {
 fn pen_is_finite(props: &StrokeProps) -> bool {
     let ok = |v: f32| v.is_finite() && v >= 0.0;
     ok(props.line_width) && ok(props.miter_limit) && props.dash_offset.is_finite() && props.dash_array.iter().all(|v| ok(*v))
+}
+
+fn pen(rgb: [u8; 3], props: &StrokeProps, width: f64, dash: Option<Dash>) -> Pen {
+    Pen { rgb, width, cap: cap(props.line_cap), join: join(props.line_join), miter: f64::from(props.miter_limit), dash }
 }
 
 fn dash(props: &StrokeProps, scale: f64) -> Option<Dash> {
@@ -356,6 +412,10 @@ impl<'a> Device<'a> for Emitter {
     }
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
+        if self.clips >= self.limits.max_clip_depth {
+            self.exceeded = true;
+            return;
+        }
         self.clips = self.clips.saturating_add(1);
         self.push(Op::Clip { path: clip_path.path.clone(), even_odd: matches!(clip_path.fill, FillRule::EvenOdd) });
     }
