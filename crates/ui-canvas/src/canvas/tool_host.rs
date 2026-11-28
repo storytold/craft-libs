@@ -10,7 +10,12 @@
 //!    `release`, and a press that moved past slop before it came up as `press`, `drag` and `release`: the tool decides
 //!    a drag from whether `drag` was called.
 //! 2. `takes(button, mods)` decides whether a button starts a gesture. A middle-button pan belongs to the canvas.
-//! 3. Escape during a drag arrives as a cancelled press ([`PressCancel`]) and calls `cancel` once.
+//! 3. Escape during a drag arrives as a cancelled press ([`PressCancel`]) and calls `cancel` once. A tool that
+//!    [`keeps_press_on_escape`](CanvasTool::keeps_press_on_escape) is the exception: the host claims that plain Escape
+//!    for the next pass, so the press stays open, its moves and its release go on, and the Escape reaches `key` as
+//!    `Cancel` while the gesture runs. A key-owning layer open over the app (a popup or a modal) outranks that claim:
+//!    with one open the Escape is the press's again, as for every other tool. The claim ends with the gesture, so an
+//!    Escape carried in the frame of the release reaches nobody.
 //! 4. Keys the canvas holds as intents (arrows, Enter, Escape) go to `key` while the canvas has focus; a text part
 //!    inside the canvas takes its own keys before they are routed here. Enter and Escape carry Alt and Shift
 //!    (`ToolContext::mods`). While nothing in the window has focus, the arrows, Enter and Escape are offered too, so a
@@ -385,6 +390,10 @@ struct HostState {
     spent: bool,
     /// The keys the tool claimed at the end of the last pass.
     claims: ToolClaims,
+    /// The tool of the open gesture keeps its press on Escape ([`CanvasTool::keeps_press_on_escape`]): the host held
+    /// that plain Escape from the app and hands it to `key` as `Cancel`. Set in every pass, from the tool the gesture
+    /// runs with; false with no gesture open, with a disabled host, and while a key-owning layer is open over the app.
+    keeps_escape: bool,
     /// The canvas of the last pass, for [`ToolHost::cancel`] outside a pass.
     rect: Option<Rect>,
     space: Option<CanvasSpace>,
@@ -758,6 +767,14 @@ impl<'m> ToolHost<'m> {
         }
         if !state.claims.keyboard && state.gesture.is_some() {
             keys::claim(&ctx, pass.id, Chord::new(Mods::NONE, Key::Space));
+        }
+        // The Escape of a gesture whose tool keeps its press: held from the app as the Space of a drag is, so it
+        // reaches no other taker, and the tool reads it as `Cancel` with its gesture still open. A layer that owns
+        // keys over the app outranks the claim: with one open the host holds no Escape at all, and the Escape is the
+        // captured press's, as it is for every other tool.
+        state.keeps_escape = !disabled && state.gesture.is_some() && !overlay::any_open(&ctx, OpenFilter::Keys) && effective.keeps_press_on_escape();
+        if state.keeps_escape {
+            keys::claim(&ctx, pass.id, Chord::new(Mods::NONE, Key::Escape));
         }
         state.rect = Some(rect);
         state.space = space;
@@ -1514,6 +1531,16 @@ impl<'a, 't: 'a> Run<'a, 't> {
             keys::settle(ctx, Some(canvas), &intents);
         }
         let claims = self.state.claims;
+        // The Escape of a gesture whose tool keeps its press was claimed at the end of the last pass: with the
+        // gesture still open it reaches this tool as `Cancel`, and no other taker sees it. A `Cancel` the tool leaves
+        // reaches no one either, as a claimed key the tool refuses does. With the gesture already ended - the release
+        // or a cancel came in this pass - the claim is not read: it ends with its gesture.
+        if self.state.keeps_escape && self.state.gesture.is_some() && keys::take_claimed(ctx, canvas, Chord::new(Mods::NONE, Key::Escape)) {
+            let cancel = ToolKey::Cancel;
+            if self.call(None, |tool, cx| tool.key(&cancel, cx)) {
+                self.response.took_key = Some(cancel);
+            }
+        }
         for chord in delete_chords(claims).filter(|chord| keys::take_claimed(ctx, canvas, *chord)) {
             let delete = ToolKey::delete(chord.key == Key::Delete);
             if self.call(None, |tool, cx| tool.key(&delete, cx)) {

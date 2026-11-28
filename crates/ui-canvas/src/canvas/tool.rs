@@ -116,7 +116,9 @@ pub enum ToolKey {
     },
     /// Enter, with Alt or Shift held or not ([`ToolContext::mods`] says which).
     Submit,
-    /// Escape with no gesture running.
+    /// Escape with no gesture running, or the Escape of a gesture whose tool
+    /// [`keeps_press_on_escape`](CanvasTool::keeps_press_on_escape): the host delivers that one while the gesture is
+    /// still open, so the tool can end the drag its own way or go on with it.
     Cancel,
     /// A key press the tool kept with [`ToolClaims::keyboard`]: every key without Ctrl or Cmd, so the app's chords
     /// still run, but Enter, Escape, Delete and Backspace, which arrive as `Submit`, `Cancel` and `Delete`. It carries
@@ -718,7 +720,8 @@ pub trait CanvasTool {
     fn hover(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {}
 
     /// The gesture ends without a commit; `reason` says why ([`CancelReason::Escape`] for Escape). The tool drops
-    /// its drag state and reports `reason` on the gesture's events.
+    /// its drag state and reports `reason` on the gesture's events. Escape brings this for every tool but one that
+    /// [`keeps_press_on_escape`](Self::keeps_press_on_escape).
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>);
 
     /// The keys the tool takes in its state at the end of this pass, after its pointer events and keys: the host
@@ -740,8 +743,23 @@ pub trait CanvasTool {
     }
 
     /// A key while the canvas has the keyboard and no text part keeps it. Return `true` to take it from the app's
-    /// shortcuts. Escape during a gesture never reaches here: it cancels. Default: `false`.
+    /// shortcuts. An Escape during a gesture does not reach here: it cancels the gesture, unless the tool
+    /// [`keeps_press_on_escape`](Self::keeps_press_on_escape). Default: `false`.
     fn key(&mut self, _key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
+        false
+    }
+
+    /// Whether the tool keeps the press of its gesture when Escape comes during it: the host cancels nothing, the
+    /// moves and the release keep coming, and the Escape reaches [`key`](Self::key) as [`ToolKey::Cancel`], so the
+    /// tool ends the drag its own way or goes on with it (the reference application's Red Eye box still applies on
+    /// the release after an Escape mid-drag). While such a gesture runs, the host holds that plain Escape from the
+    /// app's shortcuts for the next pass, as it holds the chords in [`claims`](Self::claims): a plain Escape the tool
+    /// leaves reaches no other taker. Three bounds. Any other Escape, and every Escape of a gesture whose tool does
+    /// not keep its press, cancels it through [`cancel`](Self::cancel) as before. A layer that owns keys over the app
+    /// (a popup or a modal open while the gesture runs) outranks the claim: the host holds no Escape then, and the
+    /// Escape is the captured press's again. The claim ends with the gesture, so an Escape carried in the same frame
+    /// as the release reaches nobody; the release ends the gesture. Default: `false`.
+    fn keeps_press_on_escape(&self) -> bool {
         false
     }
 
@@ -843,6 +861,10 @@ impl<T: CanvasTool + ?Sized> CanvasTool for &mut T {
 
     fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
         (**self).key(key, cx)
+    }
+
+    fn keeps_press_on_escape(&self) -> bool {
+        (**self).keeps_press_on_escape()
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
