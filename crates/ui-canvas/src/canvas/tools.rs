@@ -9,13 +9,14 @@
 use super::navigate::{FlickPan, NavigationOptions, pan};
 use super::readout::angle_row;
 use super::rotate::ViewTurn;
+use super::scrollbars::CanvasScrollbars;
 use super::zoom_motion::{HoldZoom, ZoomDrag};
 use super::{CanvasTool, CanvasWords, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use crate::primitives::Draw;
 use craft_behavior::PointerButton;
 use craft_behavior::canvas::zoom;
 use craft_behavior::geometry::crop::normalized_angle;
-use craft_behavior::kurbo::{Rect, Size, Vec2};
+use craft_behavior::kurbo::{Point, Rect, Size, Vec2};
 use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, ZoomScheme};
 use craft_keymap::{Key, Mods};
 use egui::Pos2;
@@ -313,6 +314,21 @@ impl HandTool {
         self.flick.stop();
     }
 
+    /// The limit of this tool's own pan: with Overscroll on the view stops where the canvas's scroll bars let a thumb
+    /// go, with 100 points of the document left in view at the opposite edge ([`CanvasScrollbars::clamp_overscroll`],
+    /// photocraft#12025). With Overscroll off the canvas clamps the view it is given to the document's edges; the
+    /// glide's steps are the tool's own motion and keep their run, as a turned view keeps its free pan, because the
+    /// issue measured neither.
+    fn limit_pan(&self, view: &mut CanvasView, cx: &ToolContext<'_>) {
+        if !self.options.overscroll {
+            return;
+        }
+        let Some(document) = cx.space().and_then(|space| space.document()) else {
+            return;
+        };
+        CanvasScrollbars::clamp_overscroll(view, Rect::from_origin_size(Point::ZERO, document));
+    }
+
     /// Whether a flick glides on.
     pub(crate) fn is_gliding(&self) -> bool {
         self.flick.gliding()
@@ -365,6 +381,7 @@ impl CanvasTool for HandTool {
         self.last = pointer.pos;
         let mut next = view;
         pan(&mut next, pointer.pos - from);
+        self.limit_pan(&mut next, cx);
         cx.pan_view(next, self.scroll_all);
         self.flick.drag(pointer.time, delta);
         if delta != egui::Vec2::ZERO {
@@ -376,6 +393,8 @@ impl CanvasTool for HandTool {
         let Some((view, from)) = self.start.take() else { return };
         let mut next = view;
         pan(&mut next, pointer.pos - from);
+        // The drag's own end, before the glide: the same limit the drag stops at.
+        self.limit_pan(&mut next, cx);
         // Letting go while the pointer still moves starts the glide, whose first step is this pass's.
         self.flick.release(pointer.time, self.options.flick_panning);
         if let Some(view) = self.glide(&next, pointer.time) {

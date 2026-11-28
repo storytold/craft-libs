@@ -522,6 +522,13 @@ impl<'a> Canvas<'a> {
         let (_, drag) = self.background_press(cx);
         if let Some(delta) = drag {
             pan(&mut view, delta);
+            // A middle-button drag is a Hand drag too: with Overscroll on it stops at the same limit as the tool's own
+            // (photocraft#12025); with Overscroll off [`clamped`] stops it at the document's edges.
+            if self.navigation.overscroll
+                && let Some(document) = self.document_size()
+            {
+                CanvasScrollbars::clamp_overscroll(&mut view, DocRect::from_origin_size(Point::ZERO, document));
+            }
             jumped = true;
         }
         let mut swallowing = false;
