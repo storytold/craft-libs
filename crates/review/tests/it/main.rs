@@ -5,4 +5,5 @@ pub(crate) mod balloons;
 pub(crate) mod collab;
 pub(crate) mod comments;
 pub(crate) mod note_popup;
+pub(crate) mod pins;
 pub(crate) mod signature;

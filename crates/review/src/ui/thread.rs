@@ -38,6 +38,8 @@ craft_ui::words! {
         react: "thread.react" = "Add reaction";
         pin: template "thread.pin" = "Comment by {author}";
         pin_text: template "thread.pinText" = "Comment by {author}: {words}";
+        area_pin: template "thread.areaPin" = "Area comment by {author}";
+        area_pin_text: template "thread.areaPinText" = "Area comment by {author}: {words}";
         cluster: template "thread.cluster" = "{n} comments";
         note_title: template "thread.noteTitle" = "{kind} – {author}";
     }

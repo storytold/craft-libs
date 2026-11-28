@@ -1,9 +1,11 @@
 //! Stories of the pins, the thread popover and the composer.
 
+use craft_behavior::CanvasView;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Show as _, clicked};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
-use egui::{Rect, Ui, Vec2, pos2, vec2};
+use egui::{Color32, Rect, Sense, Ui, UiBuilder, Vec2, pos2, vec2};
+use kurbo::Point;
 
 use super::pins::{Face, PinBubble};
 use super::{CommentComposer, CommentPin, CommentPins, ComposerClose, ComposerDraft, NoteDrafts, NotePopup, NotePopupMessage, ThreadPopover};
@@ -43,17 +45,67 @@ fn pin_bubble_unread(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(CommentPins<'static>, covers = [Default], drive = Drive::Never)]
 fn comment_pins_with_a_cluster(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let pin = |id: u64, x: f32, y: f32, author: &'static str| CommentPin {
-        id: ThreadId(id),
-        point: pos2(x, y),
-        author,
-        text: "Check the margin",
-        color: [200, 80, 40],
-        unread: id == 1,
-        resolved: id == 3,
+    let pin = |id: u64, x: f32, y: f32, author: &'static str| {
+        CommentPin::new(ThreadId(id), pos2(x, y), author, "Check the margin", [200, 80, 40]).unread(id == 1).resolved(id == 3)
     };
     let pins = [pin(1, 60.0, 80.0, "Ana"), pin(2, 220.0, 80.0, "Me"), pin(3, 230.0, 84.0, "Bo")];
     CommentPins::new("Pins", &pins, "Me").open(Some(ThreadId(1))).show(ui).into()
+}
+
+#[story(CommentPins<'static>, covers = [], drive = Drive::Never)]
+fn point_and_area_threads_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut point = thread();
+    point.anchor = CommentAnchor::Canvas { at: [52.0, 68.0], node: None };
+    point.messages[0].text = "Align this corner.".into();
+    let mut area = thread();
+    area.id = ThreadId(8);
+    area.anchor = CommentAnchor::CanvasArea { bounds: kurbo::Rect::new(120.0, 58.0, 206.0, 125.0) };
+    area.messages[0].text = "Check the spacing in this area.".into();
+    let threads = [point, area];
+
+    let zoomed = data.value("zoomed", false);
+    let zoom_changed = clicked(&Button::new(if *zoomed { "Zoom out" } else { "Zoom in" }).show(ui));
+    *zoomed ^= zoom_changed;
+    let zoom = if *zoomed { 1.35 } else { 1.0 };
+    let panned = data.value("panned", false);
+    let pan_changed = clicked(&Button::new(if *panned { "Reset pan" } else { "Pan right" }).show(ui));
+    *panned ^= pan_changed;
+    let center = Point::new(if *panned { 125.0 } else { 145.0 }, 85.0);
+    let (room, _) = ui.allocate_exact_size(vec2(335.0, 205.0), Sense::hover());
+    let view = CanvasView::new(room, center, zoom);
+    let mut canvas = ui.new_child(UiBuilder::new().id_salt("comment_canvas").max_rect(room));
+    canvas.set_clip_rect(room.intersect(ui.clip_rect()));
+    // Original, procedurally drawn demo content. Edges inside the rectangle remain visible.
+    let content = canvas.painter();
+    for row in 0..5 {
+        for column in 0..8 {
+            let at = Point::new(f64::from(column) * 32.0, f64::from(row) * 32.0);
+            let end = Point::new(at.x + 32.0, at.y + 32.0);
+            let shade = if (row + column) % 2 == 0 { 86 } else { 148 };
+            content.rect_filled(Rect::from_two_pos(view.to_screen(at), view.to_screen(end)), 0.0, Color32::from_gray(shade));
+        }
+    }
+
+    let pins: Vec<_> = threads
+        .iter()
+        .filter_map(|thread| {
+            let first = thread.messages.first()?;
+            CommentPin::from_canvas_anchor(thread.id, &thread.anchor, &view, &first.author, &first.text, [200, 80, 40])
+        })
+        .collect();
+    let open = data.value("open", Some(threads[1].id));
+    let shown = CommentPins::new("Comments", &pins, "Me").open(*open).show(&mut canvas);
+    *open = shown.opened.or(open.filter(|id| Some(*id) != shown.closed));
+    let selected = *open;
+
+    if let Some((thread, pin)) = threads.iter().zip(&pins).find(|(thread, _)| Some(thread.id) == selected) {
+        let draft = data.value("reply", String::new());
+        let reply = ThreadPopover::new(thread, &shown.response, "Me", &[], draft).anchor(Rect::from_min_max(pin.point, pin.point)).now(NOW).show(ui);
+        if reply.closed && !zoom_changed && !pan_changed {
+            *data.value("open", None::<ThreadId>) = None;
+        }
+    }
+    shown.into()
 }
 
 #[story(ThreadPopover<'static>, covers = [Default], drive = Drive::Never)]
