@@ -2,8 +2,9 @@
 //! being drawn.
 
 use super::PenTool;
-use super::bezier::{EditSubpath, Knot};
+use super::bezier::{BezierHit, BezierOverlay, EditPath, EditSubpath, HandlesShown, Knot, PathSelection};
 use super::tool::{Drag, Kind, PenEnd, PenEvent, PenStyle, paint_anchors, paint_close_cue, paint_path};
+use crate::geometry::curvature::CURVATURE_T_RANGE;
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{BezPath, Point};
 use craft_ui::canvas::{ToolAction, ToolContext, ToolPointer};
@@ -19,6 +20,9 @@ impl PenTool {
     /// - on another anchor: grabs it; past the click slop it follows the pointer and the draft reflows on every
     ///   move. The first [`kept`](PenTool::kept) anchors are not grabbed: a press on one adds an anchor, and a double
     ///   click on one does nothing, except on the last of them, the end the draft carries on from;
+    /// - on a segment of the curve being drawn: a smooth anchor inserted at that point, the curve re-solved through
+    ///   it, and a drag that moves it, as the Curvature Pen does on a finished path;
+    ///   [`insert_on_segment`](Self::insert_on_segment) names the drafts and presses that keep appending instead.
     /// - elsewhere: a new smooth anchor at the press, which follows the pointer while the button is down. The first
     ///   two anchors give straight segments; from three on the handles follow
     ///   [`carried_handles`](crate::geometry::curvature::carried_handles), which keeps the first
@@ -69,16 +73,43 @@ impl PenTool {
                 }
                 i
             }
-            None => {
-                draft.knots.push(Knot { smooth: true, ..Knot::corner(at) });
-                n
-            }
+            None => match self.insert_on_segment(&mut draft, pointer, view, reach) {
+                Some(inserted) => inserted,
+                None => {
+                    draft.knots.push(Knot { smooth: true, ..Knot::corner(at) });
+                    n
+                }
+            },
         };
         draft.reflow_kept(self.kept);
         let in_ctrl = draft.knots[index].in_ctrl;
         self.change(draft);
         self.drag = Some(Drag { origin: pointer.pos, kind: Kind::Move(index), last: pointer.pos, moved: false, in_ctrl });
         ToolAction::Claimed
+    }
+
+    /// The press that found no anchor, measured against the draft's own curve with the hit test the finished-path
+    /// tools use ([`BezierOverlay::hit_test`]): on a segment, a smooth knot is inserted at the point of that segment
+    /// nearest the press, at the hit's parameter clamped to [`CURVATURE_T_RANGE`] as the finished-path Curvature press
+    /// clamps it, and the new knot's index comes back; the caller's reflow re-solves the handles through it, and the
+    /// press then drags it. `None`, and nothing changed, when the press is off the curve, when `t` is not strictly
+    /// inside the segment, and for the drafts and presses the ticket leaves unmeasured, which go on appending: a draft
+    /// carried on from a selected end point (#10726, whose anchors are [`kept`](PenTool::kept)), a closed draft, a
+    /// draft of fewer than three anchors (its segments are still straight lines, not the curve), and a press with ⇧ or
+    /// ⌥ held (#12751 and #12700).
+    fn insert_on_segment(&self, draft: &mut EditSubpath, pointer: &ToolPointer, view: &CanvasView, reach: f32) -> Option<usize> {
+        if self.kept != 0 || draft.closed || draft.knots.len() < 3 || pointer.mods.shift || pointer.mods.alt {
+            return None;
+        }
+        let path = EditPath::new(0, vec![draft.clone()]);
+        let found = BezierOverlay::hit_test(&[path], &PathSelection::default(), HandlesShown::Selected, view, pointer.pos, reach)?;
+        let BezierHit::Segment { segment, t, .. } = found else { return None };
+        let at = draft.insert_at(segment.knot, t.clamp(*CURVATURE_T_RANGE.start(), *CURVATURE_T_RANGE.end()))?;
+        // `insert_at` returns the index it put the new knot at, so `at` is in range here. As
+        // `PathEdit::InsertCurvature` does on a finished path, the Curvature Pen adds a smooth point, on a straight
+        // segment too, and the caller's reflow gives it its handles.
+        draft.knots[at].smooth = true;
+        Some(at)
     }
 
     /// With no draft and the press not on an end point of an open path, the subpath [`carry_on`](PenTool::carry_on)

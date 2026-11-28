@@ -420,6 +420,239 @@ fn three_curvature_clicks_give_three_anchors() {
     }
 }
 
+// ---- Curvature mode: a press on a segment of the draft (photocraft#12749) ----
+
+/// The five clicks of the ticket's drawing: A, B, C, D and E, far apart on the canvas.
+const CURVE: [(f64, f64); 5] = [(40.0, 220.0), (110.0, 80.0), (190.0, 220.0), (270.0, 80.0), (350.0, 220.0)];
+
+/// The Curvature Pen mid-drawing: the five clicks of [`CURVE`], nothing committed yet.
+fn curvature_drawing() -> Pen {
+    let mut pen = pen();
+    pen.fixture.tool_mut().mode(PenMode::Curvature);
+    for (x, y) in CURVE {
+        pen.click_doc(x, y);
+    }
+    assert_eq!(pen.draft().knots.len(), CURVE.len(), "the five clicks drew five anchors");
+    pen
+}
+
+/// The point of the segment leaving knot `i` of `draft` at its parameter `t`: the curve the drawing shows there.
+fn point_on(draft: &EditSubpath, i: usize, t: f64) -> Point {
+    let (a, b) = (draft.knots[i], draft.knots[i + 1]);
+    let lerp = |p: Point, q: Point| p + (q - p) * t;
+    let (p01, p12, p23) = (lerp(a.anchor, a.out_ctrl), lerp(a.out_ctrl, b.in_ctrl), lerp(b.in_ctrl, b.anchor));
+    lerp(lerp(p01, p12), lerp(p12, p23))
+}
+
+/// Whether two document points lie within `within` units of each other.
+fn near(p: Point, q: Point, within: f64) -> bool {
+    p.distance(q) <= within
+}
+
+/// The same anchor with the same handles, within a thousandth of a unit.
+fn same(got: &Knot, want: &Knot) -> bool {
+    got.smooth == want.smooth
+        && near(got.anchor, want.anchor, 1e-3)
+        && near(got.in_ctrl, want.in_ctrl, 1e-3)
+        && near(got.out_ctrl, want.out_ctrl, 1e-3)
+}
+
+/// The draft the Curvature Pen leaves behind for `anchors`: every one smooth, its handles the re-solve of the run.
+fn re_solved(anchors: &[Point]) -> EditSubpath {
+    let mut want = EditSubpath::new(anchors.iter().map(|&a| Knot::smooth(a, a)).collect(), false);
+    want.reflow_kept(0);
+    want
+}
+
+/// The anchors of `draft`, in order.
+fn anchors_of(draft: &EditSubpath) -> Vec<Point> {
+    draft.knots.iter().map(|k| k.anchor).collect()
+}
+
+/// Asserts `draft` is one gesture with no step filed yet, and that its handles are the re-solve of its own anchors.
+fn check_resolved(pen: &Pen, draft: &EditSubpath) {
+    let anchors = anchors_of(draft);
+    let want = re_solved(&anchors);
+    for (i, (got, expected)) in draft.knots.iter().zip(&want.knots).enumerate() {
+        assert!(same(got, expected), "the curve is re-solved through every anchor, knot {i}: {got:?} against {expected:?}");
+    }
+    assert_eq!(pen.kinds().iter().filter(|kind| **kind == "begin").count(), 1, "one gesture for the whole drawing: {:?}", pen.kinds());
+    assert!(!pen.kinds().iter().any(|kind| *kind == "commit" || *kind == "finished"), "the draft stays open: {:?}", pen.kinds());
+}
+
+// The ticket's click: mid-segment on the curve being drawn inserts an anchor there, in order, and re-solves the curve.
+#[trial]
+fn a_curvature_press_on_a_segment_of_the_draft_inserts_an_anchor_there() {
+    let mut pen = curvature_drawing();
+    let before = pen.draft();
+    // Half-way along the curve from B to C: the ticket's click at (328, 228) on the segment B-C.
+    let on = point_on(&before, 1, 0.5);
+    let at = pen.at(on.x, on.y);
+    pen.click(at, Modifiers::NONE);
+    let draft = pen.draft();
+    let anchors = anchors_of(&draft);
+    assert_eq!(anchors.len(), 6, "the press added one anchor: {anchors:?}");
+    for (i, &(x, y)) in CURVE.iter().enumerate() {
+        let at_knot = if i < 2 { i } else { i + 1 };
+        assert!(near(doc(x, y), anchors[at_knot], 1e-6), "the {}th anchor of the drawing keeps its place at index {at_knot}: {anchors:?}", i + 1);
+    }
+    assert!(near(on, anchors[2], 1.0), "the new anchor sits within a pixel of the press, between B and C: {anchors:?}");
+    assert!(draft.knots[2].smooth, "the inserted anchor is smooth: {:?}", draft.knots[2]);
+    assert!(!near(draft.knots[1].out_ctrl, before.knots[1].out_ctrl, 1e-3), "the handles of the segment move with the re-solve");
+    check_resolved(&pen, &draft);
+}
+
+// A drag that starts on a segment inserts at the press and drags the new anchor, in one gesture.
+#[trial]
+fn a_curvature_drag_from_a_segment_inserts_at_the_press_and_moves_the_anchor() {
+    let mut pen = curvature_drawing();
+    let before = pen.draft();
+    let on = point_on(&before, 1, 0.5);
+    let from = pen.at(on.x, on.y);
+    let to = pen.at(210.0, 30.0);
+    pen.drag(from, to, Modifiers::NONE);
+    let draft = pen.draft();
+    let anchors = anchors_of(&draft);
+    assert_eq!(anchors.len(), 6, "the drag added one anchor: {anchors:?}");
+    assert!(near(doc(210.0, 30.0), anchors[2], 1e-6), "the new anchor went to the release point, between B and C: {anchors:?}");
+    for (i, &(x, y)) in CURVE.iter().enumerate() {
+        let at_knot = if i < 2 { i } else { i + 1 };
+        assert!(near(doc(x, y), anchors[at_knot], 1e-6), "the {}th anchor of the drawing keeps its place at index {at_knot}: {anchors:?}", i + 1);
+    }
+    check_resolved(&pen, &draft);
+}
+
+// The next click on empty canvas after the insert carries on from the last anchor of the drawing, not from the insert.
+#[trial]
+fn a_curvature_click_on_empty_canvas_after_a_segment_insert_carries_on_from_the_last_anchor() {
+    let mut pen = curvature_drawing();
+    let on = point_on(&pen.draft(), 1, 0.5);
+    let at = pen.at(on.x, on.y);
+    pen.click(at, Modifiers::NONE);
+    let far = pen.at(300.0, 280.0);
+    pen.click(far, Modifiers::NONE);
+    let draft = pen.draft();
+    let anchors = anchors_of(&draft);
+    assert_eq!(anchors.len(), 7, "the click on empty canvas added one anchor: {anchors:?}");
+    assert!(near(doc(350.0, 220.0), anchors[5], 1e-6), "E stayed the last anchor of the drawing: {anchors:?}");
+    assert!(near(doc(300.0, 280.0), anchors[6], 1e-6), "the click on empty canvas appended after E: {anchors:?}");
+}
+
+// The double click keeps its meaning over a segment: the anchor lands where the press was and becomes a corner.
+#[trial]
+fn a_curvature_double_click_on_a_segment_places_a_corner_anchor_there_in_order() {
+    let mut pen = curvature_drawing();
+    let on = point_on(&pen.draft(), 1, 0.5);
+    let at = pen.at(on.x, on.y);
+    // Two press and release pairs in successive frames, as `ToolFixture::double_press_at` does: the second press reads
+    // as a click count of 2.
+    pen.fixture.fixture().frame(vec![Event::PointerMoved(at)]);
+    for _ in 0..2 {
+        pen.fixture.fixture().frame(vec![button(at, true, Modifiers::NONE)]);
+        pen.fixture.fixture().frame(vec![button(at, false, Modifiers::NONE)]);
+    }
+    pen.fixture.fixture().frame(Vec::new());
+    pen.sync();
+    let draft = pen.draft();
+    let anchors = anchors_of(&draft);
+    assert_eq!(anchors.len(), 6, "the double click added one anchor: {anchors:?}");
+    assert!(near(on, anchors[2], 1.0), "it sits where the press was, between B and C: {anchors:?}");
+    assert!(near(doc(350.0, 220.0), anchors[5], 1e-6), "E is still the last anchor of the drawing: {anchors:?}");
+    assert!(!draft.knots[2].smooth, "the second click made the inserted anchor a corner: {:?}", draft.knots[2]);
+}
+
+// A press on an anchor of the draft still grabs that anchor: the segment hit test never steals it.
+#[trial]
+fn a_curvature_press_on_an_anchor_of_the_draft_moves_it_and_inserts_nothing() {
+    let mut pen = curvature_drawing();
+    let from = pen.at(190.0, 220.0);
+    let to = pen.at(210.0, 250.0);
+    pen.drag(from, to, Modifiers::NONE);
+    let draft = pen.draft();
+    let anchors = anchors_of(&draft);
+    assert_eq!(anchors.len(), 5, "a press on an anchor moves it, it inserts nothing: {anchors:?}");
+    assert!(near(doc(210.0, 250.0), anchors[2], 1e-6), "the anchor under the press followed the pointer: {anchors:?}");
+    assert!(near(doc(110.0, 80.0), anchors[1], 1e-6) && near(doc(270.0, 80.0), anchors[3], 1e-6), "its neighbours stayed: {anchors:?}");
+}
+
+// A press on the first anchor of the draft closes it at once, as it did before the segment hit test.
+#[trial]
+fn a_curvature_press_on_the_first_anchor_of_the_draft_still_closes_it() {
+    let mut pen = curvature_drawing();
+    let first = pen.at(40.0, 220.0);
+    pen.press(first, Modifiers::NONE);
+    pen.release(first, Modifiers::NONE);
+    assert!(pen.kinds().ends_with(&["commit", "finished"]), "{:?}", pen.kinds());
+    let done = pen.filed().expect("the commit that closed the path");
+    assert!(done.closed && done.knots.len() == 5, "{:?}", anchors_of(&done));
+}
+
+// Not measured by the ticket, so today's behaviour: a draft carried on from a selected end point (#10726) gains its
+// anchor at the press, after the anchors it carried, never inside the segments it carried.
+#[trial]
+fn a_curvature_press_on_a_segment_of_a_carried_on_draft_appends_as_today() {
+    let mut pen = pen();
+    let carried = EditSubpath::new(vec![Knot::corner(doc(60.0, 220.0)), Knot::corner(doc(110.0, 80.0)), Knot::corner(doc(190.0, 220.0))], false);
+    {
+        let mut tool = pen.fixture.tool_mut();
+        tool.mode(PenMode::Curvature);
+        tool.draft(Some(PenDraft::Own(&carried))).kept(3);
+    }
+    pen.fixture.fixture().settle();
+    let mid = pen.at(85.0, 150.0);
+    pen.click(mid, Modifiers::NONE);
+    let draft = pen.draft();
+    let anchors = anchors_of(&draft);
+    assert_eq!(anchors.len(), 4, "one anchor added: {anchors:?}");
+    assert!(near(doc(85.0, 150.0), anchors[3], 1e-6), "it went last, after the carried anchors: {anchors:?}");
+    assert_eq!(&draft.knots[..3], carried.knots[..].as_ref(), "the carried anchors keep their places and handles");
+}
+
+// Not measured either, so today's behaviour: a closed draft, a draft of two anchors, and a press with ⇧ or ⌥ held
+// (#12751 and #12700) all gain their anchor at the press, at the end.
+#[trial]
+fn a_curvature_press_on_a_closed_or_short_draft_or_with_a_modifier_appends_as_today() {
+    let mut kept_closed = pen();
+    let closed = EditSubpath::new(
+        vec![Knot::corner(doc(60.0, 60.0)), Knot::corner(doc(160.0, 60.0)), Knot::corner(doc(160.0, 160.0)), Knot::corner(doc(60.0, 160.0))],
+        true,
+    );
+    {
+        let mut tool = kept_closed.fixture.tool_mut();
+        tool.mode(PenMode::Curvature);
+        tool.draft(Some(PenDraft::Own(&closed)));
+    }
+    kept_closed.fixture.fixture().settle();
+    let mid = kept_closed.at(160.0, 110.0);
+    kept_closed.click(mid, Modifiers::NONE);
+    let draft = kept_closed.draft();
+    assert!(draft.closed, "the handed-in draft stays closed");
+    assert_eq!(draft.knots.len(), 5, "one anchor added: {:?}", anchors_of(&draft));
+    assert!(near(doc(160.0, 110.0), draft.knots[4].anchor, 1e-6), "it went last, as today: {:?}", anchors_of(&draft));
+
+    let mut short = pen();
+    short.fixture.tool_mut().mode(PenMode::Curvature);
+    short.click_doc(60.0, 220.0);
+    short.click_doc(110.0, 80.0);
+    let mid = short.at(85.0, 150.0);
+    short.click(mid, Modifiers::NONE);
+    let anchors = anchors_of(&short.draft());
+    assert_eq!(anchors.len(), 3, "a draft of two anchors has one straight segment: {anchors:?}");
+    assert!(near(doc(85.0, 150.0), anchors[2], 1e-6), "the press appended, as today: {anchors:?}");
+
+    for mods in [Modifiers::SHIFT, Modifiers::ALT] {
+        let mut pen = curvature_drawing();
+        let on = point_on(&pen.draft(), 1, 0.5);
+        let at = pen.at(on.x, on.y);
+        pen.click(at, mods);
+        let draft = pen.draft();
+        let anchors = anchors_of(&draft);
+        assert_eq!(anchors.len(), 6, "one anchor added with {mods:?}: {anchors:?}");
+        assert!(near(doc(350.0, 220.0), anchors[4], 1e-6), "E stays the fifth anchor with {mods:?}: {anchors:?}");
+        assert!(near(on, anchors[5], 1.0), "the new anchor is the press point, last, with {mods:?}: {anchors:?}");
+    }
+}
+
 // ---- Path modes and Path Options ----
 
 /// A host that ended the draft itself hands in no draft: the pen drops its run without an event, and the next press
