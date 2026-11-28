@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_behavior::{EditEvent, Mixed, Selection};
-use craft_color_ui::palette::{SwatchColor, SwatchGroup};
+use craft_color_ui::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchNote, read_swatches};
 use craft_color_ui::ui::{
     ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyPanel, HarmonyPanelState, HarmonyPicked, HarmonyWheel,
     PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState,
@@ -668,6 +668,95 @@ fn swatches_rig(groups: Vec<SwatchGroup>, state: SwatchesState) -> (Fixture, Rc<
     });
     fixture.room(Vec2::new(320.0, 400.0)).settle();
     (fixture, edits)
+}
+
+fn palette_color_count(groups: &[SwatchGroup]) -> usize {
+    groups.iter().flat_map(|group| &group.entries).filter(|entry| entry.color().is_some()).count()
+}
+
+/// Our own swatches cross ACT's 256-colour limit, with groups and a non-RGB colour that ACT cannot retain.
+fn act_export_groups() -> Vec<SwatchGroup> {
+    let mut entries = vec![SwatchEntry::new("Gray", SwatchColor::Gray(0.5))];
+    entries.extend((0..257).map(|i| SwatchEntry::new(format!("Color {i}"), SwatchColor::Rgb([i as f32 / 256.0, 0.0, 0.0]))));
+    let second = entries.split_off(129);
+    vec![SwatchGroup { name: "First".into(), entries }, SwatchGroup { name: "Second".into(), entries: second }]
+}
+
+#[trial]
+fn the_act_menu_export_reports_its_palette_losses_only_after_a_successful_save() {
+    use craft_ui::patterns::presets::PresetFileRequest;
+
+    let groups = act_export_groups();
+    let mut state = SwatchesState::default();
+    let words = SwatchesWords::default();
+    let format = craft_i18n::Format::from_tag("en-US");
+    let empty = [SwatchGroup { name: "Empty".into(), entries: Vec::new() }];
+    for (command, state) in SwatchesMenu::states(&empty) {
+        if matches!(command, SwatchesCommand::Export | SwatchesCommand::ExportAct | SwatchesCommand::ExportExchange) {
+            assert!(!state.is_enabled(), "{command:?} needs at least one swatch");
+        }
+    }
+    let output = SwatchesMenu::run_command(&groups, &mut state, SwatchesCommand::ExportAct, RED, &words);
+    assert!(output.edit.is_none() && output.status.is_none(), "asking for a file neither edits the library nor reports a completed export");
+    let request = output.file.expect("the ACT export asks for a file");
+    let PresetFileRequest::Save { file_name, extensions, bytes, .. } = &request else { panic!("a save request") };
+    assert_eq!(extensions, &["act".to_owned()]);
+    let (back, _) = read_swatches(bytes, file_name).expect("the menu's bytes are a readable ACT palette");
+    assert_eq!(palette_color_count(&back), 256, "ACT holds at most 256 colours");
+    assert_eq!(back.len(), 1, "ACT has no groups");
+    assert!(back[0].entries.iter().all(|entry| matches!(entry.color(), Some(SwatchColor::Rgb(_)))), "ACT stores RGB colours");
+
+    let saved = request.saved(file_name).unwrap();
+    let done = SwatchesPanel::apply_file(&mut state, &saved, &words, &Default::default(), &format);
+    assert!(done.edit.is_none(), "saving never edits the swatch library");
+    let report = done.report.expect("the saved file carries the menu's loss report");
+    assert!(report.notes.contains(&SwatchNote::GroupsFlattened));
+    assert!(report.notes.contains(&SwatchNote::ConvertedToRgb(1)));
+    assert!(report.notes.contains(&SwatchNote::Truncated(palette_color_count(&groups) - palette_color_count(&back))));
+    let status = done.status.expect("a successful lossy export explains what was lost");
+    for line in SwatchesPanel::note_lines(&report, true, &words, &format) {
+        assert!(status.text.as_str().contains(&line), "the status includes every export note: {line}");
+    }
+    let repeated = SwatchesPanel::apply_file(&mut state, &saved, &words, &Default::default(), &format);
+    assert!(repeated.report.is_none() && repeated.status.is_none(), "the saved report is consumed once");
+}
+
+#[trial]
+fn failed_or_abandoned_act_exports_do_not_leak_loss_notes_into_the_next_export() {
+    use craft_ui::patterns::presets::{PresetFileFailure, PresetFileRequest};
+
+    let groups = act_export_groups();
+    let mut state = SwatchesState::default();
+    let words = SwatchesWords::default();
+    let format = craft_i18n::Format::from_tag("en-US");
+    let failed = SwatchesMenu::run_command(&groups, &mut state, SwatchesCommand::ExportAct, RED, &words).file.unwrap();
+    let error = SwatchesPanel::apply_file(&mut state, &failed.failed("Palette.act", PresetFileFailure::Denied), &words, &Default::default(), &format);
+    assert!(error.edit.is_none() && error.report.is_none());
+    assert_eq!(error.status.expect("a write failure is reported").tone, craft_theme::variant::Tone::Bad);
+    let late = SwatchesPanel::apply_file(&mut state, &failed.saved("Palette.act").unwrap(), &words, &Default::default(), &format);
+    assert!(late.report.is_none() && late.status.is_none(), "a failed write clears its success notes");
+
+    for command in [SwatchesCommand::Export, SwatchesCommand::ExportExchange] {
+        // Cancelling the host's picker sends no Saved event. Its notes must not reach a later ACO or ASE save.
+        let abandoned = SwatchesMenu::run_command(&groups, &mut state, SwatchesCommand::ExportAct, RED, &words);
+        assert!(abandoned.file.is_some() && abandoned.status.is_none());
+        let next = SwatchesMenu::run_command(&groups, &mut state, command, RED, &words);
+        assert!(next.edit.is_none() && next.status.is_none());
+        let request = next.file.unwrap();
+        let PresetFileRequest::Save { file_name, bytes, .. } = &request else { panic!("a save request") };
+        let (back, _) = read_swatches(bytes, file_name).unwrap();
+        assert_eq!(palette_color_count(&back), palette_color_count(&groups), "{command:?} retains every colour");
+        let done = SwatchesPanel::apply_file(&mut state, &request.saved(file_name).unwrap(), &words, &Default::default(), &format);
+        let report = done.report.expect("the current export's report");
+        assert!(
+            !report.notes.iter().any(|note| matches!(note, SwatchNote::Truncated(_) | SwatchNote::ConvertedToRgb(_))),
+            "no stale ACT loss notes: {report:?}"
+        );
+        if command == SwatchesCommand::ExportExchange {
+            assert_eq!(back.len(), groups.len(), "ASE retains the groups");
+            assert!(done.status.is_none(), "a lossless ASE export has no loss warning");
+        }
+    }
 }
 
 #[trial]
