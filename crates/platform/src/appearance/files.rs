@@ -1,7 +1,9 @@
 //! Motion from the GNOME and KDE settings files, for a desktop whose portal does not answer.
 //!
 //! A bare window manager, or a session with no bus, has no portal to ask; the toolkits still
-//! follow the user's own settings files, so those answer instead.
+//! follow the user's own settings files, so those answer instead. They are read on the watcher's
+//! one worker, as the window-button layout's files are, so every one of them is read through
+//! `read_text`, which does not wait on a FIFO.
 
 use std::io::Read as _;
 use std::path::Path;
@@ -50,7 +52,7 @@ fn gtk_switch_reduces(text: &str) -> Option<bool> {
 
 /// The value of `key` in `[section]` of a settings file in INI form, trimmed; the last one wins.
 /// Comment lines (`#`, `;`) and keys outside any section don't count.
-fn ini_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
+pub(super) fn ini_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
     let mut inside = false;
     let mut found = None;
     for line in text.lines().map(str::trim) {
@@ -67,11 +69,30 @@ fn ini_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
     found
 }
 
-/// A settings file's text; `None` when it is absent, over [`CAP`] or not UTF-8.
+/// A settings file's text; `None` when it is absent or [`read_text`] refuses it.
 fn read_capped(path: &Path) -> Option<String> {
-    let mut text = String::new();
-    std::fs::File::open(path).ok()?.take(CAP + 1).read_to_string(&mut text).ok()?;
-    (text.len() as u64 <= CAP).then_some(text)
+    read_text(path, CAP).ok().flatten()
+}
+
+/// A settings file's text: `Ok(None)` when it does not exist, `Err` when it exists but can't be read whole (no
+/// permission, not a regular file, over `cap` bytes, not UTF-8). The open does not wait, as it would for a FIFO with no
+/// writer, and the type is taken from the opened file itself, so a file swapped for a FIFO meanwhile is refused too.
+pub(super) fn read_text(path: &Path, cap: u64) -> Result<Option<String>, ()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = match std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    if !file.metadata().map_err(|_| ())?.is_file() {
+        return Err(());
+    }
+    let mut bytes = Vec::new();
+    file.take(cap + 1).read_to_end(&mut bytes).map_err(|_| ())?;
+    if bytes.len() as u64 > cap {
+        return Err(());
+    }
+    String::from_utf8(bytes).map(Some).map_err(|_| ())
 }
 
 #[cfg(test)]

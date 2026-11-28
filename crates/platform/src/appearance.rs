@@ -1,11 +1,12 @@
-//! Desktop colour, contrast, motion and text-scale preferences and GNOME's window-button layout
-//! through the XDG Settings portal, the system's animation setting on Windows and macOS, plus the
-//! browser's contrast and motion media queries on the web.
+//! Desktop colour, contrast, motion and text-scale preferences and the window-button layout through
+//! the XDG Settings portal and the desktop's own settings, the system's animation setting on Windows
+//! and macOS, plus the browser's contrast and motion media queries on the web.
 //!
 //! Derived from PdfCraft's activation-safe subscription and GNOME schema fallback,
 //! CADCraft's BSD support, and ArtCraft Launcher's ReadOne/Read compatibility.
 //! Palettes, manual choices and the fallback when no preference exists belong to the host.
 mod reader;
+pub use craft_host::caption_layout::{LayoutReading, LayoutSource, RawLayout};
 pub use reader::{Reading, SystemReader};
 use std::{
     sync::{
@@ -50,6 +51,26 @@ struct Shared {
     settled_changed: Condvar,
     /// GNOME's `button-layout` as the desktop reported it; `None` until an answer arrives.
     layout: Mutex<Option<String>>,
+    /// The window-button layout each source gave, at its `LayoutSource::rank`; the best one present decides.
+    captions: Mutex<[Option<LayoutReading>; craft_host::caption_layout::LAYOUT_SOURCES]>,
+    /// The desktop whose settings place the window buttons, found once (`caption::watch`) for every source, the portal's
+    /// keys included; unset until then.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    layout_desktop: std::sync::OnceLock<craft_host::caption_layout::LayoutDesktop>,
+    /// Closed once `layout_desktop` is set: it wakes the portal's reads of the layout keys.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    found: (async_channel::Sender<()>, async_channel::Receiver<()>),
+    /// Closed when the window-button layout is first asked for (`Watcher::caption_layout`). Until then no source of it
+    /// runs: no X11 connection, no file poll, no `gsettings` helper and no portal read of its keys.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    wanted: (async_channel::Sender<()>, async_channel::Receiver<()>),
+    /// Wakes the configuration files' poll early, when the app becomes active.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    nudge: (async_channel::Sender<()>, async_channel::Receiver<()>),
+    /// Set once the portal has been asked for the layout keys (or found absent), so `gsettings` can leave the window
+    /// manager's key to it.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    captions_asked: AtomicBool,
     /// GNOME's `icon-theme` name as the desktop reported it; `None` until an answer arrives.
     icons: Mutex<Option<String>>,
     /// `XDG_CURRENT_DESKTOP` names GNOME; read once when the watcher starts.
@@ -71,6 +92,17 @@ impl Shared {
             settled: Mutex::new(false),
             settled_changed: Condvar::new(),
             layout: Mutex::new(None),
+            captions: Mutex::new(Default::default()),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            layout_desktop: std::sync::OnceLock::new(),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            found: async_channel::bounded(1),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            wanted: async_channel::bounded(1),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            nudge: async_channel::bounded(1),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            captions_asked: AtomicBool::new(false),
             icons: Mutex::new(None),
             #[cfg(all(unix, not(target_os = "macos")))]
             gnome: is_gnome_session(&|k| std::env::var(k).ok()),
@@ -145,6 +177,64 @@ impl Shared {
     fn publish_layout(&self, layout: String) {
         self.publish_text(&self.layout, layout);
     }
+    /// Takes `source`'s layout (`None`: it has none, or no longer has one) and wakes an active host when the best
+    /// reading changed.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_caption(&self, source: LayoutSource, reading: Option<LayoutReading>) {
+        let mut captions = self.captions.lock().unwrap_or_else(PoisonError::into_inner);
+        let best = |captions: &[Option<LayoutReading>]| captions.iter().flatten().next().cloned();
+        let before = best(&*captions);
+        captions[source.rank()] = reading;
+        let after = best(&*captions);
+        drop(captions);
+        if before != after {
+            match &after {
+                Some(reading) => log::debug!("window buttons: {:?} from {} ({:?})", reading.raw, reading.origin, reading.source),
+                None => log::debug!("window buttons: no source answers; the desktop's default applies"),
+            }
+            if self.active.load(Ordering::Acquire) {
+                (self.wake)();
+            }
+        }
+    }
+    /// Whether `source` holds a layout now.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn has_caption(&self, source: LayoutSource) -> bool {
+        self.captions.lock().unwrap_or_else(PoisonError::into_inner)[source.rank()].is_some()
+    }
+    /// Asks for the window-button layout: its sources start looking from now on.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn want_captions(&self) {
+        self.wanted.0.close();
+    }
+    /// Whether the window-button layout has been asked for.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn captions_wanted(&self) -> bool {
+        self.wanted.0.is_closed()
+    }
+    /// Waits until the window-button layout is asked for.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    async fn until_captions_wanted(&self) {
+        let _ = self.wanted.1.recv().await;
+    }
+    /// Sets the desktop whose settings place the window buttons, for every source; the first one set stays. The layout
+    /// counts as asked for from then on.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn find_desktop(&self, desktop: craft_host::caption_layout::LayoutDesktop) {
+        let _ = self.layout_desktop.set(desktop);
+        self.wanted.0.close();
+        self.found.0.close();
+    }
+    /// The desktop found for the layout; `None` before.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn layout_desktop(&self) -> Option<craft_host::caption_layout::LayoutDesktop> {
+        self.layout_desktop.get().copied()
+    }
+    /// Waits until the desktop is found for the layout.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    async fn until_desktop_found(&self) {
+        let _ = self.found.1.recv().await;
+    }
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     fn publish_icons(&self, icons: String) {
         // The GNOME key holds a value on every desktop that has the schema (`gsettings` answers
@@ -202,7 +292,10 @@ impl Watcher {
     pub fn start_active(active: bool, wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
         {
-            Self::spawn(active, wake, portal::watch)
+            // One worker for every source: the portal's subscription and the desktop's own settings.
+            Self::spawn(active, wake, |shared| async move {
+                futures_lite::future::zip(portal::watch(Arc::clone(&shared)), caption::watch(shared)).await;
+            })
         }
         #[cfg(any(windows, target_os = "macos"))]
         {
@@ -232,10 +325,45 @@ impl Watcher {
     /// the `gsettings` fallback has answered, and on targets without a desktop watcher.
     ///
     /// It comes over the same connection as the theme, and a change runs the same wake callback.
-    /// Only a GNOME-family window manager follows this setting; `craft_window::policy::LayoutWatch`
-    /// decides when it applies. [`Watcher::wait_first`] does not wait for it.
+    /// Only a GNOME-family window manager follows this setting; [`Watcher::caption_layout`] is the
+    /// layout of every desktop, GNOME's included. [`Watcher::wait_first`] does not wait for it.
     pub fn button_layout(&self) -> Option<String> {
         self.shared.layout.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+    /// The window-button layout of the running desktop, from the best of its sources that answers, in this order
+    /// (`craft_host::caption_layout::LayoutSource`):
+    ///
+    /// 1. the settings portal's standard `org.freedesktop.appearance` `button-placement`;
+    /// 2. the window manager's own setting: GNOME's, Cinnamon's or MATE's `button-layout` exported by the portal, then
+    ///    from `gsettings` (watched with `gsettings monitor`), or xfwm4's from Xfconf over D-Bus;
+    /// 3. the window manager's configuration file: KWin's `kwinrc` (with the system's files and their locks), xfwm4's
+    ///    channel file, Openbox's or labwc's `rc.xml` (Budgie's in `budgie-desktop/labwc`);
+    /// 4. GTK's `Gtk/DecorationLayout` from the X settings manager (not on MATE, whose manager does not follow Marco),
+    ///    then GNOME's key where the desktop keeps it in step with its window manager: KDE's GTK bridge, Xfce 4.20 and
+    ///    Budgie's labwc bridge do (GTK's own apps in a Flatpak follow it there); on LXQt, Cinnamon and MATE it holds
+    ///    GNOME's default and is not read;
+    /// 5. GTK's `gtk-decoration-layout` in `gtk-3.0/settings.ini`.
+    ///
+    /// Which window manager's setting counts follows the session (`LayoutDesktop::detect`), with the running X11
+    /// window manager's EWMH name on an X11 session and LXQt's chosen one, found once for every source: the portal is
+    /// asked for that window manager's keys only. Each source is followed while the app runs: the portal,
+    /// `gsettings monitor`, Xfconf and the X settings manager announce changes, and the files are looked at once a
+    /// second (and when the app becomes active). A source that loses its answer gives way to the next; a lost connection
+    /// keeps the last answer until it is back.
+    ///
+    /// The first call starts the sources: until then the watcher reads none of them, so an app that never asks starts
+    /// no file poll, helper or X11 connection for it. The first answers arrive a moment after that call.
+    ///
+    /// In a Flatpak, `gsettings` reads the sandbox's own settings, not the user's, so it is not asked; system
+    /// configuration folders are the runtime's, so only the user's files count; Xfconf answers only with
+    /// `--talk-name=org.xfce.Xfconf`, a file only where the app was given it (`--filesystem=xdg-config/kwinrc:ro`).
+    /// `None` while no source has answered, on a desktop none of them knows, and on targets without a desktop watcher:
+    /// the caller then keeps the desktop's default. A change runs the wake callback; [`Watcher::wait_first`] does not
+    /// wait for it.
+    pub fn caption_layout(&self) -> Option<LayoutReading> {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+        self.shared.want_captions();
+        self.shared.captions.lock().unwrap_or_else(PoisonError::into_inner).iter().flatten().next().cloned()
     }
     /// GNOME's `org.gnome.desktop.interface` `icon-theme` name as the desktop reports it, such as
     /// `Adwaita`. `None` until the portal or the `gsettings` fallback has answered, on targets
@@ -315,9 +443,14 @@ impl Watcher {
         self.current()
     }
     /// Enable or suppress future change notifications without stopping observation.
-    /// Changing this flag does not itself wake the host or clear the cached preference.
+    /// Changing this flag does not itself wake the host or clear the cached preference. Becoming active looks at the
+    /// window manager's configuration files again at once.
     pub fn set_active(&self, active: bool) {
         self.shared.active.store(active, Ordering::Release);
+        #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+        if active {
+            let _ = self.shared.nudge.0.try_send(());
+        }
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     fn spawn<F: std::future::Future<Output = ()> + 'static>(
@@ -325,7 +458,15 @@ impl Watcher {
         wake: impl Fn() + Send + Sync + 'static,
         source: impl FnOnce(Arc<Shared>) -> F + Send + 'static,
     ) -> Option<Self> {
-        let shared = Arc::new(Shared::new(active, Box::new(wake)));
+        Self::spawn_shared(Shared::new(active, Box::new(wake)), source)
+    }
+    /// [`Watcher::spawn`] with `shared` made by the caller (a test finds the desktop for it).
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn spawn_shared<F: std::future::Future<Output = ()> + 'static>(
+        shared: Shared,
+        source: impl FnOnce(Arc<Shared>) -> F + Send + 'static,
+    ) -> Option<Self> {
+        let shared = Arc::new(shared);
         let worker_shared = Arc::clone(&shared);
         let (stop, stopped) = async_channel::bounded::<()>(1);
         let (done, finished) = std::sync::mpsc::channel();
@@ -419,6 +560,11 @@ fn is_gnome_session(var: &dyn Fn(&str) -> Option<String>) -> bool {
     var("KDE_FULL_SESSION").is_none() && var("GNOME_DESKTOP_SESSION_ID").is_some()
 }
 
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod caption;
+#[cfg(test)]
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod fake_bus;
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 mod files;
 #[cfg(any(windows, target_os = "macos"))]
