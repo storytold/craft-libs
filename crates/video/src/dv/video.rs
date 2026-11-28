@@ -27,6 +27,8 @@ pub struct Picture {
     pub cr: Vec<u8>,
     /// The picture is 16:9 (squeezed into the 720 pixels), not 4:3.
     pub wide: bool,
+    /// The picture is two interlaced fields, bottom first ([`Header::interlaced`]), not progressive.
+    pub interlaced: bool,
     /// The sample aspect ratio ([`Header::sample_aspect`]).
     pub sample_aspect: (u32, u32),
 }
@@ -75,6 +77,8 @@ const EXTRA_422: [Span; 2] = [(136, 232), (360, 456)];
 const DC_BITS: usize = 12;
 /// The DC error code (§2.6, Video error code): a block whose DC is this was not reproduced.
 const DC_ERROR: i32 = -256;
+/// What a block that was not reproduced decodes to.
+const GREY: [u8; 64] = [128; 64];
 
 /// The order the coefficients are sent in (Fig. 27), as indices `8 × v + h` (`v` the row: vertical frequency, or
 /// for 2-4-8 the sum (0–3) and difference (4–7) of the fields): for 8-8 and for 2-4-8.
@@ -370,7 +374,17 @@ pub(crate) fn decode(frame: &[u8], header: &Header) -> Result<Picture> {
         Sampling::C420 => Layout::Yuv420,
         Sampling::C422 => Layout::Yuv422,
     };
-    Ok(Picture { width: WIDTH, height, layout, y: planes.y, cb: planes.cb, cr: planes.cr, wide: header.wide, sample_aspect: header.sample_aspect() })
+    Ok(Picture {
+        width: WIDTH,
+        height,
+        layout,
+        y: planes.y,
+        cb: planes.cb,
+        cr: planes.cr,
+        wide: header.wide,
+        interlaced: header.interlaced,
+        sample_aspect: header.sample_aspect(),
+    })
 }
 
 /// The planes being filled: Y 720 wide, Cb and Cr `chroma_width`.
@@ -460,9 +474,10 @@ fn decode_segment(frame: &[u8], header: &Header, (channel, sequence): (usize, us
     };
     let rows = [row(2), row(6), row(8), row(0), row(4)];
     let columns = [2, 1, 3, 0, 4];
-    // The segment's bits, one a byte, and each macro block's quantisation number.
+    // The segment's bits, one a byte, and each macro block's quantisation number and status (STA).
     let mut bits = [0u8; 5 * MACRO_BITS];
     let mut qno = [0usize; 5];
+    let mut sta = [0u8; 5];
     for (m, chunk) in bits.as_chunks_mut::<MACRO_BITS>().0.iter_mut().enumerate() {
         // Video DIF block 5k + m of the sequence: after the header, subcode and VAUX blocks, 15 to an audio block.
         let v = 5 * k + m;
@@ -473,7 +488,13 @@ fn decode_segment(frame: &[u8], header: &Header, (channel, sequence): (usize, us
             *bit = (bytes[i / 8] >> (7 - i % 8)) & 1;
         }
         qno[m] = usize::from(bytes[0] & 0x0F);
+        sta[m] = bytes[0] >> 4;
     }
+    // STA (Table 26): 0111 and 1111 say the macro block has errors, so it is left grey. Only the macro blocks whose
+    // STA has s3 = 0 and s0 = 0 keep the data continuous with each other (type a): pass 3 runs over those alone, and
+    // the others neither give it their unused space nor take from it.
+    let damaged = sta.map(|status| matches!(status, 0b0111 | 0b1111));
+    let continuous = sta.map(|status| status & 0b1001 == 0);
     // Six DCT blocks a macro block, four at 50 Mb/s (the rest marked done, so no pass reads into them).
     let mut blocks: [[Block; 6]; 5] = std::array::from_fn(|_| {
         std::array::from_fn(|l| {
@@ -526,22 +547,24 @@ fn decode_segment(frame: &[u8], header: &Header, (channel, sequence): (usize, us
         for block in macro_blocks.iter_mut().filter(|b| !b.done) {
             used = continue_block(block, &space, used);
         }
-        if macro_blocks.iter().all(|b| b.done) {
+        if continuous[m] && macro_blocks.iter().all(|b| b.done) {
             leftover.extend_from_slice(&space[used.min(space.len())..]);
         }
     }
 
     // Pass 3: what is still left over, from the space no macro block used, in order.
     let mut used = 0;
-    for block in blocks.iter_mut().flatten().filter(|b| !b.done) {
-        used = continue_block(block, &leftover, used);
+    for (macro_blocks, _) in blocks.iter_mut().zip(continuous).filter(|&(_, continuous)| continuous) {
+        for block in macro_blocks.iter_mut().filter(|b| !b.done) {
+            used = continue_block(block, &leftover, used);
+        }
     }
 
     // The pixels.
     let tables = tables();
     Some(std::array::from_fn(|m| {
         let (x, y, shape) = place(header.sampling, rows[m], columns[m], k);
-        let pixels = std::array::from_fn(|l| reconstruct(&blocks[m][l], qno[m], tables));
+        let pixels = std::array::from_fn(|l| if damaged[m] { GREY } else { reconstruct(&blocks[m][l], qno[m], tables) });
         (x, y, shape, pixels)
     }))
 }
@@ -563,7 +586,7 @@ fn continue_block(block: &mut Block, stream: &[u8], used: usize) -> usize {
 fn reconstruct(block: &Block, qno: usize, tables: &Tables) -> [u8; 64] {
     if block.dc == DC_ERROR {
         // Not reproduced: left grey rather than taken for a dark block.
-        return [128; 64];
+        return GREY;
     }
     let mode = block.mode.min(1);
     let class = block.class.min(3);
@@ -849,5 +872,62 @@ mod tests {
         assert_eq!(used, long.len() - 150);
         assert_eq!(block.next, 61);
         assert!(block.coefficients.iter().filter(|&&c| c == 1).count() == 60);
+    }
+
+    #[test]
+    fn a_block_with_its_last_coefficient_still_ends_at_its_eob() {
+        // Every place of the scan taken (63 codes of (0, 1) +), then the EOB that ends every block (§2.6), then
+        // bits of the next block: the EOB is read, and nothing after it.
+        let push = |bits: &mut Vec<u8>, code: &str| bits.extend(code.bytes().map(|b| b - b'0'));
+        let mut stream = Vec::new();
+        for _ in 0..63 {
+            push(&mut stream, "000");
+        }
+        let last = stream.len();
+        push(&mut stream, "0110");
+        let full = stream.len();
+        push(&mut stream, "1111");
+        let mut block = Block::new();
+        let mut source = Source { head: (0, 0), tail: &stream, at: 0 };
+        read_codes(&mut block, &mut source);
+        assert!(block.done);
+        assert_eq!(source.tail_used(), full);
+        // With the block's data broken off after its last coefficient, it waits for its EOB in the next pass.
+        let mut block = Block::new();
+        let mut source = Source { head: (0, 0), tail: &stream[..last], at: 0 };
+        read_codes(&mut block, &mut source);
+        assert!(!block.done);
+        block.pending = source.rest();
+        assert_eq!(continue_block(&mut block, &stream[last..], 0), full - last);
+        assert!(block.done);
+    }
+
+    #[test]
+    fn a_macro_block_whose_status_says_error_is_grey() {
+        // A segment of five macro blocks whose blocks are each a DC of 40 and an EOB: flat at 148, unless the macro
+        // block's STA says it has errors (Table 26: 0111, 1111). One concealed without errors (1010) still decodes.
+        let header = Header { system: crate::dv::System::Lines525, sampling: Sampling::C411, wide: false, interlaced: true };
+        let segment = |sta: [u8; 5]| {
+            let mut frame = vec![0u8; header.frame_bytes()];
+            for (m, &status) in sta.iter().enumerate() {
+                // Video DIF block m of the first segment of the first DIF sequence.
+                let start = (7 + m) * BLOCK + ID;
+                frame[start] = (status << 4) | 15;
+                for &(area, _) in &AREAS {
+                    // DC 000101000, 8-8, class 00, EOB 0110.
+                    for (i, bit) in "0001010000000110".bytes().enumerate() {
+                        let at = area + i;
+                        frame[start + at / 8] |= (bit - b'0') << (7 - at % 8);
+                    }
+                }
+            }
+            decode_segment(&frame, &header, (0, 0), 0).expect("a whole segment")
+        };
+        let flat = |decoded: &Decoded, value: u8| decoded.3.iter().flatten().all(|&p| p == value);
+        let clean = segment([0; 5]);
+        assert!(clean.iter().all(|decoded| flat(decoded, 148)));
+        let marked = segment([0, 0b0111, 0b1111, 0b1010, 0]);
+        assert!(flat(&marked[1], 128) && flat(&marked[2], 128));
+        assert!(flat(&marked[0], 148) && flat(&marked[3], 148) && flat(&marked[4], 148));
     }
 }

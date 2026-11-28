@@ -6,7 +6,7 @@
 
 use craft_media_testkit::fixtures;
 use craft_video::dv::{self, Layout, Sampling, System};
-use craft_video::frame::VideoFrame;
+use craft_video::frame::{FieldOrder, VideoFrame};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -167,4 +167,39 @@ fn damaged_frames_are_errors_or_pictures() {
     craft_media_testkit::hostile::hammer("dv", &frame, 64, |data| {
         let _ = dv::decode(data);
     });
+}
+
+/// A 525/60 frame of zeros but for its header DIF block (APT 001) and `packs` in its first VAUX DIF block.
+fn frame_with_packs(packs: &[[u8; 5]]) -> Vec<u8> {
+    let mut frame = vec![0u8; System::Lines525.frame_bytes()];
+    frame[..5].copy_from_slice(&[0x1F, 0x07, 0x00, 0x3F, 0x01]);
+    let vaux = 3 * dv::DIF_BLOCK;
+    frame[vaux] = 0x5F;
+    for (n, pack) in packs.iter().enumerate() {
+        let at = vaux + 3 + 5 * n;
+        frame[at..at + 5].copy_from_slice(pack);
+    }
+    frame
+}
+
+/// A VAUX source pack's signal type other than the 25 and 50 Mb/s structures (10100, as ffmpeg writes it for
+/// 1080-line DVCPRO HD) is refused rather than read as 25 Mb/s; a frame without the pack is 25 Mb/s.
+#[test]
+fn other_signal_types_are_refused() {
+    let hd = frame_with_packs(&[[0x60, 0xFF, 0xFF, 0xC0 | 0b10100, 0xFF]]);
+    assert!(matches!(dv::header(&hd), Err(dv::Error::Unsupported(_))));
+    assert_eq!(dv::header(&frame_with_packs(&[])).expect("a header").sampling, Sampling::C411);
+}
+
+/// The VAUX source control pack's interlace flag: a noninterlaced frame is a progressive VideoFrame; an interlaced
+/// one, or one without the pack, bottom field first.
+#[test]
+fn the_interlace_flag_sets_the_field_order() {
+    let order = |packs: &[[u8; 5]]| {
+        let picture = dv::decode(&frame_with_packs(packs)).expect("a picture");
+        VideoFrame::try_from(picture).expect("a video frame").field_order
+    };
+    assert_eq!(order(&[[0x61, 0x3F, 0xC8, 0xEC, 0xFF]]), FieldOrder::Progressive);
+    assert_eq!(order(&[[0x61, 0x3F, 0xC8, 0xFC, 0xFF]]), FieldOrder::BottomFieldFirst);
+    assert_eq!(order(&[]), FieldOrder::BottomFieldFirst);
 }

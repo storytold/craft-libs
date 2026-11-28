@@ -3,14 +3,14 @@
 //! QuickTime file or a raw `.dv` file (one frame after another).
 //!
 //! - [`sniff`]: whether bytes start like a DV frame.
-//! - [`header`]: a frame's system (525/60 or 625/50), colour sampling and picture shape.
+//! - [`header`]: a frame's system (525/60 or 625/50), colour sampling, picture shape and scan (interlaced or not).
 //! - [`decode`]: a frame's picture, 720 × 480 or 720 × 576 8-bit Y'CbCr in its own sampling: 4:1:1 (525/60, and
 //!   DVCPRO's 625/50), 4:2:0 (IEC 61834's 625/50) or 4:2:2 (DVCPRO50). It converts into
 //!   [`crate::frame::VideoFrame`].
 //!
 //! Written from ITU-R BT.1618-1 and SMPTE ST 314 (see `README.md` in this folder for what comes from where). Every
 //! length and number read from a frame is checked: a damaged frame gives a picture with the damaged blocks grey, or
-//! an error, never a panic. The sound in the frame's DIF blocks, DVCPRO HD and an encoder are not here yet.
+//! an error, never a panic. The sound in the frame's DIF blocks, DVCPRO HD (an error) and an encoder are not here yet.
 
 mod video;
 mod vlc;
@@ -29,6 +29,9 @@ pub enum Error {
     /// The bytes are not a DV frame, or are cut short.
     #[error("invalid DV frame: {0}")]
     Invalid(String),
+    /// The frame signals a kind of DV this decoder does not read (DVCPRO HD, for one).
+    #[error("unsupported DV: {0}")]
+    Unsupported(String),
 }
 
 /// Result with this module's [`Error`].
@@ -94,6 +97,9 @@ pub struct Header {
     pub sampling: Sampling,
     /// The picture is 16:9 (squeezed into the 720 pixels), not 4:3.
     pub wide: bool,
+    /// The picture is two interlaced fields (bottom first), not progressive: the VAUX source control pack's
+    /// interlace flag, interlaced when the frame has no such pack.
+    pub interlaced: bool,
 }
 
 impl Header {
@@ -130,7 +136,8 @@ pub fn sniff(bytes: &[u8]) -> bool {
 /// the whole frame is).
 ///
 /// # Errors
-/// When the bytes do not start with a header DIF block, or are shorter than a DIF sequence.
+/// When the bytes do not start with a header DIF block, or are shorter than a DIF sequence; and
+/// [`Error::Unsupported`] when the VAUX source pack signals a kind of DV other than the 25 and 50 Mb/s structures.
 pub fn header(frame: &[u8]) -> Result<Header> {
     let Some(&[id, _, _, dsf, apt, ..]) = frame.get(..8) else {
         return Err(Error::Invalid("the frame is too short".to_owned()));
@@ -143,19 +150,25 @@ pub fn header(frame: &[u8]) -> Result<Header> {
     if frame.len() < SEQUENCE {
         return Err(Error::Invalid(format!("the frame has {} bytes, less than a DIF sequence", frame.len())));
     }
-    // The VAUX source pack's signal type: 4:2:2 is the 50 Mb/s structure of two channels. Otherwise APT 000 is
-    // IEC 61834 (625/50 in 4:2:0); 001 is SMPTE ST 314 (4:1:1 in both systems).
-    let sampling = if vaux_pack(frame, system, 0x60).is_some_and(|pack| pack[3] & 0x1F == 0b00100) {
-        Sampling::C422
-    } else {
-        match (system, apt & 0x07) {
-            (System::Lines625, 0) => Sampling::C420,
-            _ => Sampling::C411,
-        }
+    // The 25 Mb/s structure: APT 000 is IEC 61834 (625/50 in 4:2:0); 001 is SMPTE ST 314 (4:1:1 in both systems).
+    let structure_25 = match (system, apt & 0x07) {
+        (System::Lines625, 0) => Sampling::C420,
+        _ => Sampling::C411,
     };
-    // The VAUX source control pack's display select mode: 010 is 16:9.
-    let wide = vaux_pack(frame, system, 0x61).is_some_and(|pack| pack[2] & 0x07 == 0b010);
-    Ok(Header { system, sampling, wide })
+    // The VAUX source pack's signal type (BT.1618-1 Table 13): 00000 is the 25 Mb/s structure, 00100 the 50 Mb/s
+    // structure of two channels, and the rest is reserved there (SMPTE ST 370 gives some of it to DVCPRO HD, whose
+    // frames this decoder does not read). A frame without the pack is taken for 25 Mb/s.
+    let sampling = match vaux_pack(frame, system, 0x60).map(|pack| pack[3] & 0x1F) {
+        None | Some(0b00000) => structure_25,
+        Some(0b00100) => Sampling::C422,
+        Some(signal) => return Err(Error::Unsupported(format!("signal type {signal:05b}, not the 25 or 50 Mb/s structure"))),
+    };
+    // The VAUX source control pack (Table 14): the display select mode, 010 is 16:9; the interlace flag, 0 is
+    // noninterlaced.
+    let control = vaux_pack(frame, system, 0x61);
+    let wide = control.is_some_and(|pack| pack[2] & 0x07 == 0b010);
+    let interlaced = control.is_none_or(|pack| pack[3] & 0x10 != 0);
+    Ok(Header { system, sampling, wide, interlaced })
 }
 
 /// The first VAUX pack whose header is `id` (fifteen 5-byte packs in each VAUX DIF block, BT.1618-1 Fig. 7).
