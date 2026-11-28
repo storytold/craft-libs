@@ -315,6 +315,8 @@ pub use craft_print as print;
 pub use craft_proof as proof;
 #[cfg(feature = "proto")]
 pub use craft_proto as proto;
+#[cfg(feature = "protobuf")]
+pub use craft_protobuf as protobuf;
 #[cfg(feature = "ps")]
 pub use craft_ps as ps;
 #[cfg(feature = "psd")]
