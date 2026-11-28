@@ -2,7 +2,7 @@
 //! member of the strip's run.
 
 use craft_behavior::{SelectionChange, keyed};
-use craft_ui::contract::{CollectionEvent, Role, ShowCollection as _};
+use craft_ui::contract::{CollectionEvent, Props as _, Role, ShowCollection as _};
 use craft_ui::runtime::egui::access::AccessTree;
 use craft_ui::tabs::{DocumentTabLook, Tab, TabKind, TabRole, TabStrip};
 use craft_ui::testing::focus::AccessActionKind;
@@ -761,6 +761,28 @@ fn tabs_with_the_same_label_keep_their_own_selection_and_click() {
     assert_eq!(tab_rects(fixture.tree(), "Options").len(), 2, "both tabs keep their nodes after the click");
     fixture.click_at(rects[0].center()).settle();
     assert_eq!(shown.get(), 0, "a click on the first tab shows the first");
+}
+
+/// Two tabs with the same label but different descriptions each report their own description on the node named by
+/// the label, so a reader can tell them apart.
+#[trial]
+fn tabs_in_a_strip_report_their_own_descriptions() {
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        let paths = ["Folder/Alpha.md", "Other/Alpha.md"];
+        let _ = TabStrip::new("Notes").kind(TabKind::Text).shown(0).show_items(ui, &source, &mut |key, _| Tab::new("Alpha").description(paths[*key]));
+    });
+    fixture.settle();
+    let tree = fixture.tree();
+    let mut tabs: Vec<_> = tree.with_role(Role::TAB).into_iter().filter(|key| tree.name_of(*key) == Some("Alpha")).collect();
+    tabs.sort_by(|a, b| tree.bounds_of(*a).map(|r| r.left()).unwrap_or(0.0).total_cmp(&tree.bounds_of(*b).map(|r| r.left()).unwrap_or(0.0)));
+    let descriptions: Vec<_> = tabs.iter().map(|key| tree.description_of(*key)).collect();
+    assert_eq!(
+        descriptions,
+        [Some("Folder/Alpha.md"), Some("Other/Alpha.md")],
+        "each tab keeps its label as its name and reports its own description"
+    );
 }
 
 /// The strip reports the tab under the pointer, also while a press held on another component is dragged over it, and

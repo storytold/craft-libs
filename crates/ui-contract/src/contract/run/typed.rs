@@ -966,7 +966,7 @@ fn report_member(core: &CxCore<'_>, access: &Access, node: &MemberNode, role: cr
     };
     let mut sub = SubNode::new(node.part, access.role.unwrap_or(role));
     sub.name = name;
-    sub.description = access.description.clone();
+    sub.description = access.description.clone().or_else(|| core.resolved.description.map(str::to_owned));
     sub.value = access.value.clone();
     sub.color = access.color;
     sub.numeric = access.numeric.clone();
