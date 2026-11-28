@@ -49,7 +49,6 @@ pub(crate) fn valid_time(t: NaiveDateTime) -> NaiveDateTime {
 
 /// A date from `YYYY-MM-DD` or `YYYYMMDD`, years 1 to 9999.
 fn parse_iso_date(s: &str) -> Option<NaiveDate> {
-    let s = s.trim();
     let digits: String = match s.len() {
         8 => s.to_string(),
         10 if s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-') => s.chars().filter(char::is_ascii_digit).collect(),
@@ -302,6 +301,7 @@ mod tests {
             "20-261012",
             "20261012-",
             "2026101-2T090000",
+            "20261012 T090000",
             "20261012T",
             "20261012T25",
             "20261012T240000",
