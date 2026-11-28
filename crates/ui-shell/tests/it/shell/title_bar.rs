@@ -32,7 +32,7 @@ fn sent(embedded: bool) -> (Vec<ViewportCommand>, Option<Caption>) {
     let frame = |events: Vec<Event>| {
         windows.frame(events, vec![], |ui| {
             if embedded {
-                let _ = AppShell::embedded(WindowKey::new("preview")).title_bar(|ui, _, _: &mut ()| show_bar(ui)).show(ui, &mut ());
+                let _ = AppShell::embedded(WindowKey::new("preview")).title_bar(|_| None, |ui, _, _: &mut ()| show_bar(ui)).show(ui, &mut ());
             } else {
                 show_bar(ui);
             }
@@ -282,22 +282,25 @@ fn lights_right_bar(follows: bool, lights_right: bool) -> impl Fn(&str) -> Rect 
         windows.frame(vec![], vec![], |ui| {
             let _ = AppShell::new(WindowKey::main())
                 .title_follows_lights(follows)
-                .title_bar(|ui, _, _: &mut ()| {
-                    let _ = TitleBar::new()
-                        .trailing(|ui, _| {
-                            Button::new("Discord").show(ui);
-                            Button::new("Preferences").show(ui);
-                        })
-                        .show(ui, |ui, _| {
-                            Button::new("Home").show(ui);
-                            let _ = DocumentTabs::new("Documents", &tabs)
-                                .selected(0)
-                                .trailing(|ui| {
-                                    Button::new("Open").show(ui);
-                                })
-                                .show(ui);
-                        });
-                })
+                .title_bar(
+                    |_| None,
+                    |ui, _, _: &mut ()| {
+                        let _ = TitleBar::new()
+                            .trailing(|ui, _| {
+                                Button::new("Discord").show(ui);
+                                Button::new("Preferences").show(ui);
+                            })
+                            .show(ui, |ui, _| {
+                                Button::new("Home").show(ui);
+                                let _ = DocumentTabs::new("Documents", &tabs)
+                                    .selected(0)
+                                    .trailing(|ui| {
+                                        Button::new("Open").show(ui);
+                                    })
+                                    .show(ui);
+                            });
+                    },
+                )
                 .body(|_, _, _| {})
                 .show(ui, &mut ());
         })
@@ -354,14 +357,8 @@ fn the_lights_room_follows_the_lights_without_mirroring_the_bar() {
     assert!(rect("Preferences").right() >= width - 20.0, "Preferences {:?} at the right end", rect("Preferences"));
 }
 
-/// The props of a whole title bar an app shows through a memoized view.
-#[derive(craft_ui::contract::MemoProps)]
-struct WholeBar {
-    version: u64,
-}
-
 /// A Windows title bar with a brand button, a menu bar of an image editor's menus and the document title.
-fn whole_bar(_: &mut WholeBar, ui: &mut Ui) {
+fn whole_bar(ui: &mut Ui) {
     use craft_ui::buttons::Button;
     use craft_ui::contract::Show as _;
     use craft_ui::menu::MenuItem;
@@ -397,7 +394,7 @@ fn cursors_over_the_bar(look: craft_ui::contract::MoveBandCursor) -> (Option<cra
     let mut root = craft_ui::runtime::env::RootEnv::default();
     root.values.set(look);
     windows.root_env(root);
-    let show = |ui: &mut Ui| whole_bar(&mut WholeBar { version: 0 }, ui);
+    let show = whole_bar;
     windows.frame(vec![], vec![], show);
     let settled = windows.frame(vec![], vec![], show);
     let tree = &settled.trees.iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
@@ -424,22 +421,16 @@ fn a_move_band_shows_the_arrow_when_the_app_asks() {
     assert_eq!(cursors_over_the_bar(MoveBandCursor::Arrow), (None, None), "the arrow over the band and the titles on it");
 }
 
-/// A whole title bar an app shows through a memoized view in the shell's title slot (1600 × 1000 px at 125 %) fills
-/// the slot as the bar shown directly does: the captions end at the slot's end edge and the document title is drawn
-/// whole after the last menu.
+/// A whole title bar in the shell's versioned title slot, which replays it as a memoized view (1600 × 1000 px at
+/// 125 %), fills the slot as the bar shown directly does: the captions end at the slot's end edge and the document
+/// title is drawn whole after the last menu.
 #[trial]
 fn a_memoized_title_bar_fills_the_title_slot() {
     use craft_host::target::Os;
-    use craft_ui::contract::MemoView;
     let slot = Rc::new(Cell::new(Rect::NOTHING));
     let seen = Rc::clone(&slot);
     let mut fixture = Fixture::new(move |ui| {
-        let shown = AppShell::new(WindowKey::main())
-            .title_bar(|ui, _, _: &mut ()| {
-                let _ = MemoView::new("title bar", WholeBar { version: 0 }, whole_bar).show(ui);
-            })
-            .body(|_, _, _| {})
-            .show(ui, &mut ());
+        let shown = AppShell::new(WindowKey::main()).title_bar(|_| Some(0), |ui, _, _: &mut ()| whole_bar(ui)).body(|_, _, _| {}).show(ui, &mut ());
         if let Some(rect) = shown.regions.slots.iter().find(|(key, _)| *key == "title").map(|(_, rect)| *rect) {
             seen.set(rect);
         }

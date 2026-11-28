@@ -31,5 +31,10 @@ keyring = "4.2"
 # machine-local persistence. `keyring` installs the platform store; this reads it.
 keyring-core = "1"
 
+# The account list is created with an access list of its user and SYSTEM only
+# (`owner_only::create_private_file`).
+[target.'cfg(windows)'.dependencies]
+craft-platform = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"

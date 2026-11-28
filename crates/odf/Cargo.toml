@@ -63,6 +63,9 @@ optional = true
 [dev-dependencies]
 # The tests build archives, hostile ones included, by hand.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+# The `text` tests export ODT input to HTML and Markdown, to check list items stay whole there.
+craft-html = { workspace = true, features = ["flow"] }
+craft-markdown = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # The browser clock for tracked-change dates (`text` feature; `SystemTime::now()` panics there).

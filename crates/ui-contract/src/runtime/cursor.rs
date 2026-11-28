@@ -1,6 +1,7 @@
 //! The cursor service (8.5): requests of a pass collect here, the end hook picks the winner and records it, and a
 //! painted winner reaches the window as its cursor image where the window shows one.
 
+use crate::runtime::Shift;
 use crate::runtime::egui::areas::LayerKey;
 use crate::runtime::egui::{output, pass, viewports};
 use crate::runtime::frame::PerViewport;
@@ -50,6 +51,19 @@ pub struct CursorRegion {
     pub clip: Rect,
 }
 
+impl Shift for CursorRegion {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        CursorRegion { layer: self.layer, clip: crate::runtime::Clip::new(self.clip).shifted(by).rect() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        CursorRegion { layer: self.layer, clip: self.clip.snapped(&to.clip, within) }
+    }
+}
+
+// A cursor is drawn at the pointer, wherever the record that asked for it replays.
+crate::stays!(Cursor, CursorPriority);
+
 impl CursorRegion {
     /// The region of `clip` on `layer`.
     pub fn new(layer: LayerKey, clip: Rect) -> Self {
@@ -83,7 +97,13 @@ pub fn request_within(ctx: &Context, cursor: Cursor, priority: CursorPriority, r
     push(ctx, cursor, priority, Some(region));
 }
 
+/// A request is a registration of the pass: a settled view's replay requests its cursor again.
 fn push(ctx: &Context, cursor: Cursor, priority: CursorPriority, region: Option<CursorRegion>) {
+    crate::runtime::replay::journal(
+        ctx,
+        || (cursor.clone(), priority, region),
+        |ctx, (cursor, priority, region)| push(ctx, cursor.clone(), *priority, *region),
+    );
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
         state.requests.push((cursor, priority));
         state.regions.push(region);
@@ -172,14 +192,16 @@ pub(crate) fn image_target(ctx: &Context) -> Option<ImageTarget> {
     if !shell.cursor_images(native) {
         return None;
     }
-    // A host that keeps its cursors at their size ignores the interface zoom.
-    let follows_zoom = crate::runtime::env::Env::of_root(ctx).cursor_follows_zoom;
-    let scale = match (shell.os == Os::Mac, follows_zoom) {
-        (_, false) => 1.0,
-        (true, true) => zoom,
-        (false, true) => pixels_per_point,
-    };
+    let scale = if shell.os == Os::Mac { zoom } else { pixels_per_point };
     Some(ImageTarget { scale, max_side: if shell.os == Os::Linux { MAX_SIDE_LINUX } else { MAX_SIDE } })
+}
+
+/// The factor a pointer's art is drawn at against its size in points: 1 where painted pointers follow the interface
+/// zoom (`RootEnv::cursor_follows_zoom`), else one over the zoom, so the pointer keeps the size it has at zoom 1 on
+/// the display.
+pub(crate) fn art_scale(ctx: &Context) -> f32 {
+    let zoom = ctx.zoom_factor();
+    if crate::runtime::env::Env::of_root(ctx).cursor_follows_zoom || !zoom.is_finite() || zoom <= 0.0 { 1.0 } else { 1.0 / zoom }
 }
 
 /// A painted pointer the window can take as its cursor image: drawn at a scale, compared with the last one handed over.

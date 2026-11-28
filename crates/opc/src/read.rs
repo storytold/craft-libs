@@ -25,6 +25,20 @@ fn open_zip<'a>(bytes: &'a [u8], limits: &Limits, max_total: u64) -> Result<Zip<
     Ok(zip)
 }
 
+/// Every entry that can be a part, as (index, name). Part names are a virtual namespace, never
+/// joined to a filesystem path, so a legacy writer's leading `/` is no hazard and its part stays
+/// readable; names with traversal components (`..`, a drive prefix, a NUL) are left out
+/// ([`craft_zip::Archive::virtual_entry_name`]).
+fn entries(zip: &mut Zip<'_>) -> Result<Vec<(usize, String)>, Error> {
+    let mut out = Vec::new();
+    for index in 0..zip.len() {
+        if let Some(name) = zip.virtual_entry_name(index).map_err(crate::zip_error)? {
+            out.push((index, name));
+        }
+    }
+    Ok(out)
+}
+
 /// A part name as stored: `\` as `/` (code that splits paths on `/` must not meet a `\`), no
 /// leading `/`.
 fn stored_name(name: &str) -> String {
@@ -59,8 +73,8 @@ impl Package {
         let mut files = BTreeMap::new();
         let mut skipped = Vec::new();
         let (mut total, mut work) = (0u64, 0u64);
-        let entries: Vec<String> = zip.names().map(|n| n.into_owned()).collect();
-        for (i, entry) in entries.iter().enumerate() {
+        let entries = entries(&mut zip)?;
+        for (i, (index, entry)) in entries.iter().enumerate() {
             if skip && work >= limits.max_work {
                 log::warn!("opc: decompression budget spent; skipping the remaining {} entries", entries.len().saturating_sub(i));
                 break;
@@ -69,7 +83,7 @@ impl Package {
                 continue;
             }
             let name = stored_name(entry);
-            let size = zip.declared_size(entry).unwrap_or(0);
+            let size = zip.virtual_entry_size(*index).ok().flatten().unwrap_or(0);
             if size > limits.max_part {
                 if skip {
                     log::warn!("opc: skipping oversized part {name} ({size} bytes)");
@@ -87,7 +101,7 @@ impl Package {
                 }
                 return Err(Error::PackageTooLarge { limit: limits.max_total.min(limits.max_work) });
             }
-            match zip.read(entry, room) {
+            match zip.read_virtual_index(*index, room) {
                 Ok(Some(buf)) => {
                     work = work.saturating_add(buf.len() as u64);
                     total = total.saturating_add(buf.len() as u64);
@@ -207,8 +221,8 @@ impl Package {
 /// reader that needs a few parts of a large file, or one part at a time.
 pub struct LazyPackage<'a> {
     zip: Zip<'a>,
-    /// Normalized part name → entry name (the first entry of a name).
-    names: HashMap<String, String>,
+    /// Normalized part name → entry index and name (the first entry of a name).
+    names: HashMap<String, (usize, String)>,
     total: u64,
     limits: Limits,
 }
@@ -218,10 +232,10 @@ impl<'a> LazyPackage<'a> {
     /// [`Limits::oversized`] are not used.
     pub fn open(bytes: &'a [u8], limits: &Limits) -> Result<LazyPackage<'a>, Error> {
         // This reader keeps its own count, which a failed read spends (see `read_limited`).
-        let zip = open_zip(bytes, limits, u64::MAX)?;
+        let mut zip = open_zip(bytes, limits, u64::MAX)?;
         let mut names = HashMap::new();
-        for n in zip.names() {
-            names.entry(normalize(&n)).or_insert_with(|| n.into_owned());
+        for (index, n) in entries(&mut zip)? {
+            names.entry(normalize(&n)).or_insert((index, n));
         }
         Ok(LazyPackage { zip, names, total: 0, limits: *limits })
     }
@@ -240,7 +254,7 @@ impl<'a> LazyPackage<'a> {
     /// The stored spelling of part `name` (leading `/` ignored; case-insensitive), as
     /// [`Package::canonical`] gives it: for a writer that keeps the package's part names.
     pub fn canonical(&self, name: &str) -> Option<String> {
-        self.names.get(&normalize(name)).map(|n| n.trim_start_matches('/').replace('\\', "/"))
+        self.names.get(&normalize(name)).map(|(_, n)| n.trim_start_matches('/').replace('\\', "/"))
     }
 
     /// Bytes charged to [`Limits::max_total`] so far. It is the whole of it once a read has
@@ -275,10 +289,10 @@ impl<'a> LazyPackage<'a> {
     /// pay it again and again. Every later read is then a cheap error.
     pub fn read_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, Error> {
         let maximum = maximum.min(self.limits.max_part);
-        let Some(entry) = self.names.get(&normalize(part)) else {
+        let Some(&(index, _)) = self.names.get(&normalize(part)) else {
             return Ok(None);
         };
-        let size = self.zip.declared_size(entry).unwrap_or(0);
+        let size = self.zip.virtual_entry_size(index).ok().flatten().unwrap_or(0);
         if size > maximum {
             return Err(Error::PartTooLarge { part: part.to_string(), limit: maximum });
         }
@@ -287,7 +301,7 @@ impl<'a> LazyPackage<'a> {
             self.total = self.limits.max_total;
             return Err(Error::PackageTooLarge { limit: self.limits.max_total });
         }
-        match self.zip.read(entry, maximum.min(remaining)) {
+        match self.zip.read_virtual_index(index, maximum.min(remaining)) {
             Ok(Some(out)) => {
                 self.total = self.total.saturating_add(out.len() as u64);
                 Ok(Some(out))
@@ -321,8 +335,10 @@ impl<'a> LazyPackage<'a> {
 /// the user which part made a package too large.
 pub fn declared_oversized(bytes: &[u8], limits: &Limits) -> Option<(String, u64)> {
     let mut zip = open_zip(bytes, limits, u64::MAX).ok()?;
-    let names: Vec<String> = zip.names().map(|n| n.into_owned()).collect();
-    names.into_iter().find_map(|n| zip.declared_size(&n).filter(|size| *size > limits.max_part).map(|size| (n, size)))
+    entries(&mut zip)
+        .ok()?
+        .into_iter()
+        .find_map(|(index, n)| zip.virtual_entry_size(index).ok().flatten().filter(|size| *size > limits.max_part).map(|size| (n, size)))
 }
 
 #[cfg(test)]

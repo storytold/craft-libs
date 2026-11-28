@@ -114,7 +114,8 @@ impl<'a> HeaderMenu<'a> {
 ///
 /// The face shows the picked entry's [closed label](Entry::closed_label) where it has one; the list, type-ahead and
 /// the accessible value keep the full label. A [`picture`](Select::picture) draws each entry's thumbnail in its row
-/// and before the face's text, or alone on the face with [`picture_only`](Select::picture_only).
+/// and before the face's text, or alone on the face with [`picture_only`](Select::picture_only); the picture is
+/// square unless [`picture_aspect`](Select::picture_aspect) sets its width.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(Select<'static, u8>))]
 pub struct Select<'a, T: Value + 'static> {
@@ -140,6 +141,10 @@ pub struct Select<'a, T: Value + 'static> {
     /// Shown, muted, while the value is none of the entries.
     #[prop(into)]
     placeholder: Option<Label>,
+    /// The closed face and accessible label for a bound value outside the entries. The picture,
+    /// if supplied, receives the bound value. This adds no option to the list.
+    #[prop(into)]
+    unlisted_label: Option<Label>,
     /// Adds the host's content to each entry's row.
     #[prop(func = "Fn(&T, ListRow<'a>) -> ListRow<'a>")]
     decorate: Option<RowDress<'a, T>>,
@@ -149,6 +154,9 @@ pub struct Select<'a, T: Value + 'static> {
     /// The face shows the picked entry's picture alone; its label stays the accessible value.
     #[prop(flag)]
     picture_only: bool,
+    /// The picture's width as a multiple of its height, in the rows and on the face; square without it.
+    #[prop]
+    picture_aspect: ThumbAspect,
     /// The row under the pointer is proposed as the value while the list is open, as the rows the keys reach are;
     /// closing the list without a pick restores the value.
     #[prop(flag)]
@@ -175,9 +183,11 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             search_kept: None,
             list_width: None,
             placeholder: None,
+            unlisted_label: None,
             decorate: None,
             picture: None,
             picture_only: false,
+            picture_aspect: ThumbAspect::SQUARE,
             preview: false,
             header_menu: None,
             look: SelectLook::Field,
@@ -189,13 +199,19 @@ impl<'a, T: Value + 'static> Select<'a, T> {
         value.and_then(|value| self.entries.iter().position(|entry| entry.value() == Some(value)))
     }
 
-    /// The text the face shows for `value`, unresolved (none for a value that names no entry and no placeholder), and
-    /// whether it stands in for a pick: the `mixed` word for no value, or the placeholder.
+    fn unlisted_face(&self) -> (Option<&Label>, bool) {
+        match self.unlisted_label.as_ref() {
+            Some(label) => (Some(label), false),
+            None => (self.placeholder.as_ref(), true),
+        }
+    }
+
+    /// The unresolved face text and whether it stands in for a pick.
     fn shown<'s>(&'s self, value: Option<&T>, mixed: &'s Label) -> (Option<&'s Label>, bool) {
         match self.position(value) {
             Some(at) => (Some(self.entries[at].face_label()), false),
             None if value.is_none() => (Some(mixed), true),
-            None => (self.placeholder.as_ref(), true),
+            None => self.unlisted_face(),
         }
     }
 
@@ -207,7 +223,7 @@ impl<'a, T: Value + 'static> Select<'a, T> {
     /// The face of `text`, with the picture's room before it, or the picture alone, when the select has a picture.
     fn sized_face(&self, text: Label, picture: bool, fit: bool) -> SelectFace<'static> {
         let face = SelectFace::new(text).fit(fit);
-        if self.picture.is_some() && picture { face.thumb(ThumbAspect::SQUARE, |_, _| {}).name(!self.picture_only) } else { face }
+        if self.picture.is_some() && picture { face.thumb(self.picture_aspect, |_, _| {}).name(!self.picture_only) } else { face }
     }
 
     /// Sets the value to the entry at `at` unless it is the value already.
@@ -219,17 +235,17 @@ impl<'a, T: Value + 'static> Select<'a, T> {
         }
     }
 
-    /// The closed field's keys: typed letters open the list on the first entry they begin, AccessKit sets the pick and
+    /// The closed field's keys: typed letters open the list on the first enabled match, AccessKit sets the pick and
     /// the arrow keys, Home and End step it through `stops`.
     fn closed_keys(&self, cx: &mut Cx<'_, Self>, list: PopupHandle, stops: &[usize]) {
         let held = self.position(cx.value());
         while let Some(text) = cx.intents().take_text() {
-            // Type-ahead passes over headings: their captions name no entry.
+            // Keep the entry indices for wrapping around the held value, with no label for headings or disabled items.
             let labels: Vec<Label> =
-                self.entries.iter().map(|entry| if entry.is_item() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
+                self.entries.iter().map(|entry| if entry.is_enabled() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
             let folder = cx.env.folder();
             let found = TypeAhead::pick(&text, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()), |s| folder.key(s));
-            if let Some(value) = found.filter(|&at| self.entries[at].is_enabled()).and_then(|at| self.entries[at].value()) {
+            if let Some(value) = found.and_then(|at| self.entries[at].value()) {
                 cx.propose(value.clone());
                 list.open(cx);
                 return;
@@ -325,7 +341,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             face((text.unwrap_or(&Label::Empty), !muted))
         } else {
             let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
-            let texts = entries.chain(self.placeholder.iter().map(|text| (text, false))).chain(std::iter::once((&mixed, false)));
+            let (unlisted, muted) = self.unlisted_face();
+            let texts = entries.chain(unlisted.map(|text| (text, !muted))).chain(std::iter::once((&mixed, false)));
             texts.map(face).fold(Vec2::ZERO, Vec2::max)
         };
         Vec2::new(size.x.max(cx.style.least_width), size.y)
@@ -383,15 +400,15 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     /// The picked entry's place among the entries that can be picked, shown as its label, so AccessKit steps and sets it.
-    /// A value that names no entry reads as the placeholder the face shows for it.
+    /// A value that names no entry reads as its unlisted label or placeholder, as shown on the face.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let stops = step_stops(self.entries);
         let range = 0.0..=stops.len().saturating_sub(1) as f64;
         let held = self.position(cx.value());
-        let placeholder = self.placeholder.as_ref().filter(|_| held.is_none() && cx.value().is_some());
+        let unlisted = self.unlisted_face().0.filter(|_| held.is_none() && cx.value().is_some());
         let numeric = match held.and_then(|held| stops.iter().position(|&stop| stop == held)) {
             Some(at) => Numeric::new(at as f64, range).text(cx.env.resolve(self.entries[stops[at]].label()).as_str()),
-            None => match placeholder {
+            None => match unlisted {
                 Some(text) => Numeric::empty(range).text(cx.env.resolve(text).as_str()),
                 None => Numeric::empty(range),
             },
@@ -409,7 +426,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let name = cx.label();
         let words = cx.words::<PickerWords>();
         let held = self.position(cx.value());
-        let (searchable, dress, picture) = (self.searchable, self.decorate.as_ref(), self.picture.as_ref());
+        let (searchable, dress, picture) =
+            (self.searchable, self.decorate.as_ref(), self.picture.as_ref().map(|picture| (picture, self.picture_aspect)));
         let kept =
             |at: usize| self.search_kept.as_ref().is_some_and(|kept| entries.get(at).and_then(Entry::value).is_some_and(|value| (kept.0)(value)));
         let (search_label, no_matches, wide) = (self.search_label.clone(), self.no_matches.clone(), self.list_width.is_some());
@@ -503,8 +521,9 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         if let Some(icon) = held.and_then(|at| self.entries[at].icon_spec()) {
             face = face.leading(icon.clone());
         }
-        if let (Some(picture), Some(value)) = (self.picture.as_ref(), held.and_then(|at| self.entries[at].value())) {
-            face = face.thumb(ThumbAspect::SQUARE, move |cx, rect| picture.paint(value, cx, rect)).name(!self.picture_only);
+        let pictured = held.and_then(|at| self.entries[at].value()).or(cx.value().filter(|_| !muted));
+        if let (Some(picture), Some(value)) = (self.picture.as_ref(), pictured) {
+            face = face.thumb(self.picture_aspect, move |cx, rect| picture.paint(value, cx, rect)).name(!self.picture_only);
         }
         ui.face(FACE, if muted { face.placeholder() } else { face });
     }
