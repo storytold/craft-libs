@@ -362,6 +362,24 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     }
 }
 
+/// `w:framePr`'s wrap, anchors and alignments are closed enumerations (ECMA-376 / ISO 29500
+/// §17.3.1.11, `ST_Wrap`, `ST_HAnchor`, `ST_VAnchor`, `ST_XAlign`, `ST_YAlign`), but the model
+/// keeps them as free strings, so a value that reached it from somewhere other than the reader may
+/// not be one of them. These are the sets the reader keeps, with its defaults, so a name it would
+/// have dropped is written as what it would have read instead: the saved file stays schema-valid
+/// and reopens the same way.
+const FRAME_WRAP: &[&str] = &["around", "auto", "notBeside", "none", "tight", "through"];
+const FRAME_ANCHOR: &[&str] = &["text", "margin", "page"];
+const FRAME_X_ALIGN: &[&str] = &["left", "center", "right", "inside", "outside"];
+/// `inline` is a legal `ST_YAlign` value, but the reader treats it as no alignment, so writing it
+/// would drop the paragraph's `w:y` offset; the numeric offset is written for it instead.
+const FRAME_Y_ALIGN: &[&str] = &["top", "center", "bottom", "inside", "outside"];
+
+/// `value` when the enumeration allows it, else `default`.
+fn frame_word<'a>(value: &'a str, allowed: &[&str], default: &'a str) -> &'a str {
+    if allowed.contains(&value) { value } else { default }
+}
+
 fn write_frame(w: &mut W, p: &ParaProps, framed: bool) {
     if framed && let Some(lines) = p.drop_cap.filter(|l| *l > 0) {
         // ECMA-376 §17.3.1.11: the drop cap's frame — dropped or in the margin, the lines it
@@ -392,17 +410,17 @@ fn write_frame(w: &mut W, p: &ParaProps, framed: bool) {
         if f.v_space > 0.0 {
             a.push(("w:vSpace", &vs));
         }
-        a.push(("w:wrap", &f.wrap));
+        a.push(("w:wrap", frame_word(&f.wrap, FRAME_WRAP, "auto")));
         if let Some(anchor_lock) = f.anchor_lock {
             a.push(("w:anchorLock", if anchor_lock { "1" } else { "0" }));
         }
-        a.push(("w:vAnchor", &f.v_anchor));
-        a.push(("w:hAnchor", &f.h_anchor));
-        match &f.x_align {
+        a.push(("w:vAnchor", frame_word(&f.v_anchor, FRAME_ANCHOR, "page")));
+        a.push(("w:hAnchor", frame_word(&f.h_anchor, FRAME_ANCHOR, "page")));
+        match f.x_align.as_deref().filter(|x| FRAME_X_ALIGN.contains(x)) {
             Some(x) => a.push(("w:xAlign", x)),
             None => a.push(("w:x", &fx)),
         }
-        match &f.y_align {
+        match f.y_align.as_deref().filter(|y| FRAME_Y_ALIGN.contains(y)) {
             Some(y) => a.push(("w:yAlign", y)),
             None => a.push(("w:y", &fy)),
         }

@@ -4320,6 +4320,65 @@ fn text_frames_read_and_round_trip() {
     assert!(q.iter().any(|x| x.props.drop_cap == Some(2) && x.props.frame.is_none()));
 }
 
+/// storytold/wordcraft#3672: a text frame's wrap, anchors and alignments are closed enumerations
+/// (ECMA-376 / ISO 29500 §17.3.1.11), but the model holds them as strings, so a value that did not
+/// come from the reader may be anything. The writer emits only names the schema allows, falling
+/// back to what the reader makes of the same attribute — `auto` wrap, `page` anchors, and the
+/// numeric offset in place of an alignment that is not a legal name, so the offset survives the
+/// save. Valid names, the size, the spacing and `w:anchorLock` are written as they were.
+#[test]
+fn a_frames_enumerations_are_written_only_as_the_schema_allows() {
+    let body = r#"<w:p><w:pPr><w:framePr w:w="2880" w:h="720" w:hRule="exact" w:hSpace="180" w:vSpace="90" w:anchorLock="1" w:wrap="around" w:vAnchor="text" w:hAnchor="margin" w:x="-240" w:y="480"/></w:pPr><w:r><w:t>framed</w:t></w:r></w:p>"#;
+    type Frame = craft_wordmodel::props::TextFrame;
+    // The frame as the model holds it after `mutate`, written and read back: the `w:framePr` that
+    // was saved, and the frame a fresh read makes of it.
+    let saved = |mutate: &dyn Fn(&mut Frame)| -> (String, Frame) {
+        let mut d = read_body(body);
+        let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) else { panic!("the framed paragraph") };
+        mutate(p.props.frame.as_mut().expect("a frame"));
+        let bytes = craft_docx::write(&d).unwrap();
+        let xml = text(&unzip(&bytes), "word/document.xml");
+        let frame = xml.split("<w:framePr").nth(1).and_then(|s| s.split("/>").next()).map(|s| format!("<w:framePr{s}/>")).expect("a w:framePr");
+        let back = paras(&craft_docx::read(&bytes).unwrap())[0].props.frame.clone().expect("a frame");
+        (frame, back)
+    };
+    let valid = r#"<w:framePr w:w="2880" w:h="720" w:hRule="exact" w:hSpace="180" w:vSpace="90" w:wrap="around" w:anchorLock="1" w:vAnchor="text" w:hAnchor="margin" w:x="-240" w:y="480"/>"#;
+    let (xml, kept) = saved(&|_| {});
+    assert_eq!(xml, valid, "a frame the reader built is written unchanged");
+    // An empty frame (every string left at its default) and unknown names both fall back to what
+    // the reader reads, and neither loses the offsets.
+    let empty: &dyn Fn(&mut Frame) = &|f| *f = Frame::default();
+    let unknown: &dyn Fn(&mut Frame) = &|f| {
+        f.wrap = "sideways".into();
+        f.v_anchor = "elsewhere".into();
+        f.h_anchor = "nowhere".into();
+    };
+    for junk in [empty, unknown] {
+        let (xml, back) = saved(junk);
+        assert!(xml.contains(r#"w:wrap="auto""#) && xml.contains(r#"w:vAnchor="page""#) && xml.contains(r#"w:hAnchor="page""#), "{xml}");
+        assert_eq!((back.wrap.as_str(), back.v_anchor.as_str(), back.h_anchor.as_str()), ("auto", "page", "page"));
+    }
+    let (xml, back) = saved(&|f| f.wrap = "sideways".into());
+    assert_eq!((back.x, back.y), (kept.x, kept.y), "an unknown wrap keeps the offsets: {xml}");
+    // An alignment that is not a legal name is written as the numeric offset, which the reader
+    // would otherwise have dropped along with the alignment.
+    let (xml, back) = saved(&|f| f.x_align = Some("middle".into()));
+    assert!(xml.contains(r#"w:x="-240""#) && !xml.contains("w:xAlign"), "{xml}");
+    assert_eq!((back.x, back.x_align), (kept.x, None), "{xml}");
+    let (xml, back) = saved(&|f| f.y_align = Some("middle".into()));
+    assert!(xml.contains(r#"w:y="480""#) && !xml.contains("w:yAlign"), "{xml}");
+    assert_eq!((back.y, back.y_align), (kept.y, None), "{xml}");
+    // A legal alignment is kept, and replaces the offset on its axis as before.
+    let (xml, back) = saved(&|f| f.y_align = Some("bottom".into()));
+    assert!(xml.contains(r#"w:yAlign="bottom""#) && !xml.contains(r#"w:y=""#), "{xml}");
+    assert_eq!(back.y_align.as_deref(), Some("bottom"));
+    // `w:yAlign="inline"` is a legal ST_YAlign value, but this reader maps it to no alignment, so
+    // writing it would lose the offset on reopen. The numeric `w:y` is both allowed and lossless.
+    let (xml, back) = saved(&|f| f.y_align = Some("inline".into()));
+    assert!(xml.contains(r#"w:y="480""#) && !xml.contains("w:yAlign"), "inline is written as the offset it means: {xml}");
+    assert_eq!((back.y, back.y_align), (kept.y, None), "{xml}");
+}
+
 /// #2360: a `w:framePr` in the document defaults, the sizeless top-left one Apple Pages writes,
 /// frames no paragraph, as in Word: a header's title and the body's text stay in the text instead
 /// of moving to the page's corner, and the default isn't written back. The defaults' other
