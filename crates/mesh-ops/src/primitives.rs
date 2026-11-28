@@ -328,7 +328,8 @@ fn disk_into(b: &mut Builder, center: Vec3, radius: f32, up: bool, segs: usize, 
     let c = b.vert(center, n, r.map(0.5, 0.5));
     let first = b.p.len() as u32;
     for j in 0..segs {
-        let a = j as f32 / segs as f32 * TAU;
+        // Starts at +Z, the first sample of `lathe_into`, so the rim matches the side at any `segs`.
+        let a = PI * 0.5 + j as f32 / segs as f32 * TAU;
         let (x, z) = (a.cos(), a.sin());
         // Top view: +X right, +Z down the texture; bottom view mirrors X.
         let uv = if up { r.map(0.5 + x * 0.5, 0.5 + z * 0.5) } else { r.map(0.5 + x * 0.5, 0.5 - z * 0.5) };
@@ -545,6 +546,19 @@ mod tests {
         let rim = (1.0 - ORB_CUT * ORB_CUT).sqrt() / ORB_CUT;
         let (dome, valley) = (front_depth(0.2), front_depth(rim * ORB_PANEL_VALLEY));
         assert!(dome > ORB_CUT && valley < ORB_CUT - 0.05, "dome {dome}, valley {valley}");
+    }
+
+    #[test]
+    fn cylinder_caps_share_the_side_rim_samples() {
+        for segs in [3, 5, 6, 7, 8] {
+            let m = cylinder(1.0, 2.0, segs);
+            let side: Vec<Vec3> = (0..m.positions.len()).filter(|&i| m.normals[i].y.abs() < 1e-4).map(|i| m.positions[i]).collect();
+            let rim = (0..m.positions.len()).filter(|&i| m.normals[i].y.abs() > 0.99 && Vec2::new(m.positions[i].x, m.positions[i].z).length() > 0.5);
+            for i in rim {
+                let p = m.positions[i];
+                assert!(side.iter().any(|s| s.distance(p) < 1e-5), "segs {segs}: cap rim vertex {p:?} is not on a side rim sample");
+            }
+        }
     }
 
     #[test]
