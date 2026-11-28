@@ -4317,7 +4317,9 @@ dependencies = [
 name = "craft-testkit"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustix 1.1.6",
+ "sha2 0.10.9",
  "skrifa 0.47.0",
 ]
 
