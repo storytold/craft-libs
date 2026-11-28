@@ -207,3 +207,9 @@ adapting code from [PiJellyPin's MaterialCraft](https://github.com/PiJellyPin/Ma
 `NOTICE` for the original attribution. This extraction retains vangel76's subsequent evaluator and GPU work.
 The format reference and tests are from the same TextureCraft source. The tests' numerical rule tables document
 their provenance in their headers.
+
+`crates/material-graph-wgpu` moves the GPU execution backend, WGSL shaders and GPU comparison tests from
+[TextureCraft's SPP importer at 22a37c29](https://github.com/vangel76/texturecraft/tree/22a37c29e98d8e6fc8c5e611e22f0ab95b83243d/crates/render/src)
+(MIT OR Apache-2.0). The backend extends xilefenko's original importer with graph evaluation work by
+vangel76 and the TextureCraft contributors. The test inputs are the original synthetic graphs and arrays
+from TextureCraft. See the crate's `NOTICE`.

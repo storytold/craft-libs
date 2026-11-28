@@ -1,0 +1,21 @@
+[package]
+name = "craft-material-graph-wgpu"
+description = "Native wgpu compute backend for material graphs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bytemuck = { workspace = true, features = ["derive"] }
+craft-material-graph = { workspace = true }
+log = { workspace = true }
+wgpu = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pollster = { workspace = true }
+wgpu = { workspace = true, features = ["dx12", "gles", "metal", "vulkan"] }

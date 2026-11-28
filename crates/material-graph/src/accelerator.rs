@@ -188,10 +188,12 @@ pub struct ResidentFilter<'a> {
     pub operation: FilterOperation<'a>,
 }
 
+/// A compiled grayscale filter. `Box::round_between` rounds to the node's format after the first axis (`box_blur`); without
+/// it the result is rounded once at the end (an axis-aligned `line_blur`).
 pub enum FilterOperation<'a> {
     DirectionalWarp { map: GreyInput<'a>, intensity: f32, offset: f32, direction: [f32; 2], aspect: [f32; 2] },
     GradientWarp { map: GreyInput<'a>, displacement: [f32; 2] },
-    Box { radius: [f32; 2] },
+    Box { radius: [f32; 2], round_between: bool },
     ShortLine { major: usize, slope: f32, radius: f32 },
     ShearedLine { major: usize, slope: f32, radius: f32 },
     Sharpen { weights: [f32; 2] },

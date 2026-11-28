@@ -3322,6 +3322,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-material-graph-wgpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "craft-material-graph",
+ "log",
+ "pollster 0.4.0",
+ "wgpu",
+]
+
+[[package]]
 name = "craft-materialx"
 version = "0.1.0"
 dependencies = [
