@@ -5591,3 +5591,48 @@ fn a_repeated_level_override_keeps_the_first_overrides_theme_colour() {
     let num = &saved[saved.find(r#"<w:num w:numId="1""#).expect("list")..];
     assert!(num.contains(r#"w:themeColor="accent1""#) && !num.contains("accent2"), "{num}");
 }
+
+#[test]
+fn a_start_only_override_does_not_hide_the_next_whole_level_overrides_theme_colour() {
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride><w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:rPr><w:color w:val="000000" w:themeColor="accent1"/></w:rPr></w:lvl></w:lvlOverride></w:num></w:numbering>"#
+    );
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>"#;
+    let file = docx(
+        body,
+        &[("rId1", "numbering", "numbering.xml"), ("rId2", "theme", "theme/theme1.xml")],
+        &[("word/numbering.xml", &numbering), ("word/theme/theme1.xml", ACCENTS_THEME)],
+    );
+    let saved = text(&unzip(&craft_docx::write(&craft_docx::read(&file).unwrap()).unwrap()), "word/numbering.xml");
+    let num = &saved[saved.find(r#"<w:num w:numId="1""#).expect("list")..];
+    assert!(num.contains(r#"w:themeColor="accent1""#), "{num}");
+}
+
+#[test]
+fn a_list_id_linked_to_a_numbering_style_keeps_no_theme_colour_from_a_repeat_of_that_id() {
+    let lvl = |theme: &str| {
+        format!(
+            r#"<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:rPr><w:color w:val="000000" w:themeColor="{theme}"/></w:rPr></w:lvl>"#
+        )
+    };
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="1">{}</w:abstractNum><w:abstractNum w:abstractNumId="1"><w:numStyleLink w:val="Outline"/></w:abstractNum><w:abstractNum w:abstractNumId="2"><w:styleLink w:val="Outline"/>{}</w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num></w:numbering>"#,
+        lvl("accent2"),
+        lvl("accent1")
+    );
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="numbering" w:styleId="Outline"><w:name w:val="Outline"/><w:pPr><w:numPr><w:numId w:val="2"/></w:numPr></w:pPr></w:style></w:styles>"#
+    );
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>"#;
+    let file = docx(
+        body,
+        &[("rId1", "numbering", "numbering.xml"), ("rId2", "theme", "theme/theme1.xml"), ("rId3", "styles", "styles.xml")],
+        &[("word/numbering.xml", &numbering), ("word/theme/theme1.xml", ACCENTS_THEME), ("word/styles.xml", &styles)],
+    );
+    let doc = craft_docx::read(&file).unwrap();
+    let linked = doc.numbering.abstracts.iter().find(|a| a.id == 1).expect("list");
+    let style = doc.numbering.abstracts.iter().find(|a| a.id == 2).expect("style list");
+    assert_eq!(linked.levels[0].chr, style.levels[0].chr, "the linked list takes the style's levels");
+    let saved = text(&unzip(&craft_docx::write(&doc).unwrap()), "word/numbering.xml");
+    assert!(!saved.contains("accent2"), "{saved}");
+}

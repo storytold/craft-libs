@@ -3,7 +3,7 @@
 //! The editable model resolves colours, but that conversion loses theme tint
 //! precision. Source fragments are hints, bounded and invalidated by edits.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -190,28 +190,35 @@ pub(crate) fn capture_numbering(doc: &mut Document, root: &El, aliases: &HashMap
     for n in &doc.numbering.nums {
         nums.entry(n.id).or_insert(n);
     }
+    // A list that only links to a numbering style takes that style's levels (see
+    // `read_numbering`), so no XML under its id is where their formatting came from,
+    // even another definition that repeats the id.
+    let linked: HashSet<u32> = root
+        .children("w:abstractNum")
+        .take(10_000)
+        .filter(|a| a.child("w:numStyleLink").is_some())
+        .filter_map(|a| a.attr("w:abstractNumId")?.parse().ok())
+        .collect();
     for kind in ["abstractNum", "num"] {
         let element = format!("w:{kind}");
         let attr = format!("w:{kind}Id");
         for source in root.children(&element).take(10_000) {
             let Some(id) = source.attr(&attr).and_then(|s| s.parse::<u32>().ok()) else { continue };
-            // A list that only links to a numbering style takes that style's levels (see
-            // `read_numbering`), so its own XML is not where their formatting came from.
-            if kind == "abstractNum" && source.child("w:numStyleLink").is_some() {
+            if kind == "abstractNum" && linked.contains(&id) {
                 continue;
             }
             let index = |e: &El| e.attr("w:ilvl").unwrap_or("0").trim().parse::<usize>().ok().filter(|i| *i < 9);
             let levels: Vec<_> = if kind == "abstractNum" {
                 source.children("w:lvl").take(10_000).filter_map(|e| index(e).map(|i| (i, e))).collect()
             } else {
-                // The first override of a level is the one read and written; later repeats are ignored.
+                // The first whole-level override of a level is the one read and written; a
+                // start-only override does not count, and later repeats are ignored.
                 let mut seen = [false; 9];
                 source
                     .children("w:lvlOverride")
                     .take(9)
-                    .filter_map(|e| Some((index(e)?, e)))
+                    .filter_map(|e| Some((index(e)?, e.child("w:lvl")?)))
                     .filter(|(i, _)| !std::mem::replace(&mut seen[*i], true))
-                    .filter_map(|(i, e)| Some((i, e.child("w:lvl")?)))
                     .collect()
             };
             for (index, source_level) in levels {
