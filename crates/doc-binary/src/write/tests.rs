@@ -705,3 +705,28 @@ fn compound_border_lines_round_trip() {
     let got: Vec<_> = r.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.borders.as_ref()?.bottom.map(|b| b.style)).collect();
     assert_eq!(got, styles);
 }
+
+/// Small-gap dashes keep their distinct DOC border type through repeated saves.
+#[test]
+fn small_gap_and_regular_dashes_stay_distinct_on_doc_saves() {
+    let styles = [BorderStyle::DashSmallGap, BorderStyle::Dashed];
+    let mut document = Document::new();
+    document.body = styles
+        .iter()
+        .map(|&style| {
+            let mut paragraph = para("Bordered");
+            paragraph.props.borders = Some(Borders { bottom: Some(Border { style, width: 3.0, color: None, space: 1.0 }), ..Default::default() });
+            para_block(paragraph)
+        })
+        .collect();
+    for _ in 0..3 {
+        document = round(&document);
+        let actual: Vec<_> = document
+            .body
+            .iter()
+            .filter_map(|block| block.as_para())
+            .filter_map(|paragraph| paragraph.props.borders.as_ref()?.bottom.map(|border| border.style))
+            .collect();
+        assert_eq!(actual, styles);
+    }
+}
