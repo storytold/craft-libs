@@ -158,7 +158,9 @@ interpretation needs.
   file whose cross-reference data is wrong or missing is rebuilt by scanning for object headers,
   and each repair is recorded (`repair_log`). Malformed input gives `CosError`, never a panic.
 - Encryption on open and save through `crypt`: revisions 2 to 6, crypt filters, `/EFF` and
-  `/EncryptMetadata`. `set_encryption` and `remove_encryption` change it.
+  `/EncryptMetadata`. `set_encryption` and `remove_encryption` change it. An `/Encrypt` that
+  refers to nothing reads as no encryption; one that is there but can't be read is kept, and the
+  document is not saved (`Document::encryption_unreadable`).
 - `write_incremental` appends the edited objects with a cross-reference section in the style of
   the file's last one, so earlier revisions and their signatures stay as they were; it falls back
   to `write_full` when an edit cannot be appended. `write_full` renumbers what the trailer
