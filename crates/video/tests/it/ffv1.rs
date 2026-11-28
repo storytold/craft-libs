@@ -4,6 +4,8 @@
 //! - Our packets, in an AVI with our configuration record, decode in ffmpeg to our source pixels.
 //! - ffmpeg's FFV1 files (version 3, range coder, several pixel formats and slice counts) decode
 //!   with our decoder to ffmpeg's pixels.
+//! - So do ffmpeg's version 0, 1 and 3 files with the Golomb-Rice coder or either range coder table
+//!   and non-keyframes, and damaged frames of these kinds are errors or wrong pixels, never panics.
 
 use craft_media::avi::{AviWriter, MuxOptions, StreamSpec, VideoSpec};
 use craft_video::ffv1::{Colorspace, Decoder, Encoder, EncoderConfig, Error, Frame};
@@ -299,6 +301,182 @@ fn our_decoder_reads_ffmpegs_files() {
                     panic!("{pix_fmt} s{slices} c{ctx}: our pixels differ from ffmpeg's");
                 }
             }
+        }
+    }
+}
+
+/// A format of ffmpeg's FFV1 encoder: `(encoder input pix_fmt, pix_fmt to compare in, colourspace,
+/// bits, chroma shift, planes)`. ffmpeg decodes `bgr0` as packed RGB; `gbrp` holds the same samples.
+type Source = (&'static str, &'static str, Colorspace, u8, (u8, u8), usize);
+
+const SOURCES: &[Source] = &[
+    ("yuv420p", "yuv420p", Colorspace::YCbCr, 8, (1, 1), 3),
+    ("yuv422p", "yuv422p", Colorspace::YCbCr, 8, (1, 0), 3),
+    ("yuv444p", "yuv444p", Colorspace::YCbCr, 8, (0, 0), 3),
+    ("gray", "gray", Colorspace::YCbCr, 8, (0, 0), 1),
+    ("yuva420p", "yuva420p", Colorspace::YCbCr, 8, (1, 1), 4),
+    ("bgr0", "gbrp", Colorspace::Rgb, 8, (0, 0), 3),
+    ("yuv420p10le", "yuv420p10le", Colorspace::YCbCr, 10, (1, 1), 3),
+    ("gbrp10le", "gbrp10le", Colorspace::Rgb, 10, (0, 0), 3),
+];
+
+/// testsrc2 (gradients, flat areas and edges, which give runs) with a noisy left half (which
+/// gives large differences and Golomb-Rice escapes), moving from frame to frame.
+const NOISY_TESTSRC: &str = "split[a][b];[b]noise=alls=60:allf=t,crop=iw/2:ih:0:0[n];[a][n]overlay=0:0";
+
+/// Encode `frames` frames of `w` x `h` with ffmpeg's FFV1 encoder and the options `opts`.
+fn ffmpeg_ffv1(ff: &Path, name: &str, source: &Source, w: u32, h: u32, frames: usize, opts: &[&str]) -> std::path::PathBuf {
+    let path = craft_media_testkit::fixture_subdir("ffv1").join(format!("{name}.avi"));
+    let lavfi = format!("testsrc2=size={w}x{h}:rate=25");
+    let vf = format!("{NOISY_TESTSRC},format={}", source.0);
+    let frames = frames.to_string();
+    let mut args = vec!["-f", "lavfi", "-i", &lavfi, "-frames:v", &frames, "-vf", &vf, "-c:v", "ffv1"];
+    args.extend_from_slice(opts);
+    args.push(path.to_str().expect("path"));
+    ffmpeg_run(ff, &args);
+    path
+}
+
+/// An AVI's FFV1 stream: its configuration record (empty for versions 0 and 1), frame size, and
+/// packets with their keyframe flags.
+struct AviFfv1 {
+    config: Vec<u8>,
+    width: u32,
+    height: u32,
+    packets: Vec<(Vec<u8>, bool)>,
+}
+
+fn read_avi(path: &Path) -> AviFfv1 {
+    let file = std::fs::read(path).expect("read");
+    let avi = craft_media::avi::open(&file[..]).expect("open avi");
+    let stream = &avi.streams[0];
+    let video = stream.video.as_ref().expect("video");
+    let packets = stream.chunks.iter().map(|c| (file[c.offset as usize..c.offset as usize + c.size as usize].to_vec(), c.key)).collect();
+    AviFfv1 { config: video.extra.clone(), width: video.width as u32, height: video.height.unsigned_abs(), packets }
+}
+
+/// Decode every frame of an ffmpeg FFV1 file in order and check each against ffmpeg's own decode;
+/// returns how many were non-keyframes.
+fn decodes_like_ffmpeg(ff: &Path, path: &Path, source: &Source, label: &str) -> usize {
+    let &(_, raw_fmt, cs, bits, shift, planes) = source;
+    let avi = read_avi(path);
+    let dec = Decoder::new(&avi.config, avi.width, avi.height).unwrap_or_else(|e| panic!("{label}: config: {e}"));
+    let theirs = ffmpeg_run(ff, &["-i", path.to_str().expect("path"), "-f", "rawvideo", "-pix_fmt", raw_fmt, "-"]);
+    let mut off = 0;
+    let mut non_key = 0;
+    for (i, (packet, key)) in avi.packets.iter().enumerate() {
+        non_key += usize::from(!key);
+        let got = dec.decode(packet).unwrap_or_else(|e| panic!("{label}: frame {i}: {e}"));
+        assert_eq!((got.colorspace, got.bit_depth, got.chroma_shift, got.planes.len()), (cs, bits, shift, planes), "{label}: frame {i}");
+        let mut want = got.clone();
+        if cs == Colorspace::Rgb {
+            want.planes = gbr_order(&got.planes);
+        }
+        let ours = raw_bytes(&want);
+        assert!(theirs.get(off..off + ours.len()) == Some(&ours[..]), "{label}: frame {i} differs from ffmpeg's");
+        off += ours.len();
+    }
+    assert_eq!(off, theirs.len(), "{label}: ffmpeg decoded a different number of frames");
+    non_key
+}
+
+#[test]
+fn ffmpegs_version_0_and_1_streams_decode_bit_exact() {
+    let Some(ff) = craft_media_testkit::ffmpeg() else { return };
+    for level in ["0", "1"] {
+        for coder in ["rice", "range_def", "range_tab"] {
+            for source in SOURCES {
+                // Version 0 has 8-bit samples only.
+                if level == "0" && source.3 > 8 {
+                    continue;
+                }
+                let name = format!("ffmpeg_v{level}_{coder}_{}", source.0);
+                let opts = ["-level", level, "-coder", coder, "-g", "3"];
+                let path = ffmpeg_ffv1(&ff, &name, source, 49, 25, 7, &opts);
+                assert!(decodes_like_ffmpeg(&ff, &path, source, &name) > 0, "{name}: no non-keyframes");
+            }
+        }
+    }
+}
+
+#[test]
+fn ffmpegs_golomb_rice_version_3_streams_decode_bit_exact() {
+    let Some(ff) = craft_media_testkit::ffmpeg() else { return };
+    // Slice boundaries must fall on chroma samples: 4 slices of 100 x 52 do, 49 x 25 has one slice.
+    for (w, h, slices, crc) in [(49, 25, "1", "0"), (100, 52, "4", "1")] {
+        for source in SOURCES {
+            let name = format!("ffmpeg_v3_rice_{}_s{slices}_crc{crc}", source.0);
+            let opts = ["-level", "3", "-coder", "rice", "-slices", slices, "-slicecrc", crc, "-g", "3"];
+            let path = ffmpeg_ffv1(&ff, &name, source, w, h, 7, &opts);
+            assert!(decodes_like_ffmpeg(&ff, &path, source, &name) > 0, "{name}: no non-keyframes");
+        }
+    }
+}
+
+#[test]
+fn ffmpegs_range_coded_non_keyframes_decode_bit_exact() {
+    let Some(ff) = craft_media_testkit::ffmpeg() else { return };
+    for coder in ["range_def", "range_tab"] {
+        for source in SOURCES {
+            let name = format!("ffmpeg_v3_{coder}_{}_gop", source.0);
+            let opts = ["-level", "3", "-coder", coder, "-slices", "4", "-slicecrc", "1", "-g", "3"];
+            let path = ffmpeg_ffv1(&ff, &name, source, 100, 52, 7, &opts);
+            assert!(decodes_like_ffmpeg(&ff, &path, source, &name) > 0, "{name}: no non-keyframes");
+        }
+    }
+}
+
+/// Damaged frames of the new kinds never panic or hang. With slice CRCs (version 3) every cut and
+/// every flipped bit is an error; Golomb-Rice data runs to the end of a version 0 or 1 frame, so
+/// every cut is an error there too. A non-keyframe is damaged after its keyframe decoded, so the
+/// damage meets carried-over states.
+#[test]
+fn damaged_golomb_rice_and_non_keyframes_are_errors_not_panics() {
+    let Some(ff) = craft_media_testkit::ffmpeg() else { return };
+    // (name, ffmpeg options, every cut is an error, every bit flip is an error)
+    let cases: &[(&str, &[&str], bool, bool)] = &[
+        ("v3_rice_crc", &["-level", "3", "-coder", "rice", "-slices", "1", "-slicecrc", "1"], true, true),
+        ("v3_range_crc", &["-level", "3", "-coder", "range_def", "-slices", "1", "-slicecrc", "1"], true, true),
+        ("v3_rice", &["-level", "3", "-coder", "rice", "-slices", "1", "-slicecrc", "0"], false, false),
+        ("v0_rice", &["-level", "0", "-coder", "rice"], true, false),
+        ("v1_rice", &["-level", "1", "-coder", "rice"], true, false),
+        ("v1_range", &["-level", "1", "-coder", "range_def"], false, false),
+        ("v1_range_tab", &["-level", "1", "-coder", "range_tab"], false, false),
+    ];
+    for &(name, opts, cuts_fail, flips_fail) in cases {
+        let name = format!("ffmpeg_hostile_{name}");
+        let opts: Vec<&str> = opts.iter().copied().chain(["-g", "2"]).collect();
+        let avi = read_avi(&ffmpeg_ffv1(&ff, &name, &SOURCES[0], 16, 8, 2, &opts));
+        let (config, w, h) = (avi.config.clone(), avi.width, avi.height);
+        let key = avi.packets[0].0.clone();
+        let next = avi.packets[1].0.clone();
+        assert!(!avi.packets[1].1, "{name}: the second frame is a keyframe");
+        let dec = Decoder::new(&config, w, h).expect("decoder");
+        for (frame, packet) in [&key, &next].into_iter().enumerate() {
+            let cuts = (0..packet.len()).filter(|_| cuts_fail).map(|n| packet[..n].to_vec());
+            let flips = (0..packet.len() * 8).filter(|_| flips_fail).map(|i| {
+                let mut c = packet.clone();
+                c[i / 8] ^= 1 << (i % 8);
+                c
+            });
+            for (case, damaged) in cuts.chain(flips).enumerate() {
+                if frame == 1 {
+                    dec.decode(&key).expect("keyframe");
+                }
+                assert!(dec.decode(&damaged).is_err(), "{name}: damage {case} of frame {frame} went unnoticed");
+            }
+        }
+        for (frame, seed) in [key.clone(), next].into_iter().enumerate() {
+            let (config, key) = (config.clone(), key.clone());
+            craft_media_testkit::hostile::hammer(&format!("{name} frame {frame}"), &seed, 2000, move |d| {
+                let Ok(dec) = Decoder::new(&config, w, h) else { return };
+                if frame == 1 {
+                    let _ = dec.decode(&key);
+                }
+                let _ = dec.decode(d);
+                // A second time: after a failure, or continuing the damaged frame.
+                let _ = dec.decode(d);
+            });
         }
     }
 }

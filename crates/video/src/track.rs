@@ -58,7 +58,7 @@ enum Inner {
 /// | ProRes | `prores` | ignored (frame headers carry the format) |
 /// | DNxHD / DNxHR | `dnx` | ignored (frame headers carry the format) |
 /// | APV | `apv-decode` | ignored (access units carry the format) |
-/// | FFV1 | `ffv1` | required version 3 configuration record; container width and height are required too |
+/// | FFV1 | `ffv1` | the version 3 configuration record, or empty for versions 0 and 1; container width and height are required too |
 /// | Motion JPEG | `mjpeg` | ignored (each packet carries its own picture) |
 /// | VP8 | `vp8-decode` | ignored (key frames carry the format) |
 ///
@@ -71,9 +71,10 @@ enum Inner {
 /// headers.
 ///
 /// ProRes, DNx, APV, FFV1 and Motion JPEG return one frame per packet. APV selects the first decodable
-/// primary frame and its alpha, as the codec's default decoder does. FFV1 supports version 3,
-/// range-coded key frames. VP8 hidden frames update references without returning a picture.
-/// These decoders have no delayed output; reset keeps FFV1 configuration and dimensions.
+/// primary frame and its alpha, as the codec's default decoder does. FFV1 supports versions 0, 1
+/// and 3, both coders, keyframes and non-keyframes. VP8 hidden frames update references without
+/// returning a picture. These decoders have no delayed output; reset keeps FFV1 configuration and
+/// dimensions, and forgets the states an FFV1 non-keyframe would continue.
 ///
 /// Other codecs are [`VideoError::Unsupported`], as is a codec whose decoder feature is off.
 ///
@@ -158,12 +159,13 @@ impl TrackDecoder {
     /// Whether this codec's validated track configuration declares an alpha plane.
     ///
     /// FFV1 v3 can answer this before the first packet, from its [extra plane
-    /// flag](https://www.rfc-editor.org/rfc/rfc9043.html#section-4.2.10). Other codecs currently
-    /// return `None`. Container alpha and alpha signaled in pictures can require separate inspection.
+    /// flag](https://www.rfc-editor.org/rfc/rfc9043.html#section-4.2.10); FFV1 versions 0 and 1,
+    /// whose keyframes carry that flag, and other codecs currently return `None`. Container alpha
+    /// and alpha signaled in pictures can require separate inspection.
     pub fn configured_alpha(&self) -> Option<bool> {
         #[cfg(feature = "ffv1")]
         match &self.inner {
-            Inner::Ffv1(decoder) => Some(decoder.has_alpha()),
+            Inner::Ffv1(decoder) => decoder.has_alpha(),
             // FFV1 is the only variant when no other dispatcher codec features are enabled.
             #[allow(unreachable_patterns)]
             _ => None,
@@ -392,7 +394,10 @@ impl TrackDecoder {
             #[cfg(feature = "apv-decode")]
             Inner::Apv => Ok(()),
             #[cfg(feature = "ffv1")]
-            Inner::Ffv1(_) => Ok(()),
+            Inner::Ffv1(dec) => {
+                dec.reset();
+                Ok(())
+            }
             #[cfg(feature = "mjpeg")]
             Inner::Mjpeg(_) => Ok(()),
             #[cfg(feature = "vp8-decode")]

@@ -47,7 +47,8 @@ mpeg2-encode = ["mpeg2-decode"]
 # MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): Simple profile encoder.
 mpeg4 = ["mpeg4-encode"]
 mpeg4-encode = ["craft-media/bitstream"]
-# FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder.
+# FFV1 lossless video (RFC 9043): decoder for versions 0, 1 and 3 (both coders, non-keyframes),
+# encoder for version 3 with the range coder.
 ffv1 = ["dep:craft-media"]
 # Uncompressed packed pictures (UYVY, YUYV, YVYU, v210, r210, R10k): unpacking and packing.
 rawvideo = []

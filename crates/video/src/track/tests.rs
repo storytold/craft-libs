@@ -351,9 +351,9 @@ fn ffv1_configuration_dimensions_timestamps_and_reset() {
         bad.height = height;
         assert!(matches!(TrackDecoder::new(&bad), Err(VideoError::Malformed(_))));
     }
-    for config in [&[][..], &config[..config.len() - 1]] {
-        assert!(matches!(TrackDecoder::new(&params(CodecId::Ffv1, config).with_size(16, 16)), Err(VideoError::Malformed(_))));
-    }
+    // An empty configuration is a version 0 or 1 stream, whose keyframes carry the parameters.
+    let cut = &config[..config.len() - 1];
+    assert!(matches!(TrackDecoder::new(&params(CodecId::Ffv1, cut).with_size(16, 16)), Err(VideoError::Malformed(_))));
 }
 
 #[cfg(feature = "vp8")]

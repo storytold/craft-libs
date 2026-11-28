@@ -10,7 +10,7 @@
 //! | `vp8` | `vp8` | VP8 (RFC 6386): decoder (`vp8-decode`) and key-frame encoder (`vp8-encode`) |
 //! | `mpeg2` | `mpeg2` | MPEG-2 video (ITU-T H.262) and MPEG-1 video: decoder (`mpeg2-decode`) and MPEG-2 I/P/B encoder with CBR / VBR (`mpeg2-encode`) |
 //! | `mpeg4` | `mpeg4` | MPEG-4 Part 2 video (ISO/IEC 14496-2, Xvid/DivX): Simple profile encoder (`mpeg4-encode`) |
-//! | `ffv1` | `ffv1` | FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder |
+//! | `ffv1` | `ffv1` | FFV1 lossless video (RFC 9043): versions 0, 1 and 3 decoder, version 3 range coder encoder |
 //! | `rawvideo` | `rawvideo` | Uncompressed packed pictures: UYVY, YUYV, YVYU, v210, r210, R10k |
 //! | `hap` | `hap` | Vidvox Hap, Hap Alpha, Hap Q, Hap Q Alpha, Hap Alpha-Only: decoder and encoder |
 //! | `mjpeg` | `mjpeg` | Motion JPEG: frame-level decoder and baseline encoder over `craft-jpeg` |
