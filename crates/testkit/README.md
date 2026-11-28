@@ -115,8 +115,9 @@ of the thread.
 `wait_until(limit, what, &signal, cond)` calls `cond` on the test's thread at once, and again each
 time another thread calls `signal.raise()`, until `cond` returns `true`. The thread that changes the
 state `cond` reads raises the `Signal` after each change. A raise that comes while `cond` runs makes
-`wait_until` call `cond` again straight after. When the signal is not raised within the limit after a
-call that returned `false`, the test fails with a message that names `what`.
+`wait_until` call `cond` again straight after. The limit counts from the start of the call. When the
+limit has passed and the latest call of `cond` returned `false`, the test fails with a message that
+names `what`, even if the signal is still being raised.
 
 ```rust
 use std::time::Duration;

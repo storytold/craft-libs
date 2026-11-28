@@ -11,8 +11,8 @@
 //!
 //! [`wait_until`] calls a condition on the test's thread, and calls it again each time another
 //! thread raises the [`Signal`] the call waits on. It returns when the condition returns `true`, and
-//! fails the test with its description when the signal is not raised within the limit after a call
-//! that returned `false`.
+//! fails the test with its description when the limit has passed since the call began and the latest
+//! call of the condition returned `false`.
 //!
 //! A limit is a default [`Duration`] and the name of a variable that replaces it. A plain `Duration`
 //! reads [`DEFAULT_VARIABLE`]; [`DeadlineLimit::with_variable`] names another one. The variable holds
@@ -155,12 +155,14 @@ pub fn with_deadline<'a, T: Send + 'static>(limit: impl Into<DeadlineLimit<'a>>,
 }
 
 /// Calls `cond` on the calling thread, and again each time `signal` is raised, until it returns
-/// `true`, failing the calling test when `signal` is not raised within the limit after a call that
-/// returned `false`.
+/// `true`, failing the calling test when the limit has passed since the call began and the latest
+/// call of `cond` returned `false`.
 ///
 /// `cond` is called at once. A raise that comes while `cond` runs is not lost: `cond` is called
-/// again straight after. The limit guards against a hang and counts afresh from each call of `cond`,
-/// so a condition that holds is never failed by it. The failure names `what`, the limit and the
+/// again straight after. The limit guards against a hang and counts from the start of the call, so
+/// a signal that keeps being raised while `cond` stays `false` still fails the test. `cond` is
+/// called before the limit is checked, so a condition that holds is never failed by it. The failure
+/// names `what`, the limit and the
 /// variable that sets it. A panic in `cond` reaches the caller unchanged. `cond` runs on the calling
 /// thread and is not interrupted, so it must return promptly. The threads that change what `cond`
 /// reads raise `signal` after each change.
@@ -189,7 +191,7 @@ pub fn wait_until<'a>(limit: impl Into<DeadlineLimit<'a>>, what: &str, signal: &
         Ok(resolved) => resolved,
         Err(error) => panic!("waiting for {what}: {error}"),
     };
-    if let Err(message) = wait_for_signal(&resolved, what, signal, &mut cond, wait_for_raise) {
+    if let Err(message) = wait_for_signal(&resolved, what, signal, &mut cond, Instant::now, wait_for_raise) {
         panic!("{message}");
     }
 }
@@ -354,21 +356,28 @@ fn wait_for_raise<'g>(changed: &Condvar, raised: MutexGuard<'g, u64>, seen: u64,
     (raised, result.timed_out())
 }
 
-/// The loop of [`wait_until`], with the wait for a raise passed in. The raise count is read before
-/// each call of `cond`, so a raise during the call ends the next wait at once.
+/// The loop of [`wait_until`], with the clock and the wait for a raise passed in. The raise count is
+/// read before each call of `cond`, so a raise during the call ends the next wait at once. The limit
+/// counts from the start of the loop, and each wait lasts at most the time left.
 fn wait_for_signal(
     resolved: &Resolved<'_>,
     what: &str,
     signal: &Signal,
     cond: &mut dyn FnMut() -> bool,
+    now: impl Fn() -> Instant,
     wait: impl for<'g> Fn(&Condvar, MutexGuard<'g, u64>, u64, Duration) -> (MutexGuard<'g, u64>, bool),
 ) -> Result<(), String> {
+    let start = now();
     let mut seen = *signal.lock();
     loop {
         if cond() {
             return Ok(());
         }
-        let (raised, timed_out) = wait(&signal.changed, signal.lock(), seen, resolved.limit);
+        let remaining = resolved.limit.saturating_sub(now().saturating_duration_since(start));
+        if remaining.is_zero() {
+            return Err(format!("timed out waiting for {what} within {resolved}: the condition still returned false at the limit"));
+        }
+        let (raised, timed_out) = wait(&signal.changed, signal.lock(), seen, remaining);
         if timed_out {
             return Err(format!("timed out waiting for {what} within {resolved}: the signal was not raised after the last check"));
         }
@@ -662,7 +671,7 @@ mod tests {
             }
             calls == 2
         };
-        let result = wait_for_signal(&fake_resolved(Duration::from_secs(600)), "a raise", &signal, &mut cond, |_, raised, seen, _| {
+        let result = wait_for_signal(&fake_resolved(Duration::from_secs(600)), "a raise", &signal, &mut cond, Instant::now, |_, raised, seen, _| {
             assert_ne!(*raised, seen, "the raise made during the condition was lost");
             (raised, false)
         });
@@ -678,12 +687,62 @@ mod tests {
             false
         };
         let resolved = fake_resolved(Duration::from_millis(50));
-        let text = wait_for_signal(&resolved, "the export to finish", &Signal::new(), &mut cond, |_, raised, _, _| (raised, true)).unwrap_err();
+        let text = wait_for_signal(&resolved, "the export to finish", &Signal::new(), &mut cond, Instant::now, |_, raised, _, _| (raised, true))
+            .unwrap_err();
         assert!(text.starts_with("timed out waiting for the export to finish within 50ms"), "{text}");
         assert!(text.ends_with("the signal was not raised after the last check"), "{text}");
         assert_eq!(calls, 1);
     }
 
+    #[test]
+    fn raises_that_never_satisfy_the_condition_fail_at_the_limit() {
+        // A clock that moves 20 s on each reading, and a wait that always reports a raise.
+        let start = Instant::now();
+        let readings = std::cell::Cell::new(0u32);
+        let now = || {
+            let n = readings.get();
+            readings.set(n + 1);
+            start + Duration::from_secs(20) * n
+        };
+        let mut calls = 0;
+        let mut cond = || {
+            calls += 1;
+            false
+        };
+        let resolved = fake_resolved(Duration::from_secs(60));
+        let text = wait_for_signal(&resolved, "a progress tick", &Signal::new(), &mut cond, now, |_, mut raised, _, _| {
+            *raised = raised.wrapping_add(1);
+            (raised, false)
+        })
+        .unwrap_err();
+        assert!(text.starts_with("timed out waiting for a progress tick within 60s"), "{text}");
+        assert!(text.ends_with("the condition still returned false at the limit"), "{text}");
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn a_thread_raising_in_a_loop_cannot_hold_wait_until_past_the_limit() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let signal = Arc::new(Signal::new());
+        let raiser = {
+            let (stop, signal) = (Arc::clone(&stop), Arc::clone(&signal));
+            thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    signal.raise();
+                    thread::yield_now();
+                }
+            })
+        };
+        let waiter_signal = Arc::clone(&signal);
+        let guard = DeadlineLimit::new(Duration::from_secs(30)).with_variable(UNSET);
+        let outcome = with_deadline(guard, "wait_until under constant raises", move || {
+            catch_unwind(AssertUnwindSafe(|| wait_until(short(), "a condition that never holds", &waiter_signal, || false))).map_err(message)
+        });
+        stop.store(true, Ordering::SeqCst);
+        raiser.join().unwrap();
+        let text = outcome.unwrap_err();
+        assert!(text.contains("timed out waiting for a condition that never holds within 50ms"), "{text}");
+    }
     #[test]
     #[should_panic(expected = "condition boom")]
     fn wait_until_propagates_condition_panic() {
