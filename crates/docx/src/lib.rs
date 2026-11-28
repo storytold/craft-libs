@@ -19,6 +19,7 @@ mod crypt;
 mod custom;
 mod flat;
 mod fonts;
+mod mail_merge;
 mod package;
 
 static APPLICATION_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
