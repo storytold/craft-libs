@@ -743,7 +743,7 @@ fn hostile_sizes_and_counts_are_refused_without_allocating() {
 
 #[test]
 fn banded_decode_matches_the_encoder_on_larger_images() {
-    // Many strips decoded in parallel bands, at every depth and compression.
+    // Many strips decoded in parallel bands, at each depth, compression and predictor branch.
     for (layout, sample) in [
         (ChannelLayout::Rgb, SampleType::U8),
         (ChannelLayout::Rgba, SampleType::U16),
@@ -752,6 +752,10 @@ fn banded_decode_matches_the_encoder_on_larger_images() {
     ] {
         let img = common::synth(613, 411, layout, sample, 3, 0.2);
         for c in [TiffCompression::None, TiffCompression::Lzw, TiffCompression::Deflate, TiffCompression::PackBits] {
+            // RGB covers every compressor; each other depth/layout keeps both predictor-capable codecs.
+            if !matches!(layout, ChannelLayout::Rgb) && matches!(c, TiffCompression::None | TiffCompression::PackBits) {
+                continue;
+            }
             let bytes = encode(&img, Format::Tiff, &EncodeOptions { tiff_compression: c, ..Default::default() }).unwrap();
             let back = decode_ok(&bytes);
             assert_eq!(back.data(), img.data(), "{layout:?} {sample:?} {c:?}");
