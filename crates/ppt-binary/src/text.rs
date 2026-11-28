@@ -487,6 +487,9 @@ pub struct TextBlock {
     pub outline_ref: Option<u32>,
     /// The slide list's outline block this text was read from.
     pub outline_index: Option<usize>,
+    /// Actions on ranges of the text: (instance, begin, end, action), as the file lists them.
+    /// Instance [`crate::link::CLICK`] or [`crate::link::OVER`]; `end` is exclusive.
+    pub links: Vec<(u16, u32, u32, crate::link::Info)>,
 }
 
 /// Read a text block from a run of records starting at its `TextHeaderAtom` (inside a client text
@@ -497,6 +500,8 @@ pub fn read_block<'a>(records: impl Iterator<Item = Rec<'a>>) -> Option<TextBloc
     let mut b = TextBlock::default();
     let mut started = false;
     let mut style: Option<Rec> = None;
+    // The last action container of each instance, waiting for the range atom that follows it.
+    let mut pending: [Option<crate::link::Info>; 2] = [None, None];
     for r in records {
         match r.kind {
             rt::TEXT_HEADER if started => break,
@@ -510,6 +515,16 @@ pub fn read_block<'a>(records: impl Iterator<Item = Rec<'a>>) -> Option<TextBloc
             rt::STYLE_TEXT_PROP => style = Some(r),
             rt::TEXT_RULER => b.ruler = read_ruler(&r),
             rt::OUTLINE_TEXT_REF => b.outline_ref = r.u32(0),
+            rt::INTERACTIVE_INFO => {
+                if let Some(slot) = pending.get_mut(usize::from(r.instance)) {
+                    *slot = crate::link::read(&r);
+                }
+            }
+            rt::TEXT_INTERACTIVE_INFO_ATOM => {
+                if let (Some(info), Some(begin), Some(end)) = (pending.get_mut(usize::from(r.instance)).and_then(Option::take), r.u32(0), r.u32(4)) {
+                    b.links.push((r.instance, begin, end, info));
+                }
+            }
             rt::SLIDE_NUMBER_MC => b.fields.extend(r.u32(0).map(|p| (p, FieldKind::SlideNumber))),
             rt::DATETIME_MC | rt::GENERIC_DATE_MC => b.fields.extend(r.u32(0).map(|p| (p, FieldKind::DateTime))),
             _ => {}

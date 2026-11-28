@@ -6,7 +6,7 @@
 //! of its main master. Slide shapes keep their own boxes, and their text carries its formatting
 //! resolved against the master's text styles, so it draws the same whatever the layouts hold.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -90,6 +90,10 @@ struct Ctx<'a> {
     master_props: HashMap<(u32, u32), Props<'a>>,
     /// The caller's defaults: the master each of the file's masters starts from.
     app: &'a dyn Defaults,
+    /// Hyperlink targets by `exHyperlinkId` ([`doc::hyperlink_targets`]).
+    link_targets: HashMap<u32, String>,
+    /// Bytes of link targets the links may still copy ([`crate::link::MAX_LINK_TARGET_BYTES`]).
+    link_budget: Cell<usize>,
     /// Notes pages converted already. Distinct slides can share a slide id, and so a notes page:
     /// it goes to the first of them only, so its text isn't copied into every one.
     used_notes: HashSet<usize>,
@@ -119,6 +123,8 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
         master_props: HashMap::new(),
         app,
         used_notes: HashSet::new(),
+        link_targets: doc::hyperlink_targets(&d.document),
+        link_budget: Cell::new(crate::link::MAX_LINK_TARGET_BYTES),
     };
     let environment = d.document.child(rt::ENVIRONMENT);
     if let Some(hf) = doc::headers_footers(&d.document, 3) {
@@ -575,6 +581,8 @@ impl<'a> Ctx<'a> {
             xfrm: Some(xfrm(&anchor, map, rot, raw.flip_h, raw.flip_v)),
             descr: props.string(prop::DESCRIPTION).unwrap_or_default(),
             hidden: props.flag(prop::GROUP_BOOLS, 1).unwrap_or(false),
+            click: raw.click.as_ref().and_then(|i| crate::link::hyperlink(i, &self.link_targets, &self.link_budget)),
+            hover: raw.hover.as_ref().and_then(|i| crate::link::hyperlink(i, &self.link_targets, &self.link_budget)),
             ..Default::default()
         };
         if raw.is_group {
@@ -866,6 +874,22 @@ impl<'a> Ctx<'a> {
         // run, break and field made text with many runs quadratic: 1M one-character runs, about 10 MB
         // of file, took minutes.
         let run_at = |starts: &[usize], i: usize| starts.partition_point(|&s| s <= i).checked_sub(1);
+        let clicks = self.text_links(block, crate::link::CLICK);
+        let overs = self.text_links(block, crate::link::OVER);
+        // Where a run must end for its action to change.
+        let mut cuts: Vec<usize> = clicks.iter().chain(&overs).flat_map(|r| [r.0, r.1]).collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        // Each run in a range holds its own copy of the action, so each copy is charged to the
+        // link-target budget: a range split into many runs can't copy one target over and over.
+        let link_at = |ranges: &[(usize, usize, &crate::link::Info)], i: usize| {
+            ranges
+                .partition_point(|r| r.0 <= i)
+                .checked_sub(1)
+                .and_then(|k| ranges.get(k))
+                .filter(|r| i < r.1)
+                .and_then(|r| crate::link::hyperlink(r.2, &self.link_targets, &self.link_budget))
+        };
         let mut out = vec![];
         let mut start = 0usize;
         loop {
@@ -908,7 +932,9 @@ impl<'a> Ctx<'a> {
             }
             let mut i = start;
             while i < end {
-                let props = self.run_props(&cf_at(i), &scope.scheme);
+                let mut props = self.run_props(&cf_at(i), &scope.scheme);
+                props.link = link_at(&clicks, i);
+                props.hover = link_at(&overs, i);
                 let c = chars.get(i).copied().unwrap_or(0);
                 if let Some(k) = fields.get(&i) {
                     let field = match k {
@@ -929,7 +955,9 @@ impl<'a> Ctx<'a> {
                     continue;
                 }
                 // A text run: up to the next format change, field, break or the paragraph's end.
-                let next_change = char_starts.get(char_starts.partition_point(|&s| s <= i)).copied().unwrap_or(end).min(end);
+                let next_format = char_starts.get(char_starts.partition_point(|&s| s <= i)).copied().unwrap_or(end);
+                let next_link = cuts.get(cuts.partition_point(|&c| c <= i)).copied().unwrap_or(end);
+                let next_change = next_format.min(next_link).min(end);
                 let mut j = i;
                 while j < next_change && !fields.contains_key(&j) && chars.get(j) != Some(&0x0B) {
                     j += 1;
@@ -950,6 +978,37 @@ impl<'a> Ctx<'a> {
             start = end + 1;
         }
         out
+    }
+
+    /// The actions of `instance` ([`crate::link::CLICK`] or [`crate::link::OVER`]) on ranges of
+    /// `block`'s text, as (begin, end, action): inside the text, sorted, and not overlapping (a
+    /// range that overlaps an earlier one is left out), so a run's action is a binary search. No
+    /// target is copied here; each run that takes the action copies it.
+    fn text_links<'b>(&self, block: &'b TextBlock, instance: u16) -> Vec<(usize, usize, &'b crate::link::Info)> {
+        let chars = &block.chars;
+        // A boundary between a high and a low surrogate would split one character.
+        let splits_pair = |at: usize| {
+            at > 0 && chars.get(at - 1).is_some_and(|u| (0xD800..0xDC00).contains(u)) && chars.get(at).is_some_and(|u| (0xDC00..0xE000).contains(u))
+        };
+        // Ranges that overlap, or that name a missing target, are left out here and cost nothing.
+        let mut ranges: Vec<(usize, usize, &crate::link::Info)> = block
+            .links
+            .iter()
+            .filter(|(k, ..)| *k == instance)
+            .filter_map(|(_, begin, end, info)| {
+                let (begin, end) = (usize::try_from(*begin).ok()?, usize::try_from(*end).ok()?);
+                (begin < end && end <= chars.len() && !splits_pair(begin) && !splits_pair(end)).then_some(())?;
+                crate::link::resolves(info, &self.link_targets).then_some((begin, end, info))
+            })
+            .collect();
+        ranges.sort_by_key(|r| r.0);
+        let mut kept: Vec<(usize, usize, &crate::link::Info)> = Vec::with_capacity(ranges.len());
+        for r in ranges {
+            if kept.last().is_none_or(|last| last.1 <= r.0) {
+                kept.push(r);
+            }
+        }
+        kept
     }
 
     fn run_props(&self, cf: &Cf, scheme: &Scheme) -> RunProps {
