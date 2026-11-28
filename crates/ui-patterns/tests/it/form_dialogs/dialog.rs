@@ -776,6 +776,26 @@ fn alt_reset_restores_the_opening_values_with_the_reset_to_values_over_them() {
     assert!(fixture.by_label("Blur").is_some(), "Reset keeps the dialog open");
 }
 
+// Opting out of Reset keeps the normal Cancel action while Alt is held.
+#[trial]
+fn alt_reset_opt_out_preserves_cancel() {
+    let seen = Rc::new(Cell::new(None::<(CloseReason, bool)>));
+    let out = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).alt_resets(false).show(ui);
+        if let Some(closed) = dialog.closed {
+            out.set(Some((closed, dialog.result.is_some())));
+        }
+    });
+    fixture.settle();
+    fixture.hold(Modifiers::ALT).idle(2);
+    assert!(seen.get().is_none(), "holding Alt keeps the dialog open");
+    assert!(fixture.by_label("Reset").is_none(), "the dialog opted out of Reset");
+    let cancel = fixture.by_label("Cancel").expect("Alt leaves Cancel in place");
+    fixture.click(&cancel).settle();
+    assert!(matches!(seen.get(), Some((_, false))), "Cancel closes without accepting: {:?}", seen.get());
+}
+
 /// A blur dialog that previews, over `canvas`, whose pane centres on clicks when `centres`.
 fn locating(canvas: egui::Id, centres: bool) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static {
     move |fields| blur(fields).previews(true).canvas(canvas).click_centres(centres)
