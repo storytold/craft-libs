@@ -209,11 +209,7 @@ pub fn hdr(bytes: &[u8], limits: &Limits) -> Result<Decoded, DecodeError> {
     let mut hdr_limits = craft_hdr::Limits::default();
     // The picture holds 12 bytes a pixel, less than the 16 of the RGBA plane made from it.
     hdr_limits.max_pixels = limits.max_pixels.min(limits.max_bytes / 16);
-    if let Some((w, h)) = hdr_size(bytes, hdr_limits.max_header)
-        && (w > limits.max_side || h > limits.max_side)
-    {
-        return Err(ImageError::BadSize(w, h).into());
-    }
+    hdr_limits.max_axis = limits.max_side;
     let pic = craft_hdr::decode(bytes, &hdr_limits).map_err(|e| match e {
         craft_hdr::Error::NotHdr => DecodeError::WrongFormat(NAME),
         craft_hdr::Error::Malformed(m) => DecodeError::Malformed { format: NAME, reason: m.into() },
@@ -228,22 +224,6 @@ pub fn hdr(bytes: &[u8], limits: &Limits) -> Result<Decoded, DecodeError> {
     }
     let image = Image::from_data(w, h, Kind::Color, data, limits)?;
     Ok(Decoded { image, transfer: Transfer::Linear, alpha: Alpha::Straight })
-}
-
-/// The width and height on a Radiance resolution line (the line after the first one that is empty
-/// or holds only carriage returns), read
-/// as `craft_hdr::decode` reads it (bytes that are not UTF-8 replaced, tokens after the fourth
-/// ignored), or `None` when the line cannot be read. A line of `max_header` bytes or more is not
-/// converted; `craft_hdr::decode` refuses it.
-#[cfg(feature = "hdr")]
-fn hdr_size(bytes: &[u8], max_header: usize) -> Option<(u32, u32)> {
-    let mut lines = bytes.split(|&c| c == b'\n');
-    lines.by_ref().find(|l| l.iter().all(|&c| c == b'\r'))?;
-    let line = lines.next().filter(|l| l.len() < max_header)?;
-    let line = String::from_utf8_lossy(line);
-    let mut t = line.split_whitespace();
-    let (a1, n1, n2) = (t.next()?, t.next()?.parse().ok()?, t.nth(1)?.parse().ok()?);
-    Some(if a1.ends_with('X') { (n1, n2) } else { (n2, n1) })
 }
 
 /// Decodes the color channels of an OpenEXR file: the part and the channel group that

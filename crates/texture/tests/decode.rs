@@ -268,7 +268,6 @@ mod tiff {
 #[cfg(feature = "hdr")]
 mod hdr {
     use super::*;
-    use craft_texture::ImageError;
 
     /// A flat Radiance picture of `pixels` RGBE quadruples in one row (`-Y 1 +X n`).
     fn build(pixels: &[[u8; 4]]) -> Vec<u8> {
@@ -295,7 +294,10 @@ mod hdr {
         assert!(matches!(craft_texture::decode::hdr(&file[..file.len() - 2], &l), Err(DecodeError::Malformed { .. })));
         let mut narrow = Limits::default();
         narrow.max_side = 3;
-        assert_eq!(craft_texture::decode::hdr(&file, &narrow), Err(DecodeError::Image(ImageError::BadSize(4, 1))));
+        assert_eq!(
+            craft_texture::decode::hdr(&file, &narrow),
+            Err(DecodeError::LimitExceeded { format: "Radiance HDR", reason: "axis length".into() })
+        );
     }
 
     #[test]
@@ -303,16 +305,17 @@ mod hdr {
         // No pixel data follows, so only the header can give the size error.
         let mut narrow = Limits::default();
         narrow.max_side = 50;
+        let axis = Err(DecodeError::LimitExceeded { format: "Radiance HDR", reason: "axis length".into() });
         let wide = b"#?RADIANCE\r\nFORMAT=32-bit_rle_rgbe\r\n\r\n-Y 2 +X 100\n";
-        assert_eq!(craft_texture::decode::hdr(wide, &narrow), Err(DecodeError::Image(ImageError::BadSize(100, 2))));
+        assert_eq!(craft_texture::decode::hdr(wide, &narrow), axis);
         let tall = b"#?RADIANCE\n\n+X 3 -Y 60\n";
-        assert_eq!(craft_texture::decode::hdr(tall, &narrow), Err(DecodeError::Image(ImageError::BadSize(3, 60))));
+        assert_eq!(craft_texture::decode::hdr(tall, &narrow), axis);
         // The decoder treats a line of carriage returns alone as the empty line that ends the header.
         let crs = b"#?RADIANCE\r\r\n\r\r\n-Y 2 +X 100\n";
-        assert_eq!(craft_texture::decode::hdr(crs, &narrow), Err(DecodeError::Image(ImageError::BadSize(100, 2))));
+        assert_eq!(craft_texture::decode::hdr(crs, &narrow), axis);
         // A byte that is not UTF-8 after the four tokens does not hide the sizes.
         let trailing = b"#?RADIANCE\n\n-Y 2 +X 100 \xff\n";
-        assert_eq!(craft_texture::decode::hdr(trailing, &narrow), Err(DecodeError::Image(ImageError::BadSize(100, 2))));
+        assert_eq!(craft_texture::decode::hdr(trailing, &narrow), axis);
         // A resolution line longer than the 64 KiB header limit is not read for sizes; the
         // decoder refuses it as a damaged header.
         let mut long = b"#?RADIANCE\n\n-Y 2 +X 100 ".to_vec();
