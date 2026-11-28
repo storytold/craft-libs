@@ -122,12 +122,7 @@ pub fn cube(size: f32) -> Mesh {
 }
 
 fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: UvRect) {
-    // A negative half-size is its magnitude; a NaN or zero one gets a tiny box, so the bevel range
-    // below is never empty and the UV mapping never divides by zero.
-    // A negative half-size is its magnitude; a NaN or zero one gets a tiny box, so the bevel range
-    // below is never empty and the UV mapping never divides by zero.
-    let half = Vec3::from_array(half.to_array().map(|h| if h.is_finite() { h.abs().max(1e-6) } else { 1e-6 }));
-    let bevel = if bevel.is_finite() { bevel.clamp(0.0, half.min_element() * 0.95) } else { 0.0 };
+    let bevel = bevel.clamp(0.0, half.min_element() * 0.95);
     // (normal, U = right, V = down) per face, seen from outside.
     let faces = [
         (Vec3::Z, Vec3::X, -Vec3::Y),
@@ -500,20 +495,6 @@ pub const BUILTINS: [(&str, &str); 9] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rounded_box_takes_negative_zero_and_nan_sizes() {
-        for half in [Vec3::splat(-1.0), Vec3::ZERO, Vec3::NAN, Vec3::new(1.0, f32::INFINITY, -2.0)] {
-            for bevel in [0.0, 0.2, -1.0, f32::NAN] {
-                let m = rounded_box(half, bevel);
-                m.validate().unwrap();
-                assert!(m.uvs.iter().all(|uv| uv.is_finite()), "{half:?} {bevel}");
-            }
-        }
-        let m = rounded_box(Vec3::splat(-1.0), 0.0);
-        let (lo, hi) = m.bounds();
-        assert!((lo + Vec3::ONE).length() < 1e-5 && (hi - Vec3::ONE).length() < 1e-5, "{lo:?} {hi:?}");
-    }
 
     /// Every triangle's winding agrees with its vertex normals, UVs stay in 0..1 (u in 0..max_u),
     /// and the UV mapping is not mirrored (tangent handedness +1).

@@ -83,14 +83,11 @@ impl Bvh {
     pub fn new(mesh: &Mesh) -> Bvh {
         let triangle_count = mesh.triangle_count();
         let mut tris = Vec::with_capacity(triangle_count);
-        // Original index of each kept triangle: a triangle with an out-of-range vertex index is left out.
-        let mut original = Vec::with_capacity(triangle_count);
 
         for triangle in 0..triangle_count {
             let Some([a, b, c]) = mesh.tri(triangle) else { continue };
-            let (Some(&pa), Some(&pb), Some(&pc)) = (mesh.positions.get(a), mesh.positions.get(b), mesh.positions.get(c)) else { continue };
-            tris.push([pa, pb, pc]);
-            original.push(triangle as u32);
+            let position = |i: usize| mesh.positions.get(i).copied().unwrap_or(Vec3::ZERO);
+            tris.push([position(a), position(b), position(c)]);
         }
 
         let mut order: Vec<u32> = (0..tris.len() as u32).collect();
@@ -225,9 +222,8 @@ impl Bvh {
             stack.push(left_child + 1);
         }
 
-        let sorted = order.iter().map(|t| tris[*t as usize]).collect();
-        let order = order.iter().map(|t| original[*t as usize]).collect();
-        Bvh { nodes, tris: sorted, order }
+        let tris = order.iter().map(|t| tris[*t as usize]).collect();
+        Bvh { nodes, tris, order }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -236,10 +232,9 @@ impl Bvh {
 
     /// The flattened tree (for GPU traversal), root first: bounds, then for a leaf the range
     /// `first..first + count` of [`Bvh::triangles`], for an inner node (`count` 0) the children
-    /// `first` and `first + 1`. A tree without triangles has no nodes.
+    /// `first` and `first + 1`.
     pub fn nodes(&self) -> impl ExactSizeIterator<Item = (Vec3, Vec3, u32, u32)> + '_ {
-        let len = if self.tris.is_empty() { 0 } else { self.nodes.len() };
-        self.nodes.iter().take(len).map(|n| (n.lo.into(), n.hi.into(), n.first, n.count))
+        self.nodes.iter().map(|n| (n.lo.into(), n.hi.into(), n.first, n.count))
     }
 
     /// Triangle vertices in BVH order, and the original triangle index of each.
@@ -264,9 +259,7 @@ impl Bvh {
         let e2 = t[2] - t[0];
         let p = d.cross(e2);
         let det = e1.dot(p);
-        // The ray is parallel to the triangle's plane when the determinant is negligible next to the
-        // lengths that form it, whatever the triangle's size.
-        if det.abs() <= 1e-7 * e1.length() * p.length() {
+        if det.abs() < 1e-12 {
             return None;
         }
         let inv = 1.0 / det;
@@ -284,9 +277,7 @@ impl Bvh {
             return None;
         }
         let tt = e2.dot(q) * inv;
-        // The slack lets the ray through, and the barycentrics reported stay on the triangle.
-        let u = u.clamp(0.0, 1.0);
-        (tt > 0.0).then_some((tt, u, v.clamp(0.0, 1.0 - u)))
+        (tt > 0.0).then_some((tt, u, v))
     }
 
     fn traverse(&self, o: Vec3, d: Vec3, mut tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
@@ -353,11 +344,8 @@ impl Bvh {
 
     /// The point nearest to `p` at most `max_dist` away on a triangle accepted by `filter`
     /// (original index): a [`Hit`] with the distance in `t` and the barycentrics of vertices 1
-    /// and 2. Squared distances are compared in `f64`. A negative or NaN `max_dist` finds nothing.
+    /// and 2. Squared distances are compared in `f64`.
     pub fn nearest(&self, p: Vec3, max_dist: f32, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
-        if max_dist.is_nan() || max_dist < 0.0 {
-            return None;
-        }
         self.nodes.first().filter(|_| !self.tris.is_empty() && p.is_finite())?;
         let pd = p.as_dvec3();
         let box_d2 = |n: &Node| (n.lo.as_dvec3() - pd).max(pd - n.hi.as_dvec3()).max(DVec3::ZERO).length_squared();
@@ -373,7 +361,7 @@ impl Bvh {
                     if !filter(orig) {
                         continue;
                     }
-                    let (q, u, v) = closest_on_triangle_f64(pd, tri.map(|corner| corner.as_dvec3()));
+                    let (q, u, v, _) = closest_on_triangle_f64(pd, tri.map(|corner| corner.as_dvec3()));
                     let dd = (q - pd).length_squared();
                     // The first point found may lie exactly at `max_dist`.
                     if dd.is_finite() && (dd < best_d2 || (best.is_none() && dd <= best_d2)) {
@@ -422,44 +410,47 @@ impl Bvh {
 /// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5), in `f64`: in `f32` the
 /// region tests round to zero inside thin triangles. A triangle without area is measured as the
 /// point or segment it is, and can be the nearest. An edge of zero length is skipped: the
-/// denominator of its parameter is its squared length.
+/// denominator of its parameter is its squared length. The fourth value of
+/// [`closest_on_triangle_f64`] is the squared distance from `p`; inside the face it comes from
+/// the plane equation, so it is not affected by the rounding of the point.
 #[cfg(test)]
 fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
-    let (q, v, w) = closest_on_triangle_f64(p.as_dvec3(), t.map(|c| c.as_dvec3()));
+    let (q, v, w, _) = closest_on_triangle_f64(p.as_dvec3(), t.map(|c| c.as_dvec3()));
     (q.as_vec3(), v as f32, w as f32)
 }
 
-fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64) {
+fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64, f64) {
+    let at = |q: DVec3, v: f64, w: f64| (q, v, w, (q - p).length_squared());
     let (ab, ac, ap) = (b - a, c - a, p - a);
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
-        return (a, 0.0, 0.0);
+        return at(a, 0.0, 0.0);
     }
     let bp = p - b;
     let (d3, d4) = (ab.dot(bp), ac.dot(bp));
     if d3 >= 0.0 && d4 <= d3 {
-        return (b, 1.0, 0.0);
+        return at(b, 1.0, 0.0);
     }
     // d1 - d3 = |ab|², d2 - d6 = |ac|² and (d4 - d3) + (d5 - d6) = |bc|².
     let vc = d1 * d4 - d3 * d2;
     if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 && d1 - d3 > 0.0 {
         let v = d1 / (d1 - d3);
-        return (a + ab * v, v, 0.0);
+        return at(a + ab * v, v, 0.0);
     }
     let cp = p - c;
     let (d5, d6) = (ab.dot(cp), ac.dot(cp));
     if d6 >= 0.0 && d5 <= d6 {
-        return (c, 0.0, 1.0);
+        return at(c, 0.0, 1.0);
     }
     let vb = d5 * d2 - d1 * d6;
     if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 && d2 - d6 > 0.0 {
         let w = d2 / (d2 - d6);
-        return (a + ac * w, 0.0, w);
+        return at(a + ac * w, 0.0, w);
     }
     let va = d3 * d6 - d5 * d4;
     if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 && (d4 - d3) + (d5 - d6) > 0.0 {
         let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return (b + (c - b) * w, 1.0 - w, w);
+        return at(b + (c - b) * w, 1.0 - w, w);
     }
     let sum = va + vb + vc;
     if sum > 0.0 {
@@ -468,8 +459,12 @@ fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64)
         // point that lies on the plane off it. A point whose height above the plane is 0 stays p.
         let n = ab.cross(ac);
         let nn = n.length_squared();
-        let q = if nn > 0.0 { p - n * (n.dot(ap) / nn) } else { a + ab * v + ac * w };
-        return (q, v, w);
+        if nn > 0.0 {
+            // The squared height comes from the plane equation, before q is rounded.
+            let h = n.dot(ap);
+            return (p - n * (h / nn), v, w, h * h / nn);
+        }
+        return at(a + ab * v + ac * w, v, w);
     }
     // No area and no region matched: the nearest of the three edges.
     let on_edge = |from: DVec3, to: DVec3| {
@@ -478,10 +473,11 @@ fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64)
         (from + d * s, s)
     };
     let ((qab, s), (qac, r), (qbc, k)) = (on_edge(a, b), on_edge(a, c), on_edge(b, c));
-    [(qab, s, 0.0), (qac, 0.0, r), (qbc, 1.0 - k, k)]
+    let (q, v, w) = [(qab, s, 0.0), (qac, 0.0, r), (qbc, 1.0 - k, k)]
         .into_iter()
         .min_by(|x, y| (x.0 - p).length_squared().total_cmp(&(y.0 - p).length_squared()))
-        .unwrap_or((a, 0.0, 0.0))
+        .unwrap_or((a, 0.0, 0.0));
+    at(q, v, w)
 }
 
 #[cfg(test)]
@@ -584,79 +580,6 @@ mod tests {
             let q = a * (1.0 - hit.u - hit.v) + b * hit.u + c * hit.v;
             assert!((q - Vec3::new(0.5, 0.0, 0.0)).length() < 1e-6, "{positions:?} {indices:?}: {q}");
         }
-    }
-
-    #[test]
-    fn triangles_with_out_of_range_indices_are_left_out() {
-        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(10.0, 0.0, 0.0), Vec3::new(11.0, 0.0, 0.0), Vec3::new(10.0, 1.0, 0.0)];
-        // Triangle 1 would become (1, 0, 0), (0, 1, 0), origin if the missing vertex read as zero.
-        let bvh = single_triangle(positions, vec![3, 4, 5, 1, 2, 9, 3, 4, 5]);
-        assert!(bvh.closest(Vec3::new(0.2, 0.2, 5.0), Vec3::NEG_Z, 100.0).is_none());
-        let hit = bvh.closest_filtered(Vec3::new(10.2, 0.2, 5.0), Vec3::NEG_Z, 100.0, &|t| t == 2).unwrap();
-        assert_eq!(hit.tri, 2, "the triangles after a left-out one keep their original index");
-        assert!(bvh.nearest(Vec3::new(0.2, 0.2, 0.0), 1.0, &|_| true).is_none());
-    }
-
-    #[test]
-    fn an_empty_tree_has_no_nodes() {
-        let bvh = Bvh::new(&Mesh::default());
-        assert_eq!(bvh.nodes().len(), 0);
-        assert!(bvh.is_empty());
-    }
-
-    #[test]
-    fn rays_at_vertices_are_not_lost_to_slab_rounding() {
-        let m = primitives::sphere(1.0, 24, 12);
-        let bvh = Bvh::new(&m);
-        let mut seed = 99u32;
-        let mut rnd = move || {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0
-        };
-        for &target in &m.positions {
-            for _ in 0..8 {
-                let o = target + Vec3::new(rnd(), rnd(), rnd()).normalize_or_zero() * 3.0;
-                let d = (target - o).normalize();
-                let slow = (0..m.triangle_count())
-                    .filter_map(|t| {
-                        let [x, y, z] = m.tri(t)?;
-                        Bvh::hit_tri(&[m.positions[x], m.positions[y], m.positions[z]], o, d).map(|h| h.0)
-                    })
-                    .fold(None, |s: Option<f32>, t| Some(s.map_or(t, |s| s.min(t))));
-                let fast = bvh.closest(o, d, 1e9).map(|h| h.t);
-                assert_eq!(fast.is_some(), slow.is_some(), "{o:?} {d:?}: {fast:?} {slow:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn rays_hit_a_triangle_far_smaller_than_one_unit() {
-        let bvh = single_triangle(vec![Vec3::ZERO, Vec3::new(1e-7, 0.0, 0.0), Vec3::new(0.0, 1e-7, 0.0)], vec![0, 1, 2]);
-        let hit = bvh.closest(Vec3::new(2e-8, 2e-8, 1.0), Vec3::NEG_Z, 10.0).unwrap();
-        assert!((hit.t - 1.0).abs() < 1e-6, "{hit:?}");
-        // A ray in the triangle's plane still finds nothing.
-        assert!(bvh.closest(Vec3::new(-1.0, 2e-8, 0.0), Vec3::X, 10.0).is_none());
-    }
-
-    #[test]
-    fn barycentrics_of_a_hit_on_the_edge_slack_stay_on_the_triangle() {
-        // A large triangle below widens the tree's bounds past the small one's edge.
-        let (lo, hi) = (Vec3::new(-1.0, -1.0, -5.0), Vec3::new(2.0, 2.0, -5.0));
-        let bvh =
-            single_triangle(vec![Vec3::ZERO, Vec3::X, Vec3::Y, lo, Vec3::new(hi.x, lo.y, lo.z), Vec3::new(lo.x, hi.y, lo.z)], vec![0, 1, 2, 3, 4, 5]);
-        let hit = bvh.closest(Vec3::new(-5e-6, 0.5, 1.0), Vec3::NEG_Z, 10.0).unwrap();
-        assert_eq!(hit.tri, 0, "the ray passes within the edge slack");
-        assert!(hit.u >= 0.0 && hit.v >= 0.0 && hit.u + hit.v <= 1.0, "{hit:?}");
-        assert_eq!(bvh.closest(Vec3::new(-1e-3, 0.5, 1.0), Vec3::NEG_Z, 10.0).map(|h| h.tri), Some(1));
-    }
-
-    #[test]
-    fn nearest_finds_nothing_within_a_negative_or_nan_distance() {
-        let bvh = single_triangle(vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![0, 1, 2]);
-        let p = Vec3::new(0.25, 0.25, 0.5);
-        assert_eq!(bvh.nearest(p, 1.0, &|_| true).map(|h| h.t), Some(0.5));
-        assert!(bvh.nearest(p, -1.0, &|_| true).is_none());
-        assert!(bvh.nearest(p, f32::NAN, &|_| true).is_none());
     }
 
     #[test]

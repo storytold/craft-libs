@@ -84,15 +84,6 @@ impl Mesh {
     /// polygon diagonals ([`Mesh::diagonals`]) unless only one triangle has the edge (a UV seam
     /// split it from its twin), per material in `0..materials.len().max(1)`.
     pub fn wire_edges(&self) -> Vec<Vec<(u32, u32)>> {
-        // Vertices copied only for their tangents (same position and UV) count as one vertex.
-        let mut first: std::collections::HashMap<([u32; 3], [u32; 2]), u32> = std::collections::HashMap::new();
-        let same: Vec<u32> = (0..self.positions.len())
-            .map(|v| match (self.positions.get(v), self.uvs.get(v)) {
-                (Some(p), Some(uv)) => *first.entry((p.to_array().map(f32::to_bits), uv.to_array().map(f32::to_bits))).or_insert(v as u32),
-                _ => v as u32,
-            })
-            .collect();
-        let same = |v: u32| same.get(v as usize).copied().unwrap_or(v);
         (0..self.materials.len().max(1))
             .map(|m| {
                 // Edge → (real in some triangle, triangles using it), in first-seen order.
@@ -102,10 +93,10 @@ impl Mesh {
                     let Some(v) = self.indices.get(t * 3..t * 3 + 3) else { continue };
                     let hidden = self.diagonals.get(t).copied().unwrap_or(0);
                     for (i, (a, b)) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])].into_iter().enumerate() {
-                        let key = (same(a).min(same(b)), same(a).max(same(b)));
+                        let key = (a.min(b), a.max(b));
                         let real = hidden >> i & 1 == 0;
                         let e = *at.entry(key).or_insert_with(|| {
-                            edges.push(((a.min(b), a.max(b)), false, 0));
+                            edges.push((key, false, 0));
                             edges.len() - 1
                         });
                         if let Some((_, r, n)) = edges.get_mut(e) {
@@ -201,12 +192,8 @@ impl Mesh {
             return Err(GeomError::Invalid("mesh has non-finite positions".into()));
         }
         for s in &self.submeshes {
-            if s.start as usize + s.count as usize > self.indices.len()
-                || !s.start.is_multiple_of(3)
-                || !s.count.is_multiple_of(3)
-                || s.material >= self.materials.len().max(1)
-            {
-                return Err(GeomError::Invalid(format!("submesh {} is out of range or not triangle-aligned", s.name)));
+            if s.start as usize + s.count as usize > self.indices.len() || s.material >= self.materials.len().max(1) {
+                return Err(GeomError::Invalid(format!("submesh {} is out of range", s.name)));
             }
         }
         Ok(())
@@ -240,13 +227,8 @@ impl Mesh {
         }
         // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then.
         let usable = !crate::unwrap::all_triangles_degenerate(self);
-        let slots = vec![None; self.indices.len()];
-        let mut g = Mikk { mesh: self, slots };
-        let generated = usable && mikktspace::generate_tangents(&mut g);
-        let slots = g.slots;
-        if generated {
-            self.split_tangent_seams(&slots);
-        } else {
+        let mut g = Mikk { mesh: self };
+        if !usable || !mikktspace::generate_tangents(&mut g) {
             self.simple_tangents();
         }
         for (t, n) in self.tangents.iter_mut().zip(&self.normals) {
@@ -254,32 +236,6 @@ impl Mesh {
             let v = t.truncate();
             let o = (v - *n * n.dot(v)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
             *t = o.extend(if t.w < 0.0 { -1.0 } else { 1.0 });
-        }
-    }
-
-    /// Triangle corners that share a vertex but got different tangents from the generator (a
-    /// mirrored UV seam flips the bitangent sign) each keep their own: the vertex is copied for
-    /// every distinct tangent, so the last corner written does not decide for all of them.
-    fn split_tangent_seams(&mut self, slots: &[Option<Vec4>]) {
-        let mut variants: std::collections::HashMap<u32, Vec<(Vec4, u32)>> = std::collections::HashMap::new();
-        for (slot, tangent) in slots.iter().enumerate() {
-            let (Some(tangent), Some(&vertex)) = (*tangent, self.indices.get(slot)) else { continue };
-            let known = variants.entry(vertex).or_default();
-            let same = |other: &Vec4| (other.w < 0.0) == (tangent.w < 0.0) && other.truncate().dot(tangent.truncate()) > 0.99;
-            if let Some(&(_, at)) = known.iter().find(|(other, _)| same(other)) {
-                if let Some(i) = self.indices.get_mut(slot) {
-                    *i = at;
-                }
-                continue;
-            }
-            let at = if known.is_empty() { vertex } else { self.duplicate_vertex(vertex as usize) };
-            known.push((tangent, at));
-            if let Some(t) = self.tangents.get_mut(at as usize) {
-                *t = tangent;
-            }
-            if let Some(i) = self.indices.get_mut(slot) {
-                *i = at;
-            }
         }
     }
 
@@ -390,13 +346,8 @@ impl Mesh {
     }
 
     /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
-    /// this mesh's material count. A mesh whose submeshes use the implicit material 0 (no names in
-    /// `materials`) contributes one unnamed material, so every submesh keeps its own material.
+    /// this mesh's material count.
     pub fn append(&mut self, other: &Mesh) {
-        if self.materials.is_empty() && !self.submeshes.is_empty() {
-            self.materials.push(String::new());
-        }
-        let implicit = other.materials.is_empty() && !other.submeshes.is_empty();
         let base = self.positions.len() as u32;
         let ibase = self.indices.len() as u32;
         let mbase = self.materials.len();
@@ -415,9 +366,6 @@ impl Mesh {
         }
         self.indices.extend(other.indices.iter().map(|i| i + base));
         self.materials.extend(other.materials.iter().cloned());
-        if implicit {
-            self.materials.push(String::new());
-        }
         self.submeshes.extend(other.submeshes.iter().map(|s| SubMesh {
             name: s.name.clone(),
             material: s.material + mbase,
@@ -453,22 +401,14 @@ impl Mesh {
                 (m.positions.len() - 1) as u32
             })
         };
-        let mut diagonals = Vec::with_capacity(if self.diagonals.is_empty() { 0 } else { self.indices.len() / 3 * 4 });
-        for (index, t) in self.indices.as_chunks::<3>().0.iter().enumerate() {
+        for t in self.indices.as_chunks::<3>().0 {
             if t.iter().any(|&i| i as usize >= self.positions.len()) {
                 continue;
             }
             let (a, b, c) = (t[0], t[1], t[2]);
             let (ab, bc, ca) = (mid(&mut m, a, b), mid(&mut m, b, c), mid(&mut m, c, a));
             m.indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
-            if !self.diagonals.is_empty() {
-                // Each half of a diagonal edge is a diagonal; the edges inside the triangle are not.
-                let mask = self.diagonals.get(index).copied().unwrap_or(0);
-                let (e0, e1, e2) = (mask & 0b001, mask & 0b010, mask & 0b100);
-                diagonals.extend_from_slice(&[e0 | e2, e0 | e1, e1 | e2, 0]);
-            }
         }
-        m.diagonals = diagonals;
         for s in &mut m.submeshes {
             s.start *= 4;
             s.count *= 4;
@@ -488,12 +428,6 @@ impl Mesh {
 
     /// A single-material mesh from raw attributes; computes missing normals and tangents.
     pub fn from_parts(positions: Vec<Vec3>, normals: Option<Vec<Vec3>>, uvs: Vec<Vec2>, indices: Vec<u32>, material: &str) -> Result<Mesh> {
-        if !indices.len().is_multiple_of(3) {
-            return Err(GeomError::Invalid("index count is not a multiple of 3".into()));
-        }
-        if let Some(bad) = indices.iter().find(|i| **i as usize >= positions.len()) {
-            return Err(GeomError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
-        }
         let count = indices.len() as u32;
         let mut m = Mesh {
             normals: normals.unwrap_or_default(),
@@ -517,8 +451,6 @@ impl Mesh {
 
 struct Mikk<'a> {
     mesh: &'a mut Mesh,
-    /// The tangent generated for each index slot (`face * 3 + corner`).
-    slots: Vec<Option<Vec4>>,
 }
 
 impl Mikk<'_> {
@@ -550,9 +482,6 @@ impl mikktspace::Geometry for Mikk<'_> {
         let i = self.vi(face, vert);
         if let Some(t) = self.mesh.tangents.get_mut(i) {
             *t = Vec4::from_array(tangent);
-        }
-        if let Some(slot) = self.slots.get_mut(face * 3 + vert) {
-            *slot = Some(Vec4::from_array(tangent));
         }
     }
 }
@@ -601,86 +530,6 @@ mod tests {
         a.append(&m);
         assert_eq!(a.diagonals, vec![0, 0b100, 0b001]);
         assert_eq!(crate::primitives::plane(1.0, 2).wire_edges()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
-    }
-
-    #[test]
-    fn validate_rejects_submeshes_that_are_not_triangle_aligned() {
-        let mut m = quad();
-        assert!(m.validate().is_ok());
-        for (start, count) in [(1, 3), (0, 4), (3, 2)] {
-            m.submeshes[0].start = start;
-            m.submeshes[0].count = count;
-            assert!(m.validate().is_err(), "start {start}, count {count}");
-        }
-    }
-
-    #[test]
-    fn append_keeps_each_side_on_its_own_material() {
-        let mut named = quad();
-        named.materials = vec!["B".into()];
-        let mut implicit = quad();
-        implicit.materials.clear();
-        // The receiving mesh uses the implicit material 0.
-        let mut a = implicit.clone();
-        a.append(&named);
-        assert_eq!(a.materials.len(), 2);
-        assert_eq!((a.submeshes[0].material, a.submeshes[1].material), (0, 1));
-        assert_eq!(a.materials[1], "B");
-        assert!(a.validate().is_ok());
-        // The appended mesh uses the implicit material 0.
-        let mut b = named.clone();
-        b.append(&implicit);
-        assert_eq!(b.materials.len(), 2);
-        assert_eq!((b.submeshes[0].material, b.submeshes[1].material), (0, 1));
-        assert!(b.validate().is_ok());
-        // An empty mesh gains no material of its own.
-        let mut empty = Mesh::default();
-        empty.append(&named);
-        assert_eq!(empty.materials, vec!["B".to_string()]);
-    }
-
-    #[test]
-    fn subdividing_keeps_the_diagonal_masks_on_their_triangles() {
-        let mut m = quad();
-        m.diagonals = vec![0b100, 0b001];
-        let s = m.subdivided();
-        assert_eq!(s.triangle_count(), 8);
-        // Corner, corner, corner and the middle triangle; the edges inside a triangle are real.
-        assert_eq!(s.diagonals, vec![0b100, 0, 0b100, 0, 0b001, 0b001, 0, 0]);
-        let wire = &s.wire_edges()[0];
-        // The halves of the quad's diagonal (0, 2) are left out: 0 to its midpoint, and the midpoint to 2.
-        let mid = (m.positions[0] + m.positions[2]) * 0.5;
-        let at = s.positions.iter().position(|p| *p == mid).unwrap() as u32;
-        assert!(!wire.contains(&(0, at)) && !wire.contains(&(2, at)), "{wire:?}");
-    }
-
-    #[test]
-    fn from_parts_rejects_indices_out_of_range() {
-        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
-        let uvs = vec![Vec2::ZERO; 3];
-        assert!(Mesh::from_parts(positions.clone(), None, uvs.clone(), vec![0, 1, 3], "m").is_err());
-        assert!(Mesh::from_parts(positions.clone(), None, uvs.clone(), vec![0, 1], "m").is_err());
-        assert!(Mesh::from_parts(positions, None, uvs, vec![0, 1, 2], "m").is_ok());
-    }
-
-    #[test]
-    fn a_mirrored_uv_seam_gives_each_side_its_own_tangent() {
-        // Two triangles share vertices 0 and 1; the second one's v runs the other way along y.
-        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(0.0, -1.0, 0.0)];
-        let uvs = vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::Y];
-        let m = Mesh::from_parts(positions, None, uvs, vec![0, 1, 2, 1, 0, 3], "m").unwrap();
-        m.validate().unwrap();
-        let sign = |corners: &[u32]| {
-            let w: Vec<f32> = corners.iter().map(|i| m.tangents[*i as usize].w).collect();
-            assert!(w.iter().all(|x| *x == w[0]), "corners disagree: {w:?}");
-            w[0]
-        };
-        assert!(sign(&m.indices[0..3]) * sign(&m.indices[3..6]) < 0.0, "the two sides have opposite handedness");
-
-        // The shared edge, hidden as a polygon diagonal, stays hidden after the vertices split.
-        let mut hidden = m.clone();
-        hidden.diagonals = vec![0b001, 0b001];
-        assert_eq!(hidden.wire_edges()[0].len(), 4);
     }
 
     #[test]

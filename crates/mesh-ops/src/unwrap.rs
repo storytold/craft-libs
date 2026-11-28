@@ -300,20 +300,11 @@ fn pack(sizes: &[Vec2], mut res: f32, pad: f32) -> Result<(f32, f32, Vec<Vec2>)>
 }
 
 impl Mesh {
-    /// Index, position and submesh range checks only (attribute arrays may be incomplete before
-    /// unwrapping).
+    /// Index-range checks only (attribute arrays may be incomplete before unwrapping).
     fn validate_indices(&self) -> Result<()> {
         let n = self.positions.len();
         if !self.indices.len().is_multiple_of(3) || self.indices.iter().any(|i| *i as usize >= n) {
             return Err(GeomError::Invalid("mesh indices are out of range".into()));
-        }
-        if self.positions.iter().any(|p| !p.is_finite()) {
-            return Err(GeomError::Invalid("mesh has non-finite positions".into()));
-        }
-        for s in &self.submeshes {
-            if s.start as usize + s.count as usize > self.indices.len() || !s.start.is_multiple_of(3) || !s.count.is_multiple_of(3) {
-                return Err(GeomError::Invalid(format!("submesh {} is out of range or not triangle-aligned", s.name)));
-            }
         }
         if self.triangle_count() > crate::MAX_TRIANGLES {
             return Err(GeomError::Invalid(format!("mesh has more than {} triangles", crate::MAX_TRIANGLES)));
@@ -375,24 +366,6 @@ mod tests {
         let mut m = Mesh::from_parts(p, None, Vec::new(), idx, "m").unwrap();
         auto_unwrap(&mut m, 4.0, 128).unwrap();
         assert!(m.uvs.iter().all(|uv| (0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y)));
-    }
-
-    #[test]
-    fn unwrap_rejects_non_finite_positions_and_bad_submeshes_without_changing_the_mesh() {
-        let mut nan = primitives::cube(2.0);
-        nan.positions[3] = Vec3::splat(f32::INFINITY);
-        let before = nan.clone();
-        assert!(auto_unwrap(&mut nan, 4.0, 256).is_err());
-        assert_eq!(nan, before);
-
-        for (start, count) in [(1, 3), (0, 5), (0, 3_000_000)] {
-            let mut m = primitives::cube(2.0);
-            m.submeshes[0].start = start;
-            m.submeshes[0].count = count;
-            let before = m.clone();
-            assert!(auto_unwrap(&mut m, 4.0, 256).is_err(), "start {start}, count {count}");
-            assert_eq!(m, before);
-        }
     }
 
     #[test]

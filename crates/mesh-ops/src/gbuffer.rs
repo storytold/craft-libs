@@ -143,11 +143,10 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     let nrm = p(&mesh.normals)?.try_normalize().unwrap_or(Vec3::Y);
     let (pa, pb, pc) = (*mesh.positions.get(a)?, *mesh.positions.get(b)?, *mesh.positions.get(c)?);
     let geo_nrm = (pb - pa).cross(pc - pa).try_normalize().unwrap_or(nrm);
-    let tan_a = *mesh.tangents.get(a)?;
-    let tan = tan_a * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
+    let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
     let tdir = tan.truncate().try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
-    let w = if tan_a.w < 0.0 { -1.0 } else { 1.0 };
+    let w = mesh.tangents.get(a).map(|t| if t.w < 0.0 { -1.0 } else { 1.0 }).unwrap_or(1.0);
     Some(Surface { pos, nrm, geo_nrm, tangent: tdir.extend(w), uv, tri: t })
 }
 
