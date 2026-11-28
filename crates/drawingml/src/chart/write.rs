@@ -194,16 +194,18 @@ fn str_cache(w: &mut Writer, f: &str, vals: &[String]) {
     w.close();
 }
 
-fn num_cache(w: &mut Writer, f: &str, vals: &[Option<f64>]) {
+fn num_cache(w: &mut Writer, f: Option<&str>, vals: &[Option<f64>]) {
     num_cache_fmt(w, f, vals, "General");
 }
 
 /// [`num_cache`] with the cells' number format (the date format of date categories).
-fn num_cache_fmt(w: &mut Writer, f: &str, vals: &[Option<f64>], format_code: &str) {
+fn num_cache_fmt(w: &mut Writer, f: Option<&str>, vals: &[Option<f64>], format_code: &str) {
     let vals = capped(vals);
-    w.open("c:numRef", &[]);
-    w.leaf("c:f", &[], f);
-    w.open("c:numCache", &[]);
+    if let Some(f) = f {
+        w.open("c:numRef", &[]);
+        w.leaf("c:f", &[], f);
+    }
+    w.open(if f.is_some() { "c:numCache" } else { "c:numLit" }, &[]);
     w.leaf("c:formatCode", &[], format_code);
     w.tag("c:ptCount").attr("val", vals.len()).empty();
     for (i, v) in vals.iter().enumerate() {
@@ -214,7 +216,9 @@ fn num_cache_fmt(w: &mut Writer, f: &str, vals: &[Option<f64>], format_code: &st
         }
     }
     w.close();
-    w.close();
+    if f.is_some() {
+        w.close();
+    }
 }
 
 /// Numbers written into the chart itself (`c:numLit`), with no worksheet range behind them.
@@ -305,12 +309,31 @@ fn point_fills(w: &mut Writer, s: &Series, g: Group) {
 const MAX_EXPORT_POINTS: usize = 4_000_000;
 
 #[derive(Clone, Copy)]
+enum SourceKind {
+    DefaultLayout,
+    Mixed,
+}
+
+impl SourceKind {
+    fn formula(self, given: &Option<String>, default: String) -> Option<String> {
+        given.clone().or_else(|| match self {
+            Self::DefaultLayout => Some(default),
+            Self::Mixed => None,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
 struct SeriesIndex {
     order: usize,
     id: usize,
+    source: SourceKind,
 }
 
 fn indexed_series(c: &Chart) -> Vec<(SeriesIndex, &Series)> {
+    // Only an entirely unreferenced chart uses the historical default worksheet layout.
+    // In a mixed layout there is no producer-owned column for a missing reference.
+    let source = if c.series.iter().any(|s| !s.refs.is_empty()) { SourceKind::Mixed } else { SourceKind::DefaultLayout };
     // Reserve later imported IDs before assigning new series, so an insertion at the front
     // cannot steal them. Duplicate IDs keep their first occurrence; the rest get free IDs.
     let reserved: std::collections::HashSet<usize> = c.series.iter().filter_map(|s| s.source_idx.map(|id| id as usize)).collect();
@@ -327,7 +350,7 @@ fn indexed_series(c: &Chart) -> Vec<(SeriesIndex, &Series)> {
                 used.insert(next);
                 next
             });
-            (SeriesIndex { order, id }, s)
+            (SeriesIndex { order, id, source }, s)
         })
         .collect()
 }
@@ -348,8 +371,13 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, index: SeriesIndex, kind: Chart
     w.tag("c:order").attr("val", i).empty();
     w.open("c:tx", &[]);
     let r = &s.refs;
-    let or = |given: &Option<String>, made: String| given.clone().unwrap_or(made);
-    str_cache(w, &or(&r.name, format!("Sheet1!${}$1", col(i + 1))), std::slice::from_ref(&s.name));
+    let reference = |given: &Option<String>, default: String| index.source.formula(given, default);
+    let category = |given: &Option<String>, default: String| given.clone().unwrap_or(default);
+    if let Some(f) = reference(&r.name, format!("Sheet1!${}$1", col(i + 1))) {
+        str_cache(w, &f, std::slice::from_ref(&s.name));
+    } else {
+        w.leaf("c:v", &[], &s.name);
+    }
     w.close();
     if g == Group::Stock && s.line.is_none() {
         // A stock chart's series are points joined by the high-low lines, not lines of their own.
@@ -420,15 +448,15 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, index: SeriesIndex, kind: Chart
     if matches!(g, Group::Scatter | Group::Bubble) {
         let xs: Vec<Option<f64>> = if s.x_values.is_empty() { (1..=s.values.len()).map(|v| Some(v as f64)).collect() } else { s.x_values.clone() };
         w.open("c:xVal", &[]);
-        num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &xs, c.category_format.as_deref().unwrap_or("General"));
+        num_cache_fmt(w, Some(&category(&r.categories, format!("Sheet1!$A$2:$A${last}"))), &xs, c.category_format.as_deref().unwrap_or("General"));
         w.close();
         w.open("c:yVal", &[]);
-        num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
+        num_cache(w, reference(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))).as_deref(), &s.values);
         w.close();
         if g == Group::Bubble {
             let sizes: Vec<Option<f64>> = if s.sizes.is_empty() { s.values.iter().map(|_| Some(1.0)).collect() } else { s.sizes.clone() };
             w.open("c:bubbleSize", &[]);
-            num_cache(w, &or(&r.sizes, format!("Sheet1!${0}$2:${0}${last}", col(i + 2))), &sizes);
+            num_cache(w, reference(&r.sizes, format!("Sheet1!${0}$2:${0}${last}", col(i + 2))).as_deref(), &sizes);
             w.close();
             w.tag("c:bubble3D").attr("val", 0).empty();
         } else {
@@ -444,17 +472,17 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, index: SeriesIndex, kind: Chart
                 .collect()
         });
         match (&c.category_format, nums) {
-            (Some(code), Some(nums)) => num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &nums, code),
+            (Some(code), Some(nums)) => num_cache_fmt(w, Some(&category(&r.categories, format!("Sheet1!$A$2:$A${last}"))), &nums, code),
             // Mixed number and text categories are strings, as Excel writes them: the numbers as
             // their formatted labels, which a reload could not rebuild from the raw serials.
             _ => {
                 let labels: Vec<String> = (0..c.categories.len()).map(|i| c.category_label(i)).collect();
-                str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &labels)
+                str_cache(w, &category(&r.categories, format!("Sheet1!$A$2:$A${last}")), &labels)
             }
         }
         w.close();
         w.open("c:val", &[]);
-        num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
+        num_cache(w, reference(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))).as_deref(), &s.values);
         w.close();
         if g == Group::Line {
             w.tag("c:smooth").attr("val", if s.smooth { 1 } else { 0 }).empty();
@@ -830,20 +858,15 @@ fn merge_axis_kinds(axis_kinds: &mut [Option<ChartType>; 2], emitted: [Option<Ch
 
 fn plots_and_axes(w: &mut Writer, c: &Chart, raw_kind: Option<ChartType>) {
     let indexed = indexed_series(c);
-    let main = match c.kind {
-        ChartType::Combo => c.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
-        k => k,
-    };
-    let override_kind = (c.kind != ChartType::Combo && raw_kind.is_some_and(|kind| kind != c.kind)).then_some(c.kind);
-    let effective = indexed.iter().map(|(i, s)| (*i, *s, override_kind.unwrap_or(s.kind.unwrap_or(main)))).collect::<Vec<_>>();
-    let first = effective.first().map_or(main, |(_, _, kind)| *kind);
-    let combo = c.kind == ChartType::Combo || effective.iter().any(|(_, _, kind)| *kind != first);
-    let normalize = |kind| {
-        if combo && matches!(group_of(kind), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { kind }
-    };
+    let policy = super::SeriesKinds::new(c, raw_kind);
+    let main = policy.main;
+    let first = policy.first;
+    let combo = policy.combo;
+    let override_kind = policy.override_kind;
+    let effective = indexed.iter().map(|(i, s)| (*i, *s, policy.kind(s))).collect::<Vec<_>>();
     let mut kinds = Vec::new();
     for (_, _, kind) in &effective {
-        let kind = normalize(*kind);
+        let kind = *kind;
         if !kinds.contains(&kind) {
             kinds.push(kind);
         }
@@ -858,7 +881,7 @@ fn plots_and_axes(w: &mut Writer, c: &Chart, raw_kind: Option<ChartType>) {
     };
     let mut axis_kinds: [Option<ChartType>; 2] = [None, None];
     for kind in &kinds {
-        let list = effective.iter().filter(|(_, _, k)| normalize(*k) == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
+        let list = effective.iter().filter(|(_, _, k)| *k == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
         let emitted = plot_kind(w, c, *kind, &list, override_markers);
         merge_axis_kinds(&mut axis_kinds, emitted);
     }
@@ -923,12 +946,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         // Native saves without provenance used the former metadata projection. Comparing
         // that exact projection only on the legacy path preserves raw XML without treating
         // current-reader metadata edits as unchanged legacy state.
-        let back = match c.raw_metadata_version {
-            0 => super::read::legacy_chart_from(&root),
-            1 => super::read::metadata_v1_chart_from(&root),
-            2 => super::read::metadata_v2_chart_from(&root),
-            _ => super::read::chart_from(&root),
-        };
+        let back = super::read::chart_for_version(&root, c.raw_metadata_version);
         if let Some(back) = back {
             raw_kind = Some(back.kind);
             let mut me = c.clone();

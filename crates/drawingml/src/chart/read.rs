@@ -130,7 +130,7 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
 fn chart_within(root: &El, budget: usize) -> Option<Chart> {
-    read_chart(root, budget, 3)
+    read_chart(root, budget, 4)
 }
 
 /// Exact former metadata projection for unchanged legacy native saves, using the same caps.
@@ -146,6 +146,38 @@ pub(super) fn metadata_v1_chart_from(root: &El) -> Option<Chart> {
 /// The published stacked-marker projection, before series IDs were retained.
 pub(super) fn metadata_v2_chart_from(root: &El) -> Option<Chart> {
     read_chart(root, MAX_CHART_POINTS, 2)
+}
+
+/// The series-ID projection, before reciprocal duplicate-axis selection was corrected.
+pub(super) fn metadata_v3_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, 3)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static RAW_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(super) fn chart_for_version(root: &El, version: u16) -> Option<Chart> {
+    #[cfg(test)]
+    RAW_PROJECTIONS.with(|count| count.set(count.get() + 1));
+    match version {
+        0 => legacy_chart_from(root),
+        1 => metadata_v1_chart_from(root),
+        2 => metadata_v2_chart_from(root),
+        3 => metadata_v3_chart_from(root),
+        _ => chart_from(root),
+    }
+}
+
+pub(super) fn original_kind(c: &Chart) -> Option<ChartType> {
+    let raw = c.raw.as_deref().filter(|raw| !raw.contains(super::write::NS_CX))?;
+    let mut root = crate::xmlx::parse(raw.as_bytes()).ok()?;
+    if !root.is(Local("chartSpace")) {
+        return None;
+    }
+    crate::xmlx::resolve_mc(&mut root);
+    chart_for_version(&root, c.raw_metadata_version).map(|chart| chart.kind)
 }
 
 fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
@@ -275,7 +307,7 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
             outline: flag("showOutline"),
         }
     });
-    let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val, &val_map, legacy);
+    let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val, &val_map, version);
     read_text_styles(&mut c, root, ch, val_ax, cat_ax);
     Some(c)
 }
@@ -312,13 +344,20 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
         // primary pair; require reciprocal IDs so a stray or incomplete axis cannot win.
         // The old predicate asked whether any partner matched. Index all reciprocal
         // relations, not only the last element for an ID; duplicates keep that semantics.
-        let partners: std::collections::HashSet<(&str, &str, bool)> = pa
+        let partners: std::collections::HashSet<(&str, &str)> = pa
             .elements()
             .filter_map(|a| {
                 if !matches!(a.local(), "catAx" | "dateAx" | "valAx") {
                     return None;
                 }
-                Some((a.child(Local("axId"))?.attr_local("val")?, a.child(Local("crossAx"))?.attr_local("val")?, a.is(Local("valAx"))))
+                let id = a.child(Local("axId"))?.attr_local("val")?;
+                let horizontal = if version >= 4 {
+                    !matches!(a.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("l" | "r"))
+                } else {
+                    // Preserve the exact earlier last-ID-map interpretation for native saves.
+                    val_map.get(id) == Some(&false)
+                };
+                (!a.is(Local("valAx")) || horizontal).then_some((id, a.child(Local("crossAx"))?.attr_local("val")?))
             })
             .collect();
         if let Some(id) = pa.children(Local("valAx")).find_map(|a| {
@@ -327,8 +366,7 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
             if secondary_placed(a) || !matches!(a.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("l" | "b")) {
                 return None;
             }
-            (partners.contains(&(cross, id, false)) || (val_map.get(cross) == Some(&false) && partners.contains(&(cross, id, true))))
-                .then(|| id.to_string())
+            partners.contains(&(cross, id)).then(|| id.to_string())
         }) {
             return Some(id);
         }
@@ -552,8 +590,9 @@ fn read_axes<'a>(
     pa: &'a El,
     primary_val: &Option<String>,
     val_map: &std::collections::HashMap<&str, bool>,
-    legacy: bool,
+    version: u16,
 ) -> (Option<&'a El>, Option<&'a El>) {
+    let legacy = version == 0;
     let vertical = |a: &&El| matches!(a.child(Local("axPos")).and_then(|c| c.attr_local("val")), Some("l" | "r"));
     let by_id = |id: &Option<String>| {
         pa.children(Local("valAx")).find(|a| id.is_some() && a.child(Local("axId")).and_then(|c| c.attr_local("val")) == id.as_deref())
@@ -622,11 +661,22 @@ fn read_axes<'a>(
             .and_then(|a| a.child(Local("crossAx")))
             .and_then(|a| a.attr_local("val"))
             .and_then(|id| {
-                pa.elements().find(|a| {
+                let eligible = |a: &&El| {
                     matches!(a.local(), "catAx" | "dateAx" | "valAx")
                         && (!a.is(Local("valAx")) || !vertical(a))
                         && a.child(Local("axId")).and_then(|i| i.attr_local("val")) == Some(id)
-                })
+                };
+                let reciprocal = if version >= 4 {
+                    let value_id = val_ax.and_then(|a| a.child(Local("axId"))).and_then(|a| a.attr_local("val"));
+                    pa.elements().find(|a| {
+                        eligible(a)
+                            && value_id.is_some()
+                            && a.child(Local("crossAx")).and_then(|c| c.attr_local("val")) == value_id
+                    })
+                } else {
+                    None
+                };
+                reciprocal.or_else(|| pa.elements().find(eligible))
             })
             .or_else(|| {
                 primary_val.as_deref().and_then(|id| {
@@ -2240,5 +2290,51 @@ mod tests {
         let back = read_chart_xml(&written).unwrap();
         assert_eq!(back.series[0].values, first.values);
         assert!(back.series[0].secondary_axis);
+    }
+
+    #[test]
+    fn effective_kind_context_projects_ambiguous_raw_once_per_operation() {
+        let xml = same_kind_chart_xml();
+        let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+        for s in &mut chart.series {
+            s.kind = Some(ChartType::StackedColumn);
+        }
+        let reset = || RAW_PROJECTIONS.with(|count| count.set(0));
+        let count = || RAW_PROJECTIONS.with(std::cell::Cell::get);
+        reset();
+        let kinds = chart.series_kinds();
+        for _ in 0..5 {
+            for s in &chart.series {
+                assert_eq!(kinds.kind(s), ChartType::StackedColumn);
+            }
+        }
+        assert_eq!(count(), 1, "the reusable context resolves the ambiguous raw baseline only once");
+        reset();
+        let _ = chart.axis_range(false);
+        assert_eq!(count(), 1);
+        reset();
+        let _ = chart.axis_scale(true, 5);
+        assert_eq!(count(), 1);
+        reset();
+        let _ = chart.value_range();
+        assert_eq!(count(), 1);
+        reset();
+        let _ = crate::chart::write::chart_xml(&chart);
+        assert_eq!(count(), 1, "writer reuses its existing projection instead of reparsing for the policy");
+
+        chart.raw = None;
+        reset();
+        assert_eq!(chart.series_kind(&chart.series[0]), ChartType::StackedColumn);
+        let _ = chart.axis_scale(true, 5);
+        assert_eq!(count(), 0, "ordinary new charts have no original XML to parse");
+        chart.raw = Some(xml);
+        chart.kind = ChartType::Combo;
+        reset();
+        let _ = chart.value_range();
+        assert_eq!(count(), 0, "Combo has no chart-wide override");
+        chart.kind = ChartType::StackedColumn;
+        reset();
+        let _ = chart.axis_range(false);
+        assert_eq!(count(), 0, "matching retained kinds need no raw-kind decision");
     }
 }
