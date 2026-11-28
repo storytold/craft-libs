@@ -8,9 +8,11 @@ already present with the right hash are kept. Then run the tests with
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
+import ssl
 import tempfile
 import time
 import urllib.error
@@ -43,7 +45,8 @@ def fetch(url):
             if attempt == 2:
                 raise
             error.close()
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
+        # urlopen wraps its errors in URLError; read() raises them as they are.
+        except (urllib.error.URLError, TimeoutError, ConnectionError, ssl.SSLError, http.client.HTTPException):
             if attempt == 2:
                 raise
         time.sleep(attempt + 1)

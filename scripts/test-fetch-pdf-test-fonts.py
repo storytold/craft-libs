@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Exercise fixture-download retries without network access."""
 
+import http.client
 import importlib.util
 import io
 from pathlib import Path
+import ssl
 import sys
 import unittest
 from unittest.mock import patch
@@ -41,6 +43,24 @@ class FetchTests(unittest.TestCase):
                         self.assertEqual(fetcher.fetch(URL), b"font")
                         self.assertEqual(request.call_count, 2)
                         sleep.assert_called_once_with(1)
+
+    def test_failure_while_reading_the_body_retries_then_succeeds(self):
+        # urlopen wraps its own errors in URLError, but read() raises them as they are.
+        class Broken(io.BytesIO):
+            def __init__(self, error):
+                super().__init__()
+                self.error = error
+
+            def read(self, size=-1):
+                raise self.error
+
+        errors = [ssl.SSLError(1, "record layer failure"), http.client.IncompleteRead(b"fo", 2)]
+        for error in errors:
+            with self.subTest(error=type(error).__name__):
+                with patch.object(fetcher.urllib.request, "urlopen", side_effect=[Broken(error), io.BytesIO(b"font")]) as request:
+                    with patch.object(fetcher.time, "sleep"):
+                        self.assertEqual(fetcher.fetch(URL), b"font")
+                        self.assertEqual(request.call_count, 2)
 
     def test_permanent_http_error_is_not_retried(self):
         error = urllib.error.HTTPError(URL, 404, "missing", {}, None)
