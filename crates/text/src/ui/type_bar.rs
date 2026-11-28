@@ -113,6 +113,13 @@ pub struct TypeBar<'a> {
     /// Warp Text is available.
     #[prop]
     can_warp: bool,
+    /// The glyph the colour well shows in place of a colour, because the host's target has no colour to change: a host
+    /// whose type target takes no colour will name the suite's `question_mark`, as PhotoCraft's bar will for a Type Mask
+    /// edit. Default `None`, which shows the colour as the bar always has. A placeholder well carries the mixed fill with
+    /// its glyph painted on the empty sunken well, and reports no colour value; it still files its `ColorRequest` when it
+    /// is clicked, and that request carries no colour, so what the host makes of the answer is the host's decision.
+    #[prop(into)]
+    color_placeholder: Option<IconId>,
     /// The family field is craft-font-manager's font picker over `source`.
     #[cfg(feature = "font-picker")]
     #[prop(name = "font_picker")]
@@ -132,6 +139,7 @@ impl<'a> TypeBar<'a> {
             anti_alias: None,
             anti_alias_methods: &TextAntiAlias::BAR,
             can_warp: false,
+            color_placeholder: None,
             #[cfg(feature = "font-picker")]
             picker: None,
         }
@@ -144,6 +152,7 @@ impl<'a> TypeBar<'a> {
         let paragraph = self.paragraph;
         let (families, styles, unit) = (self.families, self.styles, self.unit);
         let (orientation, anti_alias, methods, can_warp) = (self.orientation, self.anti_alias, self.anti_alias_methods, self.can_warp);
+        let placeholder = self.color_placeholder;
         #[cfg(feature = "font-picker")]
         let mut picker = self.picker;
         let env = Env::of(ui);
@@ -208,9 +217,13 @@ impl<'a> TypeBar<'a> {
 
             let color = mixed(character.color.map(Srgba::from));
             let side = SideLabel::new().kind(LabelKind::Hidden).layout(FieldLayout::Beside);
-            let well = Field::new(character_words.text_color.clone())
-                .side(side)
-                .show(ui, |ui, _| Swatch::new(character_words.text_color.clone(), color).picker(COLOR_KEY).show(ui).pick_color);
+            let well = Field::new(character_words.text_color.clone()).side(side).show(ui, |ui, _| {
+                let swatch = match placeholder.as_ref() {
+                    Some(icon) => Swatch::icon(character_words.text_color.clone(), icon.clone()),
+                    None => Swatch::new(character_words.text_color.clone(), color),
+                };
+                swatch.picker(COLOR_KEY).show(ui).pick_color
+            });
             if let Some(request) = well.inner.flatten() {
                 requests.request_color(request);
             }
