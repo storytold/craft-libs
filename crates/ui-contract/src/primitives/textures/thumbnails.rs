@@ -401,21 +401,28 @@ impl<K: TextureKey> Thumbnails<K> {
 
     fn prune_stale_geometry(&self, ctx: &Context) {
         let cached_entries = self.loader.cache().statistics(ctx).entries;
-        let candidates: Vec<K> = {
+        let (geom_candidates, pending_candidates): (Vec<K>, Vec<K>) = {
             let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
-            if keys.geometry.len() > cached_entries {
-                keys.geometry.keys().cloned().collect()
+            let geom = if keys.geometry.len() > cached_entries { keys.geometry.keys().cloned().collect() } else { Vec::new() };
+            let pending = if keys.pending_geometry.len() > cached_entries {
+                keys.pending_geometry.keys().cloned().collect()
             } else {
                 Vec::new()
-            }
+            };
+            (geom, pending)
         };
-        if !candidates.is_empty() {
-            let gone: Vec<K> = candidates.into_iter().filter(|k| !self.loader.cache().has_texture(ctx, k)).collect();
-            if !gone.is_empty() {
-                let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
-                for k in &gone {
-                    keys.geometry.remove(k);
-                }
+        let gone_geom: Vec<K> = geom_candidates.into_iter().filter(|k| !self.loader.cache().has_texture(ctx, k)).collect();
+        let gone_pending: Vec<K> = pending_candidates
+            .into_iter()
+            .filter(|k| self.loader.waited(ctx, k).is_none() && !self.loader.cache().has_texture(ctx, k))
+            .collect();
+        if !gone_geom.is_empty() || !gone_pending.is_empty() {
+            let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            for k in &gone_geom {
+                keys.geometry.remove(k);
+            }
+            for k in &gone_pending {
+                keys.pending_geometry.remove(k);
             }
         }
     }
@@ -448,15 +455,21 @@ impl<K: TextureKey> Thumbnails<K> {
         let request = ThumbRequest { side, patchable, resident_revision: if patchable { resident_revision } else { None }, ..*request };
         let revision = Revision::of(&(source.revision(key, &request), side, geom.region));
         if let Some(state) = self.loader.ask(ctx, key, revision, priority) {
-            if matches!(state, TextureState::Ready(_)) {
-                let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
-                if let Some((pending_rev, pending_geom)) = keys.pending_geometry.get(key).copied()
-                    && pending_rev == revision
-                {
-                    keys.geometry.insert(key.clone(), pending_geom);
-                    keys.pending_geometry.remove(key);
+            match &state {
+                TextureState::Ready(_) => {
+                    let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+                    if let Some((pending_rev, pending_geom)) = keys.pending_geometry.get(key).copied()
+                        && pending_rev == revision
+                    {
+                        keys.geometry.insert(key.clone(), pending_geom);
+                        keys.pending_geometry.remove(key);
+                    }
+                    keys.force_full.remove(key);
                 }
-                keys.force_full.remove(key);
+                TextureState::Empty | TextureState::Failed { .. } => {
+                    self.keys.lock().unwrap_or_else(PoisonError::into_inner).pending_geometry.remove(key);
+                }
+                TextureState::Loading { .. } | TextureState::Missing => {}
             }
             return state;
         }

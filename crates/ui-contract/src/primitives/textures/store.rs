@@ -518,17 +518,32 @@ impl<K: TextureKey> TextureStore<K> {
     /// from unmultiplied values with `ColorImage::from_rgba_unmultiplied`). A packed store writes a small picture
     /// onto a shared page instead (see [`TextureStoreOptions::packed`]).
     pub fn put(&self, ctx: &Context, key: K, revision: Revision, image: ColorImage) -> CachedTexture {
+        self.put_unless_cancelled(ctx, key, revision, image, None).expect("uncancelled put always stores")
+    }
+
+    pub(super) fn put_unless_cancelled(
+        &self,
+        ctx: &Context,
+        key: K,
+        revision: Revision,
+        image: ColorImage,
+        cancelled: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Option<CachedTexture> {
+        if cancelled.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+            return None;
+        }
         let frame = pass::root_frame_nr(ctx);
         let side = texture_side(ctx);
         let source = texels(image.size);
         let factor = texture_factor(source, side);
         let image = fit_image(image, side);
         let image = match self.put_packed(ctx, &key, revision, image, frame, side) {
-            Ok(texture) => return texture,
+            Ok(texture) => return Some(texture),
             Err(image) => image,
         };
         let size = texels(image.size);
         enum PutStep<K> {
+            Cancelled,
             Replaced(CachedTexture),
             Load { key: K, image: ColorImage, filter: TextureOptions, name: String },
         }
@@ -536,6 +551,9 @@ impl<K: TextureKey> TextureStore<K> {
         // pixels and revision advance atomically. When no handle exists yet, `textures::load`
         // creates a fresh distinct handle outside the lock before publication.
         let (key, image, filter, name) = match self.with(ctx, |inner| {
+            if cancelled.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+                return PutStep::Cancelled;
+            }
             if let Some(mut handle) = inner.handle_of(&key) {
                 let filter = inner.options.filter;
                 textures::replace(&mut handle, image, filter);
@@ -548,13 +566,20 @@ impl<K: TextureKey> TextureStore<K> {
                 PutStep::Load { key, image, filter, name }
             }
         }) {
-            PutStep::Replaced(texture) => return texture,
+            PutStep::Cancelled => return None,
+            PutStep::Replaced(texture) => return Some(texture),
             PutStep::Load { key, image, filter, name } => (key, image, filter, name),
         };
         let handle = textures::load(ctx, name, image, filter);
         let texture = CachedTexture { id: handle.id(), size, origin: [0, 0], page: size };
-        self.with(ctx, |inner| inner.publish_texture(key, revision, handle, source, factor, frame));
-        texture
+        let published = self.with(ctx, |inner| {
+            if cancelled.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+                return false;
+            }
+            inner.publish_texture(key, revision, handle, source, factor, frame);
+            true
+        });
+        published.then_some(texture)
     }
 
     /// Writes `image` onto a page of a packed store as `key`'s picture at `revision`; gives the image back when the
@@ -632,13 +657,31 @@ impl<K: TextureKey> TextureStore<K> {
         origin: [u32; 2],
         image: ColorImage,
     ) -> Option<CachedTexture> {
+        self.put_region_unless_cancelled(ctx, key, baseline, revision, origin, image, None).unwrap_or(None)
+    }
+
+    pub(super) fn put_region_unless_cancelled(
+        &self,
+        ctx: &Context,
+        key: &K,
+        baseline: Option<Revision>,
+        revision: Revision,
+        origin: [u32; 2],
+        image: ColorImage,
+        cancelled: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<Option<CachedTexture>, ()> {
         let frame = pass::root_frame_nr(ctx);
         let extent = texels(image.size);
         self.with(ctx, |inner| {
+            if cancelled.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+                return Err(());
+            }
             if let Some(base) = baseline {
-                let entry = inner.entries.get(key)?;
+                let Some(entry) = inner.entries.get(key) else {
+                    return Ok(None);
+                };
                 if entry.revision != base {
-                    return None;
+                    return Ok(None);
                 }
             }
             inner.roll_uploads(frame);
@@ -646,13 +689,13 @@ impl<K: TextureKey> TextureStore<K> {
                 if let Some(entry) = inner.entries.get_mut(key) {
                     entry.patchable = false;
                 }
-                return None;
+                return Ok(None);
             };
             if baseline.is_some() && factor > 1 {
                 if let Some(entry) = inner.entries.get_mut(key) {
                     entry.patchable = false;
                 }
-                return None;
+                return Ok(None);
             }
             let sent = if factor > 1 { reduce_image(&image, factor) } else { image };
             let uploaded = byte_size(texels(sent.size));
@@ -660,12 +703,14 @@ impl<K: TextureKey> TextureStore<K> {
                 textures::replace_region(&mut handle, [origin[0] / factor, origin[1] / factor], sent, filter);
             }
             let texture = cached(&handle, source, factor);
-            let entry = inner.entries.get_mut(key)?;
+            let Some(entry) = inner.entries.get_mut(key) else {
+                return Ok(None);
+            };
             entry.revision = revision;
             entry.seen = frame;
             inner.uploads += 1;
             inner.upload_bytes += uploaded;
-            Some(texture)
+            Ok(Some(texture))
         })
     }
 
@@ -695,21 +740,53 @@ impl<K: TextureKey> TextureStore<K> {
 
     /// Records that `key` has no picture at `revision` (state `Empty`); frees its texture.
     pub fn put_empty(&self, ctx: &Context, key: K, revision: Revision) {
-        self.put_marker(ctx, key, revision, Picture::Empty);
+        self.put_marker(ctx, key, revision, Picture::Empty, None);
+    }
+
+    pub(super) fn put_empty_unless_cancelled(
+        &self,
+        ctx: &Context,
+        key: K,
+        revision: Revision,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        self.put_marker(ctx, key, revision, Picture::Empty, Some(cancelled))
     }
 
     /// Records that making `key`'s picture at `revision` failed (state `Failed`), so nothing asks for it again
     /// until the revision changes; frees its texture.
     pub fn put_failure(&self, ctx: &Context, key: K, revision: Revision, failure: LoadFailure) {
-        self.put_marker(ctx, key, revision, Picture::Failed(failure));
+        self.put_marker(ctx, key, revision, Picture::Failed(failure), None);
     }
 
-    fn put_marker(&self, ctx: &Context, key: K, revision: Revision, picture: Picture) {
+    pub(super) fn put_failure_unless_cancelled(
+        &self,
+        ctx: &Context,
+        key: K,
+        revision: Revision,
+        failure: LoadFailure,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        self.put_marker(ctx, key, revision, Picture::Failed(failure), Some(cancelled))
+    }
+
+    fn put_marker(
+        &self,
+        ctx: &Context,
+        key: K,
+        revision: Revision,
+        picture: Picture,
+        cancelled: Option<&std::sync::atomic::AtomicBool>,
+    ) -> bool {
         let frame = pass::root_frame_nr(ctx);
         self.with(ctx, |inner| {
+            if cancelled.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+                return false;
+            }
             inner.store(key, Entry { revision, picture, seen: frame, patchable: false });
             inner.evict(frame);
-        });
+            true
+        })
     }
 
     /// Drops `key`'s entry and frees its texture.
