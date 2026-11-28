@@ -401,14 +401,22 @@ impl Mesh {
                 (m.positions.len() - 1) as u32
             })
         };
-        for t in self.indices.as_chunks::<3>().0 {
+        // Each child keeps the hidden bits of the halves of the parent's edges it has; the edges
+        // inside the parent are real.
+        let mut diagonals = Vec::with_capacity(if self.diagonals.is_empty() { 0 } else { self.diagonals.len().saturating_mul(4) });
+        for (k, t) in self.indices.as_chunks::<3>().0.iter().enumerate() {
             if t.iter().any(|&i| i as usize >= self.positions.len()) {
                 continue;
             }
             let (a, b, c) = (t[0], t[1], t[2]);
             let (ab, bc, ca) = (mid(&mut m, a, b), mid(&mut m, b, c), mid(&mut m, c, a));
             m.indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
+            if !self.diagonals.is_empty() {
+                let h = self.diagonals.get(k).copied().unwrap_or(0);
+                diagonals.extend_from_slice(&[h & 0b101, h & 0b011, h & 0b110, 0]);
+            }
         }
+        m.diagonals = diagonals;
         for s in &mut m.submeshes {
             s.start *= 4;
             s.count *= 4;
@@ -530,6 +538,12 @@ mod tests {
         a.append(&m);
         assert_eq!(a.diagonals, vec![0, 0b100, 0b001]);
         assert_eq!(crate::primitives::plane(1.0, 2).wire_edges()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
+        // Subdividing hides both halves of the diagonal and nothing else: 16 edges less 2.
+        let sub = m.subdivided();
+        assert_eq!(sub.diagonals.len(), sub.triangle_count());
+        let edges = &sub.wire_edges()[0];
+        assert_eq!(edges.len(), 14);
+        assert!(edges.iter().all(|&(a, b)| !matches!((a, b), (0, 6) | (2, 6))), "diagonal halves {edges:?}");
     }
 
     #[test]
