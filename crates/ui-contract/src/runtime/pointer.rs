@@ -854,25 +854,25 @@ pub(crate) fn over_part(ctx: &Context, viewport: ViewportId, root: Id, part: Par
 }
 
 /// The hit areas the running pass has registered so far for the components `of` takes, in screen points: each shape's
-/// bounds grown to its least size across, with the component and part it belongs to.
-pub(crate) fn hit_areas(ctx: &Context, of: impl Fn(Id) -> bool) -> Vec<(Id, Option<PartRef>, egui::Rect)> {
+/// bounds before and after growing to its least size across, with its component and part.
+pub(crate) fn hit_areas(ctx: &Context, of: impl Fn(Id) -> bool) -> Vec<(Id, Option<PartRef>, egui::Rect, egui::Rect)> {
     let viewport = pass::current_viewport(ctx);
-    let found: Vec<(Layer, Id, Option<PartRef>, egui::Rect)> = PerViewport::<Shapes>::with(ctx, viewport, |record| {
+    let found: Vec<(Layer, Id, Option<PartRef>, egui::Rect, egui::Rect)> = PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let mut found = Vec::new();
         for (layer, roots) in &record.this {
             for shape in roots.values().flat_map(|root| root.shapes.iter()).filter(|shape| of(shape.owner)) {
                 let bounds = shape.shape.bounds();
                 let grow = (egui::Vec2::splat(shape.min_across) - bounds.size()).max(egui::Vec2::ZERO) / 2.0;
-                found.push((*layer, shape.owner, shape.part, bounds.expand2(grow)));
+                found.push((*layer, shape.owner, shape.part, bounds, bounds.expand2(grow)));
             }
         }
         found
     });
     found
         .into_iter()
-        .map(|(layer, owner, part, rect)| {
+        .map(|(layer, owner, part, bounds, rect)| {
             let to_screen = areas::layer_to_screen(ctx, layer);
-            (owner, part, to_screen * rect)
+            (owner, part, to_screen * bounds, to_screen * rect)
         })
         .collect()
 }

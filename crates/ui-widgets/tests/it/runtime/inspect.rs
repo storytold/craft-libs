@@ -201,3 +201,165 @@ fn an_element_records_the_command_it_is_bound_to_with_accesskit_off() {
         assert!(rect.is_positive() && element.rect.expand(0.5).contains_rect(rect), "{:?} lies on its control {:?}", rect, element.rect);
     }
 }
+
+/// Pointer-only parts have no access node or Tab stop, but consumers still need their original
+/// geometry, not the larger minimum-size hit box, to relate a value to its drawn position.
+#[trial]
+fn pointer_only_thumb_bounds_match_paint_and_value_travel() {
+    use craft_ui::runtime::env::RootEnv;
+    use craft_ui::testing::{Frames, pointer};
+    use craft_ui::value_drag::Slider;
+    use egui::{Pos2, Vec2};
+
+    const FIELD: Rect = Rect { min: Pos2::new(30.0, 40.0), max: Pos2::new(250.0, 70.0) };
+    let value = Rc::new(RefCell::new(0.0));
+    let recorded = Rc::new(RefCell::new(None::<Arc<Recorded>>));
+    let (shown_value, shown_record) = (Rc::clone(&value), Rc::clone(&recorded));
+    let mut show = move |ui: &mut egui::Ui| {
+        let (_, record) = inspect::record(ui, Id::NULL.with("thumb-bounds"), |ui| {
+            Slider::new(Bind::bound(&mut *shown_value.borrow_mut()), 0.0..=100.0).step(1.0).label("Position").show_at(ui, FIELD);
+        });
+        if let Some(record) = record {
+            *shown_record.borrow_mut() = Some(record);
+        }
+    };
+    let mut frames = Frames::new();
+    // Built-in mouse targets are 8 pt, smaller than the 12 pt knob. Use a genuine host
+    // size override so the sensing core actually expands this part to a 32 pt target.
+    let mut root = RootEnv::new();
+    root.sizes = Arc::new(craft_theme::AppSizes::parse(br#"{ "all": { "size.hit.target": 32 } }"#).expect("valid enlarged hit target"));
+    frames.root(root);
+    frames.ctx.disable_accesskit();
+    frames.idle(3, &mut show);
+    let thumb = || {
+        let record = recorded.borrow();
+        let record = record.as_ref().expect("the region ran");
+        let thumb =
+            record.hits.iter().find(|hit| hit.part.is_some_and(|part| part.key == Slider::THUMB)).expect("a pointer-only thumb is recorded").clone();
+        assert!(
+            record.elements.iter().all(|element| element.id != thumb.owner || element.part != thumb.part),
+            "the pointer-only thumb does not need a fabricated access node or Tab stop"
+        );
+        thumb
+    };
+    let start = thumb();
+    assert!(start.rect.contains_rect(start.bounds), "the expanded hit target contains its original geometry");
+    assert!(start.rect.width() > start.bounds.width(), "minimum hit size is not the drawn thumb width");
+    assert!((start.bounds.left() - FIELD.left()).abs() < 0.01, "minimum thumb is flush with the track start");
+    assert_eq!(start.bounds.height(), FIELD.height(), "the thumb's original sensing shape spans the track height");
+    let shapes = frames.frame_shapes(&mut show);
+    // Along::thumb_rect deliberately keeps the track's full height; Slider::paint draws the
+    // smaller square knob at the same centre. The raw sensing width is exactly the painted
+    // knob width, which determines value travel. Do not mistake the sensing height or the
+    // larger shadow/expanded hit box for that width.
+    assert!(
+        shapes.iter().any(|shape| match shape {
+            egui::Shape::Rect(rect) =>
+                rect.rect.x_range() == start.bounds.x_range()
+                    && rect.rect.center().y == start.bounds.center().y
+                    && rect.rect.height() == rect.rect.width()
+                    && rect.rect.height() < start.bounds.height(),
+            _ => false,
+        }),
+        "the raw thumb width and centre identify the actual painted knob: raw={:?}, hit={:?}, shapes={:?}",
+        start.bounds,
+        start.rect,
+        shapes
+            .iter()
+            .map(|shape| match shape {
+                egui::Shape::Rect(rect) => format!("Rect box={:?} stroke={:?} kind={:?}", rect.rect, rect.stroke, rect.stroke_kind),
+                other => format!("{:?} bounds={:?}", std::mem::discriminant(other), other.visual_bounding_rect()),
+            })
+            .collect::<Vec<_>>()
+    );
+
+    *value.borrow_mut() = 100.0;
+    frames.idle(3, &mut show);
+    let end = thumb();
+    assert!((end.bounds.right() - FIELD.right()).abs() < 0.01, "maximum thumb is flush with the track end");
+    assert_eq!(start.bounds.size(), end.bounds.size(), "only the thumb's position changes");
+    let travel = end.bounds.center().x - start.bounds.center().x;
+    for fraction in [0.0f32, 0.65, 1.0] {
+        let at = start.bounds.center() + Vec2::new(travel * fraction, 0.0);
+        pointer::click(&mut frames, at, &mut show);
+        frames.idle(3, &mut show);
+        assert!((*value.borrow() - f64::from(fraction) * 100.0).abs() < 1e-4, "the raw thumb centres delimit the real value travel at {fraction}");
+        assert!((thumb().bounds.center().x - at.x).abs() < 0.01, "the clicked value is drawn at the same position");
+    }
+}
+
+/// A kept inspected slider moves both the original thumb and its expanded hit area with the memo room.
+#[trial]
+fn a_replayed_inspection_moves_both_thumb_rectangles() {
+    use craft_ui::contract::{MemoProps, MemoView};
+    use craft_ui::runtime::env::RootEnv;
+    use craft_ui::runtime::inspect::HitArea;
+    use craft_ui::testing::layout::in_region;
+    use craft_ui::testing::{Frames, MemoRun, audit_replays, in_audit_run, last_frame_memo_runs};
+    use craft_ui::value_drag::Slider;
+    use egui::{pos2, vec2};
+    use std::cell::Cell;
+
+    #[derive(MemoProps)]
+    struct InspectedThumb {}
+
+    thread_local! {
+        static AUDITED_HIT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn key() -> Id {
+        Id::NULL.with("trial.inspect.replayed-thumb")
+    }
+
+    fn thumb(record: &Recorded) -> &HitArea {
+        record.hits.iter().find(|hit| hit.part.is_some_and(|part| part.key == Slider::THUMB)).expect("a pointer-only thumb")
+    }
+
+    fn show(_: &mut InspectedThumb, ui: &mut egui::Ui) {
+        let (_, record) = inspect::record(ui, key(), |ui| {
+            Slider::new(Bind::given(0.0), 0.0..=100.0).label("Position").show(ui);
+        });
+        if in_audit_run(ui.ctx())
+            && let Some(record) = record
+        {
+            let hit = thumb(&record);
+            AUDITED_HIT.set(hit.rect.width() > hit.bounds.width());
+        }
+    }
+
+    let mut frames = Frames::new();
+    let mut root = RootEnv::new();
+    root.sizes = Arc::new(craft_theme::AppSizes::parse(br#"{ "all": { "size.hit.target": 32 } }"#).expect("valid enlarged hit target"));
+    frames.root(root);
+    frames.ctx.disable_accesskit();
+    audit_replays(&frames.ctx, false);
+
+    let draw = |frames: &mut Frames, y: f32| {
+        let room = Rect::from_min_size(pos2(30.0, y), vec2(250.0, 80.0));
+        let mut hit = None;
+        frames.frame(vec![], |ui| {
+            in_region(ui, room, |ui| MemoView::new("thumb", InspectedThumb {}, show).show(ui));
+            hit = inspect::recorded(ui.ctx(), key()).map(|record| thumb(&record).clone());
+        });
+        hit.expect("the inspector recorded the thumb")
+    };
+    for _ in 0..3 {
+        draw(&mut frames, 40.0);
+    }
+    let original = draw(&mut frames, 40.0);
+    assert!(original.rect.width() > original.bounds.width(), "the hit area is larger than the original thumb");
+    let moved = draw(&mut frames, 72.0);
+    let runs = last_frame_memo_runs(&frames.ctx);
+    assert!(runs.iter().any(|(name, _, run)| name.ends_with("InspectedThumb") && *run == MemoRun::Replayed), "the view replayed: {runs:?}");
+    let shift = vec2(0.0, 32.0);
+    assert_eq!(moved.owner, original.owner);
+    assert_eq!(moved.part, original.part);
+    assert_eq!(moved.bounds, original.bounds.translate(shift), "original geometry follows the view");
+    assert_eq!(moved.rect, original.rect.translate(shift), "expanded hit geometry follows the view");
+
+    // The audit compares that kept journal with a real run at the new place, including both hit rectangles.
+    AUDITED_HIT.set(false);
+    audit_replays(&frames.ctx, true);
+    assert_eq!(draw(&mut frames, 72.0), moved, "the replay agrees with the real inspection at the new place");
+    assert!(AUDITED_HIT.get(), "the audit compared a real record with an expanded thumb hit");
+}
