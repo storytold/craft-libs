@@ -3,7 +3,7 @@
 //! QuickTime file or a raw `.dv` file (one frame after another).
 //!
 //! - [`sniff`]: whether bytes start like a DV frame.
-//! - [`header`]: a frame's system (525/60 or 625/50), colour sampling, picture shape and scan (interlaced or not).
+//! - [`header`]: a frame's system (525/60 or 625/50), colour sampling, picture shape and field order.
 //! - [`decode`]: a frame's picture, 720 × 480 or 720 × 576 8-bit Y'CbCr in its own sampling: 4:1:1 (525/60, and
 //!   DVCPRO's 625/50), 4:2:0 (IEC 61834's 625/50) or 4:2:2 (DVCPRO50). It converts into
 //!   [`crate::frame::VideoFrame`].
@@ -16,6 +16,8 @@ mod video;
 mod vlc;
 
 pub use video::{Layout, Picture};
+
+use crate::frame::FieldOrder;
 
 /// Bytes of a DIF block.
 pub const DIF_BLOCK: usize = 80;
@@ -97,9 +99,10 @@ pub struct Header {
     pub sampling: Sampling,
     /// The picture is 16:9 (squeezed into the 720 pixels), not 4:3.
     pub wide: bool,
-    /// The picture is two interlaced fields (bottom first), not progressive: the VAUX source control pack's
-    /// interlace flag, interlaced when the frame has no such pack.
-    pub interlaced: bool,
+    /// Progressive when the VAUX source control pack's interlace flag says noninterlaced; else two interlaced fields,
+    /// in the order its first/second field flag gives: field 1, the lower line of each pair, first when the flag is
+    /// 1 (bottom field first), field 2 first when it is 0 (top field first). Bottom field first without the pack.
+    pub field_order: FieldOrder,
 }
 
 impl Header {
@@ -164,11 +167,15 @@ pub fn header(frame: &[u8]) -> Result<Header> {
         Some(signal) => return Err(Error::Unsupported(format!("signal type {signal:05b}, not the 25 or 50 Mb/s structure"))),
     };
     // The VAUX source control pack (Table 14): the display select mode, 010 is 16:9; the interlace flag, 0 is
-    // noninterlaced.
+    // noninterlaced; the first/second field flag, 1 when field 1 comes first (the lower line of each pair, Fig. 15).
     let control = vaux_pack(frame, system, 0x61);
     let wide = control.is_some_and(|pack| pack[2] & 0x07 == 0b010);
-    let interlaced = control.is_none_or(|pack| pack[3] & 0x10 != 0);
-    Ok(Header { system, sampling, wide, interlaced })
+    let field_order = match control.map(|pack| pack[3]) {
+        Some(flags) if flags & 0x10 == 0 => FieldOrder::Progressive,
+        Some(flags) if flags & 0x40 == 0 => FieldOrder::TopFieldFirst,
+        _ => FieldOrder::BottomFieldFirst,
+    };
+    Ok(Header { system, sampling, wide, field_order })
 }
 
 /// The first VAUX pack whose header is `id` (fifteen 5-byte packs in each VAUX DIF block, BT.1618-1 Fig. 7).

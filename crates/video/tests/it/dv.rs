@@ -191,15 +191,17 @@ fn other_signal_types_are_refused() {
     assert_eq!(dv::header(&frame_with_packs(&[])).expect("a header").sampling, Sampling::C411);
 }
 
-/// The VAUX source control pack's interlace flag: a noninterlaced frame is a progressive VideoFrame; an interlaced
-/// one, or one without the pack, bottom field first.
+/// The VAUX source control pack's flags (BT.1618-1 Table 14): a noninterlaced frame is a progressive VideoFrame; an
+/// interlaced one is bottom field first when field 1 (the lower line of each pair) comes first, top field first when
+/// field 2 does; one without the pack is bottom field first.
 #[test]
-fn the_interlace_flag_sets_the_field_order() {
+fn the_interlace_and_field_flags_set_the_field_order() {
     let order = |packs: &[[u8; 5]]| {
         let picture = dv::decode(&frame_with_packs(packs)).expect("a picture");
         VideoFrame::try_from(picture).expect("a video frame").field_order
     };
     assert_eq!(order(&[[0x61, 0x3F, 0xC8, 0xEC, 0xFF]]), FieldOrder::Progressive);
     assert_eq!(order(&[[0x61, 0x3F, 0xC8, 0xFC, 0xFF]]), FieldOrder::BottomFieldFirst);
+    assert_eq!(order(&[[0x61, 0x3F, 0xC8, 0xBC, 0xFF]]), FieldOrder::TopFieldFirst);
     assert_eq!(order(&[]), FieldOrder::BottomFieldFirst);
 }

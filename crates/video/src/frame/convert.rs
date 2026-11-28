@@ -633,9 +633,9 @@ impl TryFrom<crate::theora::Picture> for VideoFrame {
 impl TryFrom<crate::dv::Picture> for VideoFrame {
     type Error = FrameError;
 
-    /// An 8-bit frame, interlaced bottom field first as DV records it (IEC 61834-2, SMPTE ST 314) or progressive when
-    /// the frame says it is noninterlaced, in its own sampling (4:1:1, 4:2:0 or 4:2:2) and ITU-R BT.601 colours: the
-    /// SMPTE 170M primaries and matrix for 525/60, BT.470 BG for 625/50, in the limited range.
+    /// An 8-bit frame with the field order the frame signals (IEC 61834-2, SMPTE ST 314: interlaced, bottom field
+    /// first unless it says otherwise, or progressive), in its own sampling (4:1:1, 4:2:0 or 4:2:2) and ITU-R BT.601
+    /// colours: the SMPTE 170M primaries and matrix for 525/60, BT.470 BG for 625/50, in the limited range.
     fn try_from(p: crate::dv::Picture) -> Result<Self, FrameError> {
         use crate::dv::Layout;
         let sub = match p.layout {
@@ -657,7 +657,7 @@ impl TryFrom<crate::dv::Picture> for VideoFrame {
         let code = if height == 480 { 6 } else { 5 };
         f.color = ColorTags { primaries: code, transfer: 6, matrix: code, full_range: false };
         f.sar = Some(p.sample_aspect);
-        f.field_order = if p.interlaced { FieldOrder::BottomFieldFirst } else { FieldOrder::Progressive };
+        f.field_order = p.field_order;
         Ok(f)
     }
 }

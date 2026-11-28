@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 
 use super::vlc::{self, Code};
 use super::{Error, Header, Result, Sampling};
+use crate::frame::FieldOrder;
 
 /// A decoded picture: 720 pixels wide, 8-bit Y'CbCr (ITU-R BT.601 levels), in the frame's own colour sampling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,8 +28,8 @@ pub struct Picture {
     pub cr: Vec<u8>,
     /// The picture is 16:9 (squeezed into the 720 pixels), not 4:3.
     pub wide: bool,
-    /// The picture is two interlaced fields, bottom first ([`Header::interlaced`]), not progressive.
-    pub interlaced: bool,
+    /// Progressive, or the order of the two interlaced fields ([`Header::field_order`]).
+    pub field_order: FieldOrder,
     /// The sample aspect ratio ([`Header::sample_aspect`]).
     pub sample_aspect: (u32, u32),
 }
@@ -382,7 +383,7 @@ pub(crate) fn decode(frame: &[u8], header: &Header) -> Result<Picture> {
         cb: planes.cb,
         cr: planes.cr,
         wide: header.wide,
-        interlaced: header.interlaced,
+        field_order: header.field_order,
         sample_aspect: header.sample_aspect(),
     })
 }
@@ -906,7 +907,7 @@ mod tests {
     fn a_macro_block_whose_status_says_error_is_grey() {
         // A segment of five macro blocks whose blocks are each a DC of 40 and an EOB: flat at 148, unless the macro
         // block's STA says it has errors (Table 26: 0111, 1111). One concealed without errors (1010) still decodes.
-        let header = Header { system: crate::dv::System::Lines525, sampling: Sampling::C411, wide: false, interlaced: true };
+        let header = Header { system: crate::dv::System::Lines525, sampling: Sampling::C411, wide: false, field_order: FieldOrder::BottomFieldFirst };
         let segment = |sta: [u8; 5]| {
             let mut frame = vec![0u8; header.frame_bytes()];
             for (m, &status) in sta.iter().enumerate() {

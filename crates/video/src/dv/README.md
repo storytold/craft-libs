@@ -8,20 +8,21 @@ Clean-room, pure-Rust (no `unsafe`) decoder of DV video pictures. Part of `craft
   at 25 Mb/s: 4:1:1 in both systems), and DVCPRO50 (SMPTE ST 314 at 50 Mb/s: 4:2:2, the frame in two channels of DIF
   sequences). 4:3 and 16:9 (the VAUX display select mode).
 - **Output:** a 720 × 480 or 720 × 576 picture of 8-bit Y'CbCr in the frame's own sampling, converting into
-  `frame::VideoFrame` (interlaced, bottom field first, or progressive when the VAUX source control pack's interlace
-  flag says noninterlaced; BT.601 colours: SMPTE 170M for 525/60, BT.470 BG for 625/50; the sample aspect ratio that
-  makes the whole 720 pixels 4:3 or 16:9).
+  `frame::VideoFrame` (the field order from the VAUX source control pack: progressive when its interlace flag says
+  noninterlaced, else bottom field first, or top field first when its first/second field flag says field 2 comes
+  first; BT.601 colours: SMPTE 170M for 525/60, BT.470 BG for 625/50; the sample aspect ratio that makes the whole
+  720 pixels 4:3 or 16:9).
 - **Not yet:** DVCPRO HD (SMPTE ST 370; a frame whose VAUX source pack signals it is refused), the sound and subcode
   in the DIF blocks, and an encoder (storytold/craft-libs#1512).
 
 ## Sources
 
 - ITU-R BT.1618-1 (2011-03; withdrawn, still published by the ITU): the DIF structure (Fig. 4, Tables 1–5), the VAUX
-  packs (Fig. 7, Tables 13 and 14), the macro block and super block order (§1.7.2.1 and Table 19, §2.1, Figs 16, 20,
-  22, 24 and 26), the DCT and weighting (§2.2, Fig. 27), classes and quantisation (§2.3, Fig. 28, Table 23), the
-  variable-length codes (§2.4, Tables 24 and 25), the three passes over a video segment (§2.6), the status of a
-  compressed macro block (Table 26) and the error codes (§2.6, Fig. 33). The figures were read from the document's
-  EMF drawings.
+  packs (Fig. 7, Tables 13 and 14, with Fig. 15 for the field of each line), the macro block and super block order
+  (§1.7.2.1 and Table 19, §2.1, Figs 16, 20, 22, 24 and 26), the DCT and weighting (§2.2, Fig. 27), classes and
+  quantisation (§2.3, Fig. 28, Table 23), the variable-length codes (§2.4, Tables 24 and 25), the three passes over a
+  video segment (§2.6), the status of a compressed macro block (Table 26) and the error codes (§2.6, Fig. 33). The
+  figures were read from the document's EMF drawings.
 - SMPTE ST 314 (2005, stabilised 2013; published by SMPTE): the same content, used to cross-check the tables; the
   50 Mb/s structure from BT.1618-1 Fig. 2 (two channels of 10 / 12 DIF sequences), §1.7.2.1 and Table 18 (channel 0
   codes the even super block rows, channel 1 the odd ones), Figs 19, 21 and 25 (macro blocks of two 16 × 8 Y blocks,
@@ -58,5 +59,5 @@ decoder, so planes are compared by PSNR (above 45 dB each; about 61–64 dB in p
 code table, the scan orders, the quantisation table, that the super block layouts cover the picture exactly once,
 that the inverse DCT undoes §2.2.1's forward transform, the three-pass reading, the EOB after a block whose last
 coefficient is coded, and the macro block status. Synthetic frames check that other signal types are refused and that
-the interlace flag sets the field order. Damaged and truncated frames go through
+the interlace and first/second field flags set the field order. Damaged and truncated frames go through
 `craft_media_testkit::hostile::hammer`.
