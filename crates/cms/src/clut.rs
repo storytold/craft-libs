@@ -1,9 +1,11 @@
-//! Multi-dimensional colour lookup tables (ICC CLUTs) with tetrahedral interpolation.
+//! Multi-dimensional colour lookup tables (ICC CLUTs).
 //!
 //! Grid layout follows ICC.1: the first input channel varies slowest, output values of one
-//! node are stored together. 3-input tables use tetrahedral interpolation (Sakamoto 1980 /
+//! node are stored together. By default, 3-input tables use tetrahedral interpolation (Sakamoto 1980 /
 //! Kasson et al. 1995); 4-input tables interpolate linearly along the first input between
 //! two tetrahedral evaluations; other input counts use multilinear interpolation.
+//! Lab-PCS BToA stages selected by `Profile::pcs_to_device` use trilinear interpolation on
+//! their cloned 3-input tables, leaving the stored profile tables unchanged.
 
 use crate::{CmsError, check_len, invalid_arg};
 
@@ -23,6 +25,7 @@ pub struct Clut {
     pub(crate) grid: Vec<usize>,
     pub(crate) data: Vec<f32>,
     strides: Vec<usize>,
+    trilinear: bool,
 }
 
 impl Clut {
@@ -60,7 +63,12 @@ impl Clut {
             strides[i] = s;
             s *= grid[i];
         }
-        Clut { inputs, outputs, grid, data, strides }
+        Clut { inputs, outputs, grid, data, strides, trilinear: false }
+    }
+
+    /// Select trilinear interpolation for a cloned Lab-PCS BToA table.
+    pub(crate) fn use_trilinear(&mut self) {
+        self.trilinear = self.inputs == 3;
     }
 
     /// Number of input channels.
@@ -136,6 +144,7 @@ impl Clut {
     pub(crate) fn interp(&self, input: &[f32], out: &mut [f32]) {
         match self.inputs {
             1 => self.eval1(input[0], out),
+            3 if self.trilinear => self.multilinear(input, out),
             3 => {
                 let (b0, r0, s0) = self.locate(0, input[0]);
                 let (b1, r1, s1) = self.locate(1, input[1]);

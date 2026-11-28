@@ -564,13 +564,18 @@ impl<'a, F: Forward + ?Sized> OklabMapper<'a, F> {
             seeds.extend_from_slice(&SEEDS);
             solve_cmy_by(self.model, k, (self.p.tac - k).max(0.0), &seeds, residual(w)).0
         };
-        // A first clip without black measures how far outside the colour is. A colour just
-        // outside may give up a little lightness and hue to keep its chroma (a red reaches the
-        // full magenta and yellow edge); one far outside keeps its lightness and hue and loses
-        // chroma (a saturated blue does not slide along the gamut surface).
+        // Use the best chroma reached by the initial separation or a black-free clip:
+        // black-free gamut loss alone can overstate the printer's loss for a dark colour
+        // whose separation with generated black already retains its chroma. A colour just
+        // outside may give up a little lightness and hue to keep its chroma; one far outside
+        // keeps its lightness and hue and loses chroma.
         let first = solve(CLIP_WEIGHT, 0.0, [cmyk[0], cmyk[1], cmyk[2]]);
         let o = self.oklab(self.model.lab([first[0], first[1], first[2], 0.0]));
-        let loss = if c0 > 1e-9 { (1.0 - o[1].hypot(o[2]) / c0).clamp(0.0, 1.0) } else { 0.0 };
+        let separated = self.oklab(self.model.lab(cmyk));
+        let first_chroma = o[1].hypot(o[2]);
+        let separation_chroma = separated[1].hypot(separated[2]);
+        let available_chroma = first_chroma.max(separation_chroma);
+        let loss = if c0 > 1e-9 { (1.0 - available_chroma / c0).clamp(0.0, 1.0) } else { 0.0 };
         let w = CLIP_WEIGHT * (1.0 + CLIP_WEIGHT_GROWTH * loss * loss);
         let free = solve(w, 0.0, first);
         let norm = |c: [f64; 4]| residual(w)(self.model.lab(c)).iter().map(|v| v * v).sum::<f64>();
@@ -905,5 +910,30 @@ mod tests {
         let profile = cmyk_profile(&p).unwrap();
         let [Some(b0), Some(b1), Some(b2)] = &profile.b2a else { panic!("missing BToA tables") };
         assert!(b0 != b1 && b0 != b2, "perceptual shares a table");
+    }
+
+    #[test]
+    fn dark_chromatic_clip_preserves_reachable_colour() {
+        let profile = crate::builtin::Builtin::CoatedFogra39.profile();
+        let lut = profile.a2b[1].as_ref().expect("the printer's forward colour table");
+        let [Stage::Curves(input), Stage::Clut(table), Stage::Curves(output)] = lut.stages.as_slice() else {
+            panic!("expected the generated forward table's identity shapers");
+        };
+        assert!(input.iter().chain(output).all(Curve::is_identity));
+        // Only AToB is used: a pre-generated good BToA cannot hide a mapper regression.
+        let forward = TableForward(table.clone());
+        let p = CmykParams { tac: 3.3, gcr_curve: vec![[0.0, 0.0], [0.2, 0.05], [0.5, 0.205], [0.67, 0.5], [1.0, 0.95]], ..CmykParams::default() };
+        let mapper = OklabMapper::new(&forward, &p, 0.65, 1.05);
+        // Unaffected nearby in-gamut control first, then the dark chromatic target that
+        // black-free-only weighting clipped toward grey despite a reachable separation.
+        for target in [[18.75, 10.666666666666657, -10.666666666666671], [18.75, 10.666666666666657, -16.0]] {
+            let cmyk = mapper.clip(target, None);
+            let back = forward.lab(cmyk);
+            // REACH is the existing CIE76 reachability tolerance, not a weight oracle.
+            assert!(math::delta_e76(back, target) < REACH, "{target:?} -> {cmyk:?} -> {back:?}");
+            let chroma_loss = (back[1].hypot(back[2]) - target[1].hypot(target[2])).abs();
+            assert!(chroma_loss < REACH, "lost reachable Lab chroma: {target:?} -> {back:?}");
+            assert!(cmyk.iter().all(|v| (0.0..=1.0).contains(v)) && cmyk.iter().sum::<f64>() <= p.tac + 1e-6, "invalid inks: {cmyk:?}");
+        }
     }
 }

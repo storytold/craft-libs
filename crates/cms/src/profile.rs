@@ -540,10 +540,19 @@ impl Profile {
     }
 
     /// Stages mapping the float PCS (of the returned kind) to normalised device values.
+    /// Cloned Lab-PCS BToA stages use trilinear interpolation for 3-input CLUTs; stored stages
+    /// and DeviceLink tables (whose header PCS names an output device space) are unchanged.
     pub fn pcs_to_device(&self, intent: Intent) -> Result<(Vec<Stage>, Pcs), CmsError> {
         if let Some(l) = Self::lut_for(&self.b2a, intent) {
             let mut st = vec![encode_pcs(self.pcs, l.kind)];
             st.extend(l.stages.iter().cloned());
+            if self.pcs == Pcs::Lab && self.class != ProfileClass::DeviceLink {
+                for stage in &mut st {
+                    if let Stage::Clut(clut) = stage {
+                        clut.use_trilinear();
+                    }
+                }
+            }
             return Ok((st, self.pcs));
         }
         match self.color_space {
