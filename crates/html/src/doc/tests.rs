@@ -2198,3 +2198,30 @@ fn the_fragment_leaves_code_and_table_cells_unspaced() {
     assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
     assert!(!fragment.contains("margin-"), "{fragment}");
 }
+
+/// storytold/wordcraft#7134: HTML import keeps letter spacing, small caps and exact baseline shifts
+/// on the run's character properties.
+#[test]
+fn html_import_keeps_letter_spacing_small_caps_and_position() {
+    let f = parse(
+        "<p><span style='letter-spacing:2pt'>Tracking</span></p>\
+         <p><span style='font-variant:small-caps'>Small caps</span></p>\
+         <p><span style='vertical-align:5pt'>Raise</span></p>\
+         <p><span style='vertical-align:-5pt'>Lower</span></p>",
+    );
+    let doc = craft_flow::to_doc(&f);
+    let ps: Vec<_> = doc
+        .body
+        .iter()
+        .filter_map(|b| match &**b {
+            craft_wordmodel::Block::Para(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ps.len(), 4);
+    let props = |i: usize| ps[i].runs[0].props.clone();
+    assert_eq!(props(0).spacing, Some(2.0), "letter-spacing:2pt -> CharProps.spacing (points)");
+    assert_eq!(props(1).small_caps, Some(true), "font-variant:small-caps -> CharProps.small_caps");
+    assert_eq!(props(2).position, Some(5.0), "vertical-align:5pt -> CharProps.position (points, raised)");
+    assert_eq!(props(3).position, Some(-5.0), "vertical-align:-5pt -> CharProps.position (points, lowered)");
+}

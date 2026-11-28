@@ -588,6 +588,14 @@ pub(super) fn apply_style(
                     f.size = Some(p);
                 }
             }
+            "letter-spacing" => {
+                if let Some(p) = css_len_pt(v).filter(|p| p.is_finite()) {
+                    f.extra.get_or_insert_with(Default::default).spacing = Some(p.clamp(-1584.0, 1584.0));
+                }
+            }
+            "font-variant" => {
+                f.extra.get_or_insert_with(Default::default).small_caps = Some(lv == "small-caps");
+            }
             "font-family" => {
                 let fam = css_unescape(v.split(',').next().unwrap_or("").trim().trim_matches(['"', '\'']));
                 if model::is_mono(&fam) || fam.eq_ignore_ascii_case("monospace") {
@@ -607,6 +615,9 @@ pub(super) fn apply_style(
             "vertical-align" => {
                 f.sup = lv == "super";
                 f.sub = lv == "sub";
+                if let Some(p) = css_len_pt(v).filter(|p| p.is_finite()) {
+                    f.extra.get_or_insert_with(Default::default).position = Some(p.clamp(-1584.0, 1584.0));
+                }
             }
             "text-align" => {
                 *align = match lv.as_str() {
