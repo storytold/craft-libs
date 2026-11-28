@@ -36,7 +36,7 @@ pub(crate) use reverbs::{ConvolutionReverb, SurroundReverb};
 pub use special::LoudnessMeterFx;
 pub(crate) use special::{AmbisonicsPanner, Binauralizer, ChannelMixer, Distortion, GuitarSuite, Mastering, Mute, StereoExpander, VocalEnhancer};
 pub(crate) use time::{Delay, Reverb};
-pub use voice::VoicePitch;
+pub use voice::{VoiceFormant, VoicePitch};
 
 use crate::{AudioEffect, ParamSpec, sane_channels, sane_sample_rate};
 
@@ -127,6 +127,7 @@ static REGISTRY: &[EffectInfo] = &[
     entry!("denoise", "DeNoise", Restoration, DeNoise),
     entry!("pitch_shifter", "Pitch Shifter", Pitch, PitchShifter),
     entry!("voice_pitch", "Voice Pitch", Pitch, VoicePitch),
+    entry!("voice_formant", "Voice Formant", Pitch, VoiceFormant),
     entry!("deesser", "DeEsser", Restoration, DeEsser),
     entry!("dereverb", "DeReverb", Restoration, DeReverb),
     entry!("speech_enhance", "Enhance Speech", Filter, SpeechEnhance),
