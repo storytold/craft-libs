@@ -46,7 +46,7 @@ jobs:
       deps-profile: ${{ steps.audit.outputs.deps-profile }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@v2.22.4
+        uses: step-security/harden-runner@v2.23.0
         with:
           egress-policy: audit
       # The merge commit and its first parent.
@@ -56,7 +56,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
       - id: select
-        uses: storytold/craft-common-actions/actions/select-platforms@0bef64f155fcea81edbd9542381777358bfbdcf4
+        uses: storytold/craft-common-actions/actions/select-platforms@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
         with:
           os: '["ubuntu-latest","windows-latest","macos-latest"]'
           select-os: '["windows-latest","macos-latest"]'
@@ -221,7 +221,7 @@ jobs:
       actions: write
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@v2.22.4
+        uses: step-security/harden-runner@v2.23.0
         with:
           egress-policy: audit
       - name: Delete all but the newest rolling entry of each job and runner
