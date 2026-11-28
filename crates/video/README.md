@@ -127,7 +127,7 @@ is built with any of the decoder features below and decodes the codecs whose fea
 | ProRes | `prores` | ignored (frame headers carry the format) |
 | DNxHD / DNxHR | `dnx` | ignored (frame headers carry the format) |
 | APV | `apv-decode` | ignored (access units carry the format) |
-| FFV1 | `ffv1` | required version 3 configuration record; container width and height are required too |
+| FFV1 | `ffv1` | the version 3 configuration record, or empty for versions 0 and 1; container width and height are required too |
 | Motion JPEG | `mjpeg` | ignored (each packet carries its own picture) |
 | VP8 | `vp8-decode` | ignored (key frames carry the format) |
 
@@ -146,5 +146,6 @@ them first. When the codec itself fails, the pictures it had finished are up to 
 ProRes, DNx, APV and FFV1 return one frame per successful packet, with its packet timestamp;
 VP8 returns no picture for a hidden reference frame. These codecs have no delayed output.
 APV uses the codec's default selection of the first decodable primary frame and its alpha.
-FFV1 has the underlying decoder's version 3, range-coded, key-frame-only support. Reset keeps
-its configuration and container dimensions; VP8 reset discards its reference pictures.
+FFV1 decodes versions 0, 1 and 3, both coders, keyframes and non-keyframes. Reset keeps its
+configuration and container dimensions and forgets the states a non-keyframe would continue; VP8
+reset discards its reference pictures.

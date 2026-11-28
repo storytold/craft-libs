@@ -65,6 +65,12 @@ impl<'a> Decoder<'a> {
         self.pos
     }
 
+    /// Whether the coder has read further past the end of its data than a complete stream lets it:
+    /// it reads two bytes ahead of what an encoder has written before it ends the stream.
+    pub(crate) fn overran(&self) -> bool {
+        self.pos > self.data.len() + 2
+    }
+
     fn refill(&mut self) {
         if self.range < 256 {
             self.range <<= 8;

@@ -1,24 +1,31 @@
-//! FFV1 lossless video codec (RFC 9043): version 3, range coder, intra-only, YCbCr and RGB (JPEG 2000
-//! RCT), 8 to 16 bits per sample, any number of slices.
+//! FFV1 lossless video codec (RFC 9043): YCbCr and RGB (JPEG 2000 RCT), 8 to 16 bits per sample,
+//! any number of slices.
 //!
-//! - [`Decoder`]: built from the *configuration record* a container stores (Matroska `CodecPrivate`,
-//!   AVI `strf` extension, MP4 `glbl`) and the frame size; [`Decoder::decode`] turns one packet into a
-//!   [`Frame`]. Slice CRCs are checked.
-//! - [`Encoder`]: [`Encoder::config_record`] gives the bytes for the container, [`Encoder::encode`]
-//!   one packet per frame; every frame is a keyframe.
+//! - [`Decoder`]: versions 0, 1 and 3, the range coder and the Golomb-Rice coder, keyframes and
+//!   the non-keyframes between them. A version 3 stream is built from the *configuration record*
+//!   a container stores (Matroska `CodecPrivate`, AVI `strf` extension, MP4 `glbl`); versions 0
+//!   and 1 have none (their keyframes carry the parameters), so they take an empty one. The frame
+//!   size comes from the container too. [`Decoder::decode`] turns one packet into a [`Frame`];
+//!   packets go in decode order, since a non-keyframe continues the context states of the frame
+//!   before it. Slice CRCs are checked.
+//! - [`Encoder`]: version 3 with the range coder. [`Encoder::config_record`] gives the bytes for the
+//!   container, [`Encoder::encode`] one packet per frame; every frame is a keyframe.
 //!
-//! Not supported (reported as [`Error::Unsupported`]): the Golomb-Rice coder (`coder_type` 0),
-//! versions 0 and 1 (no configuration record, parameters in every keyframe), inter frames
-//! (`intra` 0 with `keyframe` 0), and slice rasters whose boundaries are not multiples of the
-//! chroma subsampling. See `src/ffv1/README.md`.
+//! Not supported (reported as [`Error::Unsupported`]): slice rasters whose boundaries are not
+//! multiples of the chroma subsampling, and a non-keyframe whose slice changes its Quantization
+//! Table Set. See `src/ffv1/README.md`.
 //!
 //! Implemented from RFC 9043. Frames are planar `u16`: for YCbCr, `[Y, Cb, Cr]` (plus an optional
 //! transparency plane); for RGB, `[R, G, B]` (plus transparency), all at full size.
 
+mod golomb;
 mod rc;
 
 use crate::budget::DECODE_MEMORY_BUDGET;
+use golomb::{BitReader, LOG2_RUN, VlcState, vlc_symbol};
 use rc::{Decoder as Rac, Encoder as RacEnc, Transitions};
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 
 const CONTEXT_SIZE: usize = 32;
 const MAX_CONTEXT_INPUTS: usize = 5;
@@ -177,15 +184,23 @@ fn read_quant_set(rac: &mut Rac, t: &Transitions) -> Result<QuantSet> {
     Ok(QuantSet { tables, context_count: context_count as usize })
 }
 
-fn parse_params(rac: &mut Rac) -> Result<Params> {
+/// Read the Parameters (section 4.2): from a configuration record (`in_record`, version 3) or from
+/// a keyframe (versions 0 and 1, which have no configuration record).
+fn parse_params(rac: &mut Rac, in_record: bool) -> Result<Params> {
     let mut state = [128u8; CONTEXT_SIZE];
     // Until the custom table is known, the default table decodes the fields before it.
     let t0 = Transitions::default_table();
     let version = rac.symbol(&mut state, false, &t0);
-    if version != 3 {
-        return Err(Error::Unsupported("only FFV1 version 3 has a configuration record; versions 0 and 1 are not supported"));
+    // Section 4.2.1: versions 0 and 1 have no configuration record, version 3 needs one.
+    match (version, in_record) {
+        (3, true) | (0 | 1, false) => {}
+        (0 | 1, true) => return Err(Error::Invalid("versions 0 and 1 have no configuration record")),
+        (3, false) => return Err(Error::Invalid("version 3 needs a configuration record")),
+        _ => return Err(Error::Unsupported("FFV1 versions other than 0, 1 and 3")),
     }
-    let _micro = rac.symbol(&mut state, false, &t0);
+    if version >= 3 {
+        let _micro = rac.symbol(&mut state, false, &t0);
+    }
     let coder_type = rac.symbol(&mut state, false, &t0) as u32;
     let mut delta = [0i32; 256];
     if coder_type > 1 {
@@ -194,9 +209,6 @@ fn parse_params(rac: &mut Rac) -> Result<Params> {
         }
     }
     let transitions = Transitions::new(&delta);
-    if coder_type == 0 {
-        return Err(Error::Unsupported("the Golomb-Rice coder (coder_type 0)"));
-    }
     if coder_type > 2 {
         return Err(Error::Invalid("unknown coder_type"));
     }
@@ -205,14 +217,20 @@ fn parse_params(rac: &mut Rac) -> Result<Params> {
         1 => Colorspace::Rgb,
         _ => return Err(Error::Unsupported("colorspace_type")),
     };
-    let bits = rac.symbol(&mut state, false, &t0) as u32;
+    // Section 4.2.7: absent in version 0, where it is 8.
+    let bits = if version >= 1 { rac.symbol(&mut state, false, &t0) as u32 } else { 8 };
     let bits = if bits == 0 { 8 } else { bits };
     let chroma_planes = rac.bit(&mut state[0], &t0);
     let (h, v) = (rac.symbol(&mut state, false, &t0), rac.symbol(&mut state, false, &t0));
     let extra_plane = rac.bit(&mut state[0], &t0);
-    let num_h = rac.symbol(&mut state, false, &t0) as u32 + 1;
-    let num_v = rac.symbol(&mut state, false, &t0) as u32 + 1;
-    let set_count = rac.symbol(&mut state, false, &t0);
+    // Sections 4.2.11 to 4.2.13: one slice and one Quantization Table Set before version 3.
+    let (num_h, num_v, set_count) = if version >= 3 {
+        let num_h = rac.symbol(&mut state, false, &t0) as u32 + 1;
+        let num_v = rac.symbol(&mut state, false, &t0) as u32 + 1;
+        (num_h, num_v, rac.symbol(&mut state, false, &t0))
+    } else {
+        (1, 1, 1)
+    };
     if !(8..=16).contains(&bits) || h > 3 || v > 3 || h < 0 || v < 0 || num_h > 1024 || num_v > 1024 || !(1..=8).contains(&set_count) {
         return Err(Error::Invalid("parameter out of range"));
     }
@@ -223,6 +241,25 @@ fn parse_params(rac: &mut Rac) -> Result<Params> {
     for _ in 0..set_count {
         // The Parameters are range coded with the default table; the custom one is for the slices.
         sets.push(read_quant_set(rac, &t0)?);
+    }
+    if version < 3 {
+        // Sections 4.2.14, 4.2.16 and 4.2.17: no coded initial states, no CRCs, and
+        // non-keyframes allowed.
+        return Ok(Params {
+            coder_type,
+            transitions,
+            colorspace,
+            bits,
+            chroma_planes,
+            shift: (h as u8, v as u8),
+            extra_plane,
+            num_h,
+            num_v,
+            sets,
+            initial_states: vec![None],
+            ec: false,
+            intra: false,
+        });
     }
     let mut initial_states = Vec::new();
     for set in &sets {
@@ -427,29 +464,102 @@ struct PlaneCoder {
     slot: usize,
 }
 
-/// The adaptive states of one plane class: Y, Cb and Cr together, then transparency (section 3.6).
+/// The adaptive states of one plane class: Y, then Cb and Cr together, then transparency (section
+/// 3.6). The range coder keeps `states`, the Golomb-Rice coder `vlc`; the other stays empty.
 struct ClassStates {
     set: usize,
     states: Vec<[u8; CONTEXT_SIZE]>,
+    vlc: Vec<VlcState>,
+}
+
+fn make_planes(p: &Params, rect: SliceRect) -> Vec<PlaneCoder> {
+    (0..p.plane_count())
+        .map(|pl| {
+            let (w, h) = plane_dims(rect.w, rect.h, p.colorspace, p.shift, pl, p.chroma_planes);
+            PlaneCoder { border: Border::new(w, h), slot: p.qset_slot(pl) }
+        })
+        .collect()
+}
+
+/// Fresh states for every plane class, as a keyframe starts them (sections 3.8.1.3 and 3.8.2.5).
+fn make_classes(p: &Params, set_idx: &[usize]) -> Result<Vec<ClassStates>> {
+    let slots = (0..p.plane_count()).map(|pl| p.qset_slot(pl)).max().unwrap_or(0);
+    let mut classes = Vec::new();
+    for slot in 0..=slots {
+        let set = *set_idx.get(slot).ok_or(Error::Invalid("missing quant table set index"))?;
+        let q = p.sets.get(set).ok_or(Error::Invalid("quant table set index out of range"))?;
+        let (states, vlc) = if p.coder_type == 0 {
+            (Vec::new(), vec![VlcState::default(); q.context_count])
+        } else {
+            let states = match p.initial_states.get(set) {
+                Some(Some(init)) => init.clone(),
+                _ => vec![[128u8; CONTEXT_SIZE]; q.context_count],
+            };
+            (states, Vec::new())
+        };
+        classes.push(ClassStates { set, states, vlc });
+    }
+    Ok(classes)
 }
 
 fn make_coders(p: &Params, rect: SliceRect, set_idx: &[usize]) -> Result<(Vec<PlaneCoder>, Vec<ClassStates>)> {
-    let mut planes = Vec::new();
-    for pl in 0..p.plane_count() {
-        let (w, h) = plane_dims(rect.w, rect.h, p.colorspace, p.shift, pl, p.chroma_planes);
-        planes.push(PlaneCoder { border: Border::new(w, h), slot: p.qset_slot(pl) });
-    }
-    let mut classes = Vec::new();
-    for slot in 0..=planes.iter().map(|c| c.slot).max().unwrap_or(0) {
-        let set = *set_idx.get(slot).ok_or(Error::Invalid("missing quant table set index"))?;
-        let q = p.sets.get(set).ok_or(Error::Invalid("quant table set index out of range"))?;
-        let states = match p.initial_states.get(set) {
-            Some(Some(init)) => init.clone(),
-            _ => vec![[128u8; CONTEXT_SIZE]; q.context_count],
+    Ok((make_planes(p, rect), make_classes(p, set_idx)?))
+}
+
+/// One line of a Golomb-Rice coded plane (sections 3.8.2.2 to 3.8.2.4). `run_index` lives on from
+/// line to line; the run itself ends with the line.
+fn golomb_line(br: &mut BitReader, p: &Params, c: &mut PlaneCoder, cls: &mut ClassStates, y: usize, w: usize, run_index: &mut usize) -> Result<()> {
+    let q = p.sets.get(cls.set).ok_or(Error::Invalid("quant table set index out of range"))?;
+    let bits = coded_bits(p);
+    let mask = (1i32 << bits) - 1;
+    c.border.start_row(y);
+    let mut run_count: i64 = 0;
+    // 0: no run, 1: inside a run, 2: the run's last part is known and a level ends it.
+    let mut run_mode = 0u8;
+    for x in 0..w {
+        let (ctx, pred) = c.border.context(x, y, &q.tables, false);
+        let idx = (ctx.unsigned_abs() as usize).min(q.context_count - 1);
+        if ctx == 0 && run_mode == 0 {
+            run_mode = 1;
+        }
+        let diff = if run_mode != 0 {
+            if run_count == 0 && run_mode == 1 {
+                let log2 = *LOG2_RUN.get(*run_index).ok_or(Error::Invalid("run index past the run length table"))?;
+                if br.bit()? {
+                    run_count = 1 << log2;
+                    if x as i64 + run_count <= w as i64 {
+                        *run_index += 1;
+                    }
+                } else {
+                    run_count = i64::from(br.bits(log2)?);
+                    *run_index = run_index.saturating_sub(1);
+                    run_mode = 2;
+                }
+            }
+            run_count -= 1;
+            if run_count < 0 {
+                // The sample that ends the run differs from its prediction, so 0 is not coded.
+                run_mode = 0;
+                run_count = 0;
+                let cell = cls.vlc.get_mut(idx).ok_or(Error::Invalid("context out of range"))?;
+                let mut d = vlc_symbol(br, cell, bits)?;
+                if d >= 0 {
+                    d += 1;
+                }
+                if ctx < 0 { -d } else { d }
+            } else {
+                0
+            }
+        } else {
+            let cell = cls.vlc.get_mut(idx).ok_or(Error::Invalid("context out of range"))?;
+            let d = vlc_symbol(br, cell, bits)?;
+            if ctx < 0 { -d } else { d }
         };
-        classes.push(ClassStates { set, states });
+        let at = c.border.at(x, y);
+        c.border.buf[at] = (pred + diff) & mask;
     }
-    Ok((planes, classes))
+    c.border.end_row(y);
+    Ok(())
 }
 
 /// The number of Quantization Table Set indexes in a slice header (section 4.6.5, version 3).
@@ -465,6 +575,10 @@ fn plane_store_bytes(w: u64, h: u64) -> Option<u64> {
     samples.checked_add(border)
 }
 
+fn budget_error() -> Error {
+    Error::Unsupported("frame size above the memory budget")
+}
+
 fn check_frame_size(p: &Params, w: u32, h: u32) -> Result<()> {
     if w == 0 || h == 0 {
         return Err(Error::Invalid("empty frame"));
@@ -472,29 +586,119 @@ fn check_frame_size(p: &Params, w: u32, h: u32) -> Result<()> {
     let mut bytes = 0u64;
     for plane in 0..p.plane_count() {
         let (pw, ph) = plane_dims(w as usize, h as usize, p.colorspace, p.shift, plane, p.chroma_planes);
-        let plane_bytes = plane_store_bytes(pw as u64, ph as u64).ok_or(Error::Unsupported("frame size above the memory budget"))?;
-        bytes = bytes.checked_add(plane_bytes).ok_or(Error::Unsupported("frame size above the memory budget"))?;
+        let plane_bytes = plane_store_bytes(pw as u64, ph as u64).ok_or_else(budget_error)?;
+        bytes = bytes.checked_add(plane_bytes).ok_or_else(budget_error)?;
     }
     // Retained initial contexts, up to three active context classes, and the packet's slice spans.
     let initial: u64 = p.initial_states.iter().filter_map(Option::as_ref).map(|v| v.len() as u64 * CONTEXT_SIZE as u64).sum();
     let contexts = 3 * MAX_CONTEXTS * CONTEXT_SIZE as u64;
-    let spans = u64::from(p.num_h) * u64::from(p.num_v) * (2 * std::mem::size_of::<usize>()) as u64;
-    if bytes.checked_add(initial + contexts + spans).is_none_or(|total| total > DECODE_MEMORY_BUDGET) {
-        return Err(Error::Unsupported("frame size above the memory budget"));
+    let slices = u64::from(p.num_h) * u64::from(p.num_v);
+    let spans = slices * (2 * std::mem::size_of::<usize>()) as u64;
+    // With non-keyframes, every slice's states (up to three classes) live on to the next frame.
+    let carried = if p.intra {
+        0
+    } else {
+        let largest = p.sets.iter().map(|s| s.context_count as u64).max().unwrap_or(0);
+        let per_context = if p.coder_type == 0 { std::mem::size_of::<VlcState>() } else { CONTEXT_SIZE } as u64;
+        slices.checked_mul(3 * largest * per_context + std::mem::size_of::<SliceStates>() as u64).ok_or_else(budget_error)?
+    };
+    let total = bytes.checked_add(initial + contexts + spans).and_then(|t| t.checked_add(carried));
+    if total.is_none_or(|total| total > DECODE_MEMORY_BUDGET) {
+        return Err(budget_error());
     }
     Ok(())
 }
 
+/// The context states one slice ended with, which the next frame continues when it is not a
+/// keyframe (sections 3.8.1.3 and 3.8.2.5: only a keyframe resets them).
+struct SliceStates {
+    /// `slice_width` and `slice_height` (section 5: a non-keyframe repeats the slice raster).
+    size: (usize, usize),
+    set_idx: Vec<usize>,
+    classes: Vec<ClassStates>,
+}
+
+/// What a decoded frame leaves for the next one.
+struct Carried {
+    /// The Parameters of the last keyframe, in a stream without a configuration record.
+    params: Option<Params>,
+    /// The states of each slice, by `(slice_x, slice_y)`.
+    slices: HashMap<(usize, usize), SliceStates>,
+}
+
+/// Where a slice's samples come from after its header.
+enum SampleInput<'a> {
+    Range(Rac<'a>),
+    Golomb(BitReader<'a>),
+}
+
+/// Where the Golomb-Rice bits start after the range-coded part of a slice (section 3.8.1.1.1).
+/// Version 3 ends its slice header with a sentinel symbol of state 129; versions 0 and 1 end the
+/// keyframe's Parameters (or a non-keyframe's keyframe flag) without one. The bits then start
+/// one byte before where the range decoder has read to. (Found by comparing with ffmpeg's FFV1
+/// streams, where the RFC leaves it open.)
+fn golomb_after<'a>(mut rac: Rac, data: &'a [u8], sentinel: bool) -> Result<BitReader<'a>> {
+    if sentinel {
+        let mut state = 129u8;
+        rac.bit(&mut state, &Transitions::default_table());
+    }
+    let start = rac.consumed() - 1;
+    Ok(BitReader::new(data.get(start..).ok_or(Error::Truncated)?))
+}
+
+/// A range-coded slice whose decoder has read more than two bytes past the end of the data has
+/// run out of data (cut short): no complete stream needs more. Checked line by line, so a short
+/// packet for a large frame stops early.
+fn overran(rac: &Rac) -> Result<()> {
+    if rac.overran() { Err(Error::Truncated) } else { Ok(()) }
+}
+
+/// A frame of zeros in the format `p` gives.
+fn blank_frame(p: &Params, width: u32, height: u32) -> Result<Frame> {
+    let (w, h) = (width as usize, height as usize);
+    let mut frame = Frame {
+        width,
+        height,
+        colorspace: p.colorspace,
+        bit_depth: p.bits as u8,
+        chroma_shift: if p.chroma_planes { p.shift } else { (0, 0) },
+        planes: Vec::with_capacity(p.plane_count()),
+    };
+    for pl in 0..p.plane_count() {
+        let (pw, ph) = plane_dims(w, h, p.colorspace, p.shift, pl, p.chroma_planes);
+        let mut v = Vec::new();
+        v.try_reserve_exact(pw * ph).map_err(|_| budget_error())?;
+        v.resize(pw * ph, 0u16);
+        frame.planes.push(v);
+    }
+    Ok(frame)
+}
+
 /// A decoder for one stream.
 pub struct Decoder {
-    params: Params,
+    /// The Parameters of the configuration record (version 3); `None` when keyframes carry them.
+    config: Option<Params>,
     width: u32,
     height: u32,
+    /// What the last frame left for a following non-keyframe; `None` after an error or a reset.
+    carried: Mutex<Option<Carried>>,
 }
 
 impl Decoder {
-    /// Build a decoder from the container's configuration record and the frame size.
+    /// Build a decoder from the container's configuration record and the frame size. An empty
+    /// `config_record` means the stream has none: versions 0 and 1, whose keyframes carry the
+    /// parameters (Matroska and AVI then store no codec data).
     pub fn new(config_record: &[u8], width: u32, height: u32) -> Result<Decoder> {
+        if config_record.is_empty() {
+            // The smallest frame there is: the keyframes' parameters are checked as they come.
+            if width == 0 || height == 0 {
+                return Err(Error::Invalid("empty frame"));
+            }
+            if plane_store_bytes(u64::from(width), u64::from(height)).is_none_or(|b| b > DECODE_MEMORY_BUDGET) {
+                return Err(budget_error());
+            }
+            return Ok(Decoder { config: None, width, height, carried: Mutex::new(None) });
+        }
         if config_record.len() < 5 {
             return Err(Error::Truncated);
         }
@@ -503,39 +707,46 @@ impl Decoder {
             return Err(Error::Crc("the configuration record"));
         }
         let mut rac = Rac::new(body);
-        let params = parse_params(&mut rac)?;
+        let params = parse_params(&mut rac, true)?;
         if rac.consumed() > body.len() + 2 {
             return Err(Error::Truncated);
         }
         check_frame_size(&params, width, height)?;
-        Ok(Decoder { params, width, height })
+        Ok(Decoder { config: Some(params), width, height, carried: Mutex::new(None) })
     }
 
-    /// Transparency flag from the validated v3 configuration record.
-    pub(crate) fn has_alpha(&self) -> bool {
-        self.params.extra_plane
+    /// Transparency flag from the validated v3 configuration record; `None` for versions 0 and 1,
+    /// whose keyframes tell.
+    pub(crate) fn has_alpha(&self) -> Option<bool> {
+        self.config.as_ref().map(|p| p.extra_plane)
     }
 
-    /// Decode one frame (a packet from the container).
+    /// Forget the context states the last frame left, before decoding from another keyframe (after
+    /// a seek). A non-keyframe is then an error until the next keyframe.
+    pub fn reset(&self) {
+        *self.carried.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// Decode one frame (a packet from the container). Packets go in decode order: a non-keyframe
+    /// continues from the frame before it, and is an error after a failed frame or a [`reset`]
+    /// until the next keyframe.
+    ///
+    /// [`reset`]: Decoder::reset
     pub fn decode(&self, packet: &[u8]) -> Result<Frame> {
-        let p = &self.params;
-        let (w, h) = (self.width as usize, self.height as usize);
-        let planes = p.plane_count();
-        let mut frame = Frame {
-            width: self.width,
-            height: self.height,
-            colorspace: p.colorspace,
-            bit_depth: p.bits as u8,
-            chroma_shift: if p.chroma_planes { p.shift } else { (0, 0) },
-            planes: Vec::with_capacity(planes),
+        let mut carried = self.carried.lock().unwrap_or_else(PoisonError::into_inner);
+        // A frame that fails leaves nothing to continue from.
+        let prev = carried.take();
+        let (frame, next) = match &self.config {
+            Some(p) => self.decode_with_record(p, packet, prev)?,
+            None => self.decode_without_record(packet, prev)?,
         };
-        for pl in 0..planes {
-            let (pw, ph) = plane_dims(w, h, p.colorspace, p.shift, pl, p.chroma_planes);
-            let mut v = Vec::new();
-            v.try_reserve_exact(pw * ph).map_err(|_| Error::Unsupported("frame size above the memory budget"))?;
-            v.resize(pw * ph, 0u16);
-            frame.planes.push(v);
-        }
+        *carried = next;
+        Ok(frame)
+    }
+
+    /// Version 3: slices with headers and footers (sections 4.4 to 4.9).
+    fn decode_with_record(&self, p: &Params, packet: &[u8], prev: Option<Carried>) -> Result<(Frame, Option<Carried>)> {
+        let mut frame = blank_frame(p, self.width, self.height)?;
         // Slices are found from the end of the packet through their footers (section 4.9).
         let trailer = if p.ec { 8 } else { 3 };
         let slice_count = p.num_h as usize * p.num_v as usize;
@@ -552,92 +763,172 @@ impl Decoder {
             end = start;
         }
         spans.reverse();
+        let mut prev = prev.map(|c| c.slices);
+        let mut next = HashMap::new();
+        let mut keyframe = true;
         for (n, &(start, stop)) in spans.iter().enumerate() {
             let slice = &packet[start..stop];
             if p.ec && crc32(slice) != 0 {
                 return Err(Error::Crc("a slice"));
             }
-            self.decode_slice(slice, n == 0, &mut frame)?;
+            let data = &slice[..slice.len() - trailer];
+            let t = &p.transitions;
+            let mut rac = Rac::new(data);
+            // The keyframe flag is the first symbol of the first slice.
+            // The whole slice, header included, is coded with the stream's state transition table.
+            if n == 0 {
+                let mut ks = 128u8;
+                keyframe = rac.bit(&mut ks, t);
+                if !keyframe && p.intra {
+                    return Err(Error::Invalid("a non-keyframe in an intra-only stream"));
+                }
+            }
+            let mut hs = [128u8; CONTEXT_SIZE];
+            let sx = rac.symbol(&mut hs, false, t) as usize;
+            let sy = rac.symbol(&mut hs, false, t) as usize;
+            let sw = rac.symbol(&mut hs, false, t) as usize + 1;
+            let sh = rac.symbol(&mut hs, false, t) as usize + 1;
+            let set_idx: Vec<usize> = (0..set_index_count(p)).map(|_| rac.symbol(&mut hs, false, t).max(0) as usize).collect();
+            let _picture_structure = rac.symbol(&mut hs, false, t);
+            let _sar = (rac.symbol(&mut hs, false, t), rac.symbol(&mut hs, false, t));
+            let rect = slice_rect(p, self.width as usize, self.height as usize, sx, sy, sw, sh)?;
+            let (sx_mask, sy_mask) = ((1usize << p.shift.0) - 1, (1usize << p.shift.1) - 1);
+            if p.colorspace == Colorspace::YCbCr && p.chroma_planes && (rect.x & sx_mask != 0 || rect.y & sy_mask != 0) {
+                return Err(Error::Unsupported("slice boundaries that are not multiples of the chroma subsampling"));
+            }
+            let mut classes = if keyframe {
+                make_classes(p, &set_idx)?
+            } else {
+                let before = prev.as_mut().and_then(|slices| slices.remove(&(sx, sy)));
+                let before = before.ok_or(Error::Invalid("a non-keyframe without the frame it continues"))?;
+                if before.size != (sw, sh) {
+                    return Err(Error::Invalid("a non-keyframe changes the slice raster"));
+                }
+                if before.set_idx != set_idx {
+                    return Err(Error::Unsupported("a non-keyframe that changes a slice's quantization table set"));
+                }
+                before.classes
+            };
+            let input = if p.coder_type == 0 { SampleInput::Golomb(golomb_after(rac, data, true)?) } else { SampleInput::Range(rac) };
+            self.decode_slice(p, input, rect, &mut classes, &mut frame)?;
+            if !p.intra {
+                next.insert((sx, sy), SliceStates { size: (sw, sh), set_idx, classes });
+            }
         }
-        Ok(frame)
+        let next = (!p.intra).then_some(Carried { params: None, slices: next });
+        Ok((frame, next))
     }
 
-    fn decode_slice(&self, slice: &[u8], first: bool, frame: &mut Frame) -> Result<()> {
-        let p = &self.params;
-        let t = &p.transitions;
-        let data = &slice[..slice.len() - if p.ec { 8 } else { 3 }];
-        let mut rac = Rac::new(data);
-        // The keyframe flag is the first symbol of the first slice.
-        // The whole slice, header included, is coded with the stream's state transition table.
-        let t0 = t;
-        if first {
-            let mut ks = 128u8;
-            if !rac.bit(&mut ks, t0) {
-                return Err(Error::Unsupported("inter frames (keyframe 0)"));
-            }
-        }
-        let mut hs = [128u8; CONTEXT_SIZE];
-        let sx = rac.symbol(&mut hs, false, t0) as usize;
-        let sy = rac.symbol(&mut hs, false, t0) as usize;
-        let sw = rac.symbol(&mut hs, false, t0) as usize + 1;
-        let sh = rac.symbol(&mut hs, false, t0) as usize + 1;
-        let set_idx: Vec<usize> = (0..set_index_count(p)).map(|_| rac.symbol(&mut hs, false, t0).max(0) as usize).collect();
-        let _picture_structure = rac.symbol(&mut hs, false, t0);
-        let _sar = (rac.symbol(&mut hs, false, t0), rac.symbol(&mut hs, false, t0));
-        let rect = slice_rect(p, self.width as usize, self.height as usize, sx, sy, sw, sh)?;
-        let (sx_mask, sy_mask) = ((1usize << p.shift.0) - 1, (1usize << p.shift.1) - 1);
-        if p.colorspace == Colorspace::YCbCr && p.chroma_planes && (rect.x & sx_mask != 0 || rect.y & sy_mask != 0) {
-            return Err(Error::Unsupported("slice boundaries that are not multiples of the chroma subsampling"));
-        }
-        let (mut coders, mut classes) = make_coders(p, rect, &set_idx)?;
-        let bits = coded_bits(p);
-        let mask = (1i32 << bits) - 1;
-        let sixteen = p.colorspace == Colorspace::YCbCr && p.bits == 16;
-        let read = |rac: &mut Rac, c: &mut PlaneCoder, cls: &mut ClassStates, x: usize, y: usize| -> i32 {
-            let q = &p.sets[cls.set];
-            let (ctx, pred) = c.border.context(x, y, &q.tables, sixteen);
-            let (idx, neg) = if ctx < 0 { ((-ctx) as usize, true) } else { (ctx as usize, false) };
-            let mut d = rac.symbol(&mut cls.states[idx.min(q.context_count - 1)], true, t);
-            if neg {
-                d = -d;
-            }
-            let v = (pred + d) & mask;
-            let at = c.border.at(x, y);
-            c.border.buf[at] = v;
-            v
+    /// Versions 0 and 1: the keyframe's Parameters, then one slice without header or footer
+    /// (sections 4.4 and 4.5).
+    fn decode_without_record(&self, packet: &[u8], prev: Option<Carried>) -> Result<(Frame, Option<Carried>)> {
+        let mut rac = Rac::new(packet);
+        // The keyframe flag's state is used once, so the transition table does not matter for it.
+        let mut ks = 128u8;
+        let keyframe = rac.bit(&mut ks, &Transitions::default_table());
+        let (p, mut classes) = if keyframe {
+            let p = parse_params(&mut rac, false)?;
+            check_frame_size(&p, self.width, self.height)?;
+            let classes = make_classes(&p, &[0; 3])?;
+            (p, classes)
+        } else {
+            let prev = prev.ok_or(Error::Invalid("a non-keyframe without the frame it continues"))?;
+            let (Some(p), Some(slice)) = (prev.params, prev.slices.into_values().next()) else {
+                return Err(Error::Invalid("a non-keyframe without the frame it continues"));
+            };
+            (p, slice.classes)
         };
-        match p.colorspace {
-            Colorspace::YCbCr => {
-                for (pl, c) in coders.iter_mut().enumerate() {
-                    let (pw, ph) = plane_dims(rect.w, rect.h, p.colorspace, p.shift, pl, p.chroma_planes);
-                    for y in 0..ph {
-                        c.border.start_row(y);
-                        for x in 0..pw {
-                            read(&mut rac, c, &mut classes[c.slot], x, y);
+        let mut frame = blank_frame(&p, self.width, self.height)?;
+        let rect = SliceRect { x: 0, y: 0, w: self.width as usize, h: self.height as usize };
+        let input = if p.coder_type == 0 { SampleInput::Golomb(golomb_after(rac, packet, false)?) } else { SampleInput::Range(rac) };
+        self.decode_slice(&p, input, rect, &mut classes, &mut frame)?;
+        let slices = HashMap::from([((0, 0), SliceStates { size: (1, 1), set_idx: vec![0; 3], classes })]);
+        Ok((frame, Some(Carried { params: Some(p), slices })))
+    }
+
+    /// Decode a slice's samples (section 4.7) into `frame`.
+    fn decode_slice(&self, p: &Params, input: SampleInput, rect: SliceRect, classes: &mut [ClassStates], frame: &mut Frame) -> Result<()> {
+        let mut coders = make_planes(p, rect);
+        let bits = coded_bits(p);
+        match input {
+            SampleInput::Range(mut rac) => {
+                let t = &p.transitions;
+                let mask = (1i32 << bits) - 1;
+                // Section 3.3.1: the range coder's 16-bit YCbCr predictor.
+                let sixteen = p.colorspace == Colorspace::YCbCr && p.bits == 16;
+                let read = |rac: &mut Rac, c: &mut PlaneCoder, cls: &mut ClassStates, x: usize, y: usize| -> Result<()> {
+                    let q = p.sets.get(cls.set).ok_or(Error::Invalid("quant table set index out of range"))?;
+                    let (ctx, pred) = c.border.context(x, y, &q.tables, sixteen);
+                    let (idx, neg) = if ctx < 0 { ((-ctx) as usize, true) } else { (ctx as usize, false) };
+                    let state = cls.states.get_mut(idx.min(q.context_count - 1)).ok_or(Error::Invalid("context out of range"))?;
+                    let mut d = rac.symbol(state, true, t);
+                    if neg {
+                        d = -d;
+                    }
+                    let at = c.border.at(x, y);
+                    c.border.buf[at] = (pred + d) & mask;
+                    Ok(())
+                };
+                match p.colorspace {
+                    Colorspace::YCbCr => {
+                        for (pl, c) in coders.iter_mut().enumerate() {
+                            let (pw, ph) = plane_dims(rect.w, rect.h, p.colorspace, p.shift, pl, p.chroma_planes);
+                            let cls = classes.get_mut(c.slot).ok_or(Error::Invalid("missing plane class"))?;
+                            for y in 0..ph {
+                                c.border.start_row(y);
+                                for x in 0..pw {
+                                    read(&mut rac, c, cls, x, y)?;
+                                }
+                                c.border.end_row(y);
+                                overran(&rac)?;
+                            }
                         }
-                        c.border.end_row(y);
+                    }
+                    Colorspace::Rgb => {
+                        for y in 0..rect.h {
+                            for c in coders.iter_mut() {
+                                let cls = classes.get_mut(c.slot).ok_or(Error::Invalid("missing plane class"))?;
+                                c.border.start_row(y);
+                                for x in 0..rect.w {
+                                    read(&mut rac, c, cls, x, y)?;
+                                }
+                                c.border.end_row(y);
+                            }
+                            overran(&rac)?;
+                        }
                     }
                 }
             }
-            Colorspace::Rgb => {
-                for y in 0..rect.h {
-                    for c in coders.iter_mut() {
-                        c.border.start_row(y);
-                        for x in 0..rect.w {
-                            read(&mut rac, c, &mut classes[c.slot], x, y);
+            SampleInput::Golomb(mut br) => match p.colorspace {
+                Colorspace::YCbCr => {
+                    for (pl, c) in coders.iter_mut().enumerate() {
+                        let (pw, ph) = plane_dims(rect.w, rect.h, p.colorspace, p.shift, pl, p.chroma_planes);
+                        let cls = classes.get_mut(c.slot).ok_or(Error::Invalid("missing plane class"))?;
+                        // Section 3.8.2.2.1: `run_index` starts at 0 for each plane of a slice.
+                        let mut run_index = 0;
+                        for y in 0..ph {
+                            golomb_line(&mut br, p, c, cls, y, pw, &mut run_index)?;
                         }
-                        c.border.end_row(y);
                     }
                 }
-            }
+                Colorspace::Rgb => {
+                    // The planes take turns line by line; one `run_index` follows them all.
+                    let mut run_index = 0;
+                    for y in 0..rect.h {
+                        for c in coders.iter_mut() {
+                            let cls = classes.get_mut(c.slot).ok_or(Error::Invalid("missing plane class"))?;
+                            golomb_line(&mut br, p, c, cls, y, rect.w, &mut run_index)?;
+                        }
+                    }
+                }
+            },
         }
-        self.store(&coders, rect, frame);
+        self.store(p, &coders, rect, frame);
         Ok(())
     }
 
     /// Copy a decoded slice into the frame, undoing the colour transform for RGB.
-    fn store(&self, coders: &[PlaneCoder], rect: SliceRect, frame: &mut Frame) {
-        let p = &self.params;
+    fn store(&self, p: &Params, coders: &[PlaneCoder], rect: SliceRect, frame: &mut Frame) {
         if p.colorspace == Colorspace::YCbCr {
             for (pl, c) in coders.iter().enumerate() {
                 let (pw, ph) = plane_dims(rect.w, rect.h, p.colorspace, p.shift, pl, p.chroma_planes);
