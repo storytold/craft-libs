@@ -1,4 +1,4 @@
-//! `TileGrid`: a collection of `Tile`s in wrapped cards or justified rows, under optional group headers. The item step
+//! `TileGrid`: a collection of `Tile`s in wrapped cards, justified rows or Waterfall columns, under optional group headers. The item step
 //! does the work: virtualisation, lead and selection rules, arrow, Home, End and page keys over the layout, type-ahead,
 //! drag with drop marks, OS file drops, the rename lifecycle and the context-menu request. The grid adds the layout,
 //! the pinned group headers and the tail rows after the tiles, which are rows of the grid's outline (section rows of
@@ -224,8 +224,8 @@ const WHEEL_SHARE: f32 = 1.0 / 3.0;
 /// The picture side is `zoom` times the thumbnail side (the card thumbnail unless `thumb_size` names one): a factor the
 /// app holds, or one the grid steps itself through a binding (`GridZoom`). A card is the
 /// picture plus what the tile adds around it, whatever the layout. Pictures are `aspect` wide over high; with
-/// `justified` the tiles keep their own aspects (the source's `ItemSource::size_hint` as `SizeHint::Aspect`) and fill
-/// rows. `groups` put headers over runs of tiles; a header stays pinned at the top while its group scrolls. The grid
+/// `justified` or `waterfall`, the tiles keep their own aspects (from the source's `ItemSource::size_hint`) in rows
+/// or columns. `groups` put headers over runs of tiles; a header stays pinned at the top while its group scrolls. The grid
 /// decides where every tile's caption goes and whether the cards hold a detail line.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(collection, probe(TileGrid<'static, usize>))]
@@ -245,6 +245,10 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Tiles keep their own aspect and fill rows, instead of equal cards.
     #[prop(flag)]
     justified: bool,
+    /// Tiles keep their own aspect in equal-width columns. Takes precedence over `justified` and `fill_row`.
+    /// With `rows_stamp`, change the stamp when the source's aspects change so the column index is rebuilt.
+    #[prop(flag)]
+    waterfall: bool,
     /// Equal cards grow to fill their row: the columns are those that fit at the zoomed card width, and the cards share
     /// the width between them. The row starts at the start edge, and what the columns leave over lies after the last card.
     #[prop(flag)]
@@ -374,6 +378,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             selection: None,
             reveal: None,
             justified: false,
+            waterfall: false,
             fill_row: false,
             aspect: 1.0,
             zoom: GridZoom::Fixed(1.0),
@@ -515,23 +520,28 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         let around = style.around.get(self.caption, self.detail_line);
         // A card never outgrows the grid: in a column narrower than a card the card takes the column.
         let mut side = self.picture_side(&style, item, around).min(width - 2.0 * spacing.inset - around.size().x).max(1.0);
-        if self.fill_row && !self.justified {
+        if self.fill_row && !self.justified && !self.waterfall {
             let (free, gap, card) = (width, spacing.gap, side + around.size().x);
             let columns = ((free + gap) / (card + gap)).floor().max(1.0);
             side = ((free - (columns - 1.0) * gap) / columns - around.size().x).max(1.0);
         }
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
+        let tiling = if self.waterfall {
+            Tiling::waterfall(side)
+        } else if self.justified {
+            Tiling::justified(side)
+        } else {
+            Tiling::cards(side, aspect)
+        };
         let tail_height = self.items.row_height.of(cx);
         let groups = self.shown_groups();
         let recipe = self.items.rows_stamp.map(|stamp| Recipe {
             stamp,
             width,
             tiles: source.len(),
-            side,
-            aspect,
-            justified: self.justified,
+            tiling,
             around,
-            group_header: spacing.group_header,
+            spacing,
             groups: groups.iter().map(|group| (group.start, group.count, group.open)).collect(),
             tail: (self.tail.len(), tail_height),
         });
@@ -541,8 +551,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             *self.laid.borrow_mut() = Some(previous.clone());
             return previous;
         }
-        let layout = if self.justified || !self.groups.is_empty() || !self.tail.is_empty() {
-            let tiling = if self.justified { Tiling::justified(side) } else { Tiling::cards(side, aspect) };
+        let layout = if self.waterfall || self.justified || !self.groups.is_empty() || !self.tail.is_empty() {
             let mut arrangement = arrange(&aspects_of(source), &groups, width, tiling, spacing, around);
             arrangement.add_tail(self.tail.len(), tail_height, width, spacing);
             GridLayout::arranged(arrangement, width, around)
@@ -693,10 +702,14 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         let pinned = if rule { None } else { arrangement.pinned(offset.y as f32) };
         let shift = view.min.to_vec2() - vec2(offset.x as f32, offset.y as f32);
         let clip = area;
-        for (group, header) in arrangement.headers.iter().enumerate() {
+        let top = clip.top() - shift.y;
+        let bottom = clip.bottom() - shift.y;
+        let headers = arrangement.headers_between(top, bottom);
+        let outside = pinned.filter(|(group, _)| !headers.contains(group));
+        for group in outside.into_iter().map(|(group, _)| group).chain(headers) {
             let (rect, held) = match pinned {
                 Some((at, lifted)) if at == group => (lifted, true),
-                _ => (*header, false),
+                _ => (arrangement.headers[group], false),
             };
             let rect = Self::group_rect(rect.translate(shift), view, rtl);
             let Some(declared) = self.groups.get(group) else { continue };
@@ -720,7 +733,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 cx.part(TOGGLE.at(group as u64), column).sense(Sense::CLICK).priority(priority).over().pointer_only(HEADER_KEYS);
             }
         }
-        for (at, (row, rect)) in self.tail.iter().zip(&arrangement.tails).enumerate() {
+        for at in arrangement.tails_between(top, bottom) {
+            let Some(row) = self.tail.get(at) else { continue };
+            let rect = arrangement.tails[at];
             let rect = Self::group_rect(rect.translate(shift), view, rtl);
             if !rect.intersects(clip) {
                 continue;

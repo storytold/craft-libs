@@ -26,6 +26,8 @@ pub enum NavShape {
     },
     /// Rows of different lengths.
     RaggedGrid,
+    /// Columns of tiles with independent heights. Arrows follow tile bounds and other moves follow outline order.
+    StaggeredGrid,
     /// Cells of a sheet.
     Cell,
     /// Items with free positions; arrows go to the nearest item in that direction.
@@ -82,7 +84,7 @@ pub trait NavOutline {
         None
     }
 
-    /// `Spatial`: where the position sits, in any one coordinate space.
+    /// `Spatial` and `StaggeredGrid`: where the position sits, in any one coordinate space.
     fn rect(&self, _at: usize) -> Option<Rect> {
         None
     }
@@ -164,8 +166,8 @@ pub enum NavStep {
 }
 
 /// Steps the lead of a navigation of `shape` over `outline` by `mv`. `mods.extend` keeps the anchor at the
-/// old lead; any other move clears it. `RaggedGrid` reads `row_len`, `Cell` reads `columns` and `Spatial` reads
-/// `rect` from the outline.
+/// old lead; any other move clears it. `RaggedGrid` reads `row_len`, `Cell` reads `columns`, and `Spatial`
+/// and `StaggeredGrid` read `rect` from the outline.
 pub fn step(shape: NavShape, outline: &dyn NavOutline, state: &mut NavState, mv: NavMove, mods: MoveMods) -> NavStep {
     let len = outline.len();
     if len == 0 {
@@ -184,6 +186,7 @@ pub fn step(shape: NavShape, outline: &dyn NavOutline, state: &mut NavState, mv:
         NavShape::WrappedGrid { columns } => grid(outline, state, lead, mv, mods, columns.max(1), true),
         NavShape::BoundedGrid { columns } => grid(outline, state, lead, mv, mods, columns.max(1), false),
         NavShape::RaggedGrid => ragged(outline, state, lead, mv),
+        NavShape::StaggeredGrid => staggered(outline, state, lead, mv),
         NavShape::Cell => cell(outline, state, lead, mv, mods),
         NavShape::Spatial => spatial(outline, lead, mv),
     };
@@ -367,6 +370,39 @@ fn cell(outline: &dyn NavOutline, state: &mut NavState, lead: usize, mv: NavMove
 }
 
 type Axis = fn(emath::Vec2) -> f32;
+
+/// Prefer tiles in the path of the arrow, then the closest edge and finally the closest centre on the cross axis.
+/// A header spans the columns, so a vertical arrow can reach it and a horizontal arrow passes it over.
+fn staggered(outline: &dyn NavOutline, state: &NavState, lead: usize, mv: NavMove) -> NavStep {
+    type Edges = fn(Rect) -> (f32, f32);
+    let (axis, cross): (Edges, Edges) = match mv {
+        NavMove::Back => (|r| (-r.right(), -r.left()), |r| (r.top(), r.bottom())),
+        NavMove::Forward => (|r| (r.left(), r.right()), |r| (r.top(), r.bottom())),
+        NavMove::Up => (|r| (-r.bottom(), -r.top()), |r| (r.left(), r.right())),
+        NavMove::Down => (|r| (r.top(), r.bottom()), |r| (r.left(), r.right())),
+        _ => return linear(outline, state, lead, mv),
+    };
+    let Some(from) = outline.rect(lead) else { return NavStep::Stay };
+    let (near_edge, far_edge) = axis(from);
+    let (start, end) = cross(from);
+    let nearest = (0..outline.len())
+        .filter(|&at| at != lead && selectable(outline, at))
+        .filter_map(|at| {
+            let to = outline.rect(at)?;
+            let (near, far) = axis(to);
+            let along = near - far_edge;
+            // Adjacent tiles can share an edge. Allow a little rounding at that edge.
+            if along < -f32::EPSILON * far_edge.abs().max(1.0) || near + far <= near_edge + far_edge {
+                return None;
+            }
+            let (low, high) = cross(to);
+            let gap = (start - high).max(low - end);
+            let across = ((low + high) - (start + end)).abs();
+            Some((at, (gap >= 0.0, along.max(0.0) + gap.max(0.0), across)))
+        })
+        .min_by(|(_, a), (_, b)| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.total_cmp(&b.2)));
+    moved(nearest.map(|(at, _)| at))
+}
 
 /// Items at free positions: the nearest item whose centre lies beyond the lead's in the move's direction, with
 /// the off-axis distance counting double. Back and Forward are toward lower and higher x.

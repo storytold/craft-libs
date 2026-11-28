@@ -142,6 +142,12 @@ fn tile_grid_justified(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 #[story(TileGrid<'static, usize>, covers = [], drive = Drive::Never)]
+fn tile_grid_waterfall(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let groups = [TileGroup::new(GROUP_KEYS[0], 0, 12, "October 2026"), TileGroup::new(GROUP_KEYS[1], 12, 12, "September 2026")];
+    grid(ui, data, TileGrid::new("Library").waterfall().groups(&groups).rows_stamp(1), 24, 1.0).into()
+}
+
+#[story(TileGrid<'static, usize>, covers = [], drive = Drive::Never)]
 fn tile_grid_groups(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let open = *data.value("open", [true, false, true]);
     let groups = [
