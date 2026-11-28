@@ -119,6 +119,8 @@ enum RailEvent<T> {
     TornOff(TornOff<SlotId>),
     /// The Edit Toolbar button's response in the run.
     EditToolbar(Response),
+    /// A measuring response, used only when no real response is available.
+    MeasuredEditToolbar(Response),
 }
 
 type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
@@ -432,7 +434,9 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                             Some(tips) => button.show_with_tip(ui, |ui| tips.show(&shown.id, ui)),
                                             None => button.show(ui),
                                         };
-                                        shown_at.push((*index, out.response.rect));
+                                        if !crate::runtime::measure::active(ui.ctx()) {
+                                            shown_at.push((*index, out.response.rect));
+                                        }
                                         // The slot wears the mark; while its flyout is open the tool's row does.
                                         if marked.is_some() && !out.opened {
                                             TargetMark::new(out.response.rect).id_salt(("mark", slot.id)).show_mark(ui);
@@ -458,7 +462,11 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                         let icon = props.edit_icon.clone().unwrap_or_else(|| IconId::new("more"));
                                         let more = IconButton::new(icon).id_salt("edit-toolbar").label(label).show(ui);
                                         edit_toolbar = Some(more.response.id);
-                                        sent.send(RailEvent::EditToolbar(more.response));
+                                        if !crate::runtime::measure::active(ui.ctx()) {
+                                            sent.send(RailEvent::EditToolbar(more.response));
+                                        } else {
+                                            sent.send(RailEvent::MeasuredEditToolbar(more.response));
+                                        }
                                     }
                                 }
                             }
@@ -501,7 +509,8 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             edit_toolbar = edit;
             *laid.borrow_mut() = slots;
         });
-        let (mut select, mut double_clicked, mut flyout, mut dropped, mut torn_off, mut ran) = (None, None, None, None, None, None);
+        let (mut select, mut double_clicked, mut flyout, mut dropped, mut torn_off, mut ran, mut measured) =
+            (None, None, None, None, None, None, None);
         for event in events {
             match event {
                 RailEvent::Select(tool) => select = Some(tool),
@@ -510,13 +519,14 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
                 RailEvent::Dropped(drop) => dropped = Some(drop),
                 RailEvent::TornOff(torn) => torn_off = Some(torn),
                 RailEvent::EditToolbar(response) => ran = Some(response),
+                RailEvent::MeasuredEditToolbar(response) => measured = Some(response),
             }
         }
         ToolRailOutput {
             select,
             double_clicked,
             // A replayed grid sends nothing: its button is shown again, and its response is read back.
-            edit_toolbar: ran.or_else(|| edit_toolbar.and_then(|id| crate::contract::response_of(ui, id))),
+            edit_toolbar: ran.or_else(|| edit_toolbar.and_then(|id| crate::contract::response_of(ui, id))).or(measured),
             flyout,
             dropped: dropped.or(shown.output.dropped),
             torn_off,

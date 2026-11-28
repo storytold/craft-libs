@@ -18,6 +18,7 @@ use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, Metrics, Selection, Si
 use craft_i18n::matcher::{Matcher, Rank};
 use egui::{Rect, Ui};
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// How the rows of a list show their labels as document text: the document's font, size and alignment.
@@ -176,7 +177,19 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
         let mut hasher = DefaultHasher::new();
         query.hash(&mut hasher);
         self.items = self.items.rows_stamp(hasher.finish());
-        self.filter = Some(Filter { query: query.to_owned(), texts: Box::new(texts) });
+        self.filter = Some(Filter { query: query.to_owned(), texts: Box::new(texts), count: None });
+        self
+    }
+
+    /// [`filter`](Self::filter), reporting the number of matching non-section rows in `count` when the collection
+    /// reads its items. The count includes matches outside the viewport and excludes a renamed row kept only for
+    /// editing. An empty query counts every non-section row. The caller supplies a fresh count for each show.
+    #[must_use]
+    pub fn filter_counted(mut self, query: &str, texts: impl Fn(&K) -> Vec<Label> + 'a, count: &'a Cell<usize>) -> Self {
+        self = self.filter(query, texts);
+        if let Some(filter) = self.filter.as_mut() {
+            filter.count = Some(count);
+        }
         self
     }
 
@@ -262,12 +275,18 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
         let filter = self.filter.as_ref()?;
         let matcher = Matcher::new(&env.folder(), &filter.query);
         if matcher.is_empty() {
+            if let Some(count) = filter.count {
+                count.set((0..source.len()).filter(|&at| !source.is_section(at)).count());
+            }
             return None;
         }
         let mut matches: Vec<(Rank, usize)> = (0..source.len())
             .filter(|&at| !source.is_section(at))
             .filter_map(|at| filter.rank(&matcher, &source.key(at), env).map(|rank| (rank, at)))
             .collect();
+        if let Some(count) = filter.count {
+            count.set(matches.len());
+        }
         let renamed = kept.and_then(|key| source.index_of(key)).filter(|at| !matches.iter().any(|(_, held)| held == at));
         if self.ranked {
             matches.sort_by_key(|(rank, _)| *rank);
@@ -358,6 +377,7 @@ type KeyTexts<'a, K> = Box<dyn Fn(&K) -> Vec<Label> + 'a>;
 struct Filter<'a, K> {
     query: String,
     texts: KeyTexts<'a, K>,
+    count: Option<&'a Cell<usize>>,
 }
 
 impl<K> Filter<'_, K> {
