@@ -320,6 +320,29 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts, links
                 {
                     t.remove(0);
                 }
+                // A custom mark is written as literal text at the start of a note's own story (a
+                // DOCX read has no NoteRef object there), so strip that exact prefix here or the
+                // writer would write it again in the body beside the citation label. Notes read
+                // from ODF hold their mark in a NoteRef object, never as leading body text, and
+                // auto-numbered notes have an empty mark, so neither is touched. Leave a run that
+                // doesn't literally start with the mark alone, and drop a run that is only the
+                // mark rather than emptying it.
+                if !custom.is_empty() {
+                    let drop = match first.inlines.first_mut() {
+                        Some(Inline::Text(t, _)) if t.starts_with(custom.as_str()) => {
+                            if t.len() == custom.len() {
+                                true
+                            } else {
+                                t.replace_range(..custom.len(), "");
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+                    if drop {
+                        first.inlines.remove(0);
+                    }
+                }
             }
             let endnote = *kind == craft_wordmodel::para::NoteKind::Endnote;
             vec![Inline::Note { endnote, custom: custom.clone(), blocks, fmt: f.clone() }]
