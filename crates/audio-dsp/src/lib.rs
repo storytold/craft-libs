@@ -171,8 +171,10 @@ pub trait AudioEffect: Send {
     /// Parameter descriptions (same as the registry entry's).
     fn params(&self) -> &'static [ParamSpec];
     /// Set a parameter by id; the value is clamped to its range. Returns `false` for unknown ids.
-    /// Takes effect from the next processed sample. Gains, mix amounts and equalizer bands move to
-    /// the new value smoothly; the crate documentation lists which other parameters change at once.
+    /// Updates the target immediately. Sample-based effects use the target from the next processed
+    /// sample. Frame-based effects may apply it at the next frame callback while earlier output
+    /// remains queued. Gains, mix amounts and equalizer bands move to the new value smoothly; the
+    /// crate documentation lists which other parameters change at once.
     fn set_param(&mut self, id: &str, value: f32) -> bool;
     /// Current (target) value of a parameter.
     fn param(&self, id: &str) -> Option<f32>;
