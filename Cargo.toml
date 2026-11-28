@@ -37,6 +37,7 @@ acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-plist = { path = "crates/plist" }
+craft-gpu-device = { path = "crates/gpu-device" }
 craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
 craft-png = { path = "crates/png" }
@@ -82,6 +83,7 @@ craft-cloud = { path = "crates/cloud" }
 craft-cloud-local = { path = "crates/cloud-local" }
 craft-cloud-ui = { path = "crates/cloud-ui" }
 craft-color = { path = "crates/color" }
+craft-scopes = { path = "crates/scopes" }
 craft-color-ui = { path = "crates/color-ui" }
 craft-color-transform = { path = "crates/color-transform" }
 craft-frame = { path = "crates/frame" }

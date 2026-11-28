@@ -444,10 +444,14 @@ impl<'a> ShortcutsDialog<'a> {
         self
     }
 
-    /// Sets the value `field` names in `state`, as the user editing that control would
-    /// (`search`, `area`, `command`, `pressed`; `assign` true presses Assign; `remove` takes the text
-    /// of one of the command's keys, as [`DialogSnapshot::keys`] reports it), for automation. It builds the words `Env` that `DialogState::set_field` needs. `Err` says why
-    /// the field was refused.
+    /// Sets a dialog field for automation, as the user editing `search`, `area`, `command` or `pressed` would.
+    /// `assign` true presses Assign.
+    /// `remove` takes one of the selected command's keys as reported by [`DialogSnapshot::keys`]. `replace` takes
+    /// an object with `old` in the same form and `new` as [`Trigger`] text. It preserves the old scope and keeps
+    /// hold shortcuts in the Hold column. In [`ConflictMode::Ask`], a conflict leaves the old binding in place
+    /// until the user confirms. Hosts can use [`ConflictMode::Steal`] or [`ConflictMode::Keep`] for immediate
+    /// handling. Replacing a shortcut with an equivalent trigger leaves it alone. A replacement that changes
+    /// the shortcut can be undone in one step. `Err` says why the field was refused.
     pub fn set_json_field(self, ui: &Ui, state: &mut DialogState, field: &str, value: &serde_json::Value) -> Result<(), String> {
         use craft_ui::dialog::FieldRefusal;
         let rejects = || FieldRefusal::Rejects(value).message(field);
@@ -489,6 +493,31 @@ impl<'a> ShortcutsDialog<'a> {
                     }
                     state.remove(env, &command, &wanted);
                     state.edit_result()?;
+                }
+                "replace" => {
+                    if !env.options.editable || !state.is_showing() || state.modal() || state.is_recording() || env.has_app_tab(state.tab) {
+                        return Err(inactive());
+                    }
+                    let command = state.selected.clone().ok_or_else(inactive)?;
+                    let text = |key: &str| value.get(key).and_then(serde_json::Value::as_str).ok_or_else(rejects);
+                    let old_text = text("old")?;
+                    let bindings = env.keymap.bindings(&command);
+                    let mut matches = bindings.iter().filter(|binding| binding.to_string() == old_text);
+                    let old = matches.next().ok_or_else(rejects)?;
+                    let trigger = Trigger::parse(text("new")?).map_err(|_| rejects())?;
+                    if matches.next().is_some() || trigger.is_hold() != old.trigger.is_hold() {
+                        return Err(rejects());
+                    }
+                    let platform = env.keymap.platform();
+                    let effective = trigger.effective(platform);
+                    if effective == old.trigger.effective(platform) {
+                        return Ok(());
+                    }
+                    if bindings.iter().any(|binding| binding.scope == old.scope && binding.trigger.effective(platform) == effective) {
+                        return Err(rejects());
+                    }
+                    let new = Binding { trigger, scope: old.scope.clone() };
+                    state.replace_for_automation(env, &command, old, new)?;
                 }
                 _ => return Err(FieldRefusal::Unknown.message(field)),
             }

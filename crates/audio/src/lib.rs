@@ -19,9 +19,9 @@
 //! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
-//!   gives [`wav_float_header`]), FLAC (feature `flac-encode`), AAC-LC and ALAC in M4A
-//!   (`aac-encode`, `alac-encode`) and MP3, AC-3 and E-AC-3 streams (`mp3-encode`, `ac3-encode`,
-//!   `eac3-encode`), whole-buffer or incremental into any `Write + Seek`. Feature
+//!   gives [`wav_float_header`] and [`wav_float_header_with_bwf`]), FLAC (feature `flac-encode`),
+//!   AAC-LC and ALAC in M4A (`aac-encode`, `alac-encode`) and MP3, AC-3 and E-AC-3 streams
+//!   (`mp3-encode`, `ac3-encode`, `eac3-encode`), whole-buffer or incremental into any `Write + Seek`. Feature
 //!   `lossless-encode` turns on WAV, AIFF and FLAC; feature `encode` turns on every format and encoder.
 //! - [`PacketEncoder`] (any of `aac-encode`, `alac-encode`, `mp3-encode`, `ac3-encode`,
 //!   `eac3-encode`, `opus-encode`): planar `f32` in WAV channel order to packets of AAC-LC, ALAC,
@@ -209,8 +209,6 @@ pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
     feature = "eac3-encode"
 ))]
 pub use write::FileEncoder;
-#[cfg(feature = "pcm-encode")]
-pub use write::wav_float_header;
 #[cfg(any(
     feature = "pcm-encode",
     feature = "flac-encode",
@@ -224,6 +222,8 @@ pub use write::wav_float_header;
 pub use write::{ENCODE_EXTENSIONS, encode, encode_format_for};
 #[cfg(feature = "pcm-encode")]
 pub use write::{pcm_aiff_file, pcm_aiff_header, pcm_wav_file, pcm_wav_header};
+#[cfg(feature = "pcm-encode")]
+pub use write::{wav_float_header, wav_float_header_with_bwf};
 
 /// Errors from probing, decoding and encoding.
 #[non_exhaustive]

@@ -320,6 +320,40 @@ fn enter_in_the_optimize_rows_files_the_search_and_never_saves() {
     assert!(host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::pick_path).is_some(), "with the rows closed Enter saves");
 }
 
+// While the Desired File Size holds text the field refuses (not a number, or empty), the Optimize rows' OK and Enter in
+// the field file no search with the size the rows held before; once the text parses, OK files the typed size.
+#[trial]
+fn the_optimize_rows_file_nothing_while_the_size_text_is_refused() {
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).optimize());
+    let opener = fixture.by_label("Optimize to File Size…").expect("the Optimize button");
+    fixture.click(&opener).idle(4);
+    assert!(host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").take_optimize_open(), "opening the rows asks for the opening size");
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").answer_optimize_start(Some(48 * 1024));
+    fixture.idle(4);
+    let request = |host: &Rc<RefCell<DialogHost>>| host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::take_optimize_request);
+
+    for (text, what) in [("abc", "text that is not a number"), ("", "an empty field")] {
+        let field = fixture.by_label("Desired File Size (K)").expect("the Desired File Size field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).key(Key::Backspace, Modifiers::NONE).type_text(text);
+        fixture.idle(2);
+        fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+        assert!(request(&host).is_none(), "Enter in the field files nothing while it holds {what}");
+        let ok = fixture.by_label("OK").expect("the rows' OK");
+        fixture.click(&ok).idle(4);
+        assert!(request(&host).is_none(), "OK files nothing while the field holds {what}");
+    }
+
+    let field = fixture.by_label("Desired File Size (K)").expect("the Desired File Size field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("20");
+    fixture.idle(2);
+    let ok = fixture.by_label("OK").expect("the rows' OK");
+    fixture.click(&ok).idle(4);
+    let filed = request(&host).expect("OK files the search once the text parses");
+    assert_eq!(filed.desired_k, 20.0, "the search asks for the typed size");
+}
+
 /// The frame the animation shows after the host's passes.
 fn frame_of(host: &Rc<RefCell<DialogHost>>) -> u32 {
     host.borrow_mut().get_mut::<HostedSaveForWeb>().map(|web| web.frame()).expect("the dialog is open")

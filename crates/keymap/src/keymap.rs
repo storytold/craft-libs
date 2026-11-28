@@ -229,6 +229,8 @@ pub struct Conflict {
 
 /// A binding with its scope resolved.
 type Bound = (Trigger, Scope);
+type BindingWrites = Vec<(usize, Vec<Bound>)>;
+type StoredBindingWrites = Vec<(usize, Vec<Bound>, Option<Vec<String>>)>;
 
 /// Whether `trigger` can start a command: any press can; a hold needs a chord that types a character, alone or with
 /// Shift, since the others are taken by the system and by text fields.
@@ -592,11 +594,24 @@ impl Keymap {
         }
         let mut list = self.current[i].clone();
         list.push(new.clone());
-        self.apply(i, list, &[new], policy)
+        let (assigned, writes) = self.plan_writes(i, list, &[new], policy)?;
+        self.commit(writes)?;
+        Ok(assigned)
     }
 
     /// Replaces all bindings of a command.
     pub fn set_bindings(&mut self, command: &CommandRef, bindings: Vec<Binding>, policy: Policy) -> Result<Assigned, AssignError> {
+        let (assigned, writes) = self.plan_set_bindings(command, bindings, policy)?;
+        self.commit(writes)?;
+        Ok(assigned)
+    }
+
+    pub(crate) fn check_set_bindings(&self, command: &CommandRef, bindings: Vec<Binding>, policy: Policy) -> Result<(), AssignError> {
+        let (_, writes) = self.plan_set_bindings(command, bindings, policy)?;
+        self.prepare_writes(writes).map(|_| ())
+    }
+
+    fn plan_set_bindings(&self, command: &CommandRef, bindings: Vec<Binding>, policy: Policy) -> Result<(Assigned, BindingWrites), AssignError> {
         let i = self.find(command).ok_or(AssignError::UnknownCommand)?;
         if bindings.len() > MAX_BINDINGS {
             return Err(AssignError::TooMany);
@@ -606,7 +621,7 @@ impl Keymap {
         let kept: Vec<Bound> = self.hidden(i).into_iter().filter(|h| !list.iter().any(|b| self.same(b, h))).collect();
         list.extend(kept);
         let new: Vec<Bound> = list.iter().filter(|b| !self.current[i].iter().any(|c| self.same(c, b))).cloned().collect();
-        self.apply(i, list, &new, policy)
+        self.plan_writes(i, list, &new, policy)
     }
 
     /// Removes one binding (matched by effective trigger and scope). `false` when the command does
@@ -898,7 +913,7 @@ impl Keymap {
         out.len() < MAX_CONFLICTS
     }
 
-    fn apply(&mut self, i: usize, list: Vec<Bound>, new: &[Bound], policy: Policy) -> Result<Assigned, AssignError> {
+    fn plan_writes(&self, i: usize, list: Vec<Bound>, new: &[Bound], policy: Policy) -> Result<(Assigned, BindingWrites), AssignError> {
         if list.len() > MAX_BINDINGS {
             return Err(AssignError::TooMany);
         }
@@ -916,7 +931,7 @@ impl Keymap {
         let holders: Vec<Holder> =
             clashes.iter().map(|(j, b)| Holder { command: self.catalog[*j].command.clone(), binding: self.public(*j, b) }).collect();
         let mut done = Assigned::default();
-        let mut writes: Vec<(usize, Vec<Bound>)> = Vec::new();
+        let mut writes = Vec::new();
         match policy {
             Policy::Refuse if !holders.is_empty() => return Err(AssignError::Taken(holders)),
             Policy::Refuse => {}
@@ -940,12 +955,11 @@ impl Keymap {
             }
         }
         writes.push((i, list));
-        self.commit(writes)?;
-        Ok(done)
+        Ok((done, writes))
     }
 
     /// Prepares all entries before replacing live or stored bindings, including commands whose bindings were taken.
-    fn commit(&mut self, writes: Vec<(usize, Vec<Bound>)>) -> Result<(), AssignError> {
+    fn prepare_writes(&self, writes: BindingWrites) -> Result<StoredBindingWrites, AssignError> {
         let mut prepared = Vec::with_capacity(writes.len());
         for (i, list) in writes {
             let texts = self.store_texts(i, &list)?;
@@ -955,7 +969,11 @@ impl Keymap {
         if self.overrides.len() + needed > MAX_COMMANDS {
             return Err(AssignError::Full);
         }
-        for (i, list, texts) in prepared {
+        Ok(prepared)
+    }
+
+    fn commit(&mut self, writes: BindingWrites) -> Result<(), AssignError> {
+        for (i, list, texts) in self.prepare_writes(writes)? {
             self.remove_entries(i);
             if let Some(texts) = texts {
                 self.overrides.insert(self.keys[i].clone(), texts);

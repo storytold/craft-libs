@@ -120,7 +120,7 @@ pub struct DialogSnapshot {
     pub selected: Option<CommandRef>,
     /// Commands whose bindings differ from the defaults, with their binding texts.
     pub overrides: Vec<(CommandRef, Vec<String>)>,
-    /// The conflict bar's chord and the commands holding it, while it shows.
+    /// The pending conflict's chord and the commands holding it. Another prompt or app tab can hide the conflict bar.
     pub conflict: Option<(String, Vec<CommandRef>)>,
     /// Whether a chord is being recorded, and the command it is for.
     pub recording: Option<CommandRef>,
