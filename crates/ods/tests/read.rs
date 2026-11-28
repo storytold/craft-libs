@@ -213,18 +213,56 @@ fn expansion_bounds_stop_small_repeat_bombs() {
         "x".repeat(1024)
     );
     assert!(matches!(read(&ods(&text), &tight), Err(Error::TooLarge(_))));
-    // One row of cells each just under the cell limit, past the text limit in all: refused while
-    // the row is read. The row's end is never reached.
-    let long = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "x".repeat(64 * 1024 - 1));
-    let cells = package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(17))).as_bytes()).unwrap();
-    assert!(matches!(read(&cells, &tight), Err(Error::TooLarge(_))));
-    // A row repeated once more than its cells' text allows is refused, and one that fits reads.
-    let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));
-    let rows = |n: u32| {
-        ods(&format!(r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="{n}">{cell}</table:table-row></table:table>"#))
-    };
-    assert!(read(&rows(1024), &tight).is_ok());
-    assert!(matches!(read(&rows(1025), &tight), Err(Error::TooLarge(_))));
+    fn check_text_limits() {
+        let defaults = Options::default();
+        assert_eq!(defaults.max_text, 64 << 20);
+        assert_eq!(defaults.max_cell_text, 1 << 20);
+        assert!(!defaults.truncate_text);
+        let limits = Options { max_text: 64 << 10, max_cell_text: 1 << 10, ..defaults };
+        // One unfinished row of cells just under the small per-cell limit, past the total limit:
+        // refused while the row is read, before the malformed closing XML is reached.
+        let long = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "x".repeat(1023));
+        let cells = package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(65))).as_bytes()).unwrap();
+        assert!(matches!(read(&cells, &limits), Err(Error::TooLarge(_))));
+        // The exact aggregate and per-cell byte limits both fit, with complete values retained.
+        let exact_value = "x".repeat(1024);
+        let exact_cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{exact_value}"/>"#);
+        let wb = read(&row(&exact_cell.repeat(64)), &limits).unwrap();
+        assert_eq!(wb.sheets[0].cells.len(), 64);
+        assert_eq!(shown(&wb.sheets[0], CellRef::new(0, 63)), Value::text(exact_value.as_str()));
+        assert!(!wb.text_truncated);
+        // One more byte must be refused before the row's malformed end, not by a later row check.
+        let extra = r#"<table:table-cell office:value-type="string" office:string-value="x"/>"#;
+        let over =
+            package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}{extra}"#, exact_cell.repeat(64))).as_bytes()).unwrap();
+        assert!(matches!(read(&over, &limits), Err(Error::TooLarge(_))));
+        assert!(matches!(read(&over, &Options { max_text: limits.max_text + 1, ..limits }), Err(Error::Xml(_))));
+        // A row repeated once more than its cells' text allows is refused, and one that fits reads.
+        let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));
+        let rows = |n: u32| {
+            ods(&format!(
+                r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="{n}">{cell}</table:table-row></table:table>"#
+            ))
+        };
+        let wb = read(&rows(64), &limits).unwrap();
+        assert_eq!(wb.sheets[0].cells.len(), 64);
+        assert_eq!(shown(&wb.sheets[0], CellRef::new(63, 0)), Value::text("y".repeat(1024).as_str()));
+        assert!(!wb.text_truncated);
+        assert!(matches!(read(&rows(65), &limits), Err(Error::TooLarge(_))));
+        // A one-byte row isolates the repeated-row guard's exact cap and cap+1 boundary.
+        let tiny = Options { max_text: 64, ..limits };
+        let tiny_rows = |n: u32| {
+            ods(&format!(
+                r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="{n}"><table:table-cell office:value-type="string" office:string-value="y"/></table:table-row></table:table>"#
+            ))
+        };
+        let wb = read(&tiny_rows(64), &tiny).unwrap();
+        assert_eq!(wb.sheets[0].cells.len(), 64);
+        assert_eq!(shown(&wb.sheets[0], CellRef::new(63, 0)), Value::text("y"));
+        assert!(!wb.text_truncated);
+        assert!(matches!(read(&tiny_rows(65), &tiny), Err(Error::TooLarge(_))));
+    }
+    check_text_limits();
     // An attribute over the cell text limit.
     let small = Options { max_cell_text: 10, ..Options::default() };
     assert!(matches!(
