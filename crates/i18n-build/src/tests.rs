@@ -238,3 +238,110 @@ fn an_unreadable_app_dir_is_an_error_even_when_not_required() {
     let r = run(&Catalogs::new("demo").app_dir("i18n"), &scratch, None, None);
     assert!(matches!(r.result, Err(Error::Read { .. })), "{:?}", r.result);
 }
+
+#[test]
+fn a_checkout_given_in_code_is_read_under_the_package_dir_and_needs_no_variable() {
+    let scratch = Scratch::new("in-code");
+    scratch.file("i18n/app/locales/de/common.tsv", "\tClose\tSchließen\n");
+    scratch.file("i18n/app/locales/de/demo.tsv", "\tOpen\tÖffnen\n");
+    scratch.file("i18n/app/locales/ja/demo.tsv", "\tOpen\t開く\n");
+    // The same table whether the variable is unset or required: the checkout is the folder's, not `CRAFT_I18N_DIR`'s.
+    let catalogs = Catalogs::new("demo").checkout("i18n/app");
+    for required in [None, Some("1")] {
+        let r = run(&catalogs, &scratch, None, required);
+        let locales = r.result.unwrap();
+        assert_eq!(codes(&locales), ["de", "ja"]);
+        assert_eq!(locales[0].shared, Some(scratch.0.join("i18n/app/locales/de/common.tsv")));
+        assert_eq!(locales[0].app, Some(scratch.0.join("i18n/app/locales/de/demo.tsv")));
+        assert_eq!(locales[1].shared, None);
+        assert!(warnings(&r.cargo).is_empty(), "{:?}", r.cargo);
+        let watch = format!("cargo::rerun-if-changed={}", scratch.0.join("i18n/app/locales").display());
+        assert!(r.cargo.contains(&watch), "{:?}", r.cargo);
+    }
+    // An absolute path is the path.
+    let catalogs = Catalogs::new("demo").checkout(scratch.0.join("i18n/app"));
+    assert_eq!(codes(&run(&catalogs, &scratch, None, None).result.unwrap()), ["de", "ja"]);
+}
+
+#[test]
+fn a_checkout_given_in_code_replaces_the_variable_s_checkout() {
+    let scratch = Scratch::new("in-code-instead");
+    scratch.file("i18n/app/locales/de/demo.tsv", "\tOpen\tÖffnen\n");
+    scratch.file("elsewhere/locales/de/common.tsv", "\tClose\tSchließen\n");
+    scratch.file("elsewhere/locales/de/demo.tsv", "\tOpen\tAufmachen\n");
+    scratch.file("elsewhere/locales/fr/demo.tsv", "\tOpen\tOuvrir\n");
+    let catalogs = Catalogs::new("demo").checkout("i18n/app");
+    let set = scratch.0.join("elsewhere");
+    let with_variable = run(&catalogs, &scratch, Some(&set), Some("1"));
+    let without = run(&catalogs, &scratch, None, None);
+    let locales = with_variable.result.unwrap();
+    assert_eq!(codes(&locales), ["de"], "no locale of the variable's checkout");
+    assert_eq!(locales[0].shared, None);
+    assert_eq!(locales[0].app, Some(scratch.0.join("i18n/app/locales/de/demo.tsv")));
+    assert_eq!(with_variable.table, without.table, "the variable changes nothing");
+}
+
+#[test]
+fn a_checkout_given_in_code_that_cannot_be_used_is_always_an_error() {
+    let scratch = Scratch::new("in-code-bad");
+    let catalogs = |dir: &str| Catalogs::new("demo").checkout(dir);
+    // No folder, and a folder without `locales/`.
+    let r = run(&catalogs("missing"), &scratch, None, None);
+    assert!(matches!(&r.result, Err(Error::NoLocales { .. })), "{:?}", r.result);
+    assert!(!r.table.contains("include_str!"), "{}", r.table);
+    std::fs::create_dir_all(scratch.0.join("empty")).unwrap();
+    assert!(matches!(run(&catalogs("empty"), &scratch, None, None).result, Err(Error::NoLocales { .. })));
+    // A catalog that is not UTF-8, and a folder where a catalog belongs.
+    scratch.file("latin1/locales/fr/demo.tsv", "");
+    std::fs::write(scratch.0.join("latin1/locales/fr/demo.tsv"), b"\tOpen\tOuvr\xe9\n").unwrap();
+    assert!(matches!(run(&catalogs("latin1"), &scratch, None, None).result, Err(Error::Read { .. })));
+    std::fs::create_dir_all(scratch.0.join("folder/locales/fr/demo.tsv")).unwrap();
+    assert!(matches!(run(&catalogs("folder"), &scratch, None, None).result, Err(Error::Read { .. })));
+    // A relative path needs the package directory to be under.
+    let env = Env { dir: None, required: None, out_dir: Some(scratch.0.join("out").into()), manifest_dir: None };
+    std::fs::create_dir_all(scratch.0.join("out")).unwrap();
+    let result = catalogs("i18n/app").run(&env, Path::new("craft_i18n.rs"), &mut Vec::new());
+    assert!(matches!(result, Err(Error::NotAbsolute { .. })), "{result:?}");
+}
+
+#[test]
+fn a_checkout_given_in_code_merges_with_the_app_dir_as_the_variable_s_does() {
+    let scratch = Scratch::new("in-code-merged");
+    scratch.file("i18n/app/locales/de/common.tsv", "\tClose\tSchließen\n");
+    scratch.file("i18n/app/locales/de/demo.tsv", "\tOpen\tÖffnen\n\tSave\tSpeichern\n");
+    scratch.file("own/de/demo.tsv", "\tSave\tSichern\n");
+    let r = run(&Catalogs::new("demo").checkout("i18n/app").app_dir("own"), &scratch, None, None);
+    let locales = r.result.unwrap();
+    assert_eq!(std::fs::read_to_string(locales[0].app.clone().unwrap()).unwrap(), "\tSave\tSichern\n\tOpen\tÖffnen\n");
+    assert_eq!(locales[0].shared, Some(scratch.0.join("i18n/app/locales/de/common.tsv")));
+}
+
+// The rows craft-i18n reads beyond the classic ones hide the checkout's row of the same key, and the build does not mistake them
+// for rows craft-i18n skips.
+#[test]
+fn the_newer_kinds_of_row_hide_the_checkout_s_rows() {
+    let key = "Move {n}st|Move {n}nd|Move {n}rd|Move {n}th";
+    let ours = format!(
+        "@ordinal\t{key}\t{{n}}. Stelle|{{n}}.\n\
+         @ordinal\t{key}\t.input {{$n :number select=ordinal}} .match $n one {{{{{{$n}}re}}}} * {{{{{{$n}}e}}}}\n\
+         @plural\t{{n}} file|{{n}} files\t.input {{$n :number}} .match $n one {{{{{{$n}} Datei}}}} * {{{{{{$n}} Dateien}}}}\n\
+         @grammar\tgenders\tmasculine feminine\n@noun\tpage\tfeminine: Seite\n\
+         \tDelete {{item :noun}}\t{{item}} löschen\n\
+         \tCopy {{n :number}}\t.input {{$n :number}} {{{{{{$n}} Kopien}}}}\n"
+    );
+    let theirs = "@plural\t{n} file|{n} files\t{n} Datei|{n} Dateien\n@grammar\tgenders\tmasculine\n@noun\tpage\tSeite\n\tDelete {item :noun}\tLöschen {item}\n\tCopy {n :number}\t{n} Kopie\n";
+    let merged = merge(&ours, theirs);
+    let rows: Vec<&str> = merged.lines().collect();
+    // Every row of `ours`, then only what `ours` does not define: nothing of the checkout's remains.
+    assert_eq!(rows.len(), ours.lines().count(), "{merged}");
+    assert!(!merged.contains("Löschen") && !merged.contains("{n} Kopie\n") && !merged.contains("Datei|"), "{merged}");
+    // A selector message in a row that may not hold one is a row craft-i18n skips, and leaves the checkout's.
+    let message = ".input {$n :number} .match $n one {{{$n} Datei}} * {{{$n} Dateien}}";
+    let ours = format!("@msg\tOpened {{n :number}}\t{message}\n@id\tfile.open\t{message}\n");
+    let theirs = "@msg\tOpened {n :number}\t{n} geöffnet\n@id\tfile.open\tÖffnen\n";
+    assert_eq!(merge(&ours, theirs), format!("{ours}{theirs}"));
+    // An `@ordinal` row with the wrong placeholders is still a row craft-i18n skips, and leaves the checkout's.
+    let ours = format!("@ordinal\t{key}\tAn die Stelle|An die\n");
+    let theirs = format!("@ordinal\t{key}\t{{n}}. Stelle\n");
+    assert_eq!(merge(&ours, &theirs), format!("{ours}{theirs}"));
+}
