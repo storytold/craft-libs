@@ -46,6 +46,8 @@ fn probe_caps_native() -> DeviceCaps {
         max_buffer_size: limits.max_buffer_size,
         max_texture_dimension_2d: limits.max_texture_dimension_2d,
         features: Vec::new(),
+        vendor_id: info.vendor,
+        software: info.device_type == wgpu::DeviceType::Cpu,
     }
 }
 
@@ -144,6 +146,8 @@ mod native {
             max_buffer_size: device_limits.max_buffer_size,
             max_texture_dimension_2d: device_limits.max_texture_dimension_2d,
             features: device.features().iter_names().map(|(name, _)| name.to_string()).collect(),
+            vendor_id: info.vendor,
+            software: info.device_type == wgpu::DeviceType::Cpu,
         };
         let backing = Backing::Device(DeviceBacking { device, queue, buffers: Vec::new(), lost, pending: Vec::new() });
         Some((caps, backing))
