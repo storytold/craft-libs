@@ -97,6 +97,12 @@ fn pos(r: &quick_xml::Reader<&[u8]>) -> usize {
     usize::try_from(r.buffer_position()).unwrap_or(usize::MAX)
 }
 
+// Each attribute name `scan` looks up in its set of the tag's names, on this thread.
+#[cfg(test)]
+std::thread_local! {
+    static NAME_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Locate the descriptions, their top-level properties and `</rdf:RDF>` in a packet.
 fn scan(s: &str, extra: &[XmpNamespace]) -> Result<Scan, XmpError> {
     let mut reader = quick_xml::Reader::from_reader(s.as_bytes());
@@ -124,6 +130,8 @@ fn scan(s: &str, extra: &[XmpNamespace]) -> Result<Scan, XmpError> {
                 for a in e.attributes().with_checks(false) {
                     let a = a.map_err(|e| XmpError::Xml(e.to_string()))?;
                     let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
+                    #[cfg(test)]
+                    NAME_CHECKS.with(|checks| checks.set(checks.get().saturating_add(1)));
                     if !seen.insert(k.clone()) {
                         return Err(XmpError::Xml(format!("repeated attribute {k}")));
                     }
@@ -490,11 +498,10 @@ mod tests {
 
     #[test]
     fn many_attributes_scan_in_linear_time() {
-        // quick-xml's duplicate-name check compares each attribute with all earlier ones: 200 000 attributes on
-        // one description took over 20 s to scan, about 30 ms with the set. Four times the attributes must take
-        // about four times as long, not sixteen. A ratio of the fastest runs holds on a loaded machine, where
-        // a fixed bound does not.
-        let packet = |n: usize| {
+        // A duplicate-name check that compares each attribute with all earlier ones took over 20 s for
+        // 200 000 attributes on one description. The scan looks each name up once in a set of the tag's
+        // names, and leaves quick-xml's own check off.
+        let packet = |n: usize, repeat: &str| {
             let mut s = String::from(
                 "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
                  <rdf:Description rdf:about=\"\" xmlns:foo=\"http://example.com/foo/\"",
@@ -502,25 +509,20 @@ mod tests {
             for i in 0..n {
                 s.push_str(&format!(" foo:a{i}=\"{i}\""));
             }
+            s.push_str(repeat);
             s.push_str("/></rdf:RDF></x:xmpmeta>");
             s
         };
-        let run = |s: &str, n: usize| {
-            let t = std::time::Instant::now();
-            let found = scan(s, &[]).unwrap();
-            let took = t.elapsed();
+        for n in [20_000, 80_000] {
+            NAME_CHECKS.with(|checks| checks.set(0));
+            let found = scan(&packet(n, ""), &[]).unwrap();
             assert_eq!(found.descs[0].attrs.len(), n + 2, "every attribute is read");
-            took
-        };
-        let (n, small_packet, large_packet) = (20_000, packet(20_000), packet(80_000));
-        // interleaved, so a burst of load slows both sizes rather than one; the fastest run of each counts
-        let (mut small, mut large) = (std::time::Duration::MAX, std::time::Duration::MAX);
-        for _ in 0..3 {
-            small = small.min(run(&small_packet, n));
-            large = large.min(run(&large_packet, 4 * n));
+            // one lookup for each attribute of the three tags: xmlns:x, xmlns:rdf, rdf:about, xmlns:foo and the n
+            assert_eq!(NAME_CHECKS.with(std::cell::Cell::get), n + 4);
+            // the set, not quick-xml, finds a name given twice
+            let repeated = scan(&packet(n, " foo:a0=\"again\""), &[]).map(|_| ()).unwrap_err();
+            assert_eq!(repeated, XmpError::Xml("repeated attribute foo:a0".into()));
         }
-        let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
-        assert!(ratio < 10.0, "4x the attributes took {ratio:.1}x as long ({small:?}, then {large:?})");
     }
 
     #[test]
