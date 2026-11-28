@@ -360,6 +360,14 @@ pub struct EntryReader<'a, R: Read> {
 }
 
 impl<R: Read> EntryReader<'_, R> {
+    /// Whether this member uses Stored or Deflate compression.
+    ///
+    /// This examines the compression metadata without initializing the decoder or
+    /// spending the expanded-byte budget. Callers opt into this narrower policy.
+    pub fn is_stored_or_deflated(&self) -> bool {
+        matches!(self.file.compression(), zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated)
+    }
+
     /// The uncompressed size declared by the entry header.
     pub fn declared_size(&self) -> u64 {
         self.declared
