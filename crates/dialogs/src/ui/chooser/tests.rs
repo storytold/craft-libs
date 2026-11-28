@@ -286,3 +286,26 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     assert!(!host.borrow().is_open::<FileChooser>(), "the chooser closed");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[trial]
+fn an_empty_folder_says_there_are_no_items() {
+    let fake = Arc::new(FakeDirectories::new().folder("/d/empty").folder("/d/full").file("/d/full/chapter.docx"));
+    let jobs = Arc::new(ManualJobs::new());
+    let folders = || FolderCache::new(fake.clone(), jobs.clone(), Wake::none());
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    host.borrow_mut().open(FileChooser::new(PickRequest::open("document").directory("/d/empty").fallback(true), None, folders()));
+    let shown = host.clone();
+    let run_jobs = jobs.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        run_jobs.run_all();
+        shown.borrow_mut().run(ui);
+    });
+    fixture.idle(10);
+    assert!(fixture.by_label("No items to show.").is_some(), "empty-state hint shown");
+
+    let _ = host.borrow_mut().take::<FileChooser>();
+    host.borrow_mut().open(FileChooser::new(PickRequest::open("document").directory("/d/full").fallback(true), None, folders()));
+    fixture.idle(10);
+    assert!(fixture.by_label("chapter.docx").is_some(), "the file is listed");
+    assert!(fixture.by_label("No items to show.").is_none(), "the hint is gone");
+}
