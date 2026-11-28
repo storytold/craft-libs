@@ -55,6 +55,11 @@ ravif = { version = "0.13", default-features = false, optional = true }
 rav1e = { version = "0.8", default-features = false, optional = true }
 avif-serialize = { version = "0.8", optional = true }
 hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"] }
+getrandom = "0.3"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# Host randomness (`crypto.getRandomValues`) for unique DICOM Part 10 UIDs on Wasm.
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # DDS encodes rows of blocks on several threads, as the other parallel codecs here do on native targets.

@@ -574,7 +574,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Fits => fits::encode(image, plan, opts),
         Format::Dpx => dpx::encode(image, plan, opts),
         Format::Cineon => dpx::encode_cineon(image, plan),
-        Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
+        Format::Dicom => dicom::encode(image, plan),
         Format::Iff => iff::encode(image, plan),
         Format::SunRaster => {
             #[cfg(feature = "sunraster")]

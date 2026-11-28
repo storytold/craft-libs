@@ -165,14 +165,15 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   as `round(v × 1023 / 65535)`, so a frame opened from Cineon keeps its code values; any other
   image takes the encode plan (alpha dropped, CMYK and Lab to RGB) and is quantized to 10 bits.
 
-* **DICOM (read-only).** Single-frame medical images over the uncompressed transfer syntaxes
+* **DICOM.** Single-frame medical images over the uncompressed transfer syntaxes
   (implicit VR little-endian, explicit VR little/big-endian): MONOCHROME1/2 gray (with the
   1 = white inversion) and RGB/YBR_FULL, 8- and 16-bit allocated samples, interleaved or planar,
   scaled from `BitsStored`/`HighBit` and mapped up when `PixelRepresentation` is signed.
   Undefined-length sequences outside the pixel data are skipped, as clinical files contain them.
   Compressed transfer syntaxes, sequences over the pixel data and other photometric
-  interpretations return `Unsupported`/`Malformed`. There is no DICOM writer
-  (`ASYMMETRIC_EXCEPTIONS`).
+  interpretations return `Unsupported`/`Malformed`. Writing produces an uncompressed DICOM Part 10
+  Secondary Capture file (`1.2.840.10008.5.1.4.1.1.7`) in Explicit VR Little Endian
+  (`1.2.840.10008.1.2.1`), `MONOCHROME2` or `RGB`, 8- or 16-bit unsigned samples.
 
 * **Amiga IFF.** `FORM ... ILBM` stores interleaved 1–8 bitplanes;
   `FORM ... PBM ` stores 8-bit chunky palette indices with even-padded rows. Both support

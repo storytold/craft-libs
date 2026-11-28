@@ -61,6 +61,7 @@ fn feature_config_default_build_formats_all_symmetric() {
         Format::Fits,
         Format::Dpx,
         Format::Cineon,
+        Format::Dicom,
         Format::Iff,
         #[cfg(feature = "sunraster")]
         Format::SunRaster,
@@ -548,8 +549,8 @@ fn detect_magic_dicom() {
     assert_eq!(detect(&b), Some(Format::Dicom));
     assert_eq!(from_extension("scan.DCM"), Some(Format::Dicom));
     assert_eq!(from_extension("scan.dc3"), Some(Format::Dicom));
-    assert!(caps(Format::Dicom).read && !caps(Format::Dicom).write);
-    assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Dicom));
+    assert!(caps(Format::Dicom).read && caps(Format::Dicom).write);
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Dicom));
     // A bare magic is an error, never a panic.
     assert!(decode_as(Format::Dicom, &b).is_err());
 }

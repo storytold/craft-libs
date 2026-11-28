@@ -3107,6 +3107,7 @@ dependencies = [
  "crc32fast",
  "exr",
  "flate2",
+ "getrandom 0.3.4",
  "half",
  "hayro-jpeg2000",
  "image",
