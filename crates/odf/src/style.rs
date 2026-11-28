@@ -79,10 +79,14 @@ impl Properties {
                 self.0.push(o.clone());
                 continue;
             };
-            for (k, v) in &o.attrs {
+            // The shorthands clear what was inherited first, so a side stated beside its
+            // shorthand is kept whichever the file wrote first.
+            for (k, _) in &o.attrs {
                 if let Some((_, sides)) = SHORTHANDS.iter().find(|(s, _)| s == k) {
                     g.attrs.retain(|(a, _)| !sides.contains(&a.as_str()));
                 }
+            }
+            for (k, v) in &o.attrs {
                 g.set_attr(k, v);
             }
             if o.children.iter().any(|n| matches!(n, Node::El(_))) {

@@ -82,3 +82,21 @@ fn page_layouts_master_pages_conditions_and_data_styles_are_found() {
     assert_eq!((map.condition.as_str(), map.apply.as_str(), map.base_cell.as_deref()), ("cell-content()>0", "Good", Some("Sheet1.A1")));
     assert_eq!(s.data_styles().format_code("N2").as_deref(), Some("0.00"));
 }
+
+#[test]
+fn a_side_stated_beside_its_shorthand_is_kept_in_either_order() {
+    for cell in [r#"fo:border-left="1pt solid #000000" fo:border="none""#, r#"fo:border="none" fo:border-left="1pt solid #000000""#] {
+        let part = styles_part(
+            &format!(
+                r##"<style:style style:name="Base" style:family="table-cell"><style:table-cell-properties fo:border-left="2pt solid #ff0000" fo:border-top="2pt solid #ff0000"/></style:style>
+                   <style:style style:name="Over" style:family="table-cell" style:parent-style-name="Base"><style:table-cell-properties {cell}/></style:style>"##
+            ),
+            "",
+            "",
+        );
+        let p = Styles::read(Some(&part), None).resolve("table-cell", Some("Over"));
+        let g = p.group("style:table-cell-properties").unwrap();
+        assert_eq!(g.attr("fo:border-left"), Some("1pt solid #000000"), "{cell}");
+        assert_eq!(g.attr("fo:border-top"), None, "{cell}: the inherited side is replaced");
+    }
+}
