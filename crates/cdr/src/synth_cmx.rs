@@ -285,3 +285,12 @@ pub fn sample() -> Vec<u8> {
     children.extend(tables());
     riff(&children)
 }
+
+/// Read `bytes` as [`crate::read_cmx`] does, except that after stray bytes the reader resumes only
+/// at the first chunk id found, never at a page inside that chunk (R53). Tests compare the two.
+pub fn read_cmx_without_recovery(bytes: &[u8], limits: crate::Limits) -> Result<crate::Drawing, crate::Error> {
+    if bytes.len() > limits.input {
+        return Err(crate::Error::Limit("input size"));
+    }
+    crate::cmx::drawing_without_recovery(bytes, &mut crate::limits::Budget::new(limits))
+}

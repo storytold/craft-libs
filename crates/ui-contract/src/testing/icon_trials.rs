@@ -1,8 +1,10 @@
 //! Trials of the icon lookup: the app icon registry (the catalog wins a clashing name, the first set keeps a name two
-//! sets share), the set a theme's icon pack picks, and an app icon's layers by class.
+//! sets share), the set a theme's icon pack picks, the audio and broadcast icons in every set, and an app icon's layers
+//! by class.
 
 use crate::primitives::{
-    AppIcons, DataMode, Draw, DrawEnv, Glyph, IconSpec, Layer, Mirror, PaintRecord, SvgIcon, TextRun, icon_names, paint_icon, register_app_icons,
+    AppIcons, DataMode, Draw, DrawEnv, Glyph, IconSet, IconSpec, Layer, Mirror, PaintRecord, SvgIcon, TextRun, icon_names, paint_icon,
+    register_app_icons,
 };
 use crate::style::{Ink, StyleColor, TypeRole, UiTokens, ink_color, rgba_color};
 use crate::testing::{Frames, style, trial};
@@ -86,6 +88,30 @@ fn a_theme_icon_pack_picks_the_set_and_an_unknown_pack_draws_the_default() {
     assert_ne!(mask_under_pack(Some("craft.carbon"), CATALOG_NAME), default, "a built-in pack draws its own icon");
     assert_eq!(mask_under_pack(Some("craft.lucide"), CATALOG_NAME), default, "the default set by name draws the default");
     assert_eq!(mask_under_pack(Some("user.missing"), CATALOG_NAME), default, "a pack that is not installed draws the default");
+}
+
+#[trial]
+fn the_audio_and_broadcast_icons_draw_in_every_set_and_read_apart() {
+    const NAMES: [&str; 5] = ["volume", "track_mute", "mic", "mic_off", "radio"];
+    for set in IconSet::ALL {
+        let pack = format!("{}{}", craft_theme::RESERVED_PREFIX, set.id());
+        let masks: Vec<ColorImage> = NAMES
+            .iter()
+            .map(|&name| {
+                let mask = mask_under_pack(Some(&pack), name);
+                assert!(mask.is_some(), "{name} is in the catalog");
+                mask.unwrap_or_default()
+            })
+            .collect();
+        for (name, mask) in NAMES.iter().zip(&masks) {
+            assert!(mask.pixels.iter().any(|texel| texel.a() > 0), "{pack} draws {name}");
+        }
+        for (i, (a, first)) in NAMES.iter().zip(&masks).enumerate() {
+            for (b, second) in NAMES.iter().zip(&masks).skip(i + 1) {
+                assert_ne!(first, second, "{pack} draws {a} and {b} apart");
+            }
+        }
+    }
 }
 
 const LAYERED_NAME: &str = concat!("zz_t19_", "pen");

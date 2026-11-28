@@ -5,7 +5,7 @@ use craft_ui::testing::trial;
 /// mark or next to a joiner.
 #[cfg(feature = "hindi")]
 #[trial]
-fn indic_word_limits_span_viramas() {
+fn feature_config_indic_word_limits_span_viramas() {
     let hi = Lang::for_language("hi").unwrap();
     // न म स ् क ा र: unrestricted points before म, स and र; only स has two letters on each side.
     assert_eq!(word_breaks_in("नमस्कार", hi).0, vec![3, 6, 18]);

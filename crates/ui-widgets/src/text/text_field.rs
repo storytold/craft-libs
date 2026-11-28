@@ -4,14 +4,14 @@
 pub(crate) mod stories;
 
 use super::adorn::{self, Adornment};
-use super::{FieldStyle, completions, text_part, words};
+use super::{FieldStyle, completions, lines_inset, text_part, words};
 use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
     Styled as _, WordSetCx as _,
 };
 use crate::primitives::{Completer, IconSpec, SubmitKey, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
-use crate::style::FieldLook;
+use crate::style::{FieldLook, Span};
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
 use smallvec::SmallVec;
@@ -314,6 +314,18 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// Colours stretches of the text: `ranges` gives them for the text it is called with, as byte ranges in order,
+    /// each in a theme ink ([`RangeInk`](crate::primitives::RangeInk)) that keeps the text contrast minimum on the
+    /// field. The rest of the text keeps the field's ink. It is called each frame the field shows, with the text as
+    /// typed, and not for a text longer than [`COLORED_TEXT_LIMIT`](crate::primitives::COLORED_TEXT_LIMIT), which shows
+    /// uncoloured. Colour is display only: editing, the caret, selection, wrapping and what assistive technology reads are
+    /// as without it. The field knows no language: the app finds the ranges (a script's keywords, strings and comments).
+    #[must_use]
+    pub fn color_ranges(mut self, ranges: impl Fn(&str) -> Vec<crate::primitives::ColorRange> + 'static) -> Self {
+        self.options.color_ranges = Some(Arc::new(ranges));
+        self
+    }
+
     /// `text` replaces the selection in this pass: at the caret it inserts. Set it for one pass only.
     #[must_use]
     pub fn replace_selection(mut self, text: impl Into<String>) -> Self {
@@ -343,6 +355,18 @@ impl<C: Codec + Clone + 'static> TextField<'_, C> {
     /// The clear button's name, from the library words.
     fn clear_name(words: &words::TextWords) -> Label {
         words.clear.clone()
+    }
+}
+
+impl<C: Codec + Clone + 'static> TextField<'_, C> {
+    /// `text` as the editor sets it.
+    fn run<'t>(&self, text: impl Into<Cow<'t, str>>) -> TextRun<'t> {
+        if self.options.mono { TextRun::spans(vec![Span::new(text).mono()]) } else { TextRun::new(text).role(self.options.role) }
+    }
+
+    /// The height of one line of the editor's text.
+    fn line(&self, cx: &MeasureCx<'_, Self>) -> f32 {
+        cx.layout(&self.run("M")).size().y
     }
 }
 
@@ -383,10 +407,10 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         // field's own text wrapped as the editor wraps it, not the codec's width sample, which a plain field leaves
         // empty.
         if let Some(lines) = self.options.lines.filter(|_| self.options.multiline()) {
-            let line = cx.layout(&TextRun::new("M").role(self.options.role)).size().y;
-            let height = |lines: usize| cx.style.metrics().min_size.y + line * lines.saturating_sub(1) as f32;
+            let line = self.line(cx);
+            let height = |lines: usize| 2.0 * lines_inset(&cx.style.metrics, line) + line * lines as f32;
             let shown = cx.value().map(|value| self.codec.format(value)).unwrap_or_default();
-            let tall = cx.layout(&TextRun::new(shown).role(self.options.role).wrap(Wrap::Wrap)).size().y;
+            let tall = cx.layout(&self.run(shown).wrap(Wrap::Wrap)).size().y;
             let rows = if line > 0.0 { (tall / line).round() as usize } else { 1 };
             size.y = size.y.max(height(lines.max(rows)));
             if let Some(most) = self.max_lines {
@@ -426,11 +450,15 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         let clear = self.clear_shown(value).then(|| Self::clear_name(&cx.words::<words::TextWords>()));
         let trailing = self.trailing(clear, cx.env.get());
         self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
-        let placed = adorn::place(cx.content_rect, cx.style, &self.leading, &trailing, cx.flow.is_rtl());
+        let mut placed = adorn::place(cx.content_rect, cx.style, &self.leading, &trailing, cx.flow.is_rtl());
         for (adornment, rect) in trailing.iter().zip(&placed.trailing) {
             if adornment.part() == Some(CLEAR) {
                 cx.part(CLEAR, *rect).sense(Sense::CLICK | Sense::KEEP_FOCUS).pointer_only("Escape clears the text");
             }
+        }
+        if self.options.multiline() {
+            let inset = lines_inset(&cx.style.metrics, self.line(cx));
+            placed.text = placed.text.shrink2(Vec2::new(0.0, inset.min(placed.text.height() / 2.0)));
         }
         if let Some(start) = value.or(self.empty.as_ref()) {
             let limit = self.limit.effective(self.options.multiline());

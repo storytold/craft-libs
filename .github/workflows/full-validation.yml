@@ -32,7 +32,9 @@ jobs:
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
       windows-env: CRAFT_PRINT_REQUIRE_QUEUE=1
-      env: CRAFT_PRINT_REQUIRE_QUEUE=0
+      env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=0
+        CRAFT_HOSTILE_DIVISOR=1
       setup-command: bash scripts/ci-test-inputs.sh
       command: |
         python scripts/test-full-validation.py

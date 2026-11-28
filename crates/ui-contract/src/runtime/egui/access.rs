@@ -183,6 +183,11 @@ pub(crate) fn create_node(ctx: &Context, id: Id) -> bool {
     ctx.accesskit_node_builder(id, |_| ()).is_some()
 }
 
+/// Whether this pass builds AccessKit nodes: AccessKit was on when the pass began. Reads only, unlike `create_node`.
+pub(crate) fn builds_nodes(ctx: &Context) -> bool {
+    ctx.with_accesskit_parents(|_| ()).is_some()
+}
+
 /// Whether AccessKit is running and the widget `id` is visible: nodes are built only then. Creates the node of `id`.
 pub(crate) fn enabled(ctx: &Context, id: Id) -> bool {
     create_node(ctx, id)

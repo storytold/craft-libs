@@ -116,6 +116,7 @@ pub use settle::SettleCx;
 pub use text::EDIT_MENU;
 pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed, response_of};
 
+use crate::runtime::env::Env;
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Flags, StyleCx, StyleKey};
@@ -132,7 +133,6 @@ pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
 pub use craft_behavior::MiddleButton;
 pub use craft_behavior::ReorderKeys;
-pub(crate) use run::BarRules;
 pub(crate) use run::measure_under;
 #[cfg(feature = "testing")]
 pub(crate) use steps::queue_reveal;
@@ -401,8 +401,9 @@ pub trait Component: Meta + Sized {
     const BINDS_VIEW: bool = false;
     /// How a disabled instance looks: token states (the default), or its enabled look faded.
     const DISABLED: DisabledLook = DisabledLook::States;
-    /// Whether the component is a rule between groups of members (a divider). In a bar's line a rule shows only when
-    /// the member after it shows: a rule before a member the bar hides, or with no member after it, is taken back.
+    /// Whether the component is a rule between groups of members (a divider). In a bar's line the bar draws it, as a
+    /// divider line along the axis the rule fills, only when the member after it shows: a rule before a member the bar
+    /// hides, or with no member after it, is not drawn.
     const RULE: bool = false;
 
     /// The style type.
@@ -619,6 +620,12 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     /// Plain data: selection mode, reorder, rename, columns.
     fn items(&self) -> &CollectionProps;
 
+    /// Whether keyboard focus shows a ring on the lead row, or on a populated rows viewport with no visible lead.
+    /// Lists and tables use this with independent item runs and an untransformed viewport.
+    fn shows_row_focus(&self) -> bool {
+        false
+    }
+
     /// The selection binding; `None` keeps it in session memory.
     fn selection(&mut self) -> Option<BindMut<'_, Self::Selection>> {
         None
@@ -687,6 +694,13 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         _kept: Option<&Self::Key>,
     ) -> Option<Box<dyn ItemSource<Self::Key> + 's>> {
         None
+    }
+
+    /// Whether the focus ring goes around the lead item while the collection has keyboard-visible focus: the item step
+    /// gives the ring the lead's rect (`Cx::focus_shape`), or the collection's own rect while it has no lead or its
+    /// lead is not shown. Off by default.
+    fn rings_lead(&self) -> bool {
+        false
     }
 
     /// Adjusts the item the closure built for a row, from the row's state. An auto row's measure reads the item this
@@ -787,17 +801,20 @@ pub trait Show: Component + Meta<Shape = shape::Leaf> + sealed::Show {
 
     /// Shows the component at `rect`, with no allocation.
     fn show_at(self, ui: &mut Ui, rect: Rect) -> Self::Output {
-        run::show_leaf(&mut Some(self), ui, ShowAt::Rect(rect), None)
+        let place = Env::of(ui);
+        run::show_leaf(&mut Some(self), ui, (ShowAt::Rect(rect), place), None)
     }
 
     /// Shows the component with rich tooltip content from the same call.
     fn show_with_tip(self, ui: &mut Ui, tip: impl FnOnce(&mut Ui)) -> Self::Output {
-        run::show_leaf(&mut Some(self), ui, ShowAt::Flow, Some(Box::new(tip)))
+        let place = Env::of(ui);
+        run::show_leaf(&mut Some(self), ui, (ShowAt::Flow, place), Some(Box::new(tip)))
     }
 
     /// Shows the component at `rect` with rich tooltip content.
     fn show_at_with_tip(self, ui: &mut Ui, rect: Rect, tip: impl FnOnce(&mut Ui)) -> Self::Output {
-        run::show_leaf(&mut Some(self), ui, ShowAt::Rect(rect), Some(Box::new(tip)))
+        let place = Env::of(ui);
+        run::show_leaf(&mut Some(self), ui, (ShowAt::Rect(rect), place), Some(Box::new(tip)))
     }
 
     /// Measures without allocating: steps 1 to 5 under the id `show` would use next. It registers no id, opens no
@@ -811,12 +828,14 @@ pub trait Show: Component + Meta<Shape = shape::Leaf> + sealed::Show {
 pub trait ShowContainer: Container + sealed::ShowContainer {
     /// Shows the container in the flow of `ui`.
     fn show<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Flow, &mut body, None)
+        let place = Env::of(ui);
+        run::show_container(&mut Some(self), ui, (ShowAt::Flow, place), &mut body, None)
     }
 
     /// Shows the container at `rect`, with no allocation: a frame over a split or a layer the parent places.
     fn show_at<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), &mut body, None)
+        let place = Env::of(ui);
+        run::show_container(&mut Some(self), ui, (ShowAt::Rect(rect), place), &mut body, None)
     }
 
     /// Shows the container at `rect` and takes that rect's room in the flow of `ui`: what is shown after it lies
@@ -834,7 +853,8 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
 
     /// Shows the container with rich tooltip content.
     fn show_with_tip<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui)) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Flow, &mut body, Some(Box::new(tip)))
+        let place = Env::of(ui);
+        run::show_container(&mut Some(self), ui, (ShowAt::Flow, place), &mut body, Some(Box::new(tip)))
     }
 
     /// Shows the container at `rect` with rich tooltip content.
@@ -845,7 +865,8 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
         mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
         tip: impl FnOnce(&mut Ui),
     ) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), &mut body, Some(Box::new(tip)))
+        let place = Env::of(ui);
+        run::show_container(&mut Some(self), ui, (ShowAt::Rect(rect), place), &mut body, Some(Box::new(tip)))
     }
 }
 

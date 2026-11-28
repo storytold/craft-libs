@@ -102,12 +102,7 @@ impl FillSource for StorySource {
         match self.preview {
             Preview::Loading => Job::new(|progress, cancel| {
                 progress.report(LOADING_PROGRESS);
-                for _ in 0..LOADING_SECONDS {
-                    if cancel.is_cancelled() {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_secs(1));
-                }
+                cancel.wait_timeout(Duration::from_secs(LOADING_SECONDS));
                 Ok(PreviewDone::new(Duration::ZERO))
             }),
             Preview::Failed => Job::new(|_, _| Err("nothing to sample from: the sampling area has no pixels outside the fill area".to_owned())),

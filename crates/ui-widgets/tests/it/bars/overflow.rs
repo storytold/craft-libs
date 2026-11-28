@@ -255,9 +255,10 @@ fn rule_bar_view(props: &mut RuleBar, ui: &mut Ui) {
     rule_bar(ui, props.width, &Cell::new((Rect::NOTHING, Rect::NOTHING)));
 }
 
-/// A settled memoized view holding a bar whose rule was taken back replays the bar without the rule.
+/// A settled memoized view holding a bar that did not draw a rule before a member it hides replays the bar without the
+/// rule.
 #[trial]
-fn a_settled_bar_replays_the_rule_it_took_back() {
+fn a_settled_bar_replays_without_the_rule_before_a_member_it_hides() {
     let (_, wide) = rule_bar_shapes(900.0);
     let width = cutting_width(wide);
     let scene = |ui: &mut Ui| {
@@ -271,7 +272,7 @@ fn a_settled_bar_replays_the_rule_it_took_back() {
     for frame in 0..4 {
         let shapes = frames.frame_shapes(scene);
         assert_eq!(runs(&frames), 0, "settled frame {frame} ran the view");
-        assert!(!draws_rule(&shapes, wide), "settled frame {frame} replays the rule the run took back");
+        assert!(!draws_rule(&shapes, wide), "settled frame {frame} replays a rule the run did not draw");
     }
 }
 

@@ -177,7 +177,7 @@
     {
       "path": "src/graphics/image.rs",
       "upstream_sha256": "61324d6426ac79aa5322d0d33a95532934cd1e41797a9dad6302210a2b799d5d",
-      "sha256": "d4f857d6fbf46bcc71ff392a5f6919380d57625128f751eabb8860d4ad3053ed"
+      "sha256": "e0ebcf400814ddda62d0f7ced0fa03437bf499aeaaf352605a2c3899a87ca026"
     },
     {
       "path": "src/graphics/mask.rs",
@@ -232,7 +232,7 @@
     {
       "path": "src/interactive/annotation.rs",
       "upstream_sha256": "45b01acfef124a5ab9b6799ab4c83734f929b3573fdb28c218b108e220afad39",
-      "sha256": "50f2a4bdc99d82bda275533e3a269eca6e7ae3ecb68b781203160122c744e55e"
+      "sha256": "ae77906266537fe8b87e11c195a1eaaae149452a76b567428f221e9deea44075"
     },
     {
       "path": "src/interactive/destination.rs",
@@ -317,12 +317,12 @@
     {
       "path": "src/serialize.rs",
       "upstream_sha256": "4f2c439dbd20006eea112e056b2f1a5ba98a1ede9227a45f66a6df46fb1a07e8",
-      "sha256": "031eb4ba074367da1da63ec924ae4e5b67fbbbeb66c8ceef7fafb373bc769af3"
+      "sha256": "b57d0438b9f050ee69759f7c0a5e232e2680df293b16a37f830f96f199c1ea3a"
     },
     {
       "path": "src/stream.rs",
       "upstream_sha256": "a999960d2ad0ee48c24711793da86c3a33d8c0f80ac4d53c61efdbc65af2ca22",
-      "sha256": "a999960d2ad0ee48c24711793da86c3a33d8c0f80ac4d53c61efdbc65af2ca22"
+      "sha256": "bee8923100e491a371d3d67fd5330d6684e273c668f5d57460704e002d4eb67c"
     },
     {
       "path": "src/surface.rs",

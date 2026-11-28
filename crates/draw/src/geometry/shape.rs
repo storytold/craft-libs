@@ -41,10 +41,13 @@ pub enum ShapeGeometry {
         rect: Rect,
     },
     /// A triangle filling `rect`: the apex at the top centre, the base on the bottom edge (PhotoCraft's Triangle
-    /// tool and Create Triangle).
+    /// tool and Create Triangle), each corner rounded by `corner_radius`.
     Triangle {
         /// The triangle's bounds.
         rect: Rect,
+        /// One radius for every corner, in document units; 0 for sharp corners. A radius larger than the
+        /// triangle allows is capped by the shape ([`ShapeGeometry::to_path`]).
+        corner_radius: f64,
     },
     /// A regular polygon or star inscribed in the ellipse of `rect` (the Box frame: PhotoCraft's Polygon).
     /// `sides` in [`SIDES`]; `star_ratio` in [`STAR_RATIO`], 1 for a plain polygon.
@@ -98,7 +101,9 @@ impl ShapeGeometry {
     ///   to half the shorter side, as kurbo's `RoundedRect` does); all radii 0 is the plain
     ///   rectangle.
     /// - `Ellipse`: kurbo's `Ellipse::from_rect`.
-    /// - `Triangle`: the top centre, the bottom right and the bottom left of `rect`.
+    /// - `Triangle`: the top centre, the bottom right and the bottom left of `rect`. A `corner_radius` over 0
+    ///   rounds each corner with a circular arc tangent to both its edges; the arc's ends lie no farther from
+    ///   the corner than half its shorter edge, which caps a radius the triangle cannot hold.
     /// - `Polygon`: the outline of [`RadialPolygon`](Self::RadialPolygon) with the first point
     ///   straight up, its outer points on the ellipse inscribed in `rect` (PhotoCraft's engine:
     ///   a 3-sided polygon's base lies a quarter of the height below the centre, not on the bottom
@@ -125,10 +130,10 @@ impl ShapeGeometry {
                 }
             }
             Self::Ellipse { rect } => Ellipse::from_rect(rect.abs()).to_path(tolerance),
-            Self::Triangle { rect } => {
-                // pc: #13350 (the triangle fills its box, apex on top).
+            Self::Triangle { rect, corner_radius } => {
+                // pc: #13350 (the triangle fills its box, apex on top); #13355 (the Triangle tool's radius).
                 let rect = rect.abs();
-                closed(&[Point::new(rect.center().x, rect.y0), Point::new(rect.x1, rect.y1), Point::new(rect.x0, rect.y1)])
+                rounded_closed(&[Point::new(rect.center().x, rect.y0), Point::new(rect.x1, rect.y1), Point::new(rect.x0, rect.y1)], corner_radius)
             }
             Self::Polygon { rect, sides, star_ratio } => {
                 let rect = rect.abs();
@@ -156,9 +161,11 @@ impl ShapeGeometry {
     pub fn bounds(&self) -> Rect {
         // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:85-96 `shape_bounds` (a line's ends' box).
         match *self {
-            Self::Rect { rect, .. } | Self::Ellipse { rect } | Self::Triangle { rect } | Self::Polygon { rect, .. } | Self::Custom { rect, .. } => {
-                rect.abs()
-            }
+            Self::Rect { rect, .. }
+            | Self::Ellipse { rect }
+            | Self::Triangle { rect, .. }
+            | Self::Polygon { rect, .. }
+            | Self::Custom { rect, .. } => rect.abs(),
             Self::RadialPolygon { center, radius, .. } => Rect::new(center.x - radius, center.y - radius, center.x + radius, center.y + radius),
             Self::Line { from, to, .. } => Rect::from_points(from, to),
         }
@@ -310,6 +317,50 @@ fn polygon_points(center: Point, radius: f64, rotation: f64, sides: u32, star_ra
         }
     }
     points
+}
+
+/// The closed outline through `points` with every corner rounded by `radius`: a circular arc (a cubic) tangent to
+/// both edges, whose ends lie no farther from the corner than half the shorter of its two edges. A radius that is
+/// 0, negative or not finite, and a corner too flat or too sharp to round, keep the sharp corner.
+fn rounded_closed(points: &[Point], radius: f64) -> BezPath {
+    let n = points.len();
+    if !(radius.is_finite() && radius > 0.0) || n < 3 {
+        return closed(points);
+    }
+    // Per corner: where the arc meets the incoming edge, the cubic's two control points and where it leaves.
+    let corners: Vec<(Point, Point, Point, Point)> = (0..n)
+        .map(|i| {
+            let (prev, at, next) = (points[(i + n - 1) % n], points[i], points[(i + 1) % n]);
+            let (to_prev, to_next) = (prev - at, next - at);
+            let (len_prev, len_next) = (to_prev.hypot(), to_next.hypot());
+            let angle = if len_prev > 0.0 && len_next > 0.0 { (to_prev.dot(to_next) / (len_prev * len_next)).clamp(-1.0, 1.0).acos() } else { 0.0 };
+            if !(angle > f64::EPSILON && angle < PI - f64::EPSILON) {
+                return (at, at, at, at);
+            }
+            let half = angle / 2.0;
+            // The tangent points' distance from the corner, capped at half the shorter edge.
+            let reach = (radius / half.tan()).min(len_prev.min(len_next) / 2.0);
+            let (u_prev, u_next) = (to_prev / len_prev, to_next / len_next);
+            let (enter, leave) = (at + u_prev * reach, at + u_next * reach);
+            // The arc turns by π − angle; a cubic's handles for a circular arc of turn φ are 4/3·tan(φ/4)·r long.
+            let arc_radius = reach * half.tan();
+            let handle = 4.0 / 3.0 * ((PI - angle) / 4.0).tan() * arc_radius;
+            (enter, enter - u_prev * handle, leave - u_next * handle, leave)
+        })
+        .collect();
+    let mut path = BezPath::new();
+    for (i, (enter, c1, c2, leave)) in corners.iter().enumerate() {
+        if i == 0 {
+            path.move_to(*enter);
+        } else {
+            path.line_to(*enter);
+        }
+        if enter != leave {
+            path.curve_to(*c1, *c2, *leave);
+        }
+    }
+    path.close_path();
+    path
 }
 
 fn closed(points: &[Point]) -> BezPath {

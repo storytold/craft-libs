@@ -83,7 +83,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// AccessKit requests on an item row's node or on a section row's collection node (`report_section_node`): Focus
     /// moves the lead to the row and key focus to the collection; Click also picks an item and activates it when the
-    /// collection activates on click, or activates a section; Expand and Collapse open and close rows with children.
+    /// collection activates on click, or activates a section it does not select. Expand and Collapse open and
+    /// close rows with children.
     pub(super) fn node_by_access(
         &mut self,
         comp: &C,
@@ -96,7 +97,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let (_, built) = self.built(layout, place.rect, place.offset);
         let rows: Vec<(u64, usize)> = built
             .into_iter()
-            .filter(|&at| !self.source.section_stop(at) || cx.part_if_declared(section_part(&self.source.key(at))).is_none())
+            .filter(|&at| {
+                !self.source.section_stop(at)
+                    || self.source.selectable_section(at)
+                    || cx.part_if_declared(section_part(&self.source.key(at))).is_none()
+            })
             .map(|at| (key_hash(&self.source.key(at)), at))
             .collect();
         let wanted = |request: &craft_behavior::AccessRequest| {
@@ -120,7 +125,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     }
                     focus::request_now(&cx.core.ctx, focus::FocusTarget::Id(cx.core.id));
                     if request.action == AccessAction::Click {
-                        if self.source.section_stop(at) {
+                        if self.source.section_stop(at) && !self.source.selectable_section(at) {
                             self.events.push(CollectionEvent::Activate(key));
                         } else {
                             self.click_pick(comp, at, false, false, craft_keymap::Mods::NONE);

@@ -102,7 +102,8 @@ pub(crate) fn member(ui: &Ui, id: Id, rect: Rect, enabled: bool, view: MemberVie
 fn member_on(ctx: &egui::Context, layer_id: LayerId, clip: Rect, id: Id, rect: Rect, enabled: bool, view: MemberView) -> Response {
     let mut flags = Flags::empty();
     let hovered = enabled && view.hovered;
-    // egui gives the interaction position through the pass the press ends in.
+    // egui gives the interaction position through the pass the press ends in. A hover position goes through
+    // `Cx::hover_pos`, which marks what reads it as following the pointer.
     let mine = enabled && (view.press.pressed || view.press.drag_stopped || view.press.clicked);
     if enabled {
         flags |= Flags::ENABLED;
@@ -117,7 +118,7 @@ fn member_on(ctx: &egui::Context, layer_id: LayerId, clip: Rect, id: Id, rect: R
         rect,
         interact_rect: rect.intersect(clip),
         sense: egui::Sense::hover(),
-        interact_pointer_pos_or_nan: if hovered || mine { view.pointer.unwrap_or(Pos2::NAN) } else { Pos2::NAN },
+        interact_pointer_pos_or_nan: if mine { view.pointer.unwrap_or(Pos2::NAN) } else { Pos2::NAN },
         intrinsic_size_or_nan: Vec2::NAN,
         flags,
     };

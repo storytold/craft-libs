@@ -26,6 +26,61 @@ fn app(id: &str, keys: &[&str]) -> CommandDef {
     keys.iter().fold(CommandDef::new(id, id, Scope::app()), |e, k| e.with_default(b(k)))
 }
 
+#[test]
+fn a_replacement_that_is_too_long_to_store_leaves_both_commands_intact() {
+    let context = "Text".repeat(16);
+    let scope = scope(&context);
+    let command = cmd("text.save");
+    let other = cmd("text.export");
+    let trigger = Trigger::parse("Cmd+Ctrl+Alt+Shift+IntlBackslash Cmd+Ctrl+Alt+Shift+IntlBackslash").unwrap();
+    let held = Binding::new(trigger);
+    let catalog = || vec![app("text.save", &["Cmd+S"]), CommandDef::new("text.export", "Export Text", scope.clone()).with_default(held.clone())];
+    let mut km = Keymap::new(catalog(), Scopes::new().with_context(&context), Platform::Mac);
+    let original = Binding::in_scope(Trigger::parse("Cmd+K").unwrap(), scope.clone());
+    km.set_bindings(&command, vec![original.clone()], Policy::Keep).unwrap();
+    let saved = km.overrides().clone();
+
+    let replacement = Binding::in_scope(trigger, scope.clone());
+    assert!(matches!(km.set_bindings(&command, vec![replacement], Policy::Steal), Err(craft_keymap::AssignError::Unstorable { .. })));
+    assert_eq!(km.bindings(&command), std::slice::from_ref(&original));
+    assert_eq!(km.bindings(&other), std::slice::from_ref(&held));
+    assert_eq!(km.overrides(), &saved);
+
+    let mut reopened = Keymap::new(catalog(), Scopes::new().with_context(&context), Platform::Mac);
+    reopened.set_overrides(km.overrides().clone());
+    assert_eq!(reopened.bindings(&command), [original]);
+}
+
+#[test]
+fn a_binding_that_would_reload_in_another_scope_is_refused() {
+    let command = cmd("text.save");
+    let mut km = Keymap::new(vec![app("text.save", &["Cmd+S"])], Scopes::new().with_context("Cmd+"), Platform::Mac);
+    let binding = Binding::in_scope(Trigger::parse("Cmd+:").unwrap(), scope("Cmd+"));
+    assert!(matches!(km.set_bindings(&command, vec![binding], Policy::Keep), Err(craft_keymap::AssignError::Unstorable { .. })));
+    assert_eq!(km.bindings(&command), [b("Cmd+S")]);
+    assert!(km.overrides().is_empty());
+}
+
+#[test]
+fn editing_one_shortcut_keeps_a_saved_spelling_that_can_be_read_back() {
+    let command = cmd("text.save");
+    let catalog = || vec![app("text.save", &["Cmd+S"])];
+    let scopes = || Scopes::new().with_context("Cmd+");
+    let mut km = Keymap::new(catalog(), scopes(), Platform::Mac);
+    let scoped = Binding::in_scope(Trigger::parse("Cmd+:").unwrap(), scope("Cmd+"));
+    let stored = "Cmd+: Cmd + :";
+    let mut overrides = Overrides::new();
+    assert!(overrides.insert(command.key(), vec![stored.into(), "Cmd+S".into()]));
+    km.set_overrides(overrides);
+    assert!(km.bindings(&command).contains(&scoped));
+
+    assert!(km.remove(&command, &b("Cmd+S")));
+    assert_eq!(km.overrides().get(&command.key()).unwrap(), [stored]);
+    let mut reopened = Keymap::new(catalog(), scopes(), Platform::Mac);
+    reopened.set_overrides(km.overrides().clone());
+    assert_eq!(reopened.bindings(&command), [scoped]);
+}
+
 fn in_scope(id: &str, home: &str, keys: &[&str]) -> CommandDef {
     keys.iter().fold(CommandDef::new(id, id, scope(home)), |e, k| e.with_default(b(k)))
 }

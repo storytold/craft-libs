@@ -94,6 +94,8 @@ impl Filter {
     }
 
     /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
+    /// `max_pixels` the most pixels a CCITT or JPEG 2000 image may decode to (the document's
+    /// [`DecodeLimits::max_image_pixels`](crate::DecodeLimits::max_image_pixels)), and
     /// `rows` the `/Height` of the image whose samples it produces, when it is an image's last
     /// filter.
     pub(crate) fn apply(
@@ -102,6 +104,7 @@ impl Filter {
         params: &Dict<'_>,
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
         limit: usize,
+        #[cfg_attr(not(feature = "images"), allow(unused))] max_pixels: u64,
         control: Option<&crate::cancel::Control>,
         rows: Option<usize>,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
@@ -129,11 +132,11 @@ impl Filter {
             #[cfg(feature = "images")]
             Self::DctDecode => dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
-            Self::CcittFaxDecode => ccitt::decode(data, params, image_params, limit).ok_or(DecodeFailure::ImageDecode),
+            Self::CcittFaxDecode => ccitt::decode(data, params, image_params, limit, max_pixels).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
             Self::Jbig2Decode => jbig2::decode(data, params, image_params, limit).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
-            Self::JpxDecode => jpx::decode(data, image_params, limit).ok_or(DecodeFailure::ImageDecode),
+            Self::JpxDecode => jpx::decode(data, image_params, limit, max_pixels).ok_or(DecodeFailure::ImageDecode),
             #[cfg(not(feature = "images"))]
             Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
                 warn!("image decoding is not supported (enable the `images` feature)");
@@ -190,34 +193,48 @@ pub(crate) fn decode_limit(params: &ImageDecodeParams, last: bool, limits: crate
 
 /// PdfCraft patch: whether a CCITT image of `columns` × `rows` may be decoded. The decoder sizes
 /// its line buffers from `/Columns`, which a fuzzed file set to 4294967295 (a 4 GiB allocation);
-/// real fax lines are a few thousand pixels wide.
+/// real fax lines are a few thousand pixels wide. At most [`MAX_IMAGE_PIXELS`] pixels, the
+/// default of [`DecodeLimits::max_image_pixels`](crate::DecodeLimits::max_image_pixels).
 pub fn ccitt_size_ok(columns: u32, rows: u32) -> bool {
-    const MAX_COLUMNS: u32 = 1 << 20;
-    columns > 0 && columns <= MAX_COLUMNS && u64::from(columns) * u64::from(rows.max(1)) <= MAX_CCITT_PIXELS
+    ccitt_size_within(columns, rows, MAX_IMAGE_PIXELS)
 }
 
-/// PdfCraft patch: the most pixels a CCITT image may decode to.
-const MAX_CCITT_PIXELS: u64 = 1 << 28;
+/// PdfCraft patch: [`ccitt_size_ok`] with at most `max_pixels` pixels (columns × rows).
+pub(crate) fn ccitt_size_within(columns: u32, rows: u32, max_pixels: u64) -> bool {
+    const MAX_COLUMNS: u32 = 1 << 20;
+    columns > 0 && columns <= MAX_COLUMNS && u64::from(columns) * u64::from(rows.max(1)) <= max_pixels
+}
 
 /// PdfCraft patch: the most rows of `columns` pixels, `row_bytes` bytes each once decoded, that fit
-/// both `limit` bytes and the pixel cap; at least one when one row fits.
+/// both `limit` bytes and `max_pixels` pixels; at least one when one row fits.
 #[cfg(feature = "images")]
-pub(crate) fn ccitt_max_rows(columns: u32, row_bytes: u32, limit: usize) -> u32 {
-    let by_pixels = MAX_CCITT_PIXELS / u64::from(columns.max(1));
+pub(crate) fn ccitt_max_rows(columns: u32, row_bytes: u32, limit: usize, max_pixels: u64) -> u32 {
+    let by_pixels = max_pixels / u64::from(columns.max(1));
     let by_bytes = u64::try_from(limit).unwrap_or(u64::MAX) / u64::from(row_bytes.max(1));
     u32::try_from(by_pixels.min(by_bytes)).unwrap_or(u32::MAX)
 }
 
 #[cfg(all(test, feature = "images"))]
 mod ccitt_tests {
-    use super::ccitt_max_rows;
+    use super::{MAX_IMAGE_PIXELS, ccitt_max_rows, ccitt_size_ok, ccitt_size_within};
 
     /// PdfCraft patch: an image of unknown height decodes at most the rows that fit both the output
-    /// limit (in 1-bit rows) and the 2^28-pixel cap.
+    /// limit (in 1-bit rows) and the pixel limit.
     #[test]
     fn unknown_ccitt_rows_fit_the_limit_and_the_pixel_cap() {
-        assert_eq!(ccitt_max_rows(1728, 216, 216 * 100), 100);
-        assert_eq!(ccitt_max_rows(1 << 20, 1 << 17, usize::MAX), 1 << 8);
-        assert_eq!(ccitt_max_rows(1728, 216, 100), 0);
+        assert_eq!(ccitt_max_rows(1728, 216, 216 * 100, MAX_IMAGE_PIXELS), 100);
+        assert_eq!(ccitt_max_rows(1 << 20, 1 << 17, usize::MAX, MAX_IMAGE_PIXELS), 1 << 8);
+        assert_eq!(ccitt_max_rows(1728, 216, 100, MAX_IMAGE_PIXELS), 0);
+        assert_eq!(ccitt_max_rows(1 << 20, 1 << 17, usize::MAX, 1 << 30), 1 << 10);
+    }
+
+    /// A 32768 × 16384 image (2^29 pixels) is past the default limit and within a limit of 2^30.
+    #[test]
+    fn ccitt_size_follows_the_pixel_limit() {
+        assert!(!ccitt_size_ok(32_768, 16_384));
+        assert!(!ccitt_size_within(32_768, 16_384, MAX_IMAGE_PIXELS));
+        assert!(ccitt_size_within(32_768, 16_384, 1 << 30));
+        assert!(ccitt_size_ok(16_384, 16_384));
+        assert!(!ccitt_size_within(16_384, 16_384, (1 << 28) - 1));
     }
 }

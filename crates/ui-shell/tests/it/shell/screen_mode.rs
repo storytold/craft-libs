@@ -203,12 +203,20 @@ fn focus_frame(frames: &mut Frames, mode: &mut ScreenMode, dropped: &mut bool, e
             .mode_set(ScreenModeSet::Document)
             .screen_mode(Bind::bound(&mut *mode))
             .dropped(Bind::bound(&mut *dropped))
-            .top(Slot::new("screen").screen_bar(), |ui, _, _: &mut ()| {
-                Text::new("Screen").show(ui);
-            })
-            .top(Slot::new("ribbon").drops(), |ui, _, _: &mut ()| {
-                Text::new("Ribbon").show(ui);
-            })
+            .top(
+                Slot::new("screen").screen_bar(),
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    Text::new("Screen").show(ui);
+                },
+            )
+            .top(
+                Slot::new("ribbon").drops(),
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    Text::new("Ribbon").show(ui);
+                },
+            )
             .body(|ui, _, _| {
                 Text::new("Document").show(ui);
             })

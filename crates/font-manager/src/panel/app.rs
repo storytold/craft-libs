@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::craft_font_catalog::{FontEnv, Limits, Os};
 use crate::filter::{Query, Search};
-use crate::index::{Category, Family, Index, categories, source_label};
+use crate::index::{Category, Family, FontFile, Index, categories, source_label};
 use crate::installed::{InstalledFamily, group};
 use crate::store::{Conflict, Installer, MadeAvailable, RemoveRequest, StoreError};
 use crate::{Catalog, FaceInfo, Source};
@@ -18,7 +18,7 @@ use craft_behavior::ColumnWidth;
 use craft_host::{Host, Section, Wake};
 use craft_i18n::Folder;
 use craft_i18n::matcher::Matcher;
-use craft_ui::contract::{NoValue, Outcome, Props as _, ShowContainer as _};
+use craft_ui::contract::{Animate as _, NoValue, Outcome, Props as _, ShowContainer as _};
 use craft_ui::dialog::Prompt;
 use craft_ui::fonts::{EmbeddedFace, I18nScripts, UiFonts};
 use craft_ui::layout_components::{Grid, Stack};
@@ -29,11 +29,14 @@ use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 use egui::{Context, Response, Ui};
 
+use crate::axes::AxisValues;
 use crate::panel::browse::{FontsBrowseWords, Texts};
 use crate::panel::details::DetailsSheet;
 use crate::panel::i18n::LANGUAGES;
 use crate::panel::jobs::{self, Finished, Jobs, Kind, Request};
+use crate::panel::legal::LegalTexts;
 use crate::panel::samples;
+use crate::panel::subsets::Subsets;
 
 /// Installs the standalone app's interface fonts in `ctx`: craft-ui's font stack for `language`, with `craft_faces`
 /// (craft-fonts' faces the app embeds with craft-fonts-build, or none) and the system's fonts for every other
@@ -42,8 +45,11 @@ pub fn install_interface_fonts(ctx: &Context, language: &str, craft_faces: &[Emb
     UiFonts::new(&I18nScripts).languages(LANGUAGES).ui_language(language).craft_faces(craft_faces).install(ctx);
 }
 
-/// The filters column takes the width of its widest section; the list and toolbar take the rest.
-const PANES: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
+/// The filters column, whatever the list beside it shows; the list and toolbar take the rest.
+const PANES: [ColumnWidth; 2] = [ColumnWidth::Fixed(248.0), ColumnWidth::fill(1.0)];
+/// The panes of a panel less than [`WIDE_PANEL`] wide.
+const NARROW_PANES: [ColumnWidth; 2] = [ColumnWidth::Fixed(212.0), ColumnWidth::fill(1.0)];
+const WIDE_PANEL: f32 = 860.0;
 
 /// Preview downloads: at most this much per file, and this many faces in a session.
 const PREVIEW_LIMITS: Limits = Limits { max_file_bytes: 64 << 20, max_faces_per_file: 512, max_added_faces: 20_000 };
@@ -289,6 +295,12 @@ pub struct FontsPanel {
     /// Downloaded preview files, never installed.
     pub(crate) previews: Arc<Catalog>,
     pub(crate) previewed: HashMap<String, Vec<FaceInfo>>,
+    /// The previews from the font preview service.
+    pub(crate) subsets: Subsets,
+    /// The values the user set on the details sheet's axis sliders, by file sha256.
+    pub(crate) detail_axes: HashMap<String, AxisValues>,
+    /// Licence and NOTICE texts, by family, text and file.
+    pub(crate) legal: LegalTexts,
     pub(crate) jobs: Jobs,
     pub(crate) asking: Option<Pending>,
     /// By lower-case family name.
@@ -325,6 +337,11 @@ pub(crate) fn source_name(words: &FontsPanelWords, source: Source) -> &Label {
     }
 }
 
+/// The file of the face the list shows for a family of the index: the one closest to an upright regular.
+pub(crate) fn list_file(family: &Family) -> Option<&FontFile> {
+    family.files.iter().min_by_key(|f| (f.is_italic(), !f.has_weight(400, f.is_italic()), f.weight.abs_diff(400), !f.has_normal_width()))
+}
+
 /// The face closest to an upright regular.
 pub(crate) fn regular(faces: &[FaceInfo]) -> Option<&FaceInfo> {
     faces.iter().min_by_key(|f| (f.italic, ((f.weight - 400.0).abs() * 10.0) as i64, ((f.width - 100.0).abs() * 10.0) as i64))
@@ -357,6 +374,7 @@ impl FontsPanel {
     pub fn new(options: Options) -> FontsPanel {
         let catalogue = options.index.map(|index| Catalogue { search: Search::new(&index), index: Arc::new(index) });
         let previews = Arc::new(Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false));
+        let subsets = Subsets::new(Arc::clone(&options.installer));
         FontsPanel {
             settings: FontsPanelSettings::default(),
             saved: FontsPanelSettings::default(),
@@ -389,6 +407,9 @@ impl FontsPanel {
             detail: None,
             previews,
             previewed: HashMap::new(),
+            subsets,
+            detail_axes: HashMap::new(),
+            legal: LegalTexts::new(),
             jobs: Jobs::new(),
             asking: None,
             failed: HashMap::new(),
@@ -397,6 +418,25 @@ impl FontsPanel {
             window_active: true,
             consent: None,
         }
+    }
+
+    /// Fetches the previews through `previews` instead of craft-font-store's client.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_previews(mut self, previews: craft_font_store::preview::Previews) -> FontsPanel {
+        self.subsets.replace(previews);
+        self
+    }
+
+    /// Reads the preview service and the previews setting again on the next pass, after a host's settings page changed
+    /// them. The panel also reads them when it first shows and when its window regains focus.
+    pub fn reload_preview_settings(&mut self) {
+        self.subsets.read_settings_soon();
+    }
+
+    /// Whether previews from the font preview service are being fetched.
+    pub fn loading_previews(&self) -> bool {
+        self.subsets.loading()
     }
 
     /// Shows `index` (after the host fetched the sources, say). The details sheet closes, as family positions
@@ -458,6 +498,25 @@ impl FontsPanel {
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => self.sources_job = None,
         }
+    }
+
+    /// Starts the catalogue filtered to sans-serif families and to the language of `language` (a tag such as `de` or
+    /// `pt-BR`; the most spoken language of the index with that ISO 639 code), or to English when the index has none for
+    /// it. A host calls it once, after building the panel; the user changes both filters from there.
+    pub fn use_default_filters(&mut self, language: &str) {
+        let Ok(c) = &self.catalogue else { return };
+        let code = language.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+        let best = |code: &str| {
+            c.index
+                .languages()
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| !l.historical && l.id.split('_').next().is_some_and(|id| id.eq_ignore_ascii_case(code)))
+                .max_by_key(|(_, l)| l.population)
+                .map(|(i, _)| i)
+        };
+        self.query.category = Some(Category::SansSerif);
+        self.query.language = best(&code).or_else(|| best("en"));
     }
 
     /// Whether the panel shows its own "Allow downloads" switch. A host with the switch in its own settings turns it
@@ -533,6 +592,7 @@ impl FontsPanel {
                 self.catalog.rescan_if_changed();
             }
             self.consent = None;
+            self.subsets.read_settings_soon();
         }
         self.window_active = window_active;
         self.refresh_installed();
@@ -604,6 +664,7 @@ impl FontsPanel {
             }
         }
         self.poll_sources();
+        self.poll_legal();
     }
 
     fn record_copy(&mut self, family: &str, copied: Option<Result<MadeAvailable, StoreError>>) {
@@ -731,8 +792,9 @@ impl FontsPanel {
         self.installed_shown.0.clone()
     }
 
-    /// The sample for a family with `scripts`: what the user typed, else the preset.
-    pub(crate) fn sample_for<'a>(&self, scripts: impl IntoIterator<Item = &'a str>) -> String {
+    /// The sample for a family with `scripts`, whose own sample in the index is `own`: what the user typed, else the
+    /// preset.
+    pub(crate) fn sample_for<'a>(&self, own: Option<&str>, scripts: impl IntoIterator<Item = &'a str>) -> String {
         if !self.settings.sample.trim().is_empty() {
             return self.settings.sample.clone();
         }
@@ -741,7 +803,7 @@ impl FontsPanel {
             Preset::Numerals => samples::NUMERALS.to_owned(),
             Preset::Sentence => {
                 let language = self.catalogue.as_ref().ok().zip(self.query.language).and_then(|(c, l)| c.index.languages().get(l));
-                language.and_then(|l| samples::for_language(&l.id)).unwrap_or_else(|| samples::for_scripts(scripts)).to_owned()
+                language.and_then(|l| samples::for_language(&l.id)).or(own).unwrap_or_else(|| samples::for_scripts(scripts)).to_owned()
             }
         }
     }
@@ -876,19 +938,39 @@ impl<'a> FontsPanelView<'a> {
         panel.prepare(host.as_ref(), view.shell().window.active);
         let search = ui.scope_id().with("search");
         let folder = env.folder();
-        let shown = Stack::new().fill().label(words.panel.clone()).command_scope(FontsCommand::SCOPE).show(ui, |ui, root| {
+        let wake = panel.jobs.waker();
+        let panes = if ui.available_width() < WIDE_PANEL { &NARROW_PANES } else { &PANES };
+        let mut begun = false;
+        let mut shown = Stack::new().fill().label(words.panel.clone()).command_scope(FontsCommand::SCOPE).show(ui, |ui, root| {
+            if !std::mem::replace(&mut begun, true) {
+                panel.subsets.begin(root.now(), &wake);
+            }
             while root.take_command::<FontsCommand>().is_some() {
                 focus::request(ui.ctx(), FocusTarget::Id(search));
             }
             root.publish(FontsCommand::Find, CommandState::new());
             panel.top_bar(ui, &browse, texts.format, search);
-            Grid::new(&PANES).fill().show(ui, |ui, _| {
+            let shown = Grid::new(panes).fill().show(ui, |ui, _| {
                 panel.filters(ui, &texts);
-                panel.main(ui, &texts, &folder, host.as_ref());
+                panel.main(ui, &texts, &folder, host.as_ref())
             });
+            shown.inner.flatten()
         });
-        if panel.detail.is_some() && DetailsSheet::new(panel).show(ui).closed {
-            panel.detail = None;
+        // A measuring run has no rows on screen, and a pass that runs again may have the wrong ones.
+        let rerun = craft_ui::runtime::frame::will_rerun(ui.ctx());
+        let real = shown.settle(|_, visible| (!rerun).then(|| panel.request_subsets(visible.take()))).flatten().is_some();
+        if panel.detail.is_some() {
+            if DetailsSheet::new(panel).show(ui).closed {
+                panel.detail = None;
+            }
+        } else {
+            if real {
+                panel.subsets.request_detail(None, &[]);
+            }
+            panel.detail_axes.clear();
+        }
+        if let Some(seconds) = panel.subsets.next_wake() {
+            craft_ui::runtime::frame::request_repaint_after(ui.ctx(), seconds);
         }
         panel.consent_prompt(ui, &env, &words, host.as_ref());
         panel.save_settings(host.as_ref());
