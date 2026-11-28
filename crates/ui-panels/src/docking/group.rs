@@ -394,6 +394,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
+    /// The header is the tab's alone: no drag band and no panel menu button ([`DockConfig::tab_only_narrower_than`](super::DockConfig::tab_only_narrower_than)).
+    #[prop(flag)]
+    tab_only: bool,
     /// The look of the tabs: [`tab_look`](DockGroup::tab_look).
     tab_look: PanelTabLook,
     /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
@@ -459,6 +462,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             movable: true,
             closable: false,
             wheel_selects_tabs: false,
+            tab_only: false,
             tab_look: PanelTabLook::Plain,
             titled: false,
             take_focus: false,
@@ -567,6 +571,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
     /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did; beside
     /// [`PanelTabLook::Pill`] and [`PanelTabLook::Block`] tabs, in the strip's middle.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+        if self.tab_only {
+            return;
+        }
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();
         let flow = craft_behavior::Flow::new(slot, cx.flow.is_rtl());
@@ -737,6 +744,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
     /// visible. The host's items count with the width the header last handed forward for them; before it has, they
     /// count as none.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
+        if self.tab_only {
+            return HeaderParts::NONE;
+        }
         let button = self.menu_room(cx);
         let parts = HeaderParts::NONE.end(grip_width(cx.tokens) + button);
         if self.titled {
@@ -822,6 +832,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     active: self.active,
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
+                    compact: self.tab_only,
                     look: self.tab_look,
                     take_focus: self.take_focus,
                     dock: self.dock,
@@ -916,6 +927,7 @@ struct TabRow<'a, P> {
     active: PanelKey,
     closable: bool,
     wheel_selects: bool,
+    compact: bool,
     look: PanelTabLook,
     /// The strip takes key focus in this pass (`DockGroup::take_focus`): in the key, so the row runs and the strip
     /// takes it while it runs.
@@ -1017,6 +1029,9 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         });
     if row.wheel_selects {
         strip = strip.wheel_selects();
+    }
+    if row.compact {
+        strip = strip.compact_tabs();
     }
     // The strip takes the focus while it runs, so it runs focused and the keys of the next pass route through it.
     if row.take_focus {

@@ -105,6 +105,10 @@ pub struct DockConfig {
     pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
+    /// A docked group with one tab and narrower than this many points gives its whole header to the tab: no drag band (the tab
+    /// drags the group) and no panel menu button (a context request on the tab opens the menu). Zero, the default:
+    /// every group keeps its band.
+    pub tab_only_narrower_than: u16,
     /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), on a
     /// filled rounded pill ([`PanelTabLook::Pill`]), or a square filled block on a canvas strip
     /// ([`PanelTabLook::Block`]).
@@ -145,6 +149,7 @@ impl Default for DockConfig {
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
+            tab_only_narrower_than: 0,
             tab_look: PanelTabLook::Plain,
             native_windows: true,
             group_order_items: false,
@@ -300,6 +305,13 @@ impl DockConfig {
     #[must_use]
     pub fn wheel_selects_tabs(mut self, on: bool) -> Self {
         self.wheel_selects_tabs = on;
+        self
+    }
+
+    /// See [`DockConfig::tab_only_narrower_than`].
+    #[must_use]
+    pub fn tab_only_narrower_than(mut self, width: u16) -> Self {
+        self.tab_only_narrower_than = width;
         self
     }
 
