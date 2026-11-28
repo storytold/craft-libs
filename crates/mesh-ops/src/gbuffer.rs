@@ -124,7 +124,21 @@ impl UvGBuffer {
                     for y in y0..y1 {
                         for x in x0..x1 {
                             let d = DVec2::new(f64::from(x - x0), f64::from(y - y0));
-                            let [w0, w1, w2] = [0, 1, 2].map(|i| base[i] + (step[i].x * d.x + step[i].y * d.y));
+                            // A stepped value is within a few rounding steps of its largest term.
+                            // When that bound reaches the threshold, the edge is taken again at
+                            // this center, so cancellation cannot erase its signed distance.
+                            let center = start + d;
+                            let [w0, w1, w2] = [0, 1, 2].map(|i| {
+                                let (sx, sy) = (step[i].x * d.x, step[i].y * d.y);
+                                let w = base[i] + (sx + sy);
+                                let bound = 4.0 * f64::EPSILON * (base[i].abs() + sx.abs() + sy.abs());
+                                if (w - eps[i]).abs() <= bound {
+                                    let (a, b) = edges[i];
+                                    edge(a, b, center) * area.signum()
+                                } else {
+                                    w
+                                }
+                            });
                             if w0 < eps[0] || w1 < eps[1] || w2 < eps[2] {
                                 continue;
                             }
@@ -235,6 +249,22 @@ mod tests {
         // widen it to the texel centers at y = 0.5.
         let g = UvGBuffer::new(&mesh_with_uvs([[-1e14, 0.0], [1e14, 0.0], [0.0, 0.0125]]), 0, 8, 8);
         assert_eq!(g.covered_count(), 0);
+    }
+
+    #[test]
+    fn stepped_edge_values_that_lose_the_distance_are_taken_again() {
+        // Stepping from the box's first center rounds the first-to-second edge value at texel
+        // (32, 32) to zero, although that center is far outside this sliver.
+        let (lo, hi) = (2.0_f32.powi(-70), 2.0_f32.powi(60));
+        let g = UvGBuffer::new(&mesh_with_uvs([[0.0, lo], [hi, hi], [0.0, 2.0 * lo]]), 0, 64, 64);
+        assert!(!g.covered(32 * 64 + 32));
+        assert_eq!(g.covered_count(), 0);
+        // Two triangles that share the diagonal both still take its eight texel centers.
+        let uv = vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z], None, uv, vec![0, 1, 2, 0, 3, 1], "m").unwrap();
+        let g = UvGBuffer::new(&m, 0, 8, 8);
+        assert_eq!(g.covered_count(), 64);
+        assert_eq!(g.overlaps, 8);
     }
 
     #[test]
