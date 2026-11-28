@@ -300,15 +300,116 @@ fn match_src_keeps_a_word_chunks_own_formatting() {
         // Ours stays ours either way.
         assert_eq!(look(0), (12.4, 11.0, false));
         if match_src {
-            // The chunk's own Normal (its 12 pt, Word's no space after) and its Subtitle (not italic).
+            // The chunk's own Normal (its 12 pt, Word's no space after); its last paragraph stands
+            // on our Subtitle (our defaults' 10 pt after) with its text as the chunk's (12 pt, not
+            // italic), as in Word (`a_match_src_chunks_last_paragraph_stands_on_our_style`).
             assert_eq!(look(1), (0.0, 12.0, false));
-            assert_eq!(look(2), (0.0, 12.0, false));
+            assert_eq!(look(2), (10.0, 12.0, false));
         } else {
             // Without it the chunk takes our styles (our Subtitle stands on our defaults).
             assert_eq!(look(1), (12.4, 11.0, false));
             assert_eq!(look(2), (10.0, 11.0, true));
         }
     }
+}
+
+/// Word brings a `w:matchSrc` chunk in as it inserts a file: the chunk's last paragraph keeps only
+/// its own paragraph formatting, on our style of its style's id, and its text the look the chunk
+/// gave it; a last paragraph in a style we don't have keeps the chunk's style (Word for Microsoft
+/// 365, these documents opened and saved again).
+#[test]
+fn a_match_src_chunks_last_paragraph_stands_on_our_style() {
+    use craft_wordmodel::Align;
+    let ours = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="200"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:after="248" w:line="248" w:lineRule="exact"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:i/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:rPr><w:i/></w:rPr></w:style><w:style w:type="character" w:styleId="Strong"><w:name w:val="Strong"/><w:rPr><w:b/></w:rPr></w:style><w:style w:type="character" w:styleId="Note"><w:name w:val="Note"/><w:rPr><w:i/></w:rPr></w:style><w:style w:type="character" w:styleId="Ghost"><w:name w:val="Ghost"/><w:rPr><w:i/></w:rPr></w:style>"#;
+    let theirs = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="MyInd"><w:name w:val="My Ind"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="360"/><w:jc w:val="right"/></w:pPr><w:rPr><w:b/></w:rPr></w:style><w:style w:type="character" w:styleId="Strong"><w:name w:val="Strong"/><w:rPr><w:sz w:val="40"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Note"><w:name w:val="Note"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="360"/><w:jc w:val="right"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>"#;
+    let styled = |style: &str, ppr: &str, text: &str| {
+        let s = if style.is_empty() { String::new() } else { format!(r#"<w:pStyle w:val="{style}"/>"#) };
+        format!(r#"<w:p><w:pPr>{s}{ppr}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#)
+    };
+    #[derive(Debug, PartialEq)]
+    struct Look {
+        style: Option<String>,
+        before: f32,
+        after: f32,
+        left: f32,
+        align: Align,
+        size: f32,
+        bold: bool,
+        italic: bool,
+    }
+    let read_last = |chunk_body: &str, after: &str| {
+        let inner = package_styled(chunk_body, None, Some(theirs));
+        let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>{after}"#, p("Ours"));
+        let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(ours))).unwrap();
+        let look = |i: usize| match &*d.body[i] {
+            Block::Para(p) => {
+                let para = d.styles.resolve_para(&p.props);
+                let chr = d.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(0));
+                Look {
+                    style: p.props.style.clone(),
+                    before: para.space_before,
+                    after: para.space_after,
+                    left: para.indent_left,
+                    align: para.align,
+                    size: chr.size,
+                    bold: chr.bold,
+                    italic: chr.italic,
+                }
+            }
+            b => panic!("{b:?}"),
+        };
+        (look(1), look(2), (d.body.len() > 3).then(|| look(3)))
+    };
+    let on = |style: Option<&str>, before, after, left, align, bold| Look {
+        style: style.map(str::to_string),
+        before,
+        after,
+        left,
+        align,
+        size: 12.0,
+        bold,
+        italic: false,
+    };
+    // A first paragraph in Subtitle keeps the chunk's look; the last, in Normal, gets our Normal's
+    // spacing (12.4 pt exact lines, 12.4 after) under its 12 pt text.
+    let (first, last, _) = read_last(&format!("{}{}", styled("Subtitle", "", "SubFirst"), p("PlainLast")), "");
+    assert_eq!((first.left, first.align, first.size, first.italic), (0.0, Align::Left, 12.0, false));
+    assert_eq!(last, on(None, 0.0, 12.4, 0.0, Align::Left, false));
+    // Last in Quote: our Quote (our defaults' 10 pt after, no indent: the chunk's 36 pt is its
+    // style's), not italic.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("Quote", "", "QuoteLast")), "");
+    assert_eq!(last, on(Some("Quote"), 0.0, 10.0, 0.0, Align::Left, false));
+    // Last in Subtitle, a paragraph of ours after it: our Subtitle, centred; ours is untouched.
+    let (_, last, next) = read_last(&format!("{}{}", p("Plain"), styled("Subtitle", "", "SubLast")), &p("HostAfter"));
+    assert_eq!(last, on(Some("Subtitle"), 0.0, 10.0, 0.0, Align::Center, false));
+    let next = next.unwrap();
+    assert_eq!((next.after, next.size), (12.4, 11.0));
+    // Its own paragraph formatting comes along: space before, alignment.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("", r#"<w:spacing w:before="60"/>"#, "BeforeLast")), "");
+    assert_eq!(last, on(None, 3.0, 12.4, 0.0, Align::Left, false));
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("Quote", r#"<w:jc w:val="right"/>"#, "QuoteRightLast")), "");
+    assert_eq!(last, on(Some("Quote"), 0.0, 10.0, 0.0, Align::Right, false));
+    // A style we don't have comes along, and the last paragraph keeps it: 18 pt in, right, bold.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("MyInd", "", "MyIndLast")), "");
+    assert_eq!((last.style.as_deref(), last.left, last.align, last.bold, last.size), (Some("MyInd"), 18.0, Align::Right, true, 12.0));
+    // A run's character style still beats its paragraph's style: 20 pt from the chunk's Strong,
+    // not bold like ours, not italic like our Subtitle (Word folds the style into the run; here
+    // it comes along renamed).
+    let strong = r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:rPr><w:rStyle w:val="Strong"/></w:rPr><w:t>Big</w:t></w:r></w:p>"#;
+    let (_, last, _) = read_last(&format!("{}{strong}", p("Plain")), "");
+    assert_eq!((last.style.as_deref(), last.size, last.bold, last.italic), (Some("Subtitle"), 20.0, false, false));
+    // Our style of its style's id is a character style: not one it can stand on, so it keeps the
+    // chunk's paragraph style, as one we don't have.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("Note", "", "NoteLast")), "");
+    assert_ne!(last.style.as_deref(), Some("Note"));
+    assert_eq!((last.left, last.align, last.bold, last.italic), (18.0, Align::Right, true, false));
+    // A style the chunk doesn't have is its Normal, as in Word, even where ours of that id is a
+    // character style: the last paragraph stands on our Normal like a plain one.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("Ghost", "", "GhostLast")), "");
+    assert_eq!(last, on(None, 0.0, 12.4, 0.0, Align::Left, false));
+    // Any other paragraph in it keeps the chunk's Normal: 12pt, nothing after, not italic.
+    let (first, _, _) = read_last(&format!("{}{}", styled("Ghost", "", "GhostFirst"), p("PlainLast")), "");
+    assert_eq!((first.after, first.size, first.italic), (0.0, 12.0, false));
 }
 
 #[test]
@@ -458,6 +559,26 @@ fn a_chunk_imported_twice_counts_its_dropped_pictures_past_the_list_once() {
     assert_eq!(d.missing_pictures.total, n as u64);
 }
 
+/// The chunk's last paragraph keeps its paragraph style's text effects effect by effect: a run's
+/// character style that gives a shadow still leaves the glow its paragraph style gave.
+#[test]
+fn a_match_src_chunks_last_paragraph_keeps_the_effects_its_character_style_leaves() {
+    const W14: &str = r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+    let ours = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:rPr><w:i/></w:rPr></w:style>"#;
+    let theirs = format!(
+        r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:rPr><w14:glow {W14} w14:rad="63500"><w14:srgbClr w14:val="FF0000"/></w14:glow></w:rPr></w:style><w:style w:type="character" w:styleId="Fx"><w:name w:val="Fx"/><w:rPr><w14:shadow {W14} w14:blurRad="38100" w14:dist="19050" w14:dir="2700000"><w14:srgbClr w14:val="000000"/></w14:shadow></w:rPr></w:style>"#
+    );
+    let chunk = r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:rPr><w:rStyle w:val="Fx"/></w:rPr><w:t>Glow and shadow</w:t></w:r></w:p>"#;
+    let inner = package_styled(chunk, None, Some(&theirs));
+    let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>"#, p("Ours"));
+    let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(ours))).unwrap();
+    let Block::Para(last) = &*d.body[1] else { panic!("{:?}", d.body[1]) };
+    assert_eq!(last.props.style.as_deref(), Some("Subtitle"), "on our Subtitle");
+    let fx = last.runs[0].props.text_effects.as_deref().expect("the paragraph style's glow, as direct formatting");
+    assert!(fx.glow.is_some(), "the glow the character style doesn't replace stays: {fx:?}");
+    assert!(fx.shadow.is_none(), "the shadow is the character style's own: {fx:?}");
+}
+
 #[test]
 fn a_part_a_chunk_could_not_read_is_listed_with_the_chunk() {
     let bytes = package(&format!("{}{CHUNK}", p("Before")), Some(("htm", "application/xhtml+xml", b"<p>x</p>")));
@@ -468,4 +589,123 @@ fn a_part_a_chunk_could_not_read_is_listed_with_the_chunk() {
     };
     let d = read_with(&bytes, &ReadOptions { chunks: Some(&import), ..Default::default() }).unwrap();
     assert_eq!(d.skipped_parts, vec!["word/afchunk.htm > word/media/image1.png".to_string()]);
+}
+
+/// Shading and text effects our style gives and the chunk's doesn't are taken off the chunk's last
+/// paragraph, as Word takes them off (Word for Windows, these documents: an automatic `w:shd`, a
+/// glow of radius 0, and so on); a paragraph of ours in the style keeps them.
+#[test]
+fn a_match_src_chunks_last_paragraph_takes_off_the_shading_and_effects_only_our_style_gives() {
+    const W14: &str = r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+    let ours = format!(
+        r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:rPr><w:shd w:val="clear" w:color="auto" w:fill="0000FF"/><w14:glow {W14} w14:rad="63500"><w14:srgbClr w14:val="FF0000"/></w14:glow><w14:textFill {W14}><w14:solidFill><w14:srgbClr w14:val="FF0000"/></w14:solidFill></w14:textFill></w:rPr></w:style>"#
+    );
+    let theirs = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/></w:style>"#;
+    let chunk = r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>ChunkLast</w:t></w:r></w:p>"#;
+    let inner = package_styled(chunk, None, Some(theirs));
+    let sub = r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>HostSub</w:t></w:r></w:p>"#;
+    let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>{sub}"#, p("Ours"));
+    let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(&ours))).unwrap();
+    let look = |i: usize| {
+        let Block::Para(p) = &*d.body[i] else { panic!("{:?}", d.body[i]) };
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        (p.props.style.clone(), c.shading, c.text_effects.is_some())
+    };
+    assert_eq!(look(1), (Some("Subtitle".into()), None, false), "the chunk's last paragraph");
+    assert_eq!(look(2), (Some("Subtitle".into()), Some(craft_wordmodel::Rgb(0, 0, 0xFF)), true), "ours");
+    // Saved and read back, the same.
+    let again = read(&craft_docx::write(&d).unwrap()).unwrap();
+    let Block::Para(p) = &*again.body[1] else { panic!() };
+    let c = again.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!((c.shading, c.text_effects.is_some()), (None, false));
+}
+
+/// What Word writes to take a style's shading and effects off a run (this XML is Word's, from such
+/// a chunk's last paragraph) draws none of them, and survives a save.
+#[test]
+fn words_own_way_of_taking_a_styles_shading_and_effects_off_draws_none() {
+    const W14: &str = r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+    let styles = format!(
+        r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Fx"><w:name w:val="Fx"/><w:rPr><w:shd w:val="clear" w:color="auto" w:fill="0000FF"/><w14:glow {W14} w14:rad="63500"><w14:srgbClr w14:val="FF0000"/></w14:glow><w14:shadow {W14} w14:blurRad="38100" w14:dist="19050" w14:dir="2700000" w14:sx="100000" w14:sy="100000" w14:kx="0" w14:ky="0" w14:algn="tl"><w14:srgbClr w14:val="000000"/></w14:shadow><w14:reflection {W14} w14:blurRad="6350" w14:stA="55000" w14:stPos="0" w14:endA="300" w14:endPos="45500" w14:dist="0" w14:dir="5400000" w14:fadeDir="5400000" w14:sx="100000" w14:sy="-100000" w14:kx="0" w14:ky="0" w14:algn="bl"/><w14:textOutline {W14} w14:w="9525" w14:cap="rnd" w14:cmpd="sng" w14:algn="ctr"><w14:solidFill><w14:srgbClr w14:val="00B050"/></w14:solidFill></w14:textOutline></w:rPr></w:style>"#
+    );
+    let run = format!(
+        r#"<w:p><w:pPr><w:pStyle w:val="Fx"/></w:pPr><w:r><w:rPr><w:shd w:val="clear" w:color="auto" w:fill="auto"/><w14:glow {W14} w14:rad="0"><w14:srgbClr w14:val="000000"/></w14:glow><w14:shadow {W14} w14:blurRad="0" w14:dist="0" w14:dir="0" w14:sx="0" w14:sy="0" w14:kx="0" w14:ky="0" w14:algn="none"><w14:srgbClr w14:val="000000"/></w14:shadow><w14:reflection {W14} w14:blurRad="0" w14:stA="0" w14:stPos="0" w14:endA="0" w14:endPos="0" w14:dist="0" w14:dir="0" w14:fadeDir="0" w14:sx="0" w14:sy="0" w14:kx="0" w14:ky="0" w14:algn="none"/><w14:textOutline {W14} w14:w="0" w14:cap="rnd" w14:cmpd="sng" w14:algn="ctr"><w14:noFill/></w14:textOutline></w:rPr><w:t>Plain</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Fx"/></w:pPr><w:r><w:t>Styled</w:t></w:r></w:p>"#
+    );
+    let d = read(&package_styled(&run, None, Some(&styles))).unwrap();
+    for (when, d) in [("read", d.clone()), ("after a save", read(&craft_docx::write(&d).unwrap()).unwrap())] {
+        let look = |i: usize| {
+            let Block::Para(p) = &*d.body[i] else { panic!() };
+            let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+            (c.shading.is_some(), c.text_effects.map(|t| (t.glow.is_some(), t.shadow.is_some(), t.reflection.is_some(), t.outline.is_some())))
+        };
+        assert_eq!(look(0), (false, None), "{when}: the run that takes them off");
+        assert_eq!(look(1), (true, Some((true, true, true, true))), "{when}: the style's own");
+    }
+}
+
+/// A `w:matchSrc` chunk's paragraphs before the last come in without their style's `w:cs` and
+/// `w:rtl`, as Word brings them (measured in Word for Windows: it gives them their style's look as
+/// direct formatting on Normal, bold and sizes but neither of those), whether or not we have a
+/// style of that id. The last paragraph keeps its style's when we don't have one of that id.
+#[test]
+fn a_match_src_chunks_other_paragraphs_leave_their_styles_complex_script_and_direction() {
+    for flag in ["cs", "rtl"] {
+        let theirs = format!(
+            r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:{flag}/><w:sz w:val="22"/><w:szCs w:val="48"/></w:rPr></w:style>"#
+        );
+        let para = |t: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>{t}</w:t></w:r></w:p>"#);
+        let chunk = format!(r#"{}{}<w:tbl><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>{}"#, para("First"), para("Middle"), para("Cell"), para("Last"));
+        let inner = package_styled(&chunk, None, Some(&theirs));
+        for ours_too in [true, false] {
+            let mut ours = String::from(r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#);
+            if ours_too {
+                ours.push_str(r#"<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="22"/><w:szCs w:val="48"/></w:rPr></w:style>"#);
+            }
+            let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>"#, p("Ours"));
+            let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(&ours))).unwrap();
+            for (when, d) in [("read", d.clone()), ("after a save", read(&craft_docx::write(&d).unwrap()).unwrap())] {
+                let mut seen = Vec::new();
+                for b in &d.body {
+                    craft_wordmodel::walk::each_para(b, 0, &mut |p| {
+                        let Some(r) = p.runs.first() else { return };
+                        let c = d.styles.resolve_char(p.props.style.as_deref(), &r.props);
+                        seen.push((p.text.clone(), c.cs || c.rtl, c.uses_complex('A'), c.uses_complex('\u{0E01}'), c.bold, c.size));
+                    });
+                }
+                let case = format!("{flag}, our Subtitle {ours_too}, {when}");
+                for name in ["First", "Middle", "Cell"] {
+                    let s = seen.iter().find(|s| s.0 == name).unwrap_or_else(|| panic!("{case}: no {name}: {seen:?}"));
+                    assert_eq!((s.1, s.2), (false, false), "{case}: {name} is neither complex script nor right to left");
+                    // Thai too, where the style said `w:cs` (left alone, WordCraft draws Thai
+                    // complex script by itself).
+                    assert!(flag != "cs" || !s.3, "{case}: {name}'s Thai");
+                    assert_eq!((s.4, s.5), (true, 11.0), "{case}: {name} keeps its style's bold and size");
+                }
+                if !ours_too {
+                    let last = seen.iter().find(|s| s.0 == "Last").unwrap_or_else(|| panic!("{case}: {seen:?}"));
+                    assert!(last.1 && last.2, "{case}: the last paragraph keeps its style's {flag}: {seen:?}");
+                }
+            }
+        }
+    }
+}
+
+/// A paragraph style a Word chunk names but doesn't define is its Normal, even when the chunk's
+/// styles part has no quick style: the gallery such a file gets doesn't make Subtitle one of the
+/// chunk's, so its paragraphs don't land on our Subtitle (nor on a gallery copy of it).
+#[test]
+fn a_chunk_without_quick_styles_keeps_an_undefined_style_its_normal() {
+    let theirs = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#;
+    let para = |t: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>{t}</w:t></w:r></w:p>"#);
+    let inner = package_styled(&format!("{}{}", para("First"), para("Last")), None, Some(theirs));
+    let ours = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:qFormat/><w:rPr><w:sz w:val="56"/></w:rPr></w:style>"#;
+    let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>"#, p("Ours"));
+    let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(ours))).unwrap();
+    for (i, name) in [(1, "First"), (2, "Last")] {
+        let Block::Para(p) = &*d.body[i] else { panic!("{:?}", d.body[i]) };
+        assert_eq!(p.text, name);
+        let style = p.props.style.clone().unwrap_or_default();
+        assert!(!style.starts_with("Subtitle"), "{name} is in the chunk's Normal, not {style}");
+        assert_eq!(d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 10.0, "{name}: Word's size of a Normal without one");
+    }
 }

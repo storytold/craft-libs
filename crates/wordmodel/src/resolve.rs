@@ -52,7 +52,7 @@ pub struct ResolvedChar {
     pub shadow: bool,
     pub emboss: bool,
     pub engrave: bool,
-    /// WordArt text effects (sanitized; `None` when there are none).
+    /// WordArt text effects (sanitized, only those that draw anything; `None` when there are none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_effects: Option<Box<crate::wordart::TextEffects>>,
     pub link: Option<String>,
@@ -111,7 +111,7 @@ impl ResolvedChar {
             shadow: c.shadow.unwrap_or(false),
             emboss: c.emboss.unwrap_or(false),
             engrave: c.engrave.unwrap_or(false),
-            text_effects: c.text_effects.as_deref().map(crate::wordart::TextEffects::sanitized).filter(|t| !t.is_empty()).map(Box::new),
+            text_effects: c.text_effects.as_deref().map(|t| t.sanitized().visible()).filter(|t| !t.is_empty()).map(Box::new),
             link: c.link.clone(),
             ins: c.ins,
             del: c.del,

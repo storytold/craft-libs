@@ -83,6 +83,7 @@ fn every_char_prop_round_trips() {
         color: Some(TextColor::Rgb(Rgb(0xAA, 0x10, 0x20))),
         highlight: Some(Highlight::Turquoise),
         shading: Some(Rgb(0xEE, 0xEE, 0x00)),
+        shading_auto: None,
         border: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0xC0, 0, 0)), space: 2.0 }),
         vert_align: Some(VertAlign::Superscript),
         caps: Some(true),

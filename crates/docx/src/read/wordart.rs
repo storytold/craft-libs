@@ -26,7 +26,11 @@ pub(crate) fn read(e: &El, theme: &[Rgb], fx: &mut TextEffects) -> bool {
             fx.outline = Some(TextOutline { color, width: emu(e, "w14:w"), transparency });
         }
         "w14:shadow" => {
-            let (color, transparency) = color(e, theme).unwrap_or((Rgb::BLACK, 60.0));
+            let (color, mut transparency) = color(e, theme).unwrap_or((Rgb::BLACK, 60.0));
+            // Scaled to nothing: the shadow Word writes to take a style's shadow off a run.
+            if ["w14:sx", "w14:sy"].iter().any(|n| e.attr(n).and_then(int) == Some(0)) {
+                transparency = 100.0;
+            }
             fx.shadow = Some(
                 Shadow {
                     color,
@@ -41,7 +45,8 @@ pub(crate) fn read(e: &El, theme: &[Rgb], fx: &mut TextEffects) -> bool {
         }
         "w14:glow" => {
             let (color, transparency) = color(e, theme).unwrap_or((Glow::default().color, 60.0));
-            fx.glow = Some(Glow { color, size: emu(e, "w14:rad"), transparency }.sanitized()).filter(|g| g.size > 0.0);
+            // Radius 0 is kept: it takes a style's glow off the run.
+            fx.glow = Some(Glow { color, size: emu(e, "w14:rad"), transparency }.sanitized());
         }
         "w14:reflection" => {
             // Start opacity and the end position of the fade (both 1000ths of a percent).
