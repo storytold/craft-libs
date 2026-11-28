@@ -61,7 +61,14 @@ fn cone(order: &[usize], triangles: &[[DVec2; 3]]) -> Option<Cone> {
             high = (angle, p);
         }
     }
-    (high.0 - low.0 < std::f64::consts::PI).then_some(Cone { center, low: low.1, high: high.1, low_bound: 0.0, high_bound: 0.0 })
+    if high.0 - low.0 >= std::f64::consts::PI {
+        return None;
+    }
+    // Bounds from the vertices, as supported_cone takes them: rays whose angles round to a tie
+    // can put a vertex just past the chosen ray.
+    let low_bound = order.iter().flat_map(|i| triangles[*i]).map(|p| low.1.perp_dot(p - center)).fold(0.0, f64::min);
+    let high_bound = order.iter().flat_map(|i| triangles[*i]).map(|p| high.1.perp_dot(p - center)).fold(0.0, f64::max);
+    Some(Cone { center, low: low.1, high: high.1, low_bound, high_bound })
 }
 
 fn supported_cone(order: &[usize], triangles: &[[DVec2; 3]], center: DVec2) -> Option<Cone> {
@@ -348,6 +355,37 @@ mod tests {
             let expected = (face + 1..triangles.len()).any(|other| intersects(&triangles[face], &triangles[other]));
             assert_eq!(query(root, face, triangles, &order, &nodes, &mut unlimited()), expected, "face {face}: {:?}", triangles[face]);
         }
+    }
+
+    #[test]
+    fn shared_vertex_cones_bound_every_vertex() {
+        // Rays from the shared vertex at nearly the same angle: their angles can round to a tie
+        // while the later ray lies on the far side of the first.
+        let mut checked = 0;
+        for k in 1..64u32 {
+            // Steps of one unit in the last place of 0.001.
+            let delta = f64::from(k) * 2.0f64.powi(-62);
+            let (p, q) = (DVec2::new(1.0, 0.001), DVec2::new(1.0, 0.001 - delta));
+            let r = DVec2::new(0.2, 1.0);
+            for rotation in 0..3 {
+                let mut fan = [[DVec2::ZERO, p, r], [DVec2::ZERO, q, r]];
+                for t in &mut fan {
+                    t.rotate_left(rotation);
+                }
+                let order = [0, 1];
+                let Some(c) = cone(&order, &fan) else { continue };
+                for v in fan.iter().flatten() {
+                    assert!(c.low.perp_dot(*v - c.center) >= c.low_bound, "k {k} rotation {rotation}: {v} below the low ray");
+                    assert!(c.high.perp_dot(*v - c.center) <= c.high_bound, "k {k} rotation {rotation}: {v} above the high ray");
+                }
+                // A face touching the fan only along the shared vertex's low ray does not overlap it.
+                let mut with_contact = fan.to_vec();
+                with_contact.push([DVec2::ZERO, DVec2::new(1.0, -1.0), p]);
+                agrees_with_all_pairs(&with_contact);
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
     }
 
     #[test]
