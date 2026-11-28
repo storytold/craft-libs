@@ -111,6 +111,9 @@ conventions; nothing imitates the Windows directory tree. Linux settings live un
 `XDG_CONFIG_HOME` and persistent models under `XDG_DATA_HOME` (`~/.local/share/ArtCraft/models`)
 per [settings-storage.md](settings-storage.md).
 
+See the [shared installation progress proposal](setup-progress-proposal.md) for
+the common view and platform-specific performance checks.
+
 ## Models are not caches
 
 Downloaded model files are persistent user assets. An app's cache cleanup and an app's
