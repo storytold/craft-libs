@@ -650,7 +650,11 @@ fn axes(w: &mut Writer, c: &Chart, g: Group, kind: ChartType, secondary: bool) {
         Some(f) => w.tag("c:numFmt").attr("formatCode", f).attr("sourceLinked", 0).empty(),
         // A generated General value cache is not an authored source format. Keep the
         // typed percent default authoritative instead of linking it to that synthetic code.
-        None => w.tag("c:numFmt").attr("formatCode", if kind.percent() { "0%" } else { "General" }).attr("sourceLinked", u8::from(!kind.percent())).empty(),
+        None => w
+            .tag("c:numFmt")
+            .attr("formatCode", if kind.percent() { "0%" } else { "General" })
+            .attr("sourceLinked", u8::from(!kind.percent()))
+            .empty(),
     }
     w.tag("c:majorTickMark").attr("val", "none").empty();
     w.tag("c:minorTickMark").attr("val", "none").empty();
@@ -1521,7 +1525,8 @@ mod tests {
         // Original two-axis percent chart: only the optional source/axis format differs.
         // No authored source format means the model's 0% default; authored General means
         // a numeric axis. An explicitly unlinked custom axis remains authoritative too.
-        for (source_format, axis_format, expected) in [(None, None, "50%"), (Some("General"), None, "0.5"), (Some("General"), Some("0.0%"), "50.0%")] {
+        for (source_format, axis_format, expected) in [(None, None, "50%"), (Some("General"), None, "0.5"), (Some("General"), Some("0.0%"), "50.0%")]
+        {
             let source = source_format.map(|f| format!("<c:formatCode>{f}</c:formatCode>")).unwrap_or_default();
             let axis = axis_format.map(|f| format!(r#"<c:numFmt formatCode="{f}" sourceLinked="0"/>"#)).unwrap_or_default();
             let mut plot = String::new();
@@ -1531,7 +1536,9 @@ mod tests {
                 plot.push_str(&format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/><c:ser><c:idx val="{index}"/><c:order val="{index}"/><c:tx><c:v>{name}</c:v></c:tx><c:cat><c:strLit><c:pt idx="0"><c:v>x</c:v></c:pt></c:strLit></c:cat><c:val><c:numRef><c:f>{name}!B2</c:f><c:numCache>{source}<c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:dLbls><c:showVal val="1"/></c:dLbls><c:axId val="{category}"/><c:axId val="{value}"/></c:barChart>"#));
                 axes.push_str(&format!(r#"<c:catAx><c:axId val="{category}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="{value}"/></c:catAx><c:valAx><c:axId val="{value}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="{pos}"/>{axis}<c:crossAx val="{category}"/></c:valAx>"#));
             }
-            let xml = format!(r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>{plot}{axes}</c:plotArea></c:chart></c:chartSpace>"#);
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>{plot}{axes}</c:plotArea></c:chart></c:chartSpace>"#
+            );
             let mut chart = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
             assert_eq!(chart.kind, ChartType::PercentColumn);
             assert_eq!(chart.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
@@ -1545,11 +1552,22 @@ mod tests {
             assert!(!kept, "the title edit really exercises the writer");
             let back = crate::chart::read::read_chart_xml(&written).unwrap();
             for secondary in [false, true] {
-                assert_eq!(back.axis_label(secondary, 0.5), expected, "source={source_format:?}, authored axis={axis_format:?}, secondary={secondary}");
+                assert_eq!(
+                    back.axis_label(secondary, 0.5),
+                    expected,
+                    "source={source_format:?}, authored axis={axis_format:?}, secondary={secondary}"
+                );
             }
             assert_eq!(back.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
-            assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>());
-            assert_eq!(back.series.iter().map(|s| back.data_label(s, 0.5)).collect::<Vec<_>>(), data_labels, "do not change effective data labels while repairing the axis default");
+            assert_eq!(
+                back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(),
+                chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                back.series.iter().map(|s| back.data_label(s, 0.5)).collect::<Vec<_>>(),
+                data_labels,
+                "do not change effective data labels while repairing the axis default"
+            );
             let root = crate::xmlx::parse(&written).unwrap();
             let pa = root.path(&[craft_xml::Local("chart"), craft_xml::Local("plotArea")]).unwrap();
             for ax in pa.children(craft_xml::Local("valAx")) {
@@ -1569,7 +1587,6 @@ mod tests {
         let back = crate::chart::read::read_chart_xml(&super::chart_xml(&chart).0).unwrap();
         assert_eq!(back.axis_label(false, 0.5), "0.5");
     }
-
 }
 
 #[cfg(test)]

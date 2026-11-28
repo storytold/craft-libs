@@ -509,8 +509,7 @@ impl<'a> AxisRelations<'a> {
         let y_role = |id, cross| {
             self.values.contains_key(&(id, cross))
                 && self.partners.get(&(cross, id)).copied().flatten().is_some_and(|partner| {
-                    partner.is(Local("valAx"))
-                        && matches!(partner.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("b" | "t"))
+                    partner.is(Local("valAx")) && matches!(partner.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("b" | "t"))
                 })
         };
         match (y_role(first, second), y_role(second, first)) {
@@ -519,7 +518,6 @@ impl<'a> AxisRelations<'a> {
             _ => fallback(), // No unique role evidence: keep the established fallback.
         }
     }
-
 }
 
 /// The primary value axis is the one on the left (bottom for bar charts); the secondary one
@@ -2020,7 +2018,11 @@ mod tests {
             assert_eq!(value.child(Local("axPos")).and_then(|a| a.attr_local("val")), Some(if kind.horizontal() { "b" } else { "l" }));
             let format = value.child(Local("numFmt")).unwrap();
             assert_eq!(format.attr_local("formatCode"), Some(if kind.percent() { "0%" } else { "General" }));
-            assert_eq!(format.attr_local("sourceLinked"), Some(if kind.percent() { "0" } else { "1" }), "a percent default must not link to the generated General cache");
+            assert_eq!(
+                format.attr_local("sourceLinked"),
+                Some(if kind.percent() { "0" } else { "1" }),
+                "a percent default must not link to the generated General cache"
+            );
         }
     }
 
@@ -3595,12 +3597,14 @@ mod tests {
         }
     }
 
-
     #[test]
     fn review_6096417042_unresolved_numeric_formats_follow_the_value_axis_role() {
         for kind in ["scatterChart", "bubbleChart"] {
-            let size = if kind == "bubbleChart" { r#"<c:bubbleSize><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:bubbleSize>"# } else { "" };
-            let group = format!(r#"<c:{kind}><c:ser><c:tx><c:v>Overlay</c:v></c:tx><c:xVal><c:numLit><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:formatCode>0%</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numLit></c:yVal>{size}</c:ser><c:axId val="10"/><c:axId val="20"/></c:{kind}>"#);
+            let size =
+                if kind == "bubbleChart" { r#"<c:bubbleSize><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:bubbleSize>"# } else { "" };
+            let group = format!(
+                r#"<c:{kind}><c:ser><c:tx><c:v>Overlay</c:v></c:tx><c:xVal><c:numLit><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:formatCode>0%</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numLit></c:yVal>{size}</c:ser><c:axId val="10"/><c:axId val="20"/></c:{kind}>"#
+            );
             let x = review_6095656137_axis("valAx", 10, 20, "b", 12, "");
             let y = review_6095656137_axis("valAx", 20, 10, "r", 90, r#"<c:numFmt formatCode="0.000" sourceLinked="true"/>"#);
             let duplicate_y = review_6095656137_axis("valAx", 20, 10, "r", 70, "");
@@ -3618,7 +3622,10 @@ mod tests {
                 assert_eq!(current.axis_label(false, 0.5), "0.50");
                 assert_eq!(current.series[0].values, [Some(0.5)]);
                 assert_eq!(current.series[0].x_values, [Some(30.0)]);
-                assert_eq!(current.series[0].secondary_axis, old.series[0].secondary_axis, "this format fix does not change ambiguous-series classification");
+                assert_eq!(
+                    current.series[0].secondary_axis, old.series[0].secondary_axis,
+                    "this format fix does not change ambiguous-series classification"
+                );
                 assert_eq!((current.y_max, current.y2_max), (old.y_max, old.y2_max));
                 if current.series[0].secondary_axis {
                     assert_eq!(current.y2_format.as_deref(), Some("0%"), "the unresolved Y numeric role remains eligible");
@@ -3652,7 +3659,11 @@ mod tests {
 
     #[test]
     fn review_6096417042_axis_formats_only_use_retained_series_prefixes() {
-        let ser = |i: usize, code: &str| format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:tx><c:v>S{i}</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache><c:formatCode>{code}</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#);
+        let ser = |i: usize, code: &str| {
+            format!(
+                r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:tx><c:v>S{i}</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache><c:formatCode>{code}</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#
+            )
+        };
         let cat = review_6095656137_axis("catAx", 10, 20, "b", 1, "");
         let val = review_6095656137_axis("valAx", 20, 10, "l", 1, r#"<c:numFmt formatCode="0.000" sourceLinked="true"/>"#);
         for usable in [999, 1000] {
