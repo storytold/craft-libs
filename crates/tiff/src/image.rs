@@ -155,6 +155,7 @@ impl ImageInfo {
         let mut sorted: Vec<u64> = Vec::new();
         if (0..n).any(|i| self.byte_counts.get(i).is_none_or(|&l| l == 0)) {
             sorted = self.offsets.clone();
+            count_offset_reads(sorted.len());
             sorted.sort_unstable();
             sorted.dedup();
         }
@@ -173,7 +174,13 @@ impl ImageInfo {
                 Some(&l) if l > 0 => l,
                 _ => {
                     // infer: up to the next larger offset, else end of data
-                    let next = sorted.get(sorted.partition_point(|&o| o <= offset)).copied().unwrap_or(data_len);
+                    let next = sorted
+                        .get(sorted.partition_point(|&o| {
+                            count_offset_reads(1);
+                            o <= offset
+                        }))
+                        .copied()
+                        .unwrap_or(data_len);
                     next.saturating_sub(offset)
                 }
             };
@@ -181,6 +188,30 @@ impl ImageInfo {
         }
         out
     }
+}
+
+// The offsets `ImageInfo::chunks` sorts and then reads to infer missing byte counts, on this
+// thread, and the most a test lets it read: past that the count fails the test at once rather
+// than after the rest of the work.
+#[cfg(test)]
+std::thread_local! {
+    static OFFSET_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static OFFSET_READ_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+#[inline]
+fn count_offset_reads(count: usize) {
+    #[cfg(test)]
+    {
+        let reads = OFFSET_READS.with(|reads| {
+            reads.set(reads.get().saturating_add(count));
+            reads.get()
+        });
+        let limit = OFFSET_READ_LIMIT.with(std::cell::Cell::get);
+        assert!(reads <= limit, "{reads} offsets read, more than the {limit} allowed");
+    }
+    #[cfg(not(test))]
+    let _ = count;
 }
 
 /// The bytes of a chunk, clipped to the available data (truncated files yield a shorter slice).
@@ -229,12 +260,12 @@ mod tests {
     fn many_strips_without_byte_counts_are_fast() {
         let n = 1_000_000u64;
         let info = strips((0..n).rev().map(|i| 1000 + i * 2).collect(), Vec::new());
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let chunks = info.chunks(1000 + n * 2);
-            let _ = tx.send(chunks.iter().map(|c| c.len).collect::<Vec<u64>>());
-        });
-        let lens = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("chunks() took longer than 20 s");
+        // One sort of the offsets, then a bisection of them per strip, not a scan or a sort per strip.
+        let per_strip = n.ilog2() as usize + 2;
+        OFFSET_READS.with(|reads| reads.set(0));
+        OFFSET_READ_LIMIT.with(|limit| limit.set(n as usize * (per_strip + 1)));
+        let lens: Vec<u64> = info.chunks(1000 + n * 2).iter().map(|c| c.len).collect();
+        OFFSET_READ_LIMIT.with(|limit| limit.set(usize::MAX));
         assert!(lens.iter().all(|&l| l == 2));
     }
 }
