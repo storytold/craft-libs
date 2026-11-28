@@ -258,6 +258,8 @@ pub fn part_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize),
                 right: if last_g { b.right } else { b.inside_v },
                 between: None,
                 inside_v: None,
+                tl2br: None,
+                tr2bl: None,
             }
         } else if part.is_column() {
             Borders {
@@ -267,9 +269,11 @@ pub fn part_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize),
                 right: b.right,
                 between: None,
                 inside_v: None,
+                tl2br: None,
+                tr2bl: None,
             }
         } else {
-            Borders { between: None, inside_v: None, ..b }
+            Borders { between: None, inside_v: None, tl2br: None, tr2bl: None, ..b }
         };
         out.overlay(&mapped);
     }

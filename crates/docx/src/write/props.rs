@@ -298,6 +298,15 @@ pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[
     if let Some(x) = &b.right {
         border_el(w, "w:right", x);
     }
+    // Cell diagonals: only a cell's own borders carries them (`w:tcBorders`).
+    if tag == "w:tcBorders" {
+        if let Some(x) = &b.tl2br {
+            border_el(w, "w:tl2br", x);
+        }
+        if let Some(x) = &b.tr2bl {
+            border_el(w, "w:tr2bl", x);
+        }
+    }
     if let Some(name) = inner {
         if let Some(x) = &b.between {
             border_el(w, name, x);

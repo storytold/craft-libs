@@ -350,14 +350,18 @@ pub struct Borders {
     pub between: Option<Border>,
     /// Inside vertical (tables).
     pub inside_v: Option<Border>,
+    /// Cell diagonals: top-left to bottom-right (`w:tl2br`) and top-right to bottom-left
+    /// (`w:tr2bl`).
+    pub tl2br: Option<Border>,
+    pub tr2bl: Option<Border>,
 }
 
 impl Borders {
     pub fn all(b: Border) -> Borders {
-        Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b) }
+        Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b), tl2br: None, tr2bl: None }
     }
     pub fn box_(b: Border) -> Borders {
-        Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: None, inside_v: None }
+        Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: None, inside_v: None, tl2br: None, tr2bl: None }
     }
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
@@ -376,6 +380,8 @@ impl Borders {
             right: side(self.right),
             between: side(self.between),
             inside_v: side(self.inside_v),
+            tl2br: side(self.tl2br),
+            tr2bl: side(self.tr2bl),
         }
     }
     /// A side is drawn, or a paragraph side without a line holds padding (ODF's, which keeps
