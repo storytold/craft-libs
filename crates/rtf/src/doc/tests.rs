@@ -2435,3 +2435,16 @@ fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page()
     assert_eq!(flow.meta.title, "A—аà");
     assert_eq!(texts(&flow), ["Normal:Body"]);
 }
+
+/// `\keepn` keeps a paragraph with the next one and `\keep` keeps its lines together
+/// (OOXML `w:keepNext`/`w:keepLines`); a paragraph without them stays clear (#7097).
+#[test]
+fn keep_and_keepn_are_read() {
+    let d = import(br"{\rtf1\ansi\pard\keepn Heading\par\pard\keep Body\par\pard Plain\par}").unwrap();
+    let paras: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
+    assert_eq!(paras.len(), 3, "{:?}", d.body.len());
+    assert_eq!(paras[0].props.keep_next, Some(true), "keepn sets keep_next");
+    assert_eq!(paras[1].props.keep_lines, Some(true), "keep keeps the lines together");
+    assert_eq!(paras[2].props.keep_next, None, "a paragraph without the words stays clear");
+    assert_eq!(paras[2].props.keep_lines, None, "a paragraph without the words stays clear");
+}

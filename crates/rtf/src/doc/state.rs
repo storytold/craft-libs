@@ -229,6 +229,10 @@ pub(super) struct St {
     pub(super) ilvl: u8,
     pub(super) outline: Option<u8>,
     pub(super) pagebb: bool,
+    /// `\keepn`: keep the paragraph with the next one (`w:keepNext`).
+    pub(super) keepn: bool,
+    /// `\keep`: keep the paragraph's lines together (`w:keepLines`).
+    pub(super) keep: bool,
     pub(super) field: Option<usize>,
     /// Inside a group of shapes (`\shpgrp`), whose members are not read as shapes of their own.
     pub(super) in_shpgrp: bool,
@@ -269,6 +273,8 @@ impl Default for St {
             ilvl: 0,
             outline: None,
             pagebb: false,
+            keepn: false,
+            keep: false,
             field: None,
             in_shpgrp: false,
             cp: None,

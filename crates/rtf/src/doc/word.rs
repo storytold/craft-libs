@@ -200,6 +200,8 @@ impl Reader {
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,
+            "keepn" => self.st.keepn = on,
+            "keep" => self.st.keep = on,
             "intbl" => self.st.intbl = true,
             "ls" => self.st.ls = Some(pv),
             "ilvl" => self.st.ilvl = pv.clamp(0, 8) as u8,
