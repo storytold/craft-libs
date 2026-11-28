@@ -41,6 +41,11 @@
 //! configuration error. `skip::required` reads such a variable under this rule for any caller.
 //! It is not built for `wasm32`. `skip::craft_fonts_cover` needs the `font-coverage` feature.
 //!
+//! `oracle` finds external oracle programs such as ffmpeg and qpdf, probes their version under a
+//! byte limit and a timeout, and caches the result for the process. Its `require_oracle!`,
+//! `require_ffmpeg!` and `require_ffprobe!` macros skip or fail the calling test through `skip`
+//! when a program is missing. It is not built for `wasm32`.
+//!
 //! With the `corpus` feature, `corpus` (native only) parses pinned-corpus manifests and checks a
 //! corpus folder against them: `corpus::Manifest`, `corpus::verify` and the test gate
 //! `corpus::pinned`, which skips or fails under the rule of `skip`.
@@ -74,6 +79,10 @@ pub mod guards;
 pub mod hostile;
 #[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
 pub mod mcp;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod oracle;
+#[cfg(not(target_arch = "wasm32"))]
+mod process;
 pub mod rng;
 pub mod sample_damage;
 #[cfg(not(target_arch = "wasm32"))]

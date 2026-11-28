@@ -12,7 +12,7 @@ take it under `[dev-dependencies]`.
 1. **`predefined_quit`**: Flags direct calls to `muda`'s `PredefinedMenuItem::quit` outside comments, strings and character literals, also with whitespace or a line break around `::`, in the qualified form `<muda::PredefinedMenuItem>::quit`, and through a `use muda::PredefinedMenuItem as ...` rename. A type of the same name reached through another crate or module, such as `other::PredefinedMenuItem::quit`, is not flagged. On macOS, this predefined menu item routes directly to `NSApplication terminate:`, completely bypassing application dirty document checks and unsaved changes save prompts. Applications should instead wire Quit through `craft-quit` lifecycle interceptors.
 2. **`wgsl_float_literals` / `wgsl_float_literals_in`**: Scans WGSL shader sources and flags decimal and hexadecimal float literals whose value, rounded to `f64`, exceeds `f32::MAX` (such as `3.40282347e38` or `0x1p+500f`), or 65504, the largest finite `f16`, for a literal with an `h` suffix. A literal that exceeds the maximum by less than `f64` precision rounds to the maximum and is not reported. Integer literals are not checked. Some native compilers round such literals down, but browser WebGPU compilers reject them with pipeline compilation errors, forcing applications into CPU fallback rendering. `f32::MAX` can be written as the hex float `0x1.fffffep+127f`, which equals it, or as the decimal `3.4028234663852886e38`, which rounds to it.
 3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`, under any name. The parts of a path may be split by whitespace, comments or line breaks. Other crates' `Instant` (such as `web_time::Instant` or `tokio::time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`; code before that attribute or after its item on the same line is still checked. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
-4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file that starts with the line `Signature: 8a477f597d28d172789f06886806bc55`, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
+4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), benchmarks (`benches/`), examples (`examples/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`, `test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file that starts with the line `Signature: 8a477f597d28d172789f06886806bc55`, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
 
 ## Random test input: `rng`
 
@@ -258,6 +258,40 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## oracle
+
+`craft_testkit::oracle` finds the external programs that tests compare against, such as ffmpeg, ffprobe, qpdf, `pdftoppm` and `pdftotext`. It is not built for `wasm32`.
+
+`find(program, version_arg)` takes a bare file name: a name that is empty, `.` or `..`, or contains `/`, `\`, `:` or NUL returns `OracleError::InvalidName`. It looks in this order:
+
+1. The file that `CRAFT_<PROGRAM>` names, for example `CRAFT_FFMPEG`. `find_with` takes the variable name from the caller, such as `FILMCRAFT_FFMPEG` or `CRAFT_MEDIA_FFMPEG`. An empty value counts as unset. When the value fails the candidate check described in step 2, or the OS refuses to start it for lack of execute permission, the lookup returns `OracleError::InvalidExplicitPath`. Any other failure to start it, such as a missing script interpreter, returns `OracleError::Start`. Neither error leads to a search of `PATH` or the install folders.
+2. Each directory on `PATH`, in order. Empty entries are skipped, and a relative entry is resolved against the current directory at the time of the lookup. On Windows the search tries `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists. Elsewhere it tries the bare name, then `<name>.exe`. A file the OS cannot start is skipped: on Windows a file whose extension is not `.com`, `.exe`, `.bat` or `.cmd` (in any case), and on Unix a file the current process does not have permission to execute.
+3. The install folders `known_dirs()` returns: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/opt/local/bin` and `/snap/bin`, or on Windows `C:\ffmpeg\bin`, `C:\Program Files\ffmpeg\bin` and `C:\ProgramData\chocolatey\bin`.
+
+The program found is run once with `version_arg` and standard input closed. `Oracle::version()` is the first non-blank line of its standard output, or of its standard error when standard output is blank. `ProbeLimits` bounds the run: each output stream may hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or the byte limit. On Unix the child runs in its own process group, and the whole group is killed. On Windows the child and its descendants run in a Job Object and are stopped together through `process-wrap`. A process that outlives the kill and holds an output pipe keeps that pipe's reader thread blocked until it exits; the failed probe waits up to 2 seconds for the readers and then returns without them. At most 64 pipe readers may be alive in one test process, and while that many are, a probe returns `OracleError::Read` without starting a reader. `ProbeLimits::VERSION` (the default) allows 64 KiB per stream and 5 seconds, and `ProbeLimits::LISTING` allows 1 MiB per stream and 5 seconds. These values are this crate's own defaults. A timeout too long to set a deadline, such as `Duration::MAX`, returns `OracleError::InvalidTimeout` without starting the program. A successful lookup is cached for the process under every input it read; a failed lookup is not cached, so the next call searches again.
+
+On Windows, drive-relative paths such as `C:tools\qpdf.exe` use the captured current directory on the same drive, or that drive's current directory otherwise. Returned executable paths are absolute. The resolved executable path is part of the cache key.
+
+After one version probe succeeds, concurrent and later lookups with the same cache key reuse its
+result. A failed probe can be retried by a waiting or later lookup.
+If a Unix permission query is unavailable, the lookup attempts to start the candidate. An execution
+permission denial continues the search, or rejects an explicit path. Other failures to start return
+`OracleError::Start`. Unix process-group
+cleanup sends a signal directly. An exit observed after the probe deadline returns a timeout.
+
+`find_in` takes the explicit path, the `PATH` list and the install folders as arguments, so a test can search folders it made without changing the process environment.
+
+`ffmpeg_supports_format(ff, name, limits)` runs `ffmpeg -hide_banner -formats` and looks for `name` in the name column only. A run that fails to start, passes `limits` or exits with a failure status returns an error. `ffmpeg_version(ff)` reads the version from ffmpeg's banner line.
+
+No function panics. `require_oracle!`, `require_ffmpeg!` and `require_ffprobe!` expand in the calling test:
+
+```rust
+let qpdf = craft_testkit::require_oracle!(craft_testkit::oracle::find("qpdf", "--version"), "PDFCRAFT_ORACLES_REQUIRED");
+let ff = craft_testkit::require_ffmpeg!("FILMCRAFT_FFMPEG", "FILMCRAFT_REQUIRE_ORACLES");
+```
+
+A missing program goes to `skip::skip` with the required variable the caller names (`skip::REQUIRED_VAR`, `CRAFT_TEST_REQUIRED`, by default). The test prints a `SKIPPED:` line and returns, or fails, under the rule in the `skip` section below. `oracle::outcome` sorts a lookup result into `Outcome::Missing` and `Outcome::Fail` without reading the required variable's value. A required variable name that is empty or holds `=` or a NUL character fails the test even when the program is found. Every other error, such as a wrong explicit path, a timeout or output over the limit, fails the test.
+
 ## mcp
 
 The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The module is built on every target except `wasm32`, and it opens no network connection.
@@ -348,6 +382,9 @@ variable reads it with `skip::required`, so one rule applies to all of them.
 The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
 `CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
 `skip::REQUIRED_VAR` (`CRAFT_TEST_REQUIRED`) is the default name.
+
+The example assumes `find_qpdf()` reports only an absent program. Use `require_oracle!` with
+`oracle::find` so other lookup errors fail the test. Optional skips ignore stderr write failures.
 
 ```rust
 use craft_testkit::skip::{REQUIRED_VAR, craft_fonts, skip};
@@ -451,6 +488,15 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
 
+### oracle
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| Search order, `find_in`, format and version parsing, `require_ffmpeg!`, `require_ffprobe!` | storytold/filmcraft | `crates/testkit/src/oracle.rs`, `crates/testkit/src/lib.rs` | `e4ab3c6a` |
+| `Oracle`, the version probe, install hints, `or_skip!` | storytold/pdfcraft | `crates/oracle/src/lib.rs` | `eead4541` |
+| The same probe, with `CRAFT_PDF_ORACLES_REQUIRED` | storytold/craft-libs | `crates/pdf/tests/cos/oracle.rs` | `75a654f4` |
+| Search order and install folders | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4` |
+
 ### mcp
 
 | Code | Repository | Path | SHA |
@@ -532,6 +578,19 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### oracle
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| `craft-media-testkit` | `tool`, `ffmpeg`, `ffprobe`, `oracles_required` | Pending |
+| `craft-pdf` | `tests/cos/oracle.rs` | Pending |
+| FilmCraft | `filmcraft-testkit`'s `oracle` | Pending |
+| PdfCraft | `pdfcraft-oracle` | Pending |
+| EffectCraft | `crates/opusenc/tests/it/ffmpeg.rs` and the tests that call ffmpeg or ffprobe | Pending |
+| SoundCraft | `crates/video/src/tests.rs` | Pending |
+
+Each adoption keeps the variable names the repository uses today. Its required variable then follows the `skip` rule, and the adoption says which values change, as the `skip` table below describes.
 
 ### mcp
 
