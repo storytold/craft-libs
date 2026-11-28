@@ -1,8 +1,8 @@
 //! ODS packages assembled here, not files from another application. Adapted from GridCraft's
 //! `crates/xlsx/src/tests/ods_tests.rs`.
 
-use craft_ods::testing::{content, package, spreadsheet};
-use craft_ods::{CellRef, Error, Options, Range, Sheet, Value, ValueType, Workbook, read};
+use craft_ods::testing::{NAMESPACES, content, files, package, spreadsheet};
+use craft_ods::{CellRef, Document, Error, Group, Options, Range, Sheet, Value, ValueType, Visibility, Workbook, package_path, read};
 
 fn ods(tables: &str) -> Vec<u8> {
     spreadsheet(tables).unwrap()
@@ -329,4 +329,203 @@ fn blank_repeats_past_the_sheet_edge_are_clipped() {
         r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="1048576"><table:table-cell/></table:table-row><table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table>"#,
     );
     assert!(matches!(open(&late), Err(Error::TooLarge(_))));
+}
+
+fn document(bytes: &[u8]) -> Result<Document<'_>, Error> {
+    Document::open(bytes, None, &Options::default())
+}
+
+#[test]
+fn styled_blank_cells_rows_and_columns_stay_runs_to_the_grid_edge() {
+    // Office suites pad a formatted sheet with styled blank cells to their own edge.
+    let wb = open(&ods(r#"<table:table table:name="Data">
+        <table:table-column table:style-name="co1" table:number-columns-repeated="2" table:default-cell-style-name="Money"/>
+        <table:table-column table:number-columns-repeated="3"/>
+        <table:table-column table:visibility="collapse"/>
+        <table:table-column table:style-name="co2" table:number-columns-repeated="99999"/>
+        <table:table-row table:style-name="ro1"><table:table-cell office:value-type="float" office:value="1" table:style-name="ce1"/><table:table-cell table:style-name="ce2" table:number-columns-repeated="4294967295"/></table:table-row>
+        <table:table-row table:style-name="ro2" table:number-rows-repeated="16777215"><table:table-cell table:style-name="ce3" table:number-columns-repeated="16384"/></table:table-row>
+      </table:table>"#))
+    .unwrap();
+    let s = &wb.sheets[0];
+    assert_eq!(s.cells.len(), 1, "styled blanks are not expanded into cells");
+    assert_eq!(s.cells[&CellRef::new(0, 0)].style.as_deref(), Some("ce1"));
+    let edge = CellRef::new(craft_ods::MAX_ROWS - 1, craft_ods::MAX_COLS - 1);
+    let tail = s.blanks.iter().find(|b| b.style.as_deref() == Some("ce3")).unwrap();
+    assert!(tail.range.contains(edge) && tail.range.contains(CellRef::new(1, 0)));
+    let first_row = s.blanks.iter().find(|b| b.style.as_deref() == Some("ce2")).unwrap();
+    assert!(first_row.range.contains(CellRef::new(0, 1)) && first_row.range.contains(CellRef::new(0, craft_ods::MAX_COLS - 1)));
+    assert!(!first_row.range.contains(CellRef::new(0, 0)) && !first_row.range.contains(CellRef::new(1, 1)));
+    // Columns that state nothing are left out; a run past the grid's edge is clipped.
+    let cols: Vec<_> = s.columns.iter().map(|l| (l.first, l.style.as_deref(), l.visibility)).collect();
+    assert_eq!(cols, [(0, Some("co1"), Visibility::Visible), (5, None, Visibility::Collapse), (6, Some("co2"), Visibility::Visible)]);
+    assert_eq!(s.columns[0].default_cell_style.as_deref(), Some("Money"));
+    assert!(s.columns[2].first + s.columns[2].count <= craft_ods::MAX_COLS);
+    assert_eq!(s.rows[1].first + s.rows[1].count, craft_ods::MAX_ROWS);
+    // Data after styled padding is still refused, never silently dropped.
+    let late = ods(
+        r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="1048576"><table:table-cell table:style-name="ce1"/></table:table-row><table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table>"#,
+    );
+    assert!(matches!(open(&late), Err(Error::TooLarge(_))));
+}
+
+#[test]
+fn groups_and_header_lines_keep_their_positions_and_levels() {
+    let wb = open(&ods(r#"<table:table table:name="Data">
+        <table:table-header-columns><table:table-column table:number-columns-repeated="2"/></table:table-header-columns>
+        <table:table-column-group table:display="false"><table:table-column table:number-columns-repeated="3" table:visibility="collapse"/></table:table-column-group>
+        <table:table-header-rows><table:table-row><table:table-cell/></table:table-row></table:table-header-rows>
+        <table:table-row-group>
+          <table:table-row table:number-rows-repeated="2"><table:table-cell/></table:table-row>
+          <table:table-row-group table:display="false"><table:table-row table:number-rows-repeated="4" table:visibility="collapse"><table:table-cell/></table:table-row></table:table-row-group>
+        </table:table-row-group>
+        <table:table-row><table:table-cell office:value-type="float" office:value="7"/></table:table-row>
+      </table:table>"#))
+    .unwrap();
+    let s = &wb.sheets[0];
+    assert_eq!((s.header_columns, s.header_rows), (Some((0, 2)), Some((0, 1))));
+    assert_eq!(s.column_groups, [Group { first: 2, count: 3, level: 1, display: false }]);
+    assert!(s.row_groups.contains(&Group { first: 3, count: 4, level: 2, display: false }));
+    assert!(s.row_groups.contains(&Group { first: 1, count: 6, level: 1, display: true }));
+    assert_eq!(shown(s, CellRef::new(7, 0)), Value::Number(7.0));
+    assert!(s.rows.iter().any(|l| l.first == 3 && l.count == 4 && l.visibility == Visibility::Collapse));
+}
+
+#[test]
+fn a_cell_keeps_its_note_link_styled_text_validation_matrix_and_drawings() {
+    let wb = open(&ods(r#"<table:table table:name="Data"><table:table-row>
+        <table:table-cell office:value-type="string" table:content-validation-name="val1">
+          <office:annotation><dc:creator>Ann</dc:creator><text:p>a note</text:p></office:annotation>
+          <text:p>Go <text:span text:style-name="T1">to <text:span>the</text:span></text:span> <text:a xlink:href="https://example.org/" office:title="Example">site</text:a></text:p>
+          <draw:frame draw:name="Picture 1" svg:width="2cm"><draw:image xlink:href="Pictures/a.png"/></draw:frame>
+        </table:table-cell>
+        <table:table-cell table:formula="of:=TRANSPOSE([.A1:.B1])" table:number-matrix-columns-spanned="1" table:number-matrix-rows-spanned="2" office:value-type="float" office:value="1"/>
+        <table:table-cell table:content-validation-name="val2" table:number-columns-repeated="3"/>
+        <table:table-cell table:number-columns-repeated="2"><office:annotation><text:p>on a blank cell</text:p></office:annotation></table:table-cell>
+      </table:table-row></table:table>"#))
+    .unwrap();
+    let s = &wb.sheets[0];
+    let c = &s.cells[&CellRef::new(0, 0)];
+    assert_eq!(c.text, "Go to the site", "the note's text is not the cell's");
+    let note = c.annotation.as_ref().unwrap();
+    assert_eq!(note.child("dc:creator").map(|e| e.text().into_owned()).as_deref(), Some("Ann"));
+    let link = c.link.as_ref().unwrap();
+    assert_eq!((link.href.as_str(), link.title.as_deref()), ("https://example.org/", Some("Example")));
+    let styled: Vec<_> = c.runs.iter().map(|r| (&c.text[r.start..r.end], r.style.as_str())).collect();
+    assert_eq!(styled, [("to the", "T1")]);
+    assert_eq!(c.validation.as_deref(), Some("val1"));
+    assert_eq!(c.drawings.len(), 1);
+    assert_eq!(c.drawings[0].child("draw:image").and_then(|i| i.attr("xlink:href")), Some("Pictures/a.png"));
+    assert_eq!(s.cells[&CellRef::new(0, 1)].matrix, Some((1, 2)));
+    // A blank cell's validation is a range; its note makes it a cell at every repeat.
+    let v = s.blanks.iter().find(|b| b.validation.as_deref() == Some("val2")).unwrap();
+    assert_eq!(v.range, Range::new(CellRef::new(0, 2), CellRef::new(0, 4)));
+    assert!(s.cells[&CellRef::new(0, 5)].annotation.is_some() && s.cells[&CellRef::new(0, 6)].annotation.is_some());
+}
+
+#[test]
+fn what_is_not_a_table_row_or_cell_is_kept_as_written_with_fixed_prefixes() {
+    // A writer may choose any prefixes; the trees name everything with this crate's.
+    let xml = r#"<o:document-content xmlns:o="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:t="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:s="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:c="urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0">
+          <o:automatic-styles><s:style s:name="ta1" s:family="table"/></o:automatic-styles>
+          <o:body><o:spreadsheet t:structure-protected="true">
+            <t:calculation-settings t:null-year="1930"/>
+            <t:table t:name="Data" t:style-name="ta1" t:print="false">
+              <t:table-row><t:table-cell/></t:table-row>
+              <c:conditional-formats><c:conditional-format c:target-range-address="Data.A1:A5"/></c:conditional-formats>
+            </t:table>
+            <t:named-expressions><t:named-range t:name="Rates" t:cell-range-address="$Data.$A$1"/></t:named-expressions>
+          </o:spreadsheet></o:body></o:document-content>"#;
+    let wb = open(&package(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(wb.attr("table:structure-protected"), Some("true"));
+    let s = &wb.sheets[0];
+    assert_eq!((s.attr("table:style-name"), s.attr("table:print")), (Some("ta1"), Some("false")));
+    assert_eq!(s.elements.len(), 1);
+    assert_eq!(s.elements[0].find("calcext:conditional-format").and_then(|e| e.attr("calcext:target-range-address")), Some("Data.A1:A5"));
+    let names: Vec<_> = wb.body.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["table:calculation-settings", "table:named-expressions"]);
+    assert_eq!(wb.automatic_styles.as_ref().and_then(|a| a.child("style:style")).and_then(|s| s.attr("style:name")), Some("ta1"));
+}
+
+#[test]
+fn a_document_keeps_its_other_parts_and_skips_a_damaged_one() {
+    let body = content(
+        r#"<table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table>"#,
+    );
+    let styles = format!(
+        r#"<office:document-styles {NAMESPACES}><office:styles><style:default-style style:family="table-cell"/></office:styles></office:document-styles>"#
+    );
+    let settings = format!(r#"<office:document-settings {NAMESPACES}><office:settings/></office:document-settings>"#);
+    let meta = format!(r#"<office:document-meta {NAMESPACES}><office:meta><dc:title>Budget</dc:title></office:meta></office:document-meta>"#);
+    let bytes = files(&[
+        ("content.xml", body.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("settings.xml", settings.as_bytes()),
+        ("meta.xml", meta.as_bytes()),
+        ("Pictures/a.png", b"\x89PNG"),
+        ("Object 1/content.xml", body.as_bytes()),
+    ])
+    .unwrap();
+    let doc = document(&bytes).unwrap();
+    assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+    assert!(doc.styles.as_ref().and_then(|s| s.find("style:default-style")).is_some());
+    assert!(doc.settings.is_some());
+    assert_eq!(doc.meta.as_ref().and_then(|m| m.find("dc:title")).map(|t| t.text().into_owned()).as_deref(), Some("Budget"));
+    assert_eq!(doc.file("Pictures/a.png").unwrap().as_deref(), Some(&b"\x89PNG"[..]));
+    let object = package_path("./Object 1").unwrap();
+    assert!(doc.xml(&format!("{object}/content.xml")).unwrap().is_some_and(|e| e.name == "office:document-content"));
+    assert_eq!(doc.file("Pictures/none.png").unwrap(), None);
+    // A damaged optional part is left out with a warning; the tables still open.
+    let broken = files(&[("content.xml", body.as_bytes()), ("styles.xml", b"<office:document-styles><unclosed>")]).unwrap();
+    let doc = document(&broken).unwrap();
+    assert!(doc.styles.is_none() && doc.warnings.iter().any(|w| w.contains("styles.xml")));
+    assert_eq!(shown(&doc.workbook.sheets[0], CellRef::new(0, 0)), Value::Number(1.0));
+}
+
+#[test]
+fn flat_and_password_protected_documents_open() {
+    let flat = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><office:document {NAMESPACES} office:mimetype="application/vnd.oasis.opendocument.spreadsheet"><office:meta><dc:title>Flat</dc:title></office:meta><office:body><office:spreadsheet><table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="3"><draw:frame><draw:image><office:binary-data>iVBORw==</office:binary-data></draw:image></draw:frame></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document>"#
+    );
+    let doc = document(flat.as_bytes()).unwrap();
+    let cell = &doc.workbook.sheets[0].cells[&CellRef::new(0, 0)];
+    assert_eq!(cell.value(), Some(Value::Number(3.0)));
+    let href = cell.drawings[0].child("draw:image").and_then(|i| i.attr("xlink:href")).unwrap();
+    assert_eq!(doc.file(&package_path(href).unwrap()).unwrap().as_deref(), Some(&b"\x89PNG"[..]));
+    assert!(doc.meta.as_ref().and_then(|m| m.find("dc:title")).is_some());
+
+    let plain = ods(
+        r#"<table:table table:name="Secret"><table:table-row><table:table-cell office:value-type="float" office:value="42"/></table:table-row></table:table>"#,
+    );
+    let locked = craft_odf::crypt::encrypt(&plain, "right").unwrap();
+    assert!(matches!(document(&locked), Err(Error::Encrypted)));
+    assert!(matches!(Document::open(&locked, Some("wrong"), &Options::default()), Err(Error::Password)));
+    let doc = Document::open(&locked, Some("right"), &Options::default()).unwrap();
+    assert_eq!(shown(&doc.workbook.sheets[0], CellRef::new(0, 0)), Value::Number(42.0));
+}
+
+#[test]
+fn links_outside_the_package_have_no_package_path() {
+    assert_eq!(package_path("./Object 1/").as_deref(), Some("Object 1"));
+    for outside in ["../other.ods", "file:///tmp/a.png", "https://example.org/a.png", "/etc/passwd", "#Sheet1.A1", "Pictures//a.png", ""] {
+        assert_eq!(package_path(outside), None, "{outside}");
+    }
+}
+
+#[test]
+fn kept_trees_count_every_copy_against_their_bound() {
+    let note = format!(r#"<office:annotation><text:p>{}</text:p></office:annotation>"#, "n".repeat(1000));
+    let wide = ods(&format!(
+        r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="100"><table:table-cell table:number-columns-repeated="100">{note}</table:table-cell></table:table-row></table:table>"#
+    ));
+    let small = Options { max_kept: 1 << 20, ..Options::default() };
+    assert!(matches!(read(&wide, &small), Err(Error::TooLarge(_))), "10,000 copies of a 1 KB note pass 1 MiB");
+    let one = ods(&format!(
+        r#"<table:table table:name="Data"><table:table-row><table:table-cell>{note}</table:table-cell></table:table-row></table:table>"#
+    ));
+    assert!(read(&one, &small).is_ok());
+    // A body element alone past the bound is refused too.
+    let names: String = (0..20_000).map(|i| format!(r#"<table:named-range table:name="n{i}" table:cell-range-address="$Data.$A$1"/>"#)).collect();
+    let many = ods(&format!(r#"<table:table table:name="Data"/><table:named-expressions>{names}</table:named-expressions>"#));
+    assert!(matches!(read(&many, &small), Err(Error::TooLarge(_))));
 }

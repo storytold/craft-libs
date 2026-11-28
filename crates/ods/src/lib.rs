@@ -8,14 +8,31 @@
 //! `number-rows-spanned`) as ranges. [`Cell::value`] gives the value a cell shows, with dates
 //! and durations as serial numbers.
 //!
-//! Formulas are kept as text (`of:=SUM([.A1:.A3])`), not translated. Styles, charts, pictures,
-//! annotations and settings are not read. An encrypted package is [`Error::Encrypted`]: decrypt
-//! it with `craft_odf::crypt::decrypt` first.
+//! [`Document::open`] reads the whole document: a package, a password-protected package or a
+//! flat `.fods`. Besides the tables it keeps, as the file has them and without interpreting
+//! them:
+//!
+//! - per cell: its note, the drawings anchored to it, its first link, its styled stretches of
+//!   text, its validation and the size of the matrix formula it holds;
+//! - per sheet: the table's attributes, the rows and columns that state a style, a default cell
+//!   style or a visibility (as runs, not expanded), row and column groups, header rows and
+//!   columns, blank cells with a style or a validation (as ranges), and the table's other
+//!   elements as trees (shapes, conditional formats, local names, …);
+//! - per document: the spreadsheet's other elements as trees (names, database ranges,
+//!   validations, data pilot tables, calculation settings, …), `content.xml`'s font
+//!   declarations and automatic styles, and `styles.xml`, `settings.xml` and `meta.xml` as
+//!   trees. Pictures and embedded objects (charts) are read on request ([`Document::file`],
+//!   [`Document::xml`]).
+//!
+//! Every element and attribute is named with a fixed prefix whatever the file declared
+//! (`table:`, `style:`, `draw:`, `loext:`, …). Formulas are kept as text
+//! (`of:=SUM([.A1:.A3])`), not translated.
 //!
 //! The XML is read strictly, as the source reader did: unbalanced markup, a document type
 //! declaration or an undefined entity fails the read. Input is hostile: [`Options`] bounds the
-//! package, the cells, the merged ranges and the text, repeats are checked against the grid
-//! before anything is expanded, and nothing indexes by a number from the file.
+//! package, the cells, the merged ranges, the text and what is kept besides cells, repeats are
+//! checked against the grid before anything is expanded, and nothing indexes by a number from
+//! the file.
 //!
 //! ```
 //! # fn main() -> Result<(), craft_ods::Error> {
@@ -29,14 +46,18 @@
 //! ```
 
 mod content;
+mod document;
 mod model;
+mod ns;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testing;
 
 pub use content::read_content;
 pub use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS, Range, Value};
-pub use model::{Cell, Sheet, ValueType, Workbook, date_serial, duration_days};
+pub use craft_xml::El;
+pub use document::{Document, package_path};
+pub use model::{Blank, Cell, Group, Line, Link, Run, Sheet, ValueType, Visibility, Workbook, date_serial, duration_days};
 
 /// Why a spreadsheet could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -48,9 +69,12 @@ pub enum Error {
     /// `content.xml` cannot be read or is not a spreadsheet document.
     #[error("the spreadsheet contains invalid XML: {0}")]
     Xml(String),
-    /// The package is password-protected.
+    /// The package is password-protected, and no password was given.
     #[error("the spreadsheet is password-protected (encrypted)")]
     Encrypted,
+    /// The password given does not open the package.
+    #[error("the password is incorrect")]
+    Password,
     /// More than [`Options`] or a fixed cap allows.
     #[error("the spreadsheet is too large: {0}")]
     TooLarge(String),
@@ -81,8 +105,13 @@ pub struct Options {
     pub truncate_text: bool,
     /// Bytes of one cell's text, and of one attribute value.
     pub max_cell_text: usize,
-    /// Keep the cells of this sheet only (by position); the others are listed by name, empty.
+    /// Keep the cells of this sheet only (by position); the others are listed by name and
+    /// attributes, empty.
     pub only_sheet: Option<usize>,
+    /// Bytes of what is kept besides cells, about as it is held in memory: the trees of notes,
+    /// drawings, a table's other elements, the body's other elements, the automatic styles and
+    /// the other parts, and the row, column and blank-cell runs.
+    pub max_kept: u64,
 }
 
 impl Default for Options {
@@ -95,6 +124,7 @@ impl Default for Options {
             truncate_text: false,
             max_cell_text: 1 << 20,
             only_sheet: None,
+            max_kept: 256 << 20,
         }
     }
 }

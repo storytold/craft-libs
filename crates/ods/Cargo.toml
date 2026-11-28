@@ -1,6 +1,6 @@
 [package]
 name = "craft-ods"
-description = "OpenDocument spreadsheets (.ods): the tables of content.xml with typed cell values, displayed text, formulas, repeats and merged cells, on craft-odf."
+description = "OpenDocument spreadsheets (.ods, .fods): tables with typed values, text, formulas, merges, row and column runs, notes, links and drawings, and the document's other parts as trees, on craft-odf."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
