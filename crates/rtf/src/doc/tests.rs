@@ -1898,6 +1898,29 @@ fn export_writes_every_section() {
     assert!(!one.contains("\\sect\n") && !one.contains("\\sect\\"), "{one}");
 }
 
+/// The document preamble describes the first section, not the last: a portrait first section
+/// with a landscape last section must not reopen as landscape (#7130).
+#[test]
+fn export_keeps_the_first_section_portrait_when_the_last_is_landscape() {
+    use craft_wordmodel::section::SectionStart;
+    use craft_wordmodel::{Block, SectionProps};
+    let mut d = craft_wordmodel::Document::from_text("one\ntwo");
+    let s1 = SectionProps::default();
+    let s2 = SectionProps { start: SectionStart::NextPage, page_w: 792.0, page_h: 612.0, landscape: true, ..Default::default() };
+    if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.section = Some(Box::new(s1.clone()));
+    }
+    d.last_section = s2.clone();
+    let rtf = export(&d);
+    assert!(!rtf.contains("\\landscape"), "the preamble carries the last section's orientation: {rtf}");
+    assert!(rtf.contains("\\paperw12240\\paperh15840"), "the preamble carries the first section's portrait page: {rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let secs = back.sections();
+    assert_eq!(secs.len(), 2, "{rtf}");
+    assert!(!secs[0].1.landscape && secs[0].1.page_w < secs[0].1.page_h, "section 1 stays portrait: {:?}", secs[0].1);
+    assert!(secs[1].1.landscape && secs[1].1.page_w > secs[1].1.page_h, "section 2 stays landscape: {:?}", secs[1].1);
+}
+
 #[test]
 fn export_keeps_a_single_sections_formatting() {
     use craft_wordmodel::SectionProps;
