@@ -16,7 +16,7 @@ use crate::shared::white_from_data_sourced;
 use crate::tiffraw::{Packing, check_image, read_image};
 use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use crate::{coolpix, nefc};
-use craft_tiff::image::ImageInfo;
+use craft_tiff::image::{ImageInfo, Layout};
 use craft_tiff::tags::{self as t, photometric};
 use craft_tiff::{ByteOrder, Ifd, Tiff, makernote};
 
@@ -247,7 +247,21 @@ fn legacy_field_layout(info: &ImageInfo, mn: Option<&makernote::MakerNote>, file
         && info.compression == 1
         && info.samples_per_pixel == 1
         && info.bits() == 12
+        && matches!(info.layout, Layout::Strips { .. })
         && matches!(info.chunks(file_len as u64).as_slice(), [c] if Some(c.len) == expected)
+}
+
+/// Whether `raw` is the E5700's four-colour (CYGM) raster that [`coolpix::cygm_to_rgb`] is calibrated for: the
+/// E5700, its CYGM colour-filter tag, one uncompressed 12-bit sample per pixel. Other files with that tag keep the
+/// mosaic path.
+fn e5700_cygm(raw: &Ifd, info: &ImageInfo, model: &str) -> bool {
+    matches!(
+        (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)),
+        (Some([2, 2]), Some(p)) if p == coolpix::CYGM_PATTERN
+    ) && model.trim() == "E5700"
+        && info.compression != t::compression::NIKON
+        && info.samples_per_pixel == 1
+        && info.bits() == 12
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
@@ -262,6 +276,24 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         tiff.exif().and_then(|e| e.get(t::MAKER_NOTE)).and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make));
     if let Some(strip) = small_raw_strip(&info, bytes.len(), mn.as_ref()) {
         return small_raw(bytes, &tiff, &info, strip, mode, limits);
+    }
+    let model = ifd0.string(t::MODEL).unwrap_or_default();
+    // the E5700's four-colour (CYGM) filter becomes linear RGB (fixed measured gains, approximate colour)
+    let cygm = e5700_cygm(raw, &info, &model);
+    // Checked in every mode, before any pixel is read, so a CYGM NEF that `probe_info` accepts also decodes
+    if cygm {
+        if w < 4 || h < 4 || !w.is_multiple_of(2) || !h.is_multiple_of(2) {
+            return Err(RawError::Corrupt("Coolpix: bad CYGM mosaic".into()));
+        }
+        if w.checked_mul(h).and_then(|n| n.checked_mul(3)).is_none_or(|n| n > limits.samples()) {
+            return Err(RawError::Limit("Coolpix: RGB image too large"));
+        }
+    }
+    // Two stored fields: the header probe reads only the first, so the whole strip must be there in every mode
+    // (the full decode needs the second field too)
+    let fields = coolpix::field_order(&model).is_some() && legacy_field_layout(&info, mn.as_ref(), bytes.len());
+    if fields && info.chunks(bytes.len() as u64).first().is_some_and(|c| c.offset.saturating_add(c.len) > bytes.len() as u64) {
+        return Err(RawError::Corrupt("Coolpix: the second field of the strip is missing".into()));
     }
     // the header probe reads only the rows the masked-column test needs
     let rows = match mode {
@@ -279,29 +311,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
         _ => w,
     };
-    let model = ifd0.string(t::MODEL).unwrap_or_default();
     // Some CCD Coolpix bodies write two interlaced fields one after the other: the measured bodies, in their
     // measured legacy layout, are interleaved in their model's field order (see `coolpix`).
     if let (Mode::Full, RawData::U16(d)) = (mode, &mut data)
+        && fields
         && let Some(first_even) = coolpix::field_order(&model)
-        && legacy_field_layout(&info, mn.as_ref(), bytes.len())
         && let Some(img) = coolpix::deinterlace(d, w, h, first_even)
     {
         *d = img;
-    }
-    // the E5700's four-colour (CYGM) filter becomes linear RGB (fixed measured gains, approximate colour)
-    let cygm = matches!(
-        (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)),
-        (Some([2, 2]), Some(p)) if p == coolpix::CYGM_PATTERN
-    ) && info.compression != t::compression::NIKON
-        && info.samples_per_pixel == 1;
-    // Checked in every mode, so a CYGM NEF that `probe_info` accepts also decodes
-    if cygm && (w < 4 || h < 4 || !w.is_multiple_of(2) || !h.is_multiple_of(2)) {
-        return Err(RawError::Corrupt("Coolpix: bad CYGM mosaic".into()));
-    }
-    if cygm && let (Mode::Full, RawData::U16(d)) = (mode, &data) {
-        let rgb = coolpix::cygm_to_rgb(d, w, h, coolpix::CYGM_PATTERN).ok_or_else(|| RawError::Corrupt("Coolpix: bad CYGM mosaic".into()))?;
-        data = RawData::U16(rgb);
     }
     let RawData::U16(ref samples) = data else { return Err(RawError::Unsupported("float NEF".into())) };
 
@@ -338,7 +355,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
             (Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }, false)
         }
-        _ => (Cfa::bayer_static("RGGB"), true),
+        // converted CYGM data has no CFA, so no Bayer pattern is assumed for it
+        _ => (Cfa::bayer_static("RGGB"), !cygm),
     };
     let body = measured_body(&model, w, h, bits);
     let active_w = stored_active_w;
@@ -354,6 +372,21 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let crop = match body {
         Some(&MeasuredBody { crop: (x, y, cw, ch), .. }) if x + cw <= active_w && y + ch <= h => Rect::new(x, y, cw, ch),
         _ => default_crop(mn.as_ref(), active_w, h),
+    };
+    // The CYGM mosaic's black (per filter site) comes off before the conversion mixes the sites: the RGB result
+    // has black 0, in both modes.
+    let black = if cygm {
+        if let (Mode::Full, RawData::U16(d)) = (mode, &mut data) {
+            let site = |i: usize| black.at(i % w, i / w, 0, 1);
+            if black.values.iter().chain(&black.delta_h).chain(&black.delta_v).any(|v| *v != 0.0) {
+                d.iter_mut().enumerate().for_each(|(i, v)| *v = (f32::from(*v) - site(i)).round().max(0.0) as u16);
+            }
+            let rgb = coolpix::cygm_to_rgb(d, w, h, coolpix::CYGM_PATTERN).ok_or_else(|| RawError::Corrupt("Coolpix: bad CYGM mosaic".into()))?;
+            data = RawData::U16(rgb);
+        }
+        BlackLevel::uniform(0.0)
+    } else {
+        black
     };
     let pixel_aspect = pixel_aspect_of(raw);
     let img = RawImage {
@@ -1195,6 +1228,21 @@ mod tests {
     }
 
     fn coolpix_file_version(model: &str, pattern: [u8; 4], w: usize, h: usize, strip_px: &[u16], version: &[u8]) -> Vec<u8> {
+        coolpix_file_with(model, pattern, w, h, strip_px, version, &[], false)
+    }
+
+    /// [`coolpix_file_version`] with extra maker-note tags, and the strip stored as one tile when `tiled`.
+    #[allow(clippy::too_many_arguments)]
+    fn coolpix_file_with(
+        model: &str,
+        pattern: [u8; 4],
+        w: usize,
+        h: usize,
+        strip_px: &[u16],
+        version: &[u8],
+        note_tags: &[(u16, Value)],
+        tiled: bool,
+    ) -> Vec<u8> {
         let mut packed = Vec::new();
         for pair in strip_px.chunks(2) {
             let v = (pair[0] as u32) << 12 | pair.get(1).copied().unwrap_or(0) as u32;
@@ -1209,13 +1257,20 @@ mod tests {
         raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
         raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
         raw.set(t::CFA_PATTERN_EP, Value::Byte(pattern.to_vec()));
-        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![packed] });
+        if tiled {
+            raw.set_image(ImageData::Tiles { tile_width: w as u32, tile_height: h as u32, tiles: vec![packed] });
+        } else {
+            raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![packed] });
+        }
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::MAKE, Value::Ascii("NIKON".into()));
         ifd0.set(t::MODEL, Value::Ascii(model.into()));
         ifd0.set(t::ORIENTATION, Value::Short(vec![1]));
         let mut note = IfdBuilder::new();
         note.set(0x0001, Value::Undefined(version.to_vec()));
+        for (tag, value) in note_tags {
+            note.set(*tag, value.clone());
+        }
         let mut maker = b"Nikon\0\x02\0\0\0".to_vec();
         maker.extend(TiffWriter::new(ByteOrder::Little, false).write(&[note]).unwrap());
         let mut exif = IfdBuilder::new();
@@ -1324,6 +1379,84 @@ mod tests {
         assert!(r.cfa.is_none());
         let expected = coolpix::cygm_to_rgb(&img, w, h, coolpix::CYGM_PATTERN).unwrap();
         assert!(r.data == RawData::U16(expected), "full decode retains the intended sensor geometry");
+    }
+
+    /// storytold/craft-libs#2235 review: only a single strip is the measured field layout; the same bytes as one
+    /// tile keep their stored rows.
+    #[test]
+    fn a_tiled_raster_is_not_read_as_two_fields() {
+        let (w, h) = (96usize, 80usize);
+        let stored = two_fields(&smooth_scene(w, h), w, h, true);
+        let bytes = coolpix_file_with("E8400", [2, 1, 1, 0], w, h, &stored, &[0, 2, 0, 0], &[], true);
+        assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(stored));
+    }
+
+    /// storytold/craft-libs#2235 review: the CYGM conversion is the E5700's; other bodies with the same filter tag
+    /// keep the mosaic, and the converted image reports no assumed CFA.
+    #[test]
+    fn only_the_e5700_cygm_raster_is_converted() {
+        let (w, h) = (128usize, 96usize);
+        let img = smooth_scene(w, h);
+        let e5700 = crate::decode(&coolpix_file("E5700", coolpix::CYGM_PATTERN, w, h, &two_fields(&img, w, h, false))).unwrap();
+        assert_eq!(e5700.cpp, 3);
+        assert!(!e5700.notices.assumed_cfa, "converted RGB has no CFA to assume");
+        for model in ["E5000", "E8700"] {
+            let r = crate::decode(&coolpix_file(model, coolpix::CYGM_PATTERN, w, h, &img)).unwrap();
+            assert_eq!((r.cpp, r.data), (1, RawData::U16(img.clone())), "{model}");
+        }
+    }
+
+    /// storytold/craft-libs#2235 review: the RGB result (three samples a pixel) is held to the sample limit in both
+    /// modes, before any pixel is read.
+    #[test]
+    fn the_cygm_rgb_output_is_held_to_the_sample_limit() {
+        let (w, h) = (128usize, 96usize);
+        let bytes = coolpix_file("E5700", coolpix::CYGM_PATTERN, w, h, &two_fields(&smooth_scene(w, h), w, h, false));
+        let tight = Limits { max_samples: w * h * 3 - 1, ..Limits::default() };
+        let enough = Limits { max_samples: w * h * 3, ..Limits::default() };
+        for mode in [Mode::Header, Mode::Full] {
+            assert!(matches!(decode(&bytes, mode, &tight), Err(RawError::Limit(_))), "{mode:?}");
+            assert!(decode(&bytes, mode, &enough).is_ok(), "{mode:?}");
+        }
+    }
+
+    /// storytold/craft-libs#2235 review: a maker-note black on the CYGM mosaic comes off each site before the sites
+    /// are mixed, and both modes report the RGB result's black as 0.
+    #[test]
+    fn cygm_mosaic_black_is_removed_before_conversion() {
+        let (w, h) = (128usize, 96usize);
+        let img = smooth_scene(w, h);
+        // a 12-bit file: the tag is in 14-bit units, so 400 / 404 / 408 / 412 are 100 / 101 / 102 / 103
+        let lifted: Vec<u16> = img.iter().enumerate().map(|(i, v)| v + 100 + ((i / w % 2) * 2 + i % 2) as u16).collect();
+        let note = [(BLACK_LEVEL, Value::Short(vec![400, 404, 408, 412]))];
+        let bytes = coolpix_file_with("E5700", coolpix::CYGM_PATTERN, w, h, &two_fields(&lifted, w, h, false), &[0, 2, 0, 0], &note, false);
+        let header = decode(&bytes, Mode::Header, &Limits::default()).unwrap();
+        let full = decode(&bytes, Mode::Full, &Limits::default()).unwrap();
+        assert_eq!(header.black, BlackLevel::uniform(0.0));
+        assert_eq!(full.black, BlackLevel::uniform(0.0));
+        assert!(full.data == RawData::U16(coolpix::cygm_to_rgb(&img, w, h, coolpix::CYGM_PATTERN).unwrap()));
+    }
+
+    /// storytold/craft-libs#2235 review: the header probe reads only the first field, so a strip cut inside the
+    /// second field is refused in both modes rather than probing fine and failing to decode.
+    #[test]
+    fn a_missing_second_field_is_refused_in_both_modes() {
+        let (w, h) = (96usize, 80usize);
+        let bytes = coolpix_file("E8400", [2, 1, 1, 0], w, h, &two_fields(&smooth_scene(w, h), w, h, true));
+        let tiff = Tiff::parse(&bytes).unwrap();
+        let raw = raw_ifd(&tiff).unwrap();
+        let len = raw.image().unwrap().chunks(bytes.len() as u64).remove(0).len as usize;
+        let at = raw.get(t::STRIP_OFFSETS).unwrap().offset as usize;
+        // point the strip a quarter of its length past the end: the first field and the rows the probe reads are
+        // in the file, the rest of the second field is not
+        let mut short = bytes.clone();
+        short.get_mut(at..at + 4).unwrap().copy_from_slice(&((bytes.len() - len * 3 / 4) as u32).to_le_bytes());
+        assert_eq!(raw.get(t::STRIP_OFFSETS).unwrap().count(), 1);
+        assert!(decode(&bytes, Mode::Header, &Limits::default()).is_ok());
+        for mode in [Mode::Header, Mode::Full] {
+            let Err(RawError::Corrupt(why)) = decode(&short, mode, &Limits::default()) else { panic!("{mode:?}: expected corrupt") };
+            assert!(why.contains("second field"), "{mode:?}: {why}");
+        }
     }
 
     #[test]

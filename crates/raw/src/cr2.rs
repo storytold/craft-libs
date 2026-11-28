@@ -34,6 +34,7 @@
 
 mod sraw;
 
+use crate::canon_wb::{preset_records, presets_at, wb_from_levels};
 use crate::shared::{active_rows, black_from_columns_sourced, white_from_data_sourced};
 use crate::{
     BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg,
@@ -89,16 +90,6 @@ fn words(v: &Value, order: ByteOrder) -> Vec<u64> {
     }
 }
 
-/// WB multipliers (R, G, B; G = 1) from one set of levels, when they are plausible.
-fn wb_from_levels(r: f32, g1: f32, g2: f32, b: f32) -> Option<[f32; 3]> {
-    if g1 < 256.0 || g2 < 256.0 || r < 64.0 || b < 64.0 || g1 > 16384.0 || (g1 - g2).abs() > 0.05 * g1 {
-        return None;
-    }
-    let g = (g1 + g2) / 2.0;
-    let (mr, mb) = (r / g, b / g);
-    ((0.25..6.0).contains(&mr) && (0.25..6.0).contains(&mb)).then_some([mr, 1.0, mb])
-}
-
 /// As-shot WB multipliers (R, G, B; G = 1) from the ColorBalance array.
 fn wb_from_color_balance(v: &[u64]) -> Option<[f32; 3]> {
     for off in [63usize, 25, 24, 34, 71, 85, 105, 69, 77] {
@@ -121,7 +112,8 @@ fn wb_from_color_balance(v: &[u64]) -> Option<[f32; 3]> {
 /// everything else is 5-word records `R G G B Kelvin` in the order Daylight (5200 K), Shade (7000), Cloudy (6000),
 /// Tungsten (3200), Fluorescent, Kelvin, Flash (thirty words after Daylight): version 1 from word 78, 2–9 from 83, 10
 /// from 103 on the EOS 1200D family and from 128 on the others, 11 from 128, 12–15 from 133. A version with two
-/// layouts is read at the one whose Daylight record names 5200 K. Other versions give no presets.
+/// layouts (10) is read at the one its word count names, or else at the one whose Daylight record names 5200 K. Other
+/// versions give no presets.
 fn preset_rows(version: i16) -> &'static [[(usize, usize); 5]] {
     const fn records(daylight: usize) -> [(usize, usize); 5] {
         preset_records(daylight, daylight + 30)
@@ -143,37 +135,23 @@ fn preset_rows(version: i16) -> &'static [[(usize, usize); 5]] {
     }
 }
 
-/// The five preset records (Daylight, Shade, Cloudy, Tungsten, Flash) of a `ColorData` array whose Daylight record
-/// starts at word `daylight` and Flash record at `flash`: Daylight, Shade, Cloudy and Tungsten follow each other
-/// in 5-word records `R G G B Kelvin`. Also used by CR3 (`ColorData` words of the same record layout).
-pub(crate) const fn preset_records(daylight: usize, flash: usize) -> [(usize, usize); 5] {
-    [(daylight, daylight + 4), (daylight + 5, daylight + 9), (daylight + 10, daylight + 14), (daylight + 15, daylight + 19), (flash, flash + 4)]
-}
-
 /// The camera's planckian white-balance presets from the `ColorData` words ([`preset_rows`]) as a Kelvin curve;
 /// `None` for an unknown version, a short array or presets that don't make a curve.
 fn kelvin_presets_from_color_data(v: &[u64]) -> Option<crate::kelvin::KelvinPresets> {
     let version = *v.first()? as u16 as i16;
     let rows = match preset_rows(version) {
         [one] => one,
-        many => many.iter().find(|rows| v.get(rows[0].1) == Some(&5200))?,
+        // version 10: the word count names the layout (the documentation's ColorData6, 1273 or 1275 words, from 103;
+        // ColorData7, 1312, 1313, 1316 or 1506 words, from 128). Word 107 is Daylight's temperature only in the first,
+        // and may hold 5200 in the second too, so it only picks the layout for a count neither names.
+        [at_103, at_128] => match v.len() {
+            1273 | 1275 => at_103,
+            1312 | 1313 | 1316 | 1506 => at_128,
+            _ => [at_103, at_128].into_iter().find(|rows| v.get(rows[0].1) == Some(&5200))?,
+        },
+        _ => return None,
     };
     presets_at(v, rows)
-}
-
-/// The Kelvin curve of the preset records at `rows` ((levels word, temperature word) of each) in `v`.
-pub(crate) fn presets_at(v: &[u64], rows: &[(usize, usize); 5]) -> Option<crate::kelvin::KelvinPresets> {
-    let mut points = Vec::with_capacity(rows.len());
-    for &(at, temp_at) in rows {
-        let q = v.get(at..at + 4)?;
-        let temp = *v.get(temp_at)? as f32;
-        if let Some(wb) = wb_from_levels(q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32)
-            && (1000.0..=20000.0).contains(&temp)
-        {
-            points.push((temp, wb));
-        }
-    }
-    crate::kelvin::KelvinPresets::from_unordered(points)
 }
 
 /// As-shot WB multipliers of a body without `ColorData` (the PowerShot G9): the WBInfo row of the preset that
@@ -791,6 +769,31 @@ pub(crate) mod tests {
         b[132] = 5000;
         assert!(kelvin_presets_from_color_data(&b).is_none(), "10, neither layout names Daylight at 5200 K");
         assert!(kelvin_presets_from_color_data(&[10]).is_none());
+        // version 10 by word count, at literal offsets: a 1312-word array (Daylight at 128, Flash at 158) whose word
+        // 107 holds 5200 is read at 128, not at 103 (where it reads Daylight's levels from unrelated words 103-106)
+        let eos10 = [(2013u64, 1479u64, 5200u64), (2300, 1280, 7000), (2153, 1374, 6000), (1442, 2089, 3200), (2203, 1371, 6156)];
+        let mut b = vec![0u64; 1312];
+        b[0] = 10;
+        for (&at, &(r, bl, k)) in [128usize, 133, 138, 143, 158].iter().zip(&eos10) {
+            b[at..at + 4].copy_from_slice(&[r, 1024, 1024, bl]);
+            b[at + 4] = k;
+        }
+        b[107] = 5200;
+        b[103..107].copy_from_slice(&[3000, 1024, 1024, 600]);
+        let p = kelvin_presets_from_color_data(&b).expect("1312 words: the 128 layout");
+        assert_eq!(p.points().iter().map(|q| q.0).collect::<Vec<_>>(), [3200.0, 5200.0, 6000.0, 6156.0, 7000.0]);
+        assert!(p.points().contains(&(5200.0, [2013.0 / 1024.0, 1.0, 1479.0 / 1024.0])));
+        // the same words as a 1275-word array are read at 103: its rows there make no curve
+        b.truncate(1275);
+        assert!(kelvin_presets_from_color_data(&b).is_none(), "1275 words: the 103 layout");
+        // a 1273-word array with its presets at 103
+        let mut c = vec![0u64; 1273];
+        c[0] = 10;
+        for (&at, &(r, bl, k)) in [103usize, 108, 113, 118, 133].iter().zip(&eos10) {
+            c[at..at + 4].copy_from_slice(&[r, 1024, 1024, bl]);
+            c[at + 4] = k;
+        }
+        assert_eq!(kelvin_presets_from_color_data(&c).map(|p| p.points().len()), Some(5), "1273 words: the 103 layout");
         // a preset that would turn the curve back (Flash cooler than Shade's levels say) is dropped, not fatal
         let mut odd = g1x3;
         odd[4] = (1500, 1300, 9000);

@@ -58,6 +58,8 @@
 //! and from observation of files. No other raw decoder's source was consulted; see `README.md`.
 #![forbid(unsafe_code)]
 
+#[cfg(any(feature = "cr2", feature = "cr3"))]
+mod canon_wb;
 #[cfg(feature = "cr2")]
 mod cr2;
 #[cfg(feature = "cr3")]

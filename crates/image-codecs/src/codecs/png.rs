@@ -59,6 +59,12 @@ fn validate_adam7(bytes: &[u8], limits: &Limits) -> Result<(), CodecError> {
     Ok(())
 }
 
+/// Grows `buf`'s capacity to hold `size` bytes, refusing (not aborting) when that cannot be allocated.
+fn reserve_total(buf: &mut Vec<u8>, size: usize) -> Result<(), CodecError> {
+    buf.try_reserve_exact(size.saturating_sub(buf.len()))
+        .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {size} bytes for the image")))
+}
+
 fn err(e: impl std::fmt::Display) -> CodecError {
     CodecError::malformed(F, e)
 }
@@ -405,7 +411,9 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         // or finish the image data again on every metadata yield.
         if !self.tail {
             if self.interlaced {
-                // An Adam7 frame is decoded in one go, over the whole output buffer.
+                // An Adam7 frame is decoded in one go, over the whole output buffer. `open` reserved
+                // only what the IDAT data can inflate to, so the rest is reserved here, fallibly.
+                reserve_total(&mut self.buf, self.size)?;
                 self.buf.resize(self.size, 0);
                 let out = self.reader.next_frame(&mut self.buf).map_err(map_png_err)?;
                 self.buf.truncate(out.buffer_size());
@@ -2725,6 +2733,17 @@ mod inflate_bound_tests {
         assert!(image.data().as_chunks::<4>().0.iter().all(|p| *p == [10, 20, 30, 200]));
         let small = Limits { max_alloc: 1 << 20, ..Limits::default() };
         assert!(matches!(decode(&bytes, &small), Err(CodecError::LimitExceeded(_))));
+    }
+
+    /// The Adam7 output past the first reservation is reserved fallibly: a size that cannot be had
+    /// is a limit error, not an allocation abort.
+    #[test]
+    fn the_adam7_output_reservation_is_fallible() {
+        let mut buf = vec![0u8; 16];
+        assert!(matches!(reserve_total(&mut buf, usize::MAX), Err(CodecError::LimitExceeded(_))));
+        assert!(matches!(reserve_total(&mut buf, isize::MAX as usize), Err(CodecError::LimitExceeded(_))));
+        reserve_total(&mut buf, 4096).unwrap();
+        assert!(buf.capacity() >= 4096 && buf.len() == 16);
     }
 
     #[test]

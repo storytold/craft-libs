@@ -79,14 +79,16 @@ impl KelvinPresets {
         }
         let (pa, pd) = (log_point(a), log_point(d65));
         let unit = |m: [f32; 3]| [m[0] / m[1], 1.0, m[2] / m[1]];
-        (pd[0] > pa[0] && pd[1] < pa[1]).then(|| KelvinPresets { points: Vec::new(), pair: Some([unit(a), unit(d65)]), lights: None })
+        let (ua, ud) = (unit(a), unit(d65));
+        // the ratios are checked in f64, but the stored gains are f32: one may overflow (or vanish) there
+        (pd[0] > pa[0] && pd[1] < pa[1] && usable(ua) && usable(ud)).then(|| KelvinPresets { points: Vec::new(), pair: Some([ua, ud]), lights: None })
     }
 
     /// [`Self::from_neutral_pair`] for two other lights, given by their CIE 1931 chromaticities, the warmer first
-    /// (Panasonic stores its multipliers for D55 and the ISO studio tungsten lamp). `None` unless the multipliers make
-    /// a curve as for a pair and the chromaticities are distinct points inside (0, 1).
+    /// (Panasonic stores its multipliers for D55 and for tungsten at 3200 K). `None` unless the multipliers make
+    /// a curve as for a pair and the chromaticities are distinct points inside the CIE xy triangle (x, y > 0, x + y ≤ 1).
     pub fn from_neutral_lights(lights: [[f64; 2]; 2], warm: [f32; 3], cool: [f32; 3]) -> Option<KelvinPresets> {
-        let inside = |p: [f64; 2]| p.iter().all(|v| *v > 0.0 && *v < 1.0);
+        let inside = |p: [f64; 2]| p.iter().all(|v| *v > 0.0 && *v < 1.0) && p[0] + p[1] <= 1.0;
         if !inside(lights[0]) || !inside(lights[1]) || lights[0] == lights[1] {
             return None;
         }
@@ -185,5 +187,20 @@ mod tests {
         assert!(KelvinPresets::from_neutral_lights([lights[0], lights[0]], warm, cool).is_none());
         assert!(KelvinPresets::from_neutral_lights([[0.0, 0.4], lights[1]], warm, cool).is_none());
         assert!(KelvinPresets::from_neutral_lights([[f64::NAN, 0.4], lights[1]], warm, cool).is_none());
+        // each coordinate inside (0, 1) but z = 1 - x - y negative: not a chromaticity
+        assert!(KelvinPresets::from_neutral_lights([[0.8, 0.4], lights[1]], warm, cool).is_none());
+        assert!(KelvinPresets::from_neutral_lights([lights[0], [0.4, 0.7]], warm, cool).is_none());
+        // the edge of the triangle is still a chromaticity
+        assert!(KelvinPresets::from_neutral_lights([[0.5, 0.5], lights[1]], warm, cool).is_some());
+    }
+
+    /// Finite inputs whose f64 ratios make a curve but whose f32 gains overflow are refused, not stored as infinite.
+    #[test]
+    fn a_neutral_pair_whose_gains_overflow_is_refused() {
+        assert_eq!(KelvinPresets::from_neutral_pair([1.0, f32::MIN_POSITIVE, 8.0], [2.0, f32::MIN_POSITIVE, 2.0]), None);
+        assert!(
+            KelvinPresets::from_neutral_lights([[0.4232, 0.3991], [0.3324, 0.3474]], [1.0, f32::MIN_POSITIVE, 8.0], [2.0, f32::MIN_POSITIVE, 2.0])
+                .is_none()
+        );
     }
 }

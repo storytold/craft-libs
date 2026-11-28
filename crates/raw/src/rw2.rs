@@ -345,8 +345,8 @@ fn decode_words(src: &[u8], shift: u32, out: &mut [u16]) {
 
 /// CIE daylight D55, CIE 1931 (x, y).
 const D55_XY: [f64; 2] = [0.33242, 0.34743];
-/// The 3200 K Planckian light (the ISO 7589 studio tungsten lamp), CIE 1931 (x, y) from Kim et al.'s (2002) cubic
-/// approximation of the Planckian locus.
+/// The 3200 K point of the Planckian locus (a 3200 K blackbody), CIE 1931 (x, y) from Kim et al.'s (2002) cubic
+/// approximation of the locus: the nominal temperature of the tungsten entry (type 24).
 const TUNGSTEN_3200_XY: [f64; 2] = [0.423_181_806_762_695_35, 0.399_077_685_165_656_9];
 
 /// The Kelvin scale of a body without colour matrices, from tag `0x0027` (`WBInfo2`; tag number and entry layout
@@ -356,7 +356,11 @@ const TUNGSTEN_3200_XY: [f64; 2] = [0.423_181_806_762_695_35, 0.399_077_685_165_
 /// Planckian light. Those two give a neutral pair ([`crate::kelvin::KelvinPresets::from_neutral_lights`]).
 fn panasonic_kelvin_presets(ifd: &Ifd, order: ByteOrder) -> Option<crate::kelvin::KelvinPresets> {
     let v = u16_array(ifd, WB_TABLE, order)?;
-    let n = (*v.first()? as usize).min(v.len() / 4);
+    // the count must not pass the table's complete 4-word entries: a table cut short is not read in part
+    let n = *v.first()? as usize;
+    if n > (v.len() - 1) / 4 {
+        return None;
+    }
     let entry = |code: u16| {
         let e = v.get(1..)?.as_chunks::<4>().0.iter().take(n).find(|e| e[0] == code)?;
         Some([f32::from(e[1]), f32::from(e[2]), f32::from(e[3])])
@@ -985,15 +989,21 @@ mod tests {
             crate::decode(&file(w as u16, h as u16, &tags, &payload, &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))])).unwrap()
         };
         assert!(decode(None).color.kelvin_presets.is_none());
-        // three entries: Fine Weather (ignored), D55 and ISO studio tungsten, as red/green/blue multipliers
+        // three entries: Fine Weather (ignored), D55 and tungsten (3200 K), as red/green/blue multipliers
         let table = vec![3, 9, 480, 256, 400, 20, 380, 256, 500, 24, 250, 256, 700];
-        let p = decode(Some(table)).color.kelvin_presets.unwrap();
+        let p = decode(Some(table.clone())).color.kelvin_presets.unwrap();
         let unit = |r: f32, b: f32| [r / 256.0, 1.0, b / 256.0];
         assert_eq!(p.neutral_pair(), Some([unit(250.0, 700.0), unit(380.0, 500.0)]));
         assert_eq!(p.neutral_lights(), Some([TUNGSTEN_3200_XY, D55_XY]));
         // a missing light, or a count beyond the data, gives none
         assert!(decode(Some(vec![1, 20, 500, 256, 380])).color.kelvin_presets.is_none());
         assert!(decode(Some(vec![9, 20, 500, 256, 380, 24, 700, 256])).color.kelvin_presets.is_none());
+        // a count past the complete entries refuses the table, though both lights are in it
+        let mut long_count = table.clone();
+        long_count[0] = 9;
+        assert!(decode(Some(long_count)).color.kelvin_presets.is_none());
+        // one word short of the third entry: two complete entries, a count of 3
+        assert!(decode(Some(table[..table.len() - 1].to_vec())).color.kelvin_presets.is_none());
     }
 
     #[test]
