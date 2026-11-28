@@ -2199,6 +2199,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cloud-google-drive"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "craft-cloud",
+ "craft-suite-account",
+ "craft-ui",
+ "egui",
+ "getrandom 0.3.4",
+ "log",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "craft-cloud-local"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,34 @@
+[package]
+name = "craft-cloud-google-drive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Google Drive as a craft-ui CloudBackend: OAuth sign-in for installed apps (loopback + PKCE) and the Drive v3 calls to list, open and save, with no service in between"
+
+[lints]
+workspace = true
+
+# Desktop only: see the note in `lib.rs`. On wasm the crate is empty and depends on nothing.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+thiserror = { workspace = true }
+craft-cloud = { workspace = true }
+craft-ui = { workspace = true, features = ["cloud"] }
+# The refresh token goes in the suite's keychain namespace through its TokenStore, so the suite
+# keeps one keychain implementation.
+craft-suite-account = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+# PKCE's S256 challenge (RFC 7636).
+sha2 = "0.10"
+base64 = "0.23"
+# Verifiers, `state` and multipart boundaries.
+getrandom = "0.3"
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = "3"
+egui = { workspace = true }
