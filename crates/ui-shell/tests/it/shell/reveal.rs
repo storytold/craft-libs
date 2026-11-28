@@ -316,6 +316,10 @@ fn tab_in_standard_hides_the_options_bar_and_rail_and_keeps_the_title_and_status
     assert_eq!(seen.slots, ["title", "status"], "Tab hides the options bar and the rail and keeps the title bar and the status bar");
     assert!(!seen.hidden, "the window does not become body-only: its own chrome stays");
     assert!(seen.bars && seen.body_sees_bars, "the pass and its body read the chrome hiding, so a body with panels hides them too");
+    let seen = window_tabbed(&mut windows, &mut mode);
+    assert_eq!(seen.slots, ["title", "options", "status", "tools"], "Tab again shows what it hid");
+    assert!(!seen.hidden && !seen.bars && !seen.body_sees_bars, "and the window is a normal window again");
+    window_tabbed(&mut windows, &mut mode);
     command(&windows, ChromeToggle::Reveal(Some(RevealEdge::Top)));
     assert_eq!(
         window_settled(&mut windows, &mut mode).slots,
@@ -323,9 +327,15 @@ fn tab_in_standard_hides_the_options_bar_and_rail_and_keeps_the_title_and_status
         "an edge reveal shows the hidden bar over the body, as it does today"
     );
     command(&windows, ChromeToggle::Reveal(None));
-    let seen = window_tabbed(&mut windows, &mut mode);
-    assert_eq!(seen.slots, ["title", "options", "status", "tools"], "Tab again shows what it hid");
-    assert!(!seen.hidden && !seen.bars && !seen.body_sees_bars, "and the window is a normal window again");
+    window_settled(&mut windows, &mut mode);
+    command(&windows, ChromeToggle::PanelsKeepTools);
+    let seen = window_settled(&mut windows, &mut mode);
+    assert_eq!(seen.slots, ["title", "status"], "Shift+Tab refuses while the bars are hidden, as it does while the window is body-only");
+    assert!(seen.bars && !seen.hidden, "and stays in the chrome hiding, not the window's own one");
+    command(&windows, ChromeToggle::ShowPanels);
+    let seen = window_settled(&mut windows, &mut mode);
+    assert_eq!(seen.slots, ["title", "options", "status", "tools"], "ShowPanels ends the chrome hiding too");
+    assert!(!seen.bars && !seen.hidden, "and no hiding is left");
 }
 
 #[trial]
