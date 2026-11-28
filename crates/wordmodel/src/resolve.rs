@@ -268,6 +268,7 @@ impl ResolvedPara {
         let mut tabs: Vec<TabStop> =
             p.tabs.clone().unwrap_or_default().into_iter().filter(|t| t.align != TabAlign::Clear && t.pos.is_finite()).collect();
         tabs.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+        tabs.truncate(MAX_TABS);
         ResolvedPara {
             style: style.to_string(),
             align: p.align.unwrap_or_default(),
@@ -346,9 +347,7 @@ impl StyleSheet {
                 let mut sp = s.para.clone();
                 // Tabs accumulate along the chain (with Clear removing inherited stops).
                 if let (Some(base), Some(add)) = (pp.tabs.clone(), sp.tabs.clone()) {
-                    let mut merged: Vec<TabStop> = base.into_iter().filter(|t| !add.iter().any(|a| (a.pos - t.pos).abs() < 0.5)).collect();
-                    merged.extend(add);
-                    sp.tabs = Some(merged);
+                    sp.tabs = Some(merge_tabs(base, add));
                 }
                 pp.overlay(&sp);
                 cp.overlay(&s.chr);
@@ -409,9 +408,7 @@ impl StyleSheet {
         let (mut base, _) = self.para_style_props_over(&style, defaults, CharProps::default());
         let mut direct = p.clone();
         if let (Some(b), Some(d)) = (base.tabs.clone(), direct.tabs.clone()) {
-            let mut merged: Vec<TabStop> = b.into_iter().filter(|t| !d.iter().any(|a| (a.pos - t.pos).abs() < 0.5)).collect();
-            merged.extend(d);
-            direct.tabs = Some(merged);
+            direct.tabs = Some(merge_tabs(b, d));
         }
         base.overlay(&direct);
         let mut rp = ResolvedPara::from(&base, &style);
@@ -462,6 +459,28 @@ fn diff_patch<T: Serialize + serde::de::DeserializeOwned + Default>(with: &T, wi
     };
     let patch: serde_json::Map<String, serde_json::Value> = w.into_iter().filter(|(k, v)| o.get(k) != Some(v)).collect();
     serde_json::from_value(serde_json::Value::Object(patch)).unwrap_or_default()
+}
+
+/// Most tab stops a resolved paragraph keeps, as Word does (storytold/wordcraft#3707).
+const MAX_TABS: usize = 64;
+
+/// `own` tab stops over `inherited` ones: an own stop replaces an inherited one at its position
+/// (a `Clear` stop hides it), and the inherited stops that would take the paragraph past
+/// [`MAX_TABS`] are dropped, the furthest first, so own stops keep their precedence.
+fn merge_tabs(inherited: Vec<TabStop>, own: Vec<TabStop>) -> Vec<TabStop> {
+    let room = MAX_TABS.saturating_sub(own.iter().filter(|t| t.align != TabAlign::Clear).count());
+    let mut merged: Vec<TabStop> = inherited.into_iter().filter(|t| !own.iter().any(|a| (a.pos - t.pos).abs() < 0.5)).collect();
+    merged.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+    let mut kept = 0;
+    merged.retain(|t| {
+        if t.align == TabAlign::Clear {
+            return true;
+        }
+        kept += 1;
+        kept <= room
+    });
+    merged.extend(own);
+    merged
 }
 
 #[cfg(test)]
@@ -614,6 +633,33 @@ mod tests {
         }
         assert_eq!(s.resolve_para_in(&ParaProps::default(), Some(&table_p)).space_after, 10.0);
         assert_eq!(s.resolve_char_in(None, Some(&table_c), &CharProps::default()).size, 11.0);
+    }
+
+    /// A style's stops and the paragraph's own resolve to at most 64 stops, as Word keeps
+    /// (storytold/wordcraft#3707): the style's furthest stops give way, the paragraph's all stay.
+    #[test]
+    fn resolved_tab_stops_stop_at_64_and_keep_direct_ones() {
+        let stops = |from: i32, n: i32| {
+            (from..from + n).map(|k| TabStop { pos: k as f32 * 10.0, align: TabAlign::Left, leader: Default::default() }).collect::<Vec<_>>()
+        };
+        let mut s = StyleSheet::builtin();
+        s.styles.push(crate::styles::Style {
+            id: "Tabbed".into(),
+            based_on: Some("Normal".into()),
+            para: ParaProps { tabs: Some(stops(0, 64)), ..Default::default() },
+            ..Default::default()
+        });
+        let resolve = |own: Vec<TabStop>| {
+            s.resolve_para(&ParaProps { style: Some("Tabbed".into()), tabs: Some(own), ..Default::default() })
+                .tabs
+                .iter()
+                .map(|t| t.pos)
+                .collect::<Vec<_>>()
+        };
+        let pos = |v: Vec<TabStop>| v.iter().map(|t| t.pos).collect::<Vec<_>>();
+        assert_eq!(resolve(stops(100, 64)), pos(stops(100, 64)), "64 own stops leave no room for the style's");
+        let mixed = [pos(stops(0, 54)), pos(stops(100, 10))].concat();
+        assert_eq!(resolve(stops(100, 10)), mixed, "10 own stops keep the style's first 54");
     }
 
     #[test]
