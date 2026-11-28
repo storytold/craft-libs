@@ -1863,6 +1863,7 @@ dependencies = [
  "craft-media-source",
  "craft-menu",
  "craft-mesh",
+ "craft-mesh-ops",
  "craft-metadata",
  "craft-metafile",
  "craft-midi",
@@ -3417,6 +3418,17 @@ dependencies = [
  "craft-zip",
  "miniz_oxide 0.9.1",
  "serde_json",
+]
+
+[[package]]
+name = "craft-mesh-ops"
+version = "0.1.0"
+dependencies = [
+ "glam 0.30.10",
+ "mikktspace",
+ "rayon",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6809,6 +6821,12 @@ dependencies = [
 
 [[package]]
 name = "glam"
+version = "0.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3abb554f8ee44336b72d522e0a7fe86a29e09f839a36022fa869a7dfe941a54b"
+
+[[package]]
+name = "glam"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "151665d9be52f9bb40fc7966565d39666f2d1e69233571b71b87791c7e0528b3"
@@ -6818,6 +6836,9 @@ name = "glam"
 version = "0.30.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "glifo"
@@ -8662,6 +8683,15 @@ name = "micromap"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
+
+[[package]]
+name = "mikktspace"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d0b56b403871a8f992ca626d52cc0a690d4841baea8955dc4af6304ac62f8b0"
+dependencies = [
+ "glam 0.15.2",
+]
 
 [[package]]
 name = "mime"
