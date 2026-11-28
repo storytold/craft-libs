@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use craft_pptx::anim::Transition;
 use craft_pptx::style::{Dash, LineCap, LineEnd, LineJoin, PictureFill, PictureMode, Shadow};
 use craft_pptx::text::{Align, Anchor as TextAnchor, AutoFit, BodyProps, Bullet, LevelStyle, ListStyle, ParaProps, RunKind, Spacing, TabStop};
 use craft_pptx::{
@@ -93,6 +94,51 @@ struct Ctx<'a> {
     /// Notes pages converted already. Distinct slides can share a slide id, and so a notes page:
     /// it goes to the first of them only, so its text isn't copied into every one.
     used_notes: HashSet<usize>,
+    /// The document's embedded sounds by id ([`doc::sounds`]).
+    sounds: HashMap<u32, Rec<'a>>,
+    /// Sounds added to the presentation already, by id, so slides sharing one add it once.
+    sound_media: HashMap<u32, Option<MediaId>>,
+}
+
+/// Longest automatic advance a slide may wait ([MS-PPT] §2.6.6 `slideTime`), in milliseconds.
+const MAX_SLIDE_TIME: i32 = 86_399_000;
+
+/// The model's transition (kind, option) for a `SlideShowSlideInfoAtom`'s `effectType` and
+/// `effectDirection` ([MS-PPT] §2.6.6), as the PPTX reader maps the same effects. `None` for no
+/// effect (a Cut that isn't through black) and for an effect or direction the model has no
+/// match for. Directions are the way the effect moves, as the model's options are: Cover Left
+/// is "l". Wheel's spoke count isn't modelled.
+fn transition_effect(effect: u8, dir: u8) -> Option<(&'static str, &'static str)> {
+    const SIDES: [&str; 8] = ["l", "u", "r", "d", "lu", "ru", "ld", "rd"];
+    let pick = |options: &[&'static str]| options.get(usize::from(dir)).copied();
+    Some(match effect {
+        0 => ("cut", (dir == 1).then_some("throughBlack")?),
+        1 => ("random", ""),
+        2 => ("blinds", pick(&["vert", "horz"])?),
+        3 => ("checker", pick(&["horz", "vert"])?),
+        4 => ("cover", pick(&SIDES)?),
+        5 => ("dissolve", ""),
+        // PowerPoint 97's one fade, Fade Through Black; AlphaFade (23) is the smooth one.
+        6 => ("fade", "throughBlack"),
+        7 => ("uncover", pick(&SIDES)?),
+        8 => ("randomBar", pick(&["horz", "vert"])?),
+        // Strips: the diagonal wipes, directions 4 to 7 only.
+        9 => ("wipe", pick(&SIDES).filter(|_| dir >= 4)?),
+        10 => ("wipe", pick(&SIDES[..4])?),
+        // Box In/Out is the Shape transition's In and Out.
+        11 => ("shape", pick(&["out", "in"])?),
+        13 => ("split", pick(&["horzOut", "horzIn", "vertOut", "vertIn"])?),
+        17 => ("shape", "diamond"),
+        18 => ("shape", "plus"),
+        19 => ("clock", "wedge"),
+        20 => ("push", pick(&SIDES[..4])?),
+        21 => ("comb", pick(&["horz", "vert"])?),
+        22 => ("zoom", "rotate"),
+        23 => ("fade", "smoothly"),
+        26 => ("clock", "clockwise"),
+        27 => ("shape", "circle"),
+        _ => return None,
+    })
 }
 
 /// A page side in master units as points, else `fallback` when it is missing or out of range.
@@ -119,6 +165,8 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
         master_props: HashMap::new(),
         app,
         used_notes: HashSet::new(),
+        sounds: doc::sounds(&d.document),
+        sound_media: HashMap::new(),
     };
     let environment = d.document.child(rt::ENVIRONMENT);
     if let Some(hf) = doc::headers_footers(&d.document, 3) {
@@ -465,7 +513,9 @@ impl<'a> Ctx<'a> {
         if let Some(hf) = doc::headers_footers(&s.rec, 0).or_else(|| doc::headers_footers(&d.document, 3)) {
             self.footers(&mut shapes, &hf);
         }
-        let hidden = s.rec.child(rt::SLIDE_SHOW_SLIDE_INFO).and_then(|i| i.u16(10)).is_some_and(|f| f & 0x4 != 0);
+        let info = s.rec.child(rt::SLIDE_SHOW_SLIDE_INFO);
+        let hidden = info.as_ref().and_then(|i| i.u16(10)).is_some_and(|f| f & 0x4 != 0);
+        let transition = info.and_then(|i| self.transition(&i));
         let notes = find
             .notes_of
             .get(&s.slide_id)
@@ -473,7 +523,58 @@ impl<'a> Ctx<'a> {
             .and_then(|&i| d.notes.get(i))
             .map(|n| self.notes(n, &styles, scheme))
             .unwrap_or_default();
-        Some(Slide { id, layout, shapes, background, hidden, show_master_shapes: atom.follow_master_objects, notes, ..Default::default() })
+        Some(Slide {
+            id,
+            layout,
+            shapes,
+            background,
+            hidden,
+            show_master_shapes: atom.follow_master_objects,
+            notes,
+            transition,
+            ..Default::default()
+        })
+    }
+
+    /// The slide transition in a slide's `SlideShowSlideInfoAtom` ([MS-PPT] §2.6.6); `None` when
+    /// it has no effect, advances on click only and plays or stops no sound, or is cut short.
+    fn transition(&mut self, info: &Rec) -> Option<Transition> {
+        let flags = info.u16(10)?;
+        let bit = |n: u16| flags & (1 << n) != 0;
+        let (kind, option) = transition_effect(info.u8(9)?, info.u8(8)?).unwrap_or(("none", ""));
+        let duration_ms = match info.u8(12) {
+            Some(0) => 750,
+            Some(1) => 500,
+            Some(2) => 250,
+            // Out of the spec's range: the PPTX reader's default when `spd` is missing.
+            _ => 500,
+        };
+        // fSound plays the sound `soundIdRef` names; 0 names none.
+        let sound = if bit(4) { info.u32(4).filter(|&id| id != 0).and_then(|id| self.sound(id)) } else { None };
+        let tr = Transition {
+            kind: kind.into(),
+            option: option.into(),
+            duration_ms,
+            // fManualAdvance, and fAutoAdvance after `slideTime` ms (0 to 86,399,000).
+            advance_on_click: bit(0),
+            advance_after_ms: bit(10).then(|| u32::try_from(info.i32(0).unwrap_or(0).clamp(0, MAX_SLIDE_TIME)).unwrap_or(0)),
+            sound,
+            sound_loop: sound.is_some() && bit(6),
+            stop_sound: bit(8),
+            raw: None,
+        };
+        let plain = kind == "none" && tr.advance_on_click && tr.advance_after_ms.is_none() && tr.sound.is_none() && !tr.stop_sound;
+        (!plain).then_some(tr)
+    }
+
+    /// The embedded sound `id` names, added to the presentation once.
+    fn sound(&mut self, id: u32) -> Option<MediaId> {
+        if let Some(m) = self.sound_media.get(&id) {
+            return *m;
+        }
+        let m = self.sounds.get(&id).and_then(doc::sound).and_then(|s| self.p.add_media(&s.name, s.content_type, s.data.to_vec()));
+        self.sound_media.insert(id, m);
+        m
     }
 
     /// The date, footer and slide number placeholders `hf` turns on, for those the slide doesn't
@@ -1195,6 +1296,50 @@ mod tests {
         // bottom right (DrawingML: 90° runs top to bottom, 0° left to right).
         for (a, dm) in [(0.0, 90.0), (-90.0, 0.0), (-180.0, 90.0), (-270.0, 180.0), (-315.0, 225.0), (-45.0, 315.0)] {
             assert_eq!(linear_angle(a), dm, "{a}");
+        }
+    }
+
+    /// #2480: each `effectType` and `effectDirection` of [MS-PPT] §2.6.6 the model can show maps to
+    /// the kind and option the PPTX reader gives the same effect; the rest map to none.
+    #[test]
+    fn transition_effects_map_as_the_pptx_reader_maps_them() {
+        for (effect, dir, want) in [
+            (0, 0, None),
+            (0, 1, Some(("cut", "throughBlack"))),
+            (1, 0, Some(("random", ""))),
+            (2, 0, Some(("blinds", "vert"))),
+            (3, 1, Some(("checker", "vert"))),
+            (4, 0, Some(("cover", "l"))),
+            (4, 7, Some(("cover", "rd"))),
+            (4, 8, None),
+            (5, 0, Some(("dissolve", ""))),
+            (6, 0, Some(("fade", "throughBlack"))),
+            (7, 1, Some(("uncover", "u"))),
+            (8, 1, Some(("randomBar", "vert"))),
+            (9, 5, Some(("wipe", "ru"))),
+            (9, 1, None),
+            (10, 3, Some(("wipe", "d"))),
+            (10, 4, None),
+            (11, 0, Some(("shape", "out"))),
+            (11, 1, Some(("shape", "in"))),
+            (12, 0, None),
+            (13, 3, Some(("split", "vertIn"))),
+            (17, 0, Some(("shape", "diamond"))),
+            (18, 0, Some(("shape", "plus"))),
+            (19, 0, Some(("clock", "wedge"))),
+            (20, 2, Some(("push", "r"))),
+            (21, 0, Some(("comb", "horz"))),
+            (22, 0, Some(("zoom", "rotate"))),
+            (23, 0, Some(("fade", "smoothly"))),
+            (26, 8, Some(("clock", "clockwise"))),
+            (27, 0, Some(("shape", "circle"))),
+            (255, 0, None),
+        ] {
+            assert_eq!(transition_effect(effect, dir), want, "effect {effect}, direction {dir}");
+            if let Some((kind, option)) = want {
+                let t = craft_pptx::anim::TRANSITIONS.iter().find(|t| t.0 == kind).expect("a model kind");
+                assert!(option.is_empty() || t.4.contains(&option), "{kind} has no option {option}");
+            }
         }
     }
 }

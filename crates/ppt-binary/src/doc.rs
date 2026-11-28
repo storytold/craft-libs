@@ -20,6 +20,9 @@ pub mod rt {
     pub const SLIDE_PERSIST_ATOM: u16 = 0x03F3;
     pub const MAIN_MASTER: u16 = 0x03F8;
     pub const SLIDE_SHOW_SLIDE_INFO: u16 = 0x03F9;
+    pub const SOUND_COLLECTION: u16 = 0x07E4;
+    pub const SOUND: u16 = 0x07E6;
+    pub const SOUND_DATA: u16 = 0x07E7;
     pub const DRAWING_GROUP: u16 = 0x040B;
     pub const DRAWING: u16 = 0x040C;
     pub const COLOR_SCHEME: u16 = 0x07F0;
@@ -336,6 +339,71 @@ pub struct HeadersFooters {
 /// writer that adds one would otherwise put a NUL into the text, or make a tag name fail to match.
 fn cstring_units(b: &[u8]) -> impl Iterator<Item = u16> + '_ {
     b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&u| u != 0)
+}
+
+/// Longest sound name kept, in UTF-16 units: a name is a label, and a hostile one could be as long
+/// as the stream.
+const MAX_SOUND_NAME: usize = 255;
+
+/// The document's embedded sounds ([MS-PPT] §2.4.16): each `SoundContainer` of its
+/// `SoundCollectionContainer`, by the number its `SoundIdAtom` spells. A repeated id keeps its
+/// first sound.
+pub fn sounds<'a>(document: &Rec<'a>) -> HashMap<u32, Rec<'a>> {
+    let mut by_id = HashMap::new();
+    for sound in document.children_of(rt::SOUND_COLLECTION).flat_map(|c| c.children()).filter(|r| r.kind == rt::SOUND) {
+        let id = sound
+            .children()
+            .find(|r| r.kind == rt::CSTRING && r.instance == 2)
+            // A u32 has at most 10 digits; a little room for spaces around them.
+            .map(|r| String::from_utf16_lossy(&cstring_units(r.data).take(16).collect::<Vec<u16>>()))
+            .and_then(|t| t.trim().parse::<u32>().ok());
+        if let Some(id) = id.filter(|&id| id != 0) {
+            by_id.entry(id).or_insert(sound);
+        }
+    }
+    by_id
+}
+
+/// An embedded sound's file: its name, media type and bytes.
+pub struct Sound<'a> {
+    pub name: String,
+    pub content_type: &'static str,
+    pub data: &'a [u8],
+}
+
+/// The file in a `SoundContainer`: WAV or AIFF by its `SoundExtensionAtom`, else by the data's
+/// own header; `None` for anything else, or with no data. The name is its `SoundNameAtom` with the
+/// extension added.
+pub fn sound<'a>(container: &Rec<'a>) -> Option<Sound<'a>> {
+    let data = container.child(rt::SOUND_DATA)?.data;
+    let text = |instance: u16, max: usize| {
+        container
+            .children()
+            .find(|r| r.kind == rt::CSTRING && r.instance == instance)
+            .map(|r| String::from_utf16_lossy(&cstring_units(r.data).take(max).collect::<Vec<u16>>()))
+            .unwrap_or_default()
+    };
+    let by_extension = match text(1, 8).trim().to_ascii_lowercase().as_str() {
+        ".wav" | "wave" => Some(("audio/wav", ".wav")),
+        ".aif" | "aiff" => Some(("audio/aiff", ".aif")),
+        _ => None,
+    };
+    let (content_type, ext) = by_extension.or_else(|| match (data.get(0..4), data.get(8..12)) {
+        (Some(b"RIFF"), Some(b"WAVE")) => Some(("audio/wav", ".wav")),
+        (Some(b"FORM"), Some(b"AIFF" | b"AIFC")) => Some(("audio/aiff", ".aif")),
+        _ => None,
+    })?;
+    let name = text(0, MAX_SOUND_NAME);
+    let name = name.trim();
+    let lower = name.to_ascii_lowercase();
+    let name = if name.is_empty() {
+        format!("sound{ext}")
+    } else if lower.ends_with(ext) || (ext == ".aif" && lower.ends_with(".aiff")) {
+        name.to_string()
+    } else {
+        format!("{name}{ext}")
+    };
+    Some(Sound { name, content_type, data })
 }
 
 /// The slides' headers and footers in `container`, from its `HeadersFootersContainer` of
