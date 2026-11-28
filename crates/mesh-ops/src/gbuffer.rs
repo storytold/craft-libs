@@ -2,7 +2,7 @@
 //! to. Painting, compositing, baking and padding all work from this one buffer, so they agree
 //! on which texel is which surface point.
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{DVec2, Vec2, Vec3, Vec4};
 use rayon::prelude::*;
 
 use crate::Mesh;
@@ -52,18 +52,18 @@ enum Contact {
 /// texel center on its boundary: a half-plane on an edge, the corner's angle on a corner.
 type Wedge = (f64, f64);
 
-fn angle(v: Vec2) -> f64 {
-    f64::from(v.y).atan2(f64::from(v.x))
+fn angle(v: DVec2) -> f64 {
+    v.y.atan2(v.x)
 }
 
 /// The wedge around a texel center on edge `e0`–`e1` on the side of corner `c`.
-fn edge_wedge(e0: Vec2, e1: Vec2, c: Vec2) -> Wedge {
+fn edge_wedge(e0: DVec2, e1: DVec2, c: DVec2) -> Wedge {
     let start = if edge(e0, e1, c) > 0.0 { angle(e1 - e0) } else { angle(e0 - e1) };
     (start, std::f64::consts::PI)
 }
 
 /// The wedge of the triangle's corner at `v` between its edges toward `q` and `r`.
-fn corner_wedge(v: Vec2, q: Vec2, r: Vec2) -> Wedge {
+fn corner_wedge(v: DVec2, q: DVec2, r: DVec2) -> Wedge {
     let (a, b) = (angle(q - v), angle(r - v));
     let sweep = (b - a).rem_euclid(std::f64::consts::TAU);
     if sweep <= std::f64::consts::PI { (a, sweep) } else { (b, std::f64::consts::TAU - sweep) }
@@ -76,7 +76,7 @@ fn wedges_overlap((a1, s1): Wedge, (a2, s2): Wedge) -> bool {
     d < s1 - TOLERANCE || d > std::f64::consts::TAU - s2 + TOLERANCE
 }
 
-fn edge(a: Vec2, b: Vec2, p: Vec2) -> f32 {
+fn edge(a: DVec2, b: DVec2, p: DVec2) -> f64 {
     (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
 }
 
@@ -87,7 +87,12 @@ impl UvGBuffer {
         let size = Vec2::new(w as f32, h as f32);
         let bands = h.div_ceil(BAND) as usize;
         let mut bins: Vec<Vec<u32>> = vec![Vec::new(); bands];
-        for t in mesh.triangles_of(material) {
+        // Each triangle once, even when two of the material's submeshes list it; distinct
+        // triangles with the same UVs still overlap.
+        let mut triangles: Vec<usize> = mesh.triangles_of(material).collect();
+        triangles.sort_unstable();
+        triangles.dedup();
+        for t in triangles {
             let Some([a, b, c]) = mesh.tri(t) else { continue };
             let (Some(ua), Some(ub), Some(uc)) = (mesh.uvs.get(a), mesh.uvs.get(b), mesh.uvs.get(c)) else { continue };
             let y0 = (ua.y.min(ub.y).min(uc.y) * size.y).floor().max(0.0) as i64;
@@ -119,19 +124,22 @@ impl UvGBuffer {
                 for &t in bins.get(bi).map(Vec::as_slice).unwrap_or(&[]) {
                     let Some([a, b, c]) = mesh.tri(t as usize) else { continue };
                     let (Some(&ua), Some(&ub), Some(&uc)) = (mesh.uvs.get(a), mesh.uvs.get(b), mesh.uvs.get(c)) else { continue };
-                    let (pa, pb, pc) = (ua * size, ub * size, uc * size);
+                    // In f64, where the edge products of any finite f32 UVs neither overflow nor
+                    // lose the triangle's area.
+                    let dsize = size.as_dvec2();
+                    let (pa, pb, pc) = (ua.as_dvec2() * dsize, ub.as_dvec2() * dsize, uc.as_dvec2() * dsize);
                     let area = edge(pa, pb, pc);
                     if area.abs() < 1e-12 {
                         continue;
                     }
                     let eps = -1e-6 * area.abs();
                     let x0 = pa.x.min(pb.x).min(pc.x).floor().max(0.0) as u32;
-                    let x1 = (pa.x.max(pb.x).max(pc.x).ceil().min(w as f32) as u32).min(w);
-                    let y0 = (pa.y.min(pb.y).min(pc.y).floor().max(row0 as f32) as u32).max(row0);
-                    let y1 = (pa.y.max(pb.y).max(pc.y).ceil() as u32).min(row0 + rows);
+                    let x1 = (pa.x.max(pb.x).max(pc.x).ceil().min(f64::from(w)) as u32).min(w);
+                    let y0 = (pa.y.min(pb.y).min(pc.y).floor().max(f64::from(row0)) as u32).max(row0);
+                    let y1 = (pa.y.max(pb.y).max(pc.y).ceil().min(f64::from(row0 + rows)) as u32).min(row0 + rows);
                     for y in y0..y1 {
                         for x in x0..x1 {
-                            let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                            let p = DVec2::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
                             let (w0, w1, w2) = (edge(pb, pc, p) * area.signum(), edge(pc, pa, p) * area.signum(), edge(pa, pb, p) * area.signum());
                             if w0 < eps || w1 < eps || w2 < eps {
                                 continue;
@@ -175,7 +183,7 @@ impl UvGBuffer {
                                 }
                                 *slot = t;
                                 let inv = 1.0 / area.abs();
-                                *bw = [w1 * inv, w2 * inv];
+                                *bw = [(w1 * inv) as f32, (w2 * inv) as f32];
                             }
                         }
                     }
@@ -217,7 +225,9 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     let pos = p(&mesh.positions)?;
     let nrm = p(&mesh.normals)?.try_normalize().unwrap_or(Vec3::Y);
     let (pa, pb, pc) = (*mesh.positions.get(a)?, *mesh.positions.get(b)?, *mesh.positions.get(c)?);
-    let geo_nrm = (pb - pa).cross(pc - pa).try_normalize().unwrap_or(nrm);
+    // In f64, so tiny and huge faces keep their normal instead of underflowing or overflowing.
+    let (da, db, dc) = (pa.as_dvec3(), pb.as_dvec3(), pc.as_dvec3());
+    let geo_nrm = (db - da).cross(dc - da).try_normalize().map_or(nrm, |n| n.as_vec3());
     let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
     let tdir = tan.truncate().try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
@@ -300,6 +310,40 @@ mod tests {
         let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, uv, vec![0, 1, 2, 0, 1, 2], "m").unwrap();
         let g = UvGBuffer::new(&m, 0, 1, 1);
         assert_eq!((g.covered_count(), g.overlaps), (1, 1));
+    }
+
+    #[test]
+    fn a_triangle_listed_twice_is_rasterized_once() {
+        let uv = vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)];
+        let mut m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, uv, vec![0, 1, 2], "m").unwrap();
+        let once = m.submeshes[0].clone();
+        m.submeshes.push(once);
+        let g = UvGBuffer::new(&m, 0, 8, 8);
+        assert!(g.covered_count() > 0);
+        assert_eq!(g.overlaps, 0);
+    }
+
+    #[test]
+    fn large_finite_uvs_rasterize_without_overflow() {
+        // Edge products of these UVs at 8 texels overflow f32.
+        let uv = vec![Vec2::new(-1e37, -1e37), Vec2::new(3e37, -1e37), Vec2::new(-1e37, 3e37)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, uv, vec![0, 1, 2], "m").unwrap();
+        let g = UvGBuffer::new(&m, 0, 8, 8);
+        assert_eq!(g.covered_count(), 64);
+        for (i, [b1, b2]) in g.bary.iter().enumerate() {
+            assert!(b1.is_finite() && b2.is_finite() && *b1 >= 0.0 && *b2 >= 0.0 && b1 + b2 <= 1.0, "texel {i}: {b1} {b2}");
+        }
+    }
+
+    #[test]
+    fn tiny_and_huge_triangles_keep_their_geometric_normal() {
+        for s in [1e-20f32, 1e19] {
+            let p = vec![Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(0.0, 0.0, -s)];
+            let mut m = Mesh::from_parts(p, None, vec![Vec2::ZERO, Vec2::X, Vec2::Y], vec![0, 1, 2], "m").unwrap();
+            m.normals = vec![Vec3::X; 3];
+            let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
+            assert!((surface.geo_nrm - Vec3::Y).length() < 1e-6, "scale {s}: {}", surface.geo_nrm);
+        }
     }
 
     #[test]
