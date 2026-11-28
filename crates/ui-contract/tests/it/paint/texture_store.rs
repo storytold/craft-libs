@@ -705,10 +705,67 @@ fn loader_patch_rejected_reports_rejection_without_unpatching_newer_entry() {
     assert!(loader.cache().is_patchable(&ctx, &1));
 
     jobs.run_all();
-    frame(&mut frames, || {
-        let _ = loader.ask(&ctx, &1, rev_2, Priority::VISIBLE);
-    });
-    assert!(loader.patch_rejected(&ctx, &1, rev_2), "loader reports rejected patch for rev_2");
+    assert!(loader.patch_rejected(&ctx, &1, rev_2), "loader polls finished work and reports rejected patch for rev_2");
     assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(rev_3), "newer entry rev_3 preserved");
     assert!(loader.cache().is_patchable(&ctx, &1), "newer entry rev_3 stays patchable");
+}
+
+struct BackgroundGeomSource {
+    phase: Cell<u64>,
+    seen_patchable: Cell<bool>,
+}
+
+impl ThumbSource<u32> for BackgroundGeomSource {
+    fn revision(&self, _key: &u32, _request: &ThumbRequest) -> Revision {
+        Revision::new(self.phase.get())
+    }
+
+    fn render(&self, _key: &u32, request: &ThumbRequest) -> ThumbRender {
+        self.seen_patchable.set(request.patchable);
+        let side = request.side as usize;
+        if self.phase.get() == 1 {
+            ThumbRender::Ready(square(side, shade(10)))
+        } else if self.phase.get() == 2 {
+            ThumbRender::Later(Box::new(move |_| Ok(LoadedPicture::Image(square(side, shade(50))))))
+        } else if request.patchable {
+            ThumbRender::Region { origin: [0, 0], image: square(SMALL, shade(200)) }
+        } else {
+            ThumbRender::Ready(square(side, shade(100)))
+        }
+    }
+}
+
+#[trial]
+fn thumbnails_background_geometry_reconciles_before_next_request() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let jobs = Arc::new(ManualJobs::new());
+    let thumbs = Thumbnails::<u32>::in_context(
+        &ctx,
+        "test-bg-geom-reconcile",
+        ThumbnailOptions::new().max_side(512).jobs(Arc::clone(&jobs) as Arc<dyn craft_host::Jobs>),
+    );
+    let source = BackgroundGeomSource { phase: Cell::new(1), seen_patchable: Cell::new(false) };
+    let req_small = ThumbRequest::for_cell(16.0, 1.0);
+    let req_large = ThumbRequest::for_cell(64.0, 1.0);
+
+    // Frame 1: install small texture
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req_small, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+
+    // Frame 2: queue large background render
+    source.phase.set(2);
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req_large, Priority::VISIBLE), TextureState::Loading { .. }));
+    });
+    jobs.run_all();
+
+    // Frame 3: request small again without ever asking for the large revision;
+    // completed large job's geometry must reconcile before matches_geom is evaluated.
+    source.phase.set(3);
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req_small, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+    assert!(!source.seen_patchable.get(), "small request must not patch against newly installed large texture");
 }

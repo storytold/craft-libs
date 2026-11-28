@@ -297,8 +297,9 @@ impl<K: TextureKey> TextureLoader<K> {
     }
 
     /// Returns `true` if the most recent `LoadedPicture::Region` for `key` at `revision` was rejected by the store.
-    /// Direct callers can check this before `request`/`submit` to fall back to `LoadedPicture::Image`.
+    /// Polls finished work first so direct callers can check this before `request`/`submit` to fall back to `LoadedPicture::Image`.
     pub fn patch_rejected(&self, ctx: &Context, key: &K, revision: Revision) -> bool {
+        self.poll(ctx);
         self.with(ctx, |pool| pool.rejected_patches.get(key) == Some(&revision))
     }
 

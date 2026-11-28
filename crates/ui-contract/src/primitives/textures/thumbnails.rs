@@ -399,14 +399,49 @@ impl<K: TextureKey> Thumbnails<K> {
         keys.force_full.remove(key);
     }
 
+    fn prune_stale_geometry(&self, ctx: &Context) {
+        let cached_entries = self.loader.cache().statistics(ctx).entries;
+        let candidates: Vec<K> = {
+            let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            if keys.geometry.len() > cached_entries {
+                keys.geometry.keys().cloned().collect()
+            } else {
+                Vec::new()
+            }
+        };
+        if !candidates.is_empty() {
+            let gone: Vec<K> = candidates.into_iter().filter(|k| !self.loader.cache().has_texture(ctx, k)).collect();
+            if !gone.is_empty() {
+                let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+                for k in &gone {
+                    keys.geometry.remove(k);
+                }
+            }
+        }
+    }
+
     fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
         self.loader.poll(ctx);
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));
         let geom = ThumbGeometry { side, region: region_bits(request.region) };
         let resident_revision = self.loader.cache().texture_revision(ctx, key);
+        self.prune_stale_geometry(ctx);
         let (matches_geom, force_full) = {
-            let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            match resident_revision {
+                Some(res_rev) => {
+                    if let Some((pending_rev, pending_geom)) = keys.pending_geometry.get(key).copied()
+                        && pending_rev == res_rev
+                    {
+                        keys.geometry.insert(key.clone(), pending_geom);
+                        keys.pending_geometry.remove(key);
+                    }
+                }
+                None => {
+                    keys.geometry.remove(key);
+                }
+            }
             (keys.geometry.get(key) == Some(&geom), keys.force_full.contains(key))
         };
         let patchable = !force_full && matches_geom && self.loader.cache().is_patchable(ctx, key);
@@ -564,8 +599,12 @@ impl<K: TextureKey> Thumbnails<K> {
     }
 
     /// Keeps only the pictures whose key `keep` accepts (the open documents changed).
-    pub fn retain(&self, ctx: &Context, keep: impl FnMut(&K) -> bool) {
-        self.loader.cache().retain(ctx, keep);
+    pub fn retain(&self, ctx: &Context, mut keep: impl FnMut(&K) -> bool) {
+        self.loader.cache().retain(ctx, &mut keep);
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        keys.geometry.retain(|k, _| keep(k));
+        keys.pending_geometry.retain(|k, _| keep(k));
+        keys.force_full.retain(|k| keep(k));
     }
 
     /// The store under the thumbnails, for `forget`, `clear` and `statistics`.
