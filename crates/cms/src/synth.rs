@@ -901,7 +901,7 @@ mod tests {
 
     #[test]
     fn oklab_profile_has_three_tables() {
-        let p = CmykParams { grid_a2b: 5, grid_b2a: 5, mapping: GamutMapping::Oklab { knee: 0.65, saturation: 1.05 }, ..CmykParams::default() };
+        let p = CmykParams { grid_a2b: 3, grid_b2a: 3, mapping: GamutMapping::Oklab { knee: 0.65, saturation: 1.05 }, ..CmykParams::default() };
         let profile = cmyk_profile(&p).unwrap();
         let [Some(b0), Some(b1), Some(b2)] = &profile.b2a else { panic!("missing BToA tables") };
         assert!(b0 != b1 && b0 != b2, "perceptual shares a table");

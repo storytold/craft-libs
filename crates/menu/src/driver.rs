@@ -3,10 +3,12 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 use craft_ui::contract::{MemoKey, MemoProps};
 use craft_ui::menu::Alternate;
+use craft_ui::runtime::motion::Instant;
 use craft_ui::runtime::windows::{KeyEquivalent, WindowAction, WindowHost};
 
 use crate::layout::{Clash, Layout};
@@ -201,6 +203,67 @@ pub trait Backend {
     /// Keep the driver's [`Dispatch`]: the backend's menu event handler turns every chosen item
     /// into an [`Event`] through [`Dispatch::chosen`]. [`NativeMenu::new`] calls it once.
     fn attach(&mut self, dispatch: Dispatch);
+}
+
+/// How long a backend waits after a failed rebuild before it tries the same menus once more
+/// ([`RebuildRetry`]).
+pub const REBUILD_RETRY: Duration = Duration::from_secs(1);
+
+/// When a backend tries again to build menus the platform could not build. New menus are always
+/// built. When their build fails, the same menus are tried once more [`REBUILD_RETRY`] after the
+/// failure; when that fails too, they are not tried again until they change.
+///
+/// The driver syncs a backend only when the menus' key, the gate or a menu event calls for it
+/// ([`NativeMenu::sync_with`]), so a backend keeps the menus it could not build and tries them
+/// again itself, for example from [`Backend::drain`], asking egui for a frame when the retry is
+/// due.
+#[derive(Debug)]
+pub struct RebuildRetry<B> {
+    /// The menus whose build failed, and when to try them again (`None`: their retry failed too).
+    failed: Option<(B, Option<Instant>)>,
+}
+
+impl<B> Default for RebuildRetry<B> {
+    fn default() -> RebuildRetry<B> {
+        RebuildRetry { failed: None }
+    }
+}
+
+/// What [`RebuildRetry::attempt`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Attempt {
+    /// The menus were built.
+    Built,
+    /// The menus were not built: their build failed, or their retry is not due yet. Try them again
+    /// after this long.
+    Retry(Duration),
+    /// The build failed and so did its retry: these menus are not built again until they change.
+    Failed,
+}
+
+impl<B: Clone + PartialEq> RebuildRetry<B> {
+    /// Build `bar` with `build` (which returns whether it succeeded) unless `bar` failed before
+    /// and its retry is not due, and record the outcome. `clock` gives the time. It is read again
+    /// after a failed build, so the delay starts when the build fails.
+    pub fn attempt(&mut self, bar: &B, clock: impl Fn() -> Instant, build: impl FnOnce() -> bool) -> Attempt {
+        let now = clock();
+        let retrying = match &self.failed {
+            Some((failed, at)) if failed == bar => match at {
+                Some(at) if now < *at => return Attempt::Retry(at.saturating_duration_since(now)),
+                Some(_) => true,
+                None => return Attempt::Failed,
+            },
+            _ => false,
+        };
+        if build() {
+            self.failed = None;
+            return Attempt::Built;
+        }
+        let at = if retrying { None } else { clock().checked_add(REBUILD_RETRY) };
+        self.failed = Some((bar.clone(), at));
+        if at.is_some() { Attempt::Retry(REBUILD_RETRY) } else { Attempt::Failed }
+    }
 }
 
 /// The native menu bar, while the app uses one (its in-window menus are hidden then).

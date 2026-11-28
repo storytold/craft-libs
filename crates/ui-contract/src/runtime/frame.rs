@@ -2,7 +2,6 @@
 
 use crate::runtime::commands::{self, CommandInput, CommandSet as _, Fired};
 use crate::runtime::egui::input::{self as raw_input, Arrived, HeldInput, RawInput};
-use crate::runtime::egui::memory as store;
 use crate::runtime::egui::{clipboard, pass, scale, style};
 use crate::runtime::env::{AltCodePages, Env, RootEnv, WheelSpeed, WindowKey};
 use crate::runtime::pass_state;
@@ -14,7 +13,6 @@ use craft_keymap::Mods;
 use craft_theme::{AppSizes, Appearance, Contrast, HitSizes, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, builtins, resolve_sized};
 use egui::{Context, Id, Ui, ViewportId};
 use std::any::TypeId;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -275,18 +273,18 @@ impl<T: Default> PerViewport<T> {
     }
 }
 
-/// Where the records of a [`PerViewport`] type live: a context service unless the type is pass-local
-/// (`runtime::pass_state`), which overrides these.
+/// Where the records of a [`PerViewport`] type live: in the context's pass state, a field of it for the types the
+/// runtime names there (`runtime::pass_state`, which overrides these), else by type beside the fields.
 #[doc(hidden)]
 pub trait Stored: Default + Send + 'static {
     /// Runs `f` on the records of this type.
     fn records<R>(ctx: &Context, f: impl FnOnce(&mut PerViewport<Self>) -> R) -> R {
-        store::with::<PerViewport<Self>, R>(ctx, f)
+        pass_state::with_records::<Self, R>(ctx, f)
     }
 
     /// Runs `f` on the stamped records of this type.
     fn stamped<R>(ctx: &Context, f: impl FnOnce(&mut PerViewport<Stamped<Self>>) -> R) -> R {
-        store::with::<PerViewport<Stamped<Self>>, R>(ctx, f)
+        pass_state::with_records::<Stamped<Self>, R>(ctx, f)
     }
 }
 
@@ -681,14 +679,6 @@ struct ViewportRecord {
 
 impl Stored for ViewportRecord {}
 
-/// What the begin hook read of the running pass; steps read it, none writes it.
-#[derive(Clone)]
-struct RunningPass {
-    /// The context the pass runs in. Another context on the same thread, and a pass a panic left open, read none of these.
-    ctx: Context,
-    facts: PassFacts,
-}
-
 /// What a pass fixes for every step: its viewport, numbers and time.
 #[derive(Clone, Copy)]
 #[doc(hidden)]
@@ -703,15 +693,11 @@ pub struct PassFacts {
     pub elapsed: f64,
 }
 
-thread_local! {
-    /// The passes between their begin and end hooks on this thread, innermost last: nested viewport passes stack.
-    static RUNNING: RefCell<Vec<RunningPass>> = const { RefCell::new(Vec::new()) };
-}
-
-/// The facts of the innermost running pass of `ctx` on this thread, `None` outside every pass of it.
+/// The facts of the innermost running pass of `ctx` on this thread, `None` outside every pass of it. The begin hook
+/// reads them; steps read them, none writes them.
 #[doc(hidden)]
 pub fn running(ctx: &Context) -> Option<PassFacts> {
-    RUNNING.with(|running| running.borrow().iter().rev().find(|pass| pass.ctx == *ctx).map(|pass| pass.facts))
+    pass_state::running(ctx)
 }
 
 /// The facts of the innermost running pass of `ctx`, or outside every pass of it, what the context says of its
@@ -840,13 +826,8 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
         let elapsed = record.now.replace(now).map_or(0.0, |previous| (now - previous).max(0.0));
         (elapsed, std::mem::take(&mut record.press_cancelled))
     });
-    RUNNING.with(|running| {
-        let mut running = running.borrow_mut();
-        // A pass of this viewport that never ended (a panic unwound through it) is not still running.
-        running.retain(|pass| !(pass.ctx == ctx && pass.facts.viewport == viewport));
-        running.push(RunningPass { ctx: ctx.clone(), facts: PassFacts { viewport, pass_nr, frame_nr, now, elapsed } });
-    });
     pass_state::hold(&ctx);
+    pass_state::begin_running(&ctx, PassFacts { viewport, pass_nr, frame_nr, now, elapsed });
     if root_pass.is_some() && pass::first_of_frame(&ctx) {
         prune_closed(&ctx);
     }
@@ -880,7 +861,7 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     } else if escapes.to_components > 0 {
         raw_input::stop_dragging(&ctx);
     }
-    wheel::begin(&ctx);
+    wheel::begin(&ctx, input.root.pointer_scoped_field_wheel);
     // H7: shortcuts the owner allows, through the gate.
     commands::begin(&ctx);
     access::begin_live_pass(&ctx);
@@ -916,11 +897,6 @@ pub(crate) fn end_pass(ui: &mut Ui) {
     pass_state::with::<FrameState, _>(&ctx, |state| state.passes_open = state.passes_open.saturating_sub(1));
     #[cfg(feature = "testing")]
     crate::runtime::egui::access::check_parents_acyclic(&ctx);
-    RUNNING.with(|running| {
-        let mut running = running.borrow_mut();
-        if let Some(at) = running.iter().rposition(|pass| pass.ctx == ctx) {
-            running.remove(at);
-        }
-    });
+    pass_state::end_running(&ctx);
     pass_state::release(&ctx);
 }

@@ -66,13 +66,14 @@ pub enum WindowAction {
 }
 
 /// What a double click on a window's free move band (its title bar, or the strip a modal leaves over it) asks of the
-/// window in `frame`: an integrated frame maximizes or restores; a macOS inset frame follows the system setting
-/// `setting`; a native frame is the OS's.
+/// window in `frame`: an integrated or macOS inset frame follows the system setting `setting` (zoom, the default,
+/// maximizes or restores; GNOME's setting comes from `craft_window::desktop::double_click`); a native frame is the
+/// OS's.
 pub fn double_click_action(frame: &Frame, setting: DoubleClick, maximized: bool) -> Option<WindowAction> {
     match (frame, setting) {
         (Frame::Native, _) => None,
-        (Frame::Integrated(_), _) | (Frame::Inset(_), DoubleClick::Zoom) => Some(WindowAction::SetMaximized(!maximized)),
-        (Frame::Inset(_), DoubleClick::Minimize) => Some(WindowAction::Minimize),
+        (Frame::Integrated(_) | Frame::Inset(_), DoubleClick::Zoom) => Some(WindowAction::SetMaximized(!maximized)),
+        (Frame::Integrated(_) | Frame::Inset(_), DoubleClick::Minimize) => Some(WindowAction::Minimize),
         _ => None,
     }
 }

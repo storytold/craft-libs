@@ -25,7 +25,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::windows::{ResizeEdge, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
+use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
 use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
 use craft_ui_widgets::popover::WholeWindow;
@@ -45,12 +45,15 @@ pub(crate) fn title_row(tokens: &UiTokens) -> f32 {
 /// title bar has beside its double arrow; the menu opens from the band.
 const ACTIONS: [HeaderAction; 1] = [HeaderAction::Close];
 
-/// The style of a floating group: the surface and padding come from the container.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+/// The style of a floating group: the surface and padding come from the container, and the ring from the theme.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct FloatingGroupStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the chevron while it has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
 }
 
 /// The column a dock's floating window holds. The window's title row is the column's bar: it shows the column's
@@ -258,6 +261,9 @@ pub struct FloatingGroup<'a> {
     /// Whether only the title row shows.
     #[prop]
     minimized: bool,
+    /// Whether the floating window's edge grips can resize it.
+    #[prop]
+    resizable: bool,
     /// The column the window holds, whose bar the title row is.
     #[prop]
     column: Option<WindowColumn>,
@@ -326,8 +332,9 @@ pub struct FloatingGroup<'a> {
     files_at: Option<Pos2>,
 }
 
-/// Starts the window-unit drag: a move by the title row when the flag is set, else a drag the window took over.
-type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>, bool) + 'a>;
+/// Starts the window-unit drag of a window of the given size: a move by the title row when the flag is set, else a
+/// drag the window took over.
+type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>, bool, Vec2) + 'a>;
 
 type TakeDrop<'a> = Box<dyn for<'b, 'c> FnMut(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
 
@@ -351,6 +358,7 @@ impl<'a> FloatingGroup<'a> {
             limits: SizeLimits::default(),
             opacity: 1.0,
             minimized: false,
+            resizable: true,
             column: None,
             sized: Sizing::Content,
             native: None,
@@ -387,8 +395,7 @@ impl<'a> FloatingGroup<'a> {
     #[must_use]
     pub fn window_of<P: Clone + Hash + Send + Sync + 'static>(mut self, anchor: P) -> Self {
         let active = PanelKey::of(&anchor);
-        let size = self.rect.size();
-        self.start_drag = Some(Box::new(move |cx, title_row| start_window_drag(cx, anchor, active, size, title_row)));
+        self.start_drag = Some(Box::new(move |cx, title_row, size| start_window_drag(cx, anchor, active, size, title_row)));
         self
     }
 
@@ -451,19 +458,20 @@ impl<'a> FloatingGroup<'a> {
     /// A minimized group, and one with `Sizing::Content`, is placed by its position and width; its height is its
     /// content's, which is the chrome alone while minimized.
     fn mount(&self) -> Mount {
-        // The frame's limits are the body's with the chrome on top.
-        let frame = self.limits.around(Vec2::new(0.0, self.chrome));
+        let frame = self.frame_limits();
+        let rect = self.within_limits();
         // A collapsed column's width stays within its own bounds, a minimized one's within the panels' limits.
         let widths = self.column.map(|column| match column.collapsed {
             Some(_) => column.widths,
             None => (frame.min.x, frame.max.map_or(f32::INFINITY, |max| max.x)),
         });
         let held = self.held_rect().zip(widths);
-        let mut overlay = Overlay::floating().movable(true).resizable(!self.minimized).opacity(self.opacity).body_scroll(false);
+        let resizable = self.resizable && !self.minimized;
+        let mut overlay = Overlay::floating().movable(true).resizable(resizable).opacity(self.opacity).body_scroll(false);
         overlay = if let Some((shown, (least, most))) = held {
             // The sides resize the column's width; its content fixes its height.
             let height = shown.height();
-            let edges = if self.minimized { ResizeEdges::NONE } else { ResizeEdges::LEFT.union(ResizeEdges::RIGHT) };
+            let edges = if resizable { ResizeEdges::LEFT.union(ResizeEdges::RIGHT) } else { ResizeEdges::NONE };
             overlay.placed(shown).resize_edges(edges).size_limits(SizeLimits::new(Vec2::new(least, height), Vec2::new(most.max(least), height)))
         } else if let Some(size) = self.column.and_then(|column| column.fitted) {
             // The host turns a resize into the column's steps, and the window takes the size they make.
@@ -475,7 +483,7 @@ impl<'a> FloatingGroup<'a> {
             let width = self.rect.width().max(frame.min.x).min(frame.max.map_or(f32::INFINITY, |max| max.x));
             overlay.placed_at(self.rect.min).size_limits(SizeLimits { min: Vec2::new(width, frame.min.y), max: frame.max })
         } else {
-            overlay.placed(self.rect).size_limits(frame)
+            overlay.placed(rect).size_limits(frame)
         };
         if let Some(bounds) = self.bounds {
             overlay = overlay.bounds(bounds);
@@ -496,7 +504,21 @@ impl<'a> FloatingGroup<'a> {
     /// Where the group shows while its column's content fixes its height ([`WindowColumn::shown`]). `None` while the
     /// rect gives the height.
     fn held_rect(&self) -> Option<Rect> {
-        self.column?.shown(self.rect, self.chrome, self.rtl)
+        let column = self.column?;
+        // A collapsed column's width is its own; an expanded one shows at the rect's width within the panels' limits.
+        let rect = if column.collapsed.is_some() { self.rect } else { self.within_limits() };
+        column.shown(rect, self.chrome, self.rtl)
+    }
+
+    /// The window's size limits: the body's with the chrome on top.
+    fn frame_limits(&self) -> SizeLimits {
+        self.limits.around(Vec2::new(0.0, self.chrome))
+    }
+
+    /// The rect at its place, its size within [`Self::frame_limits`]: a rect placed or restored outside the panels'
+    /// limits shows at the nearest size within them, as an OS window's placed rect does.
+    fn within_limits(&self) -> Rect {
+        Rect::from_min_size(self.rect.min, self.frame_limits().clamp(self.rect.size()))
     }
 
     /// The double arrow's square at the end of the title row the window keeps to.
@@ -511,8 +533,8 @@ impl Component for FloatingGroup<'_> {
     type Style = FloatingGroupStyle;
     type Output = FloatingGroupOutput;
 
-    fn style(_: &StyleCx<'_>, _: FloatingGroupStyleKey) -> FloatingGroupStyle {
-        FloatingGroupStyle::default()
+    fn style(cx: &StyleCx<'_>, _: FloatingGroupStyleKey) -> FloatingGroupStyle {
+        FloatingGroupStyle { metrics: Metrics::new(), focus: cx.focus_look() }
     }
 
     fn sense(&self) -> Sense {
@@ -564,7 +586,10 @@ impl Component for FloatingGroup<'_> {
         if self.moving
             && let Some(start) = self.start_drag.take()
         {
-            start(&mut cx, !self.continued);
+            // A window its column's content sizes keeps the rect's size; any other keeps it within the panels' limits.
+            let fitted = self.column.is_some_and(|column| column.fitted.is_some());
+            let size = if fitted { self.rect.size() } else { self.within_limits().size() };
+            start(&mut cx, !self.continued, size);
         }
         if let Some(opener) = self.menu_opener {
             Popup::toggle(opener, &mut cx);

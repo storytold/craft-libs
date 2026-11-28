@@ -211,6 +211,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
+- [`craft-gpu-device`](crates/gpu-device/README.md): choosing and opening a wgpu device: Auto,
+  low power, a named adapter that survives a reordered list and a driver update, or software;
+  corrections for drivers that crash; the next adapter and then a software one when a device fails
+  to open; a capability report; device-loss and error recording without panics; and what to reopen
+  after a loss. Settings pages and the window stay in each app.
 - [`craft-gridcraft-format`](crates/gridcraft-format/README.md): GridCraft's native JSON workbook
   (`.json`, `.scjson`): the extensions, the reader, the pretty writer, and newer entries kept
   unread and written back into a list. The workbook model and what follows a read stay in GridCraft.
@@ -377,8 +382,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   with a password. Salvages damaged files. Bounded and panic-free on hostile input. What an item
   means stays in each app.
 
-- [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
-  app menu. Unsaved-document decisions and save prompts stay in each app.
+- [`craft-quit`](crates/quit/README.md): native macOS quit, a window close held for unsaved
+  documents, the Quit menu item id and the unsaved-changes question one document at a time
+  (`CloseGuard`). The prompt and the saving stay in each app.
 - [`craft-rtf`](crates/rtf/README.md): Rich Text Format: a tokenizer, text decoding in the file's code pages
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer
   for a small neutral model (paragraphs, character formatting, outline levels, tables).
@@ -388,6 +394,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   revisions panel, presence, voting, cursor chat and join over the app's own transport (`ui`
   feature).
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations, plus remembered dialog options and preset folders (also on wasm32). Policy in [docs/settings-storage.md](docs/settings-storage.md).
+- [`craft-shared-vec`](crates/shared-vec/README.md): an ordered, indexed list whose clones share storage, for document trees kept in an undo history: an edit copies the blocks on its path instead of the whole list, and `bytes_not_in` counts what keeping two versions costs. Reads and writes as a plain sequence with `serde`.
 - [`craft-sheet`](crates/sheet/README.md): spreadsheet vocabulary shared by `craft-xls`, `craft-xlsx` and `craft-ods`: cell positions and A1 text, cell values and error values, sheet-name quoting, Excel's built-in number formats and indexed colour palette. Not a file format; no dependencies.
 - [`craft-sf2`](crates/sf2/README.md): SoundFont 2 (`.sf2`) reader: the sample pool and, per preset, the key and velocity regions a note sounds, with tuning, loop points, pan, level and volume envelope resolved from the preset and instrument zones. Bounded on hostile input. From LoopCraft.
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.

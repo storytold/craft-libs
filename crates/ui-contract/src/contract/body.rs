@@ -36,7 +36,7 @@ pub use scroll::{STRIP_BACK, STRIP_FORWARD};
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
 pub use window::grip_band;
-pub(crate) use window::keep_inside;
+pub use window::keep_inside;
 
 /// The scroll region's view in the last pass that showed it.
 #[derive(Clone, Default)]
@@ -79,6 +79,10 @@ pub(super) struct BodyHooks<'b> {
     overflow: f32,
     /// The room the mount offers, in which a content-sized body runs.
     room: Vec2,
+    /// What the view of a scroll area around the container shows along x from the container's start
+    /// (`layout::view_room`), where that view scrolls along x and leaves the container's width unbounded: the rows of
+    /// its body shrink to it.
+    view_room: Option<f32>,
     open: bool,
     open_at_read: bool,
     open_bound: bool,
@@ -205,6 +209,7 @@ impl<'b> BodyHooks<'b> {
             least_width: 0.0,
             overflow: 0.0,
             room: Vec2::ZERO,
+            view_room: None,
             open: true,
             open_at_read: true,
             open_bound: false,

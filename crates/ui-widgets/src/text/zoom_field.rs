@@ -4,7 +4,6 @@ use super::NumberField;
 use super::words::TextWords;
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _};
 use crate::runtime::env::{Env, Label, UnitKind};
-use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
 use craft_behavior::{CanvasView, EditEvents, ZoomScheme};
 use egui::{Rect, Response, Ui};
@@ -21,12 +20,15 @@ const MESSAGE_DECIMALS: usize = 2;
 ///
 /// - Typing takes digits, `-`, `/` and the decimal separator: `a/b` is the zoom `a ÷ b × 100` %. Non-positive
 ///   entries are rejected; a second separator applies the number before it and reports [`InvalidZoom`].
-/// - Tab writes the typed number in the field's own form and selects it; focus stays and nothing applies.
+/// - Tab writes the typed number in the field's own form and selects it; focus stays and nothing applies. With nothing
+///   typed, Tab and Shift+Tab move focus as in any field.
 /// - A press on a part declared `holds_drafts` (the pasteboard, the title bar) keeps the typed zoom unapplied; the
 ///   next Enter applies it.
 #[derive(crate::contract::Pattern)]
 pub struct ZoomField {
     label: Label,
+    /// The zoom shown, in view points per document unit (`CanvasView::zoom`).
+    zoom: Option<f64>,
     view: Option<CanvasView>,
     document: Size,
     stepper: bool,
@@ -61,7 +63,33 @@ impl ZoomScale {
 impl ZoomField {
     /// A zoom field named `label` over `view` (`None` when no view is known) of a document of `document` units.
     pub fn new(label: impl Into<Label>, view: Option<CanvasView>, document: Size) -> Self {
-        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true, status_bar: false, scale: ZoomScale::Device }
+        ZoomField {
+            label: label.into(),
+            zoom: view.map(|view| view.zoom),
+            view,
+            document,
+            stepper: false,
+            scrub: false,
+            enabled: true,
+            status_bar: false,
+            scale: ZoomScale::Device,
+        }
+    }
+
+    /// A zoom field over `zoom` alone (view points per document unit, as `CanvasView::zoom`; `None` when none is known),
+    /// for a host that keeps the rest of the view itself: [`show_zoom`](Self::show_zoom) reports the zoom the field set.
+    pub(crate) fn of_zoom(label: impl Into<Label>, zoom: Option<f64>, document: Size) -> Self {
+        ZoomField {
+            label: label.into(),
+            zoom,
+            view: None,
+            document,
+            stepper: false,
+            scrub: false,
+            enabled: true,
+            status_bar: false,
+            scale: ZoomScale::Device,
+        }
     }
 
     /// What 100 % means: device pixels (the default) or document points.
@@ -110,18 +138,37 @@ impl ZoomField {
     }
 
     fn show_in(self, ui: &mut Ui, rect: Option<Rect>) -> ZoomFieldOutput {
+        let view = self.view;
+        let shown = self.show_zoom_in(ui, rect);
+        let view = match view {
+            Some(current) => shown.zoom.map(|zoom| {
+                let mut next = current;
+                next.zoom = zoom;
+                next
+            }),
+            None => EditEvents::new(),
+        };
+        ZoomFieldOutput { response: shown.response, view, invalid_zoom: shown.invalid_zoom }
+    }
+
+    /// Shows the field and reports the zoom it set, clamped to the document's zoom range.
+    pub(crate) fn show_zoom(self, ui: &mut Ui) -> ZoomEdit {
+        self.show_zoom_in(ui, None)
+    }
+
+    fn show_zoom_in(self, ui: &mut Ui, rect: Option<Rect>) -> ZoomEdit {
         let env = Env::of(ui);
         let pixels_per_point = self.scale.pixels_per_unit(env.scale.0);
         let scheme = env.view().get::<ZoomScheme>();
         let document = self.document;
-        let device = self.view.as_ref().map(|view| zoom::device(view, pixels_per_point));
+        let device = self.zoom.map(|zoom| zoom * f64::from(pixels_per_point));
         // The document's zoom range widened to the current zoom, so the field never pulls the zoom back.
         let range = device.map(|device| scheme.percent_range(device, document));
         let mut field = NumberField::new(self.label, Bind::given(device.map(|device| scheme.percent(device))))
             .codec(env.units().zoom_codec().signed_zoom())
             .unit_kind(UnitKind::Percent)
             .zoom_typing()
-            .enabled(self.enabled && self.view.is_some());
+            .enabled(self.enabled && self.zoom.is_some());
         if let Some(range) = range.clone() {
             field = field.range(range);
         }
@@ -139,14 +186,22 @@ impl ZoomField {
             None => field.show(ui),
         };
         let invalid_zoom = range.filter(|_| shown.cut).map(|range| InvalidZoom { low: *range.start(), high: *range.end() });
-        let view = match self.view {
+        let zoom = match self.zoom {
             Some(current) => shown.edit.events.clone().map(|percent| {
-                percent.map_or(current, |percent| zoom::with_device(&current, scheme.device(percent), document, pixels_per_point, &scheme))
+                percent.map_or(current, |percent| CanvasView::points_per_unit(scheme.clamp(scheme.device(percent), document), pixels_per_point))
             }),
             None => EditEvents::new(),
         };
-        ZoomFieldOutput { response: shown.edit.response.clone(), view, invalid_zoom }
+        ZoomEdit { response: shown.edit.response.clone(), zoom, invalid_zoom }
     }
+}
+
+/// What a zoom field over a zoom alone reports.
+pub(crate) struct ZoomEdit {
+    pub(crate) response: Response,
+    /// The zoom changes of this pass, in view points per document unit.
+    pub(crate) zoom: EditEvents<f64>,
+    pub(crate) invalid_zoom: Option<InvalidZoom>,
 }
 
 /// What a zoom field reports.

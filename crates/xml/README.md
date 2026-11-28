@@ -36,7 +36,7 @@ assert_eq!((rows, sheet.map(|s| s.children.len())), (3, Ok(0)));
 | `unknown_entity` | `Drop` | `Drop`, `Literal` (keep `&name;` as text) or `Error`. |
 | `doctype` | `Ignore` | `Ignore`, `RejectInternalSubset` or `Reject`. Never processed, whichever is chosen. |
 | `cdata`, `pis`, `comments` | `false` | Keep these as their own nodes. CDATA content is otherwise joined to the text around it. |
-| `drop_blank_text` | `false` | Drop the text of an element with child elements when all of it is whitespace (indentation). |
+| `drop_blank_text` | `false` | If an element has child elements and all its character data is XML whitespace, the reader drops its ordinary text nodes. CDATA nodes retained by `cdata` remain. |
 | `split_depth` | `2` | For streaming: how far below the root an element may be and still be handed out. |
 
 ### Limits

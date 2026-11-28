@@ -1,4 +1,4 @@
-//! The menu bar: what the help search finds.
+//! The menu bar: what the help search finds, and the width its titles take.
 
 use craft_host::target::Os;
 use craft_i18n::Direction;
@@ -95,6 +95,40 @@ fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
     fixture.settle();
     assert_eq!(saved.get(), 1, "the letter runs the row it marks");
     assert!(fixture.by_label("Save").is_none(), "and the run closes the menu");
+}
+
+/// The output's `natural` is the width of every title side by side: the titles' width in a room that holds them all, and
+/// the same width in a room that folds some into "…", where the drawn titles are narrower.
+#[trial]
+fn the_output_reports_the_width_every_title_takes_in_any_room() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let seen = Rc::new(Cell::new([(0.0, 0.0); 2]));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = || {
+            ["&File", "&Edit", "&Image", "&Layer", "&Select", "&View", "&Window", "&Help"]
+                .into_iter()
+                .map(|title| {
+                    MenuTitle::new(title, |ui: &mut egui::Ui| {
+                        MenuItem::new("&New").show(ui);
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let top = ui.max_rect().left_top();
+        let wide = MenuBar::new("Wide menu", titles()).show_at(ui, egui::Rect::from_min_size(top, egui::vec2(800.0, 24.0)));
+        let below = top + egui::vec2(0.0, 40.0);
+        let narrow = MenuBar::new("Narrow menu", titles()).show_at(ui, egui::Rect::from_min_size(below, egui::vec2(120.0, 24.0)));
+        out.set([(wide.natural, wide.titles.width()), (narrow.natural, narrow.titles.width())]);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let [(wide, wide_titles), (narrow, narrow_titles)] = seen.get();
+    assert!(wide > 0.0, "the bar reports a width");
+    assert!((wide - wide_titles).abs() < 0.5, "with room for every title the natural width {wide} is the titles' width {wide_titles}");
+    assert!((narrow - wide).abs() < 0.5, "a narrow bar reports the same natural width {narrow} as a wide one {wide}");
+    assert!(narrow_titles < narrow, "a narrow bar draws titles {narrow_titles} narrower than its natural width {narrow}");
 }
 
 /// The pass a pointer move over a menu's rows runs paints the row under the pointer as the active row and no other,
@@ -600,4 +634,38 @@ fn a_fields_selection_holds_while_the_menu_bar_has_the_keyboard() {
     fixture.click(&edit).settle();
     let copy = fixture.by_label("Copy").expect("the Edit menu is open");
     assert!(!fixture.tree().is_disabled_key(copy.node), "Copy applies to the field's selection");
+}
+
+/// Whether the latest frame paints a focus ring (a stroke at least two points wide) close around `target`, not around
+/// the whole bar.
+fn ringed(fixture: &mut Fixture, target: egui::Rect) -> bool {
+    let around = |ring: egui::Rect| ring.expand(1.0).contains_rect(target) && target.expand(4.0).contains_rect(ring);
+    fixture.frame_shapes().iter().any(|shape| match shape {
+        egui::Shape::Rect(rect) if rect.stroke.width >= 2.0 => around(rect.rect),
+        egui::Shape::Path(path) if path.stroke.width >= 2.0 => around(egui::Rect::from_points(&path.points)),
+        _ => false,
+    })
+}
+
+/// The title that Tab, F10 or an arrow key moves the keyboard to is ringed, as a focused button is, and the title the
+/// keyboard left is not.
+#[trial]
+fn the_focused_title_shows_the_focus_ring() {
+    let mut rig = rig(Direction::Ltr);
+    let fixture = &mut rig.fixture;
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let (bar, file) = fixture.focused_stop().and_then(|(bar, part)| Some((bar, part?))).expect("Tab focuses a title");
+    let file_rect = fixture.part_rect(bar, file).expect("the focused title's rect");
+    assert!(ringed(fixture, file_rect), "Tab rings the title it focuses");
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    let edit = fixture.focused_stop().and_then(|(_, part)| part).expect("Right focuses the next title");
+    assert_ne!(edit, file, "Right moves to another title");
+    let edit_rect = fixture.part_rect(bar, edit).expect("the next title's rect");
+    assert!(ringed(fixture, edit_rect), "Right rings the title it moves to");
+    assert!(!ringed(fixture, file_rect), "the title the keyboard left loses its ring");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    fixture.key(Key::F10, Modifiers::NONE).settle();
+    let first = fixture.focused_stop().and_then(|(_, part)| part).expect("F10 focuses the first title");
+    let first_rect = fixture.part_rect(bar, first).expect("the first title's rect");
+    assert!(ringed(fixture, first_rect), "F10 rings the title it focuses");
 }
