@@ -357,6 +357,15 @@ pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)).host());
 }
 
+/// Registers the app's own egui widget `id`, drawn in the running pass, as a stop that Tab and F6 pass by, in place of
+/// the stop it has as one of the app's focusable egui widgets: a press, the app's own key handling or a `request`
+/// (such as `take_for_bar`) gives it the focus. For controls another key reaches, such as the titles of an app's own
+/// menu bar that a lone Alt focuses (`keys::claim_alt_tap`): a menu bar's titles are no Tab stops on Windows and Linux.
+/// Call it in each pass the widget shows, after it is drawn.
+pub fn host_press_only(ctx: &Context, id: Id) {
+    register_stop(ctx, Stop::new(id, KeyUse::of(craft_behavior::Input::Pointer)).host().press_only());
+}
+
 /// The stop of the document canvas `viewport` registered in its last pass (`KeyUse::chrome_key`), framework or the
 /// app's own (`Stop::host`). Read before the begin hook rotates the registrations, by the input hook and the begin
 /// hook's Tab moves.

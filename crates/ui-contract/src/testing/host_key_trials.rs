@@ -7,7 +7,7 @@ use crate::runtime::commands::{
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::{Env, RootEnv};
-use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
+use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, host_press_only, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::ime;
 use crate::runtime::keys::with_window_intents;
@@ -661,6 +661,29 @@ fn tab_moves_through_the_app_s_widgets_and_canvas_in_a_window_without_framework_
     frames.idle(2, &mut show);
     assert_eq!(egui_focused(&frames.ctx), Some(canvas));
     assert_eq!(tab(&mut frames, &mut show), (Some(canvas), true), "a canvas that keeps Tab gets it from egui and keeps the focus");
+}
+
+/// An app's own widget the app registers as press-only (`host_press_only`), between two of its buttons: Tab and
+/// Shift+Tab pass it by, as a menu bar's titles, and a request still gives it the focus.
+#[trial]
+fn tab_passes_an_app_s_press_only_widget_by_and_a_request_still_focuses_it() {
+    let (first, title, last) = (named_id("host first"), named_id("host title"), named_id("host last"));
+    let mut show = move |ui: &mut Ui| {
+        fixture::host_button(ui, first, Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)));
+        fixture::host_button(ui, title, Rect::from_min_size(Pos2::new(220.0, 300.0), egui::vec2(80.0, 30.0)));
+        host_press_only(ui.ctx(), title);
+        fixture::host_button(ui, last, Rect::from_min_size(Pos2::new(340.0, 300.0), egui::vec2(80.0, 30.0)));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let tabs: Vec<_> = (0..3).map(|_| tab_with(&mut frames, &mut show, Modifiers::NONE)).collect();
+    assert_eq!(tabs, [Some(first), Some(last), Some(first)], "Tab passes the press-only widget by");
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::SHIFT), Some(last), "and so does Shift+Tab");
+    request(&frames.ctx, FocusTarget::Id(title));
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(title), "a request focuses it");
+    let next = tab_with(&mut frames, &mut show, Modifiers::NONE);
+    assert!(next.is_some() && next != Some(title), "Tab from it reaches a Tab stop: {next:?}");
 }
 
 /// The window the one-order trials show: the app's own button, a framework stop, the app's own single-line text field
