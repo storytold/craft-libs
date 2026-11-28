@@ -51,6 +51,8 @@ pub enum Format {
     Sgi,
     /// JPEG-LS (`.jls`): lossless and near-lossless gray and RGB.
     JpegLs,
+    /// Apple Macintosh PICT (`.pct`, `.pict`): the pixel images of QuickDraw pictures. Read-only.
+    Pict,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -115,6 +117,10 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
          unsupported. Without the feature HEIF is detected but neither read nor written.",
     ),
     (Format::Jp2, "JPEG 2000 decode uses hayro-jpeg2000 (pure Rust); writing JPEG 2000 is not provided."),
+    (
+        Format::Pict,
+        "PICT is the legacy Macintosh QuickDraw picture format. Opening existing pictures is supported; new files should use PNG or TIFF, so no PICT writer is provided.",
+    ),
 ];
 
 use ChannelLayout as L;
@@ -127,7 +133,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 27] = [
+    pub const ALL: [Format; 28] = [
         Format::Png,
         Format::Jpeg,
         Format::Jp2,
@@ -155,6 +161,7 @@ impl Format {
         Format::SunRaster,
         Format::Sgi,
         Format::JpegLs,
+        Format::Pict,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -196,6 +203,7 @@ impl Format {
             Format::SunRaster => "Sun Raster",
             Format::Sgi => "SGI",
             Format::JpegLs => "JPEG-LS",
+            Format::Pict => "PICT",
         }
     }
 
@@ -230,6 +238,7 @@ impl Format {
             Format::SunRaster => &["ras", "sun"],
             Format::Sgi => &["sgi", "rgb", "rgba", "bw"],
             Format::JpegLs => &["jls"],
+            Format::Pict => &["pct", "pict"],
         }
     }
 
@@ -262,6 +271,7 @@ impl Format {
             Format::SunRaster => "image/x-sun-raster",
             Format::Sgi => "image/x-sgi",
             Format::JpegLs => "image/jls",
+            Format::Pict => "image/x-pict",
         }
     }
 
@@ -351,6 +361,7 @@ pub fn caps(format: Format) -> FormatCaps {
         }
         Format::JpegLs => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Jp2 => FormatCaps { read: true, write: false, layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA], icc: true, ..base },
+        Format::Pict => FormatCaps { read: true, write: false, layouts: &[L::Rgb, L::Rgba], dpi: true, ..base },
     }
 }
 
@@ -463,6 +474,11 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
             return Some(Format::Heif);
         }
     }
+    // A version 2 PICT's six-byte signature after its 10-byte header (and an optional 512-byte
+    // file header) is checked before BMP, whose two-byte magic a PICT's size field can match.
+    if matches!(crate::codecs::pict::sniff(b), Some((_, crate::codecs::pict::Version::V2))) {
+        return Some(Format::Pict);
+    }
     if b.len() >= 14 && b.starts_with(b"BM") {
         return Some(Format::Bmp);
     }
@@ -503,6 +519,10 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if looks_like_tga(b) {
         return Some(Format::Tga);
+    }
+    // A version 1 PICT's signature is two bytes, so it comes last.
+    if crate::codecs::pict::sniff(b).is_some() {
+        return Some(Format::Pict);
     }
     None
 }

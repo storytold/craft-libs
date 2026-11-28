@@ -84,7 +84,7 @@ pub use half::f16;
 use crate::codecs::sgi;
 #[cfg(feature = "sunraster")]
 use crate::codecs::sunraster;
-use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, pict, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -139,6 +139,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::Dicom => dicom::decode(bytes, l),
         Format::Iff => iff::decode(bytes, l),
+        Format::Pict => pict::decode(bytes, l),
         Format::SunRaster => {
             #[cfg(feature = "sunraster")]
             {
@@ -355,6 +356,12 @@ pub fn xpm_named_color_rgb(name: &str) -> Option<[f32; 3]> {
 /// entry its Graphic Control Extension makes transparent, read without decoding pixels.
 pub fn gif_palette(bytes: &[u8]) -> Option<(Vec<[u8; 3]>, Option<u8>)> {
     crate::codecs::gif_palette::palette(bytes)
+}
+
+/// The colour table of a PICT made of one indexed pixel image (a 1-bit bitmap's is white and
+/// black), read without decoding pixels; `None` for direct-colour or several-image pictures.
+pub fn pict_palette(bytes: &[u8]) -> Result<Option<Vec<[u8; 3]>>, CodecError> {
+    codecs::pict::palette(bytes)
 }
 
 /// Returns the embedded colour table for an indexed BMP, if it has one.
@@ -575,6 +582,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Dpx => dpx::encode(image, plan, opts),
         Format::Cineon => dpx::encode_cineon(image, plan),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
+        Format::Pict => Err(CodecError::unsupported(format, "PICT is import-only; save as PNG or TIFF instead")),
         Format::Iff => iff::encode(image, plan),
         Format::SunRaster => {
             #[cfg(feature = "sunraster")]

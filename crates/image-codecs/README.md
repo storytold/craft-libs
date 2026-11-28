@@ -63,6 +63,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | JPEG-LS (`.jls`) | yes (any NEAR; one scan per component) | yes (lossless) | U8, U16 | Gray, RGB | no | no | no | no | no | no | no | built in |
 | AVIF | with feature `avif-decode` (native only) | only with feature `avif` | U8, U16 (10/12-bit decodes to U16; PQ/HLG to linear F32) | RGB, RGBA | yes (auxiliary alpha) | read (`colr` prof/rICC) | read | read | no | no | yes | `craft-video` AV1 decoder; `image` + `ravif` to write |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
+| PICT (`.pct`, `.pict`) | yes (pixel images only) | **no** | U8 | RGB, RGBA | yes (32-bit alpha plane) | no | no | no | yes | no | n/a | built in |
 
 "Native" means the data is stored and read back without conversion. Anything else is converted by
 the encode plan, and `fidelity_warnings` reports the conversion when it loses information:
@@ -85,6 +86,10 @@ profile it converts from.
 
 Palette BMP and PNG pixels decode as RGB(A) in `Image`; `bmp_palette` and `png_palette` expose the
 embedded table (and a PNG's transparent entry) so `photocraft-io` can open them in Indexed Color mode.
+`pict_palette` does the same for a PICT made of one indexed pixel image (a 1-bit bitmap's table is
+white and black). A PICT's QuickDraw vector drawing and QuickTime-compressed images are not drawn:
+a picture with only those is `Unsupported`, and one with a pixel image as well decodes with
+`DecodeWarning::DrawingSkipped`.
 `bmp_palette` returns the colours the header declares, not the decoder's 256-entry padding.
 `encode_bmp_indexed` writes the inverse: indices plus a table as an 8-bit palette BMP;
 `encode_bmp_indexed_with_dpi` also writes a resolution in the header.

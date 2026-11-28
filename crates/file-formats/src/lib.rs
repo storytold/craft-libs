@@ -41,6 +41,8 @@ pub enum Format {
     Iff,
     /// JPEG-LS (ITU-T T.87). Its files start with the same `FF D8 FF` bytes as JPEG files.
     JpegLs,
+    /// Apple Macintosh PICT (QuickDraw picture); its pixel images are read.
+    Pict,
     Ase,
     Psd,
     Affinity,
@@ -110,7 +112,7 @@ const fn availability(feature: bool, supported: bool) -> Availability {
 
 impl Format {
     /// Every known format, including formats whose reader or writer is not enabled in this build.
-    pub const ALL: [Format; 57] = [
+    pub const ALL: [Format; 58] = [
         Self::Pdf,
         Self::Eps,
         Self::PostScript,
@@ -142,6 +144,7 @@ impl Format {
         Self::Dicom,
         Self::Iff,
         Self::JpegLs,
+        Self::Pict,
         Self::Ase,
         Self::Psd,
         Self::Affinity,
@@ -204,6 +207,7 @@ impl Format {
             Self::Dicom => &["dcm", "dicom", "dc3"],
             Self::Iff => &["iff", "lbm", "ilbm"],
             Self::JpegLs => &["jls"],
+            Self::Pict => &["pct", "pict"],
             Self::Ase => &["ase"],
             Self::Psd => &["psd", "psb", "psdt"],
             Self::Affinity => &["afdesign", "afphoto", "afpub", "af"],
@@ -275,6 +279,7 @@ impl Format {
             Self::Dicom => "application/dicom",
             Self::Iff => "image/ilbm",
             Self::JpegLs => "image/jls",
+            Self::Pict => "image/x-pict",
             Self::Ase => "application/x-adobe-swatch-exchange",
             Self::Psd => "image/vnd.adobe.photoshop",
             Self::Affinity => "application/x-affinity",
@@ -333,6 +338,7 @@ impl Format {
             Self::Dicom => Codec::Dicom,
             Self::Iff => Codec::Iff,
             Self::JpegLs => Codec::JpegLs,
+            Self::Pict => Codec::Pict,
             _ => return None,
         })
     }
@@ -376,7 +382,7 @@ impl Format {
                 file_sequence: false,
             },
             Self::Jxl => capability(raster, false, true, false, false),
-            Self::Pcx | Self::Xpm | Self::Dicom => capability(raster, true, false, false, false),
+            Self::Pcx | Self::Xpm | Self::Dicom | Self::Pict => capability(raster, true, false, false, false),
             Self::Tga
             | Self::Ico
             | Self::Pnm

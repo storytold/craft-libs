@@ -18,6 +18,7 @@ pub(crate) mod jpeg;
 pub(crate) mod jpegls;
 pub(crate) mod jxl;
 pub(crate) mod pcx;
+pub(crate) mod pict;
 pub(crate) mod png;
 pub(crate) mod pnm;
 #[cfg(feature = "sgi")]
