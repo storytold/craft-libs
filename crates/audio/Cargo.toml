@@ -126,6 +126,3 @@ required-features = ["decode"]
 name = "encode"
 required-features = ["lossless-encode", "aac-encode"]
 
-[[test]]
-name = "it"
-path = "tests/main.rs"

@@ -171,7 +171,7 @@ impl BigTree {
     }
 }
 
-/// What [`file`] writes.
+/// What [`file()`] writes.
 pub struct FileSpec<'a> {
     /// `SMK2` or `SMK4`.
     pub signature: [u8; 4],
