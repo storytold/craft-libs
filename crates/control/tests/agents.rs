@@ -18,18 +18,6 @@ fn temp_dir(tag: &str) -> tempfile::TempDir {
     tempfile::Builder::new().prefix(&format!("craft-agents-{tag}-")).tempdir().expect("a temp dir")
 }
 
-/// Waits up to five seconds for `done`.
-fn wait_for(mut done: impl FnMut() -> bool) -> bool {
-    let started = Instant::now();
-    while !done() {
-        if started.elapsed() > Duration::from_secs(5) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    true
-}
-
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /// Writes `text` as an owner-only token file, as an app's own token writer does.
@@ -281,6 +269,21 @@ fn paths(p: &[&str]) -> Vec<PathBuf> {
     p.iter().map(PathBuf::from).collect()
 }
 
+/// Gives `cfg`'s launch wait a clock that moves only when the wait sleeps: each sleep calls
+/// `gate`, then adds its length to the time and returns. Returns the lengths slept.
+fn virtual_clock(cfg: &mut LiveConfig<Window, HeadlessFolders>, gate: impl Fn() + Send + Sync + 'static) -> Arc<Mutex<Vec<Duration>>> {
+    let slept = Arc::new(Mutex::new(Vec::new()));
+    let start = Instant::now();
+    let s = slept.clone();
+    cfg.now = Box::new(move || start + s.lock().unwrap().iter().sum::<Duration>());
+    let s = slept.clone();
+    cfg.sleep = Box::new(move |d| {
+        gate();
+        s.lock().unwrap().push(d);
+    });
+    slept
+}
+
 /// An app accepting agents takes the call; the same port, token and process keep the client, a
 /// restarted app (another process on the same port and token) gets a new one.
 #[test]
@@ -487,8 +490,10 @@ fn a_launch_that_cannot_happen_or_never_finishes_says_what_to_do() {
     let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
     cfg.launch = Some(Box::new(|| Ok(())));
     cfg.launch_timeout = Duration::from_millis(40);
+    let slept = virtual_clock(&mut cfg, || {});
     let err = TestLive::new(cfg).resolve().err().unwrap();
     assert!(err.starts_with("Test didn't accept agents within 0 s of starting."), "{err}");
+    assert_eq!(*slept.lock().unwrap(), [Duration::from_millis(5); 8], "the app is looked for every poll until the timeout");
 }
 
 /// "Launch" starts the app once, also for calls that arrive together, and the calls go to its
@@ -498,19 +503,24 @@ fn a_started_app_takes_the_call_and_concurrent_calls_start_it_once() {
     let dir = temp_dir("launch");
     let made = Arc::new(Made::default());
     let launches = Arc::new(AtomicUsize::new(0));
-    let app: Arc<Mutex<Option<TcpListener>>> = Arc::new(Mutex::new(None));
     let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
-    let (d, n, slot) = (dir.path().to_path_buf(), launches.clone(), app.clone());
+    let (queued_tx, queued) = mpsc::channel();
+    cfg.on_queued = Some(Box::new(move || {
+        let _ = queued_tx.send(());
+    }));
+    let (launched_tx, launched) = mpsc::channel();
+    let n = launches.clone();
     cfg.launch = Some(Box::new(move || {
         n.fetch_add(1, Ordering::Relaxed);
-        let (d, slot) = (d.clone(), slot.clone());
-        // The app takes a moment before it accepts agents.
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(60));
-            *slot.lock().unwrap() = Some(publish(&d).0);
-        });
+        let _ = launched_tx.send(());
         Ok(())
     }));
+    // The started app's first poll waits until the test has published the app.
+    let (open, opened) = mpsc::channel::<()>();
+    let opened = Mutex::new(opened);
+    virtual_clock(&mut cfg, move || {
+        let _ = opened.lock().unwrap().recv();
+    });
     let live = Arc::new(TestLive::new(cfg));
     let calls: Vec<_> = (0..4)
         .map(|_| {
@@ -518,6 +528,13 @@ fn a_started_app_takes_the_call_and_concurrent_calls_start_it_once() {
             std::thread::spawn(move || window(live.resolve()))
         })
         .collect();
+    // Every call is under way before the app is started and accepts agents.
+    for _ in 0..4 {
+        queued.recv().unwrap();
+    }
+    launched.recv().unwrap();
+    let _app = publish(dir.path());
+    drop(open);
     let ports: Vec<u16> = calls.into_iter().map(|c| c.join().unwrap().port).collect();
     assert_eq!(launches.load(Ordering::Relaxed), 1, "one start for every call");
     assert!(ports.windows(2).all(|p| p[0] == p[1]), "{ports:?}");
@@ -532,26 +549,30 @@ fn calls_queued_behind_a_failed_start_share_its_error() {
     let made = Arc::new(Made::default());
     let launches = Arc::new(AtomicUsize::new(0));
     let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
-    let entered = Arc::new(AtomicUsize::new(0));
-    let (n, e) = (launches.clone(), entered.clone());
-    // The app is started but never accepts agents within the timeout. The start waits until every
-    // call is under way and then a while longer, so a call that hasn't reached its lookup by the
-    // time the start ends is very unlikely (there is no hook between the two).
+    let (queued_tx, queued) = mpsc::channel();
+    cfg.on_queued = Some(Box::new(move || {
+        let _ = queued_tx.send(());
+    }));
+    let queued = Mutex::new(queued);
+    let n = launches.clone();
+    // The app is started but never accepts agents within the timeout. The first start returns only
+    // once every call has queued behind it.
     cfg.launch = Some(Box::new(move || {
-        n.fetch_add(1, Ordering::Relaxed);
-        assert!(wait_for(|| e.load(Ordering::Relaxed) == 4), "every call starts");
-        std::thread::sleep(Duration::from_millis(250));
+        if n.fetch_add(1, Ordering::Relaxed) == 0 {
+            let queued = queued.lock().unwrap();
+            for _ in 0..4 {
+                queued.recv().unwrap();
+            }
+        }
         Ok(())
     }));
     cfg.launch_timeout = Duration::from_millis(150);
+    virtual_clock(&mut cfg, || {});
     let live = Arc::new(TestLive::new(cfg));
     let calls: Vec<_> = (0..4)
         .map(|_| {
-            let (live, entered) = (live.clone(), entered.clone());
-            std::thread::spawn(move || {
-                entered.fetch_add(1, Ordering::Relaxed);
-                live.resolve()
-            })
+            let live = live.clone();
+            std::thread::spawn(move || live.resolve())
         })
         .collect();
     let answers: Vec<_> = calls.into_iter().map(|c| c.join().unwrap()).collect();
@@ -639,7 +660,19 @@ fn a_huge_launch_timeout_or_poll_neither_panics_nor_hangs() {
     }));
     cfg.launch_timeout = Duration::MAX;
     cfg.poll = Duration::MAX;
-    let started = Instant::now();
+    let slept = virtual_clock(&mut cfg, || {});
     window(TestLive::new(cfg).resolve());
-    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(*slept.lock().unwrap(), [Duration::from_secs(1)], "the poll is cut to a second");
+
+    // An app that never accepts agents: the wait ends after the longest launch timeout.
+    let dir = temp_dir("huge-never");
+    let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
+    cfg.launch = Some(Box::new(|| Ok(())));
+    cfg.launch_timeout = Duration::MAX;
+    cfg.poll = Duration::MAX;
+    let slept = virtual_clock(&mut cfg, || {});
+    let err = TestLive::new(cfg).resolve().err().unwrap();
+    assert!(err.starts_with("Test didn't accept agents within 600 s of starting."), "{err}");
+    let slept = slept.lock().unwrap();
+    assert_eq!((slept.len(), slept.iter().max()), (600, Some(&Duration::from_secs(1))));
 }

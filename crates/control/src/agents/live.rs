@@ -147,6 +147,16 @@ pub struct LiveConfig<W, H> {
     pub launch_timeout: Duration,
     /// How often a starting app is looked for ([`LAUNCH_POLL`]; kept between 1 ms and 1 s).
     pub poll: Duration,
+    /// The clock the launch timeout is measured on ([`Instant::now`]).
+    #[doc(hidden)]
+    pub now: Box<dyn Fn() -> Instant + Send + Sync>,
+    /// Waits one poll while a started app is looked for ([`std::thread::sleep`]).
+    #[doc(hidden)]
+    pub sleep: Box<dyn Fn(Duration) + Send + Sync>,
+    /// Called by each [`Live::resolve`] once it has noted how many starts have finished, before it
+    /// waits for the lookup.
+    #[doc(hidden)]
+    pub on_queued: Option<Box<dyn Fn() + Send + Sync>>,
     consent: ConsentFn,
     connect: ConnectFn<W>,
     headless: HeadlessFn<H>,
@@ -173,6 +183,9 @@ impl<W, H> LiveConfig<W, H> {
             launch: None,
             launch_timeout: LAUNCH_TIMEOUT,
             poll: LAUNCH_POLL,
+            now: Box::new(Instant::now),
+            sleep: Box::new(std::thread::sleep),
+            on_queued: None,
             consent: Box::new(consent),
             connect: Box::new(connect),
             headless: Box::new(headless),
@@ -246,6 +259,9 @@ impl<W: Clone, H: Clone> Live<W, H> {
     /// result.
     pub fn resolve(&self) -> Result<Route<W, H>, String> {
         let queued_at = self.finished.load(Ordering::Acquire);
+        if let Some(queued) = &self.cfg.on_queued {
+            queued();
+        }
         let mut last_failure = self.lookup.lock().unwrap_or_else(PoisonError::into_inner);
         let consent = (self.cfg.consent)(&self.cfg.config_dir);
         // Allow Agent Control off refuses agents, as the app does: it doesn't listen then.
@@ -310,15 +326,15 @@ impl<W: Clone, H: Clone> Live<W, H> {
         };
         launch().map_err(|e| format!("couldn't start {app}: {e}"))?;
         let timeout = self.cfg.launch_timeout.min(MAX_LAUNCH_TIMEOUT);
-        let started = Instant::now();
+        let started = (self.cfg.now)();
         let deadline = started.checked_add(timeout).unwrap_or(started);
         let poll = self.cfg.poll.clamp(POLL_RANGE.0, POLL_RANGE.1);
         loop {
-            std::thread::sleep(poll);
+            (self.cfg.sleep)(poll);
             if let Some(window) = self.find_app()? {
                 return self.use_window(window);
             }
-            if Instant::now() >= deadline {
+            if (self.cfg.now)() >= deadline {
                 return Err(format!(
                     "{app} didn't accept agents within {} s of starting. If it's still opening, try again in a moment; otherwise check that AI agents are on in ArtCraft Launcher › Settings › AI agents.",
                     timeout.as_secs()
