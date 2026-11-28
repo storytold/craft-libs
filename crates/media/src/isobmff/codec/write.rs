@@ -318,6 +318,11 @@ impl SampleEntry {
         b.u16(v.depth);
         b.i16(-1);
         write_video_codec_config(b, &self.codec);
+        // Right after the codec configuration, before `colr` and the other descriptive boxes, where
+        // an iPhone recording has it.
+        if let Some(dv) = &v.dolby_vision {
+            b.leaf(&dv.box_kind().0, dv.record());
+        }
         write_video_descriptive_boxes(b, v);
         if let Some(br) = self.bitrate {
             write_btrt(b, br);

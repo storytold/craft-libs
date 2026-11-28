@@ -1,5 +1,7 @@
 //! Visual sample entry parameters and the video codec configuration records.
 
+use crate::isobmff::dolby_vision::DolbyVisionConfig;
+
 use super::{BoxBuf, Cur, Error, FourCc, Result};
 
 /// Fields common to all visual sample entries plus the optional descriptive boxes.
@@ -43,6 +45,12 @@ pub struct VideoParams {
     pub mastering_display: Option<MasteringDisplay>,
     /// `clli`: content light level (MaxCLL, MaxFALL in cd/m²; 0 = unknown).
     pub content_light: Option<(u16, u16)>,
+    /// Dolby Vision decoder configuration (`dvcC`, `dvvC` or `dvwC`), under any video sample
+    /// entry, kept byte for byte. A record shorter than 5 or longer than 24 bytes, or a second
+    /// configuration box, reads as `None`. The `SampleEntry` constructors leave it `None`; a new
+    /// encode that copies a demuxed entry's `VideoParams` must set it to `None`, or it claims
+    /// metadata the new stream does not carry.
+    pub dolby_vision: Option<DolbyVisionConfig>,
 }
 
 /// SMPTE ST 2086 mastering display metadata, in the units of the `mdcv` box and the H.264/HEVC

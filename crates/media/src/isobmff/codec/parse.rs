@@ -1,5 +1,7 @@
 //! Sample entry parsing: `stsd` entry payloads, `esds`, `colr` and `btrt`.
 
+use crate::isobmff::dolby_vision::DolbyVisionConfig;
+
 use super::{
     AacConfig, ApvConfig, AudioParams, Av1Config, AvcConfig, BitRate, CleanAperture, CodecConfig, ColorInfo, Cur, Error, FieldInfo, FlacConfig,
     FourCc, HevcConfig, MasteringDisplay, OpusConfig, PcmConfig, Result, SampleEntry, TimecodeConfig, VideoParams, VpcConfig, boxes,
@@ -9,9 +11,23 @@ use super::{
 // ---------------------------------------------------------------------------------------------
 // Parsing
 
+/// The sample entry type a Dolby Vision entry is derived from, whose codec configuration it
+/// carries for its base layer (mp4ra.org): `dvh1` from `hvc1`, `dvhe` from `hev1`, `dva1` from
+/// `avc1`, `dvav` from `avc3` and `dav1` from `av01`. Any other type is its own base.
+fn base_video_fourcc(f: &[u8; 4]) -> &[u8; 4] {
+    match f {
+        b"dvh1" => b"hvc1",
+        b"dvhe" => b"hev1",
+        b"dva1" => b"avc1",
+        b"dvav" => b"avc3",
+        b"dav1" => b"av01",
+        _ => f,
+    }
+}
+
 fn is_video_fourcc(f: &[u8; 4]) -> bool {
     matches!(
-        f,
+        base_video_fourcc(f),
         b"avc1"
             | b"avc3"
             | b"hvc1"
@@ -116,20 +132,23 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
         let mut codec = None;
         let mut bitrate = None;
         let mut log_seen = false;
+        let mut dolby_vision_seen = false;
+        let base = base_video_fourcc(f);
         for b in boxes(c.rest()).map_while(|b| b.ok()) {
             let p = b.payload;
             match &b.kind.0 {
-                b"avcC" if matches!(f, b"avc1" | b"avc3") => codec = Some(CodecConfig::Avc(AvcConfig::parse(p)?)),
-                b"hvcC" if matches!(f, b"hvc1" | b"hev1") => codec = Some(CodecConfig::Hevc(HevcConfig::parse(p)?)),
-                b"av1C" if f == b"av01" => codec = Some(CodecConfig::Av1(Av1Config::parse(p)?)),
+                b"avcC" if matches!(base, b"avc1" | b"avc3") => codec = Some(CodecConfig::Avc(AvcConfig::parse(p)?)),
+                b"hvcC" if matches!(base, b"hvc1" | b"hev1") => codec = Some(CodecConfig::Hevc(HevcConfig::parse(p)?)),
+                b"av1C" if base == b"av01" => codec = Some(CodecConfig::Av1(Av1Config::parse(p)?)),
                 b"vpcC" if f == b"vp09" => codec = Some(CodecConfig::Vp9(VpcConfig::parse(p)?)),
                 b"apvC" if f == b"apv1" => codec = Some(CodecConfig::Apv(ApvConfig::parse(p)?)),
                 b"colr" => v.color = parse_colr(p).ok(),
                 b"logs" => {
-                    // Two identifiers are ambiguous: neither is believed.
-                    v.log_transfer_function =
-                        if log_seen { None } else { std::str::from_utf8(p).ok().filter(|s| valid_log_identifier(s)).map(str::to_owned) };
-                    log_seen = true;
+                    let id = std::str::from_utf8(p).ok().filter(|s| valid_log_identifier(s)).map(str::to_owned);
+                    read_once(&mut v.log_transfer_function, &mut log_seen, id);
+                }
+                _ if DolbyVisionConfig::BOX_KINDS.contains(&b.kind) => {
+                    read_once(&mut v.dolby_vision, &mut dolby_vision_seen, DolbyVisionConfig::from_box(b.kind, p));
                 }
                 b"mdcv" => v.mastering_display = MasteringDisplay::parse(p),
                 b"clli" if p.len() >= 4 => v.content_light = Some((u16::from_be_bytes([p[0], p[1]]), u16::from_be_bytes([p[2], p[3]]))),
@@ -255,6 +274,13 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
         return Ok(SampleEntry { format, data_reference_index, codec, video: None, audio: Some(a), bitrate });
     }
     Ok(SampleEntry { format, data_reference_index, codec: unknown(), video: None, audio: None, bitrate: None })
+}
+
+/// Stores what a box that may appear once in an entry says. Two such boxes are ambiguous, so from
+/// the second on neither is believed and the value reads as `None`.
+fn read_once<T>(slot: &mut Option<T>, seen: &mut bool, value: Option<T>) {
+    *slot = if *seen { None } else { value };
+    *seen = true;
 }
 
 fn qt_pcm(f: &[u8; 4], a: &AudioParams) -> Result<PcmConfig> {
