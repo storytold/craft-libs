@@ -6,8 +6,9 @@
 //!
 //! A document larger than the device's texture limit (`texture_side`) is uploaded reduced; zoomed in, the part in
 //! view is added at the screen's resolution as a detail texture ([`DetailPlan`]), so a large document shows its own
-//! pixels at 100 percent and the cost follows the window, not the document. Pixels are drawn sharp (nearest) from
-//! 100 percent up and filtered below.
+//! pixels at 100 percent and the cost follows the window, not the document. A full-resolution texture is drawn sharp
+//! (nearest) at whole-number zooms and from 200 percent up, and filtered between them, as a GPU canvas samples
+//! (`sharp`); a reduced texture is always filtered.
 //!
 //! Past the document's edge the display shows nothing, the source's pixels out to a larger region (a crop preview of
 //! layers past the canvas), or copies of the document around it (a pattern preview); see [`Extent`].
@@ -180,6 +181,16 @@ enum Level {
     Detail(DetailPlan),
 }
 
+impl Level {
+    /// The document pixels the texture holds.
+    fn region(&self) -> PixelRect {
+        match self {
+            Level::Base(region) => *region,
+            Level::Detail(plan) => plan.region,
+        }
+    }
+}
+
 /// What a display shows.
 enum Picture<'a> {
     /// The source's pixels, kept in the display's textures.
@@ -261,6 +272,10 @@ impl Outcome for RasterDisplayOutput {
 /// - **Edge.** [`outlined`](Self::outlined) draws the divider rule just outside the picture's area, so an image
 ///   reads apart from the surface around it.
 /// - **Turned views.** A rotated or mirrored view draws each texture as one quad on the view's mapped corners.
+/// - **Sampling.** A full-resolution texture is sharp at whole-number device zooms and from 2× up, and filtered
+///   between 1× and 2× off a whole number, the GPU canvas's rule, so a mirrored view an app draws here looks as its
+///   unmirrored view on the GPU canvas does (`sharp`). A texture whose sampling changes with the zoom is read
+///   again once, into the store of the new sampling.
 /// - **Memory.** The textures live in two `TextureStore`s per display id and go with the store's budget; a
 ///   detail texture of a plan no longer in use is dropped in the pass the plan changes.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -383,8 +398,8 @@ impl<'a> RasterDisplay<'a> {
         self
     }
 
-    /// The store that holds this display's textures of one sampling. A texture is sharp (nearest) from 100 percent
-    /// up, which is when one texel is one document pixel; a reduced texture holds averages and stays filtered.
+    /// The store that holds this display's textures of one sampling: magnified nearest when `sharp`, else linearly
+    /// ([`sharp`] says which a texture takes). Both shrink linearly.
     fn store(ctx: &Context, id: Id, sharp: bool) -> TextureStore<Level> {
         let magnification = if sharp { TextureFilter::Nearest } else { TextureFilter::Linear };
         let filter = TextureOptions { magnification, ..TextureOptions::LINEAR };
@@ -397,8 +412,8 @@ impl<'a> RasterDisplay<'a> {
         image
     }
 
-    /// The texture of `level`, which holds `region` of the document at one texel per `factor` pixels, brought up to
-    /// the source's revision, and the pixels read to do it.
+    /// The texture of `level`, which holds the level's region of the document at one texel per `factor` pixels in the
+    /// store of sampling `sharp`, brought up to the source's revision, and the pixels read to do it.
     /// - A texture with the revision is kept.
     /// - A texture of an older revision is updated with what the source reports damaged since then: that part is
     ///   read again alone, and damage elsewhere moves the texture to the revision without a read.
@@ -409,11 +424,11 @@ impl<'a> RasterDisplay<'a> {
         id: Id,
         held: &mut Held,
         level: Level,
-        region: PixelRect,
         factor: u32,
+        sharp: bool,
     ) -> (CachedTexture, PixelRect) {
-        let sharp = factor == 1;
-        // A key never lives in both samplings: the other store's copy is from before the factor changed.
+        let region = level.region();
+        // A key never lives in both samplings: the other store's copy is from before the factor or the zoom changed.
         Self::store(ctx, id, !sharp).forget(ctx, &level);
         let store = Self::store(ctx, id, sharp);
         let revision = source.revision();
@@ -516,10 +531,13 @@ impl Component for RasterDisplay<'_> {
         };
         let side = texture_side(&ctx);
         let factor = texture_factor(bounds.size(), side);
-        let (base, base_read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Base(bounds), bounds, factor);
-        let plan = DetailPlan::in_view(&space.view, bounds, side, space.pixels_per_point).filter(|_| self.mapping.is_none());
+        let ppp = space.pixels_per_point;
+        let base_sharp = sharp(factor, &space.view, ppp);
+        let (base, base_read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Base(bounds), factor, base_sharp);
+        let plan = DetailPlan::in_view(&space.view, bounds, side, ppp).filter(|_| self.mapping.is_none());
         let detail = plan.map(|plan| {
-            let (texture, read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Detail(plan), plan.region, plan.factor);
+            let sharp = sharp(plan.factor, &space.view, ppp);
+            let (texture, read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Detail(plan), plan.factor, sharp);
             self.read = self.read.union(&read);
             (texture, plan)
         });
@@ -609,6 +627,25 @@ impl Component for RasterDisplay<'_> {
         let detail = self.shown.as_ref().and_then(|shown| shown.textures.as_ref()?.detail.as_ref().map(|(_, plan)| *plan));
         RasterDisplayOutput { response: cx.response.clone(), read: (!self.read.is_empty()).then_some(self.read), detail }
     }
+}
+
+/// How far from a whole number a device zoom may be and still count as one: the GPU canvas's tolerance.
+const WHOLE_ZOOM: f64 = 1e-3;
+
+/// Whether a texture of one texel per `factor` document pixels is drawn sharp (nearest) through `view` at
+/// `pixels_per_point`, rather than filtered. A reduced texture holds averages and is always filtered. A full-resolution
+/// one is sharp unless nearest sampling would draw some document rows or columns twice and others once, which steps
+/// every diagonal edge (photocraft#13505): between 1× and 2× device pixels per document pixel, off a whole number,
+/// along either axis. It stays sharp at whole numbers and from 2× up, where pixel art keeps its hard texel edges, and
+/// below 1×, where it is only shrunk (linearly in either store). That is the GPU canvas's rule, so a view an app draws
+/// here instead (a mirrored one) samples as its other views do.
+fn sharp(factor: u32, view: &CanvasView, pixels_per_point: f32) -> bool {
+    let ppp = f64::from(pixels_per_point);
+    let steps = |zoom: f64| {
+        let device = zoom * ppp;
+        device > 1.0 && device < 2.0 && (device - device.round()).abs() >= WHOLE_ZOOM
+    };
+    factor == 1 && !steps(view.zoom) && !steps(view.zoom_x())
 }
 
 /// The divider rule just outside `corners`, a convex quad on screen: each side moved out by half the rule's width and

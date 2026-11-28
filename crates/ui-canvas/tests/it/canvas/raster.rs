@@ -6,10 +6,10 @@ use craft_behavior::{CanvasView, PixelSize};
 use craft_ui::canvas::{AppPaint, Canvas, Extent, PageFrame, Pasteboard, PixelRect, RasterDisplay, RasterSource};
 use craft_ui::canvas_controls::PixelGrid;
 use craft_ui::contract::{Show as _, ShowContainer as _};
-use craft_ui::primitives::{Checker, Revision};
+use craft_ui::primitives::{Checker, MAX_TEXTURE, Revision};
 use craft_ui::style::DataColor;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Color32, ColorImage, Mesh, PaintCallback, Pos2, Rect, Shape, TextureId, Vec2};
+use egui::{Color32, ColorImage, Mesh, PaintCallback, Pos2, Rect, Shape, TextureFilter, TextureId, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -593,4 +593,108 @@ fn colour_at(shapes: &[Shape], at: Pos2) -> [f32; 4] {
 fn encloses(points: &[Pos2], at: Pos2) -> bool {
     let edges = points.iter().zip(points.iter().cycle().skip(1));
     edges.filter(|(a, b)| (a.y > at.y) != (b.y > at.y) && at.x < a.x + (at.y - a.y) / (b.y - a.y) * (b.x - a.x)).count() % 2 == 1
+}
+
+/// A canvas at `pixels_per_point` showing a display of `document`, with no checkerboard, through whatever view `view`
+/// holds at each frame.
+fn sampling_canvas(document: Rc<Document>, view: Rc<Cell<CanvasView>>, pixels_per_point: f32) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        Canvas::new("Document").view(view.get()).show(ui, |ui, body| {
+            RasterDisplay::new("Picture", &*document).show_at(ui, body.rect);
+        });
+    });
+    fixture.pixels_per_point(pixels_per_point).room(CANVAS);
+    fixture.settle();
+    fixture
+}
+
+/// How each texture a frame of `fixture` draws is magnified, in paint order: the whole document, then the detail.
+fn magnification(fixture: &mut Fixture) -> Vec<TextureFilter> {
+    let shapes = fixture.frame_shapes();
+    let textures = fixture.ctx().tex_manager();
+    let textures = textures.read();
+    textured(&shapes).iter().map(|mesh| textures.meta(mesh.texture_id).expect("a drawn texture is allocated").options.magnification).collect()
+}
+
+/// A view of `document`'s centre at `device_zoom` device pixels per document pixel at `pixels_per_point`.
+fn view_at(document: &Document, device_zoom: f64, pixels_per_point: f32) -> CanvasView {
+    let center = Point::new(f64::from(document.size.width) / 2.0, f64::from(document.size.height) / 2.0);
+    let zoom = CanvasView::points_per_unit(device_zoom, pixels_per_point);
+    CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, zoom)
+}
+
+/// photocraft#13505: a mirrored view, which PhotoCraft draws here instead of on its GPU canvas, magnified the document
+/// nearest at 108.3 %, so one row and column in twelve showed twice and every diagonal edge went in steps, while the
+/// unmirrored view on the GPU canvas filtered it. Between 1× and 2× device pixels per document pixel, off a whole
+/// number, a full-resolution texture is now filtered, mirrored or not; at whole numbers and from 2× up it stays sharp.
+#[trial]
+fn a_full_resolution_texture_is_filtered_between_whole_zooms_below_2x() {
+    use TextureFilter::{Linear, Nearest};
+    // (device zoom, pixels per point, aspect, how the texture is magnified)
+    let cases = [
+        (1.083, 1.0, 1.0, Linear),
+        (1.5, 1.0, 1.0, Linear),
+        (1.9, 1.0, 1.0, Linear),
+        (1.0, 1.0, 1.0, Nearest),
+        (1.0005, 1.0, 1.0, Nearest),
+        (2.0, 1.0, 1.0, Nearest),
+        (2.5, 1.0, 1.0, Nearest),
+        (3.0, 1.0, 1.0, Nearest),
+        // Shrunk, a texture is minified linearly in either store; it keeps the store it has at 100 %.
+        (0.5, 1.0, 1.0, Nearest),
+        // The zoom that counts is in device pixels: 150 % interface scale.
+        (1.5, 1.5, 1.0, Linear),
+        (1.0, 1.5, 1.0, Nearest),
+        (2.0, 1.5, 1.0, Nearest),
+        // Non-square pixels: the document's x axis is shown at 1.5× while its y axis is at 1×.
+        (1.0, 1.0, 1.5, Linear),
+        (2.0, 1.0, 1.5, Nearest),
+    ];
+    let document = Document::new(400, 300);
+    for (device_zoom, ppp, aspect, expected) in cases {
+        for flip in [false, true] {
+            let view = view_at(&document, device_zoom, ppp).flip_x(flip).aspect(aspect);
+            let mut fixture = sampling_canvas(Rc::clone(&document), Rc::new(Cell::new(view)), ppp);
+            assert_eq!(magnification(&mut fixture), [expected], "{device_zoom}× at {ppp} pixels per point, aspect {aspect}, flipped {flip}");
+        }
+    }
+}
+
+/// A large document's detail texture, one texel per pixel, takes the same rule; the whole document, reduced, stays
+/// filtered at any zoom.
+#[trial]
+fn a_detail_texture_is_filtered_between_whole_zooms_below_2x() {
+    use TextureFilter::{Linear, Nearest};
+    // Past any device's texture side, so the whole document is reduced.
+    let document = Document::new(MAX_TEXTURE * 3, 300);
+    for (device_zoom, expected) in [(1.083, Linear), (1.0, Nearest), (2.0, Nearest)] {
+        for flip in [false, true] {
+            let view = view_at(&document, device_zoom, 1.0).flip_x(flip);
+            let mut fixture = sampling_canvas(Rc::clone(&document), Rc::new(Cell::new(view)), 1.0);
+            assert_eq!(magnification(&mut fixture), [Linear, expected], "{device_zoom}×, flipped {flip}");
+        }
+    }
+}
+
+/// The sampling follows the zoom: a texture is read again once when the zoom moves it into the other sampling, and
+/// not at all while the zoom stays in one.
+#[trial]
+fn a_zoom_into_the_other_sampling_reads_the_texture_again_once() {
+    use TextureFilter::{Linear, Nearest};
+    let document = Document::new(400, 300);
+    let whole = PixelRect::new(0, 0, 400, 300);
+    let view = Rc::new(Cell::new(view_at(&document, 1.0, 1.0)));
+    let mut fixture = sampling_canvas(Rc::clone(&document), Rc::clone(&view), 1.0);
+    let mut frame = |device_zoom: f64| {
+        view.set(view_at(&document, device_zoom, 1.0).flip_x(true));
+        document.reads.borrow_mut().clear();
+        let magnified = magnification(&mut fixture);
+        (magnified, document.reads.borrow().clone())
+    };
+    assert_eq!(frame(1.0), (vec![Nearest], vec![]), "100 %: as shown");
+    assert_eq!(frame(1.083), (vec![Linear], vec![(whole, 1)]), "108.3 %: read again, filtered");
+    assert_eq!(frame(1.083), (vec![Linear], vec![]), "108.3 % again: kept");
+    assert_eq!(frame(1.5), (vec![Linear], vec![]), "150 %: the same sampling, kept");
+    assert_eq!(frame(2.0), (vec![Nearest], vec![(whole, 1)]), "200 %: read again, sharp");
+    assert_eq!(frame(3.0), (vec![Nearest], vec![]), "300 %: the same sampling, kept");
 }
