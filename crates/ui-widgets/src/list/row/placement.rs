@@ -1,12 +1,12 @@
 //! Where a row's parts lie: its sizes, bands and the placement of label, cells and trailing items.
 
 use super::ListRow;
-use super::show::named;
+use super::show::{TOGGLE_CELL, named};
 use super::style::{ListRowStyle, ThumbRows};
 use super::thumb::{Thumb, ThumbSize};
 use super::trailing::{TrailingFace, TrailingItem, trailing_run};
 use crate::buttons::Link;
-use crate::contract::{ColumnAlign, PartsCx, RowHeight, WordSetCx as _};
+use crate::contract::{ColumnAlign, PartsCx, RowHeight, RowToggle, WordSetCx as _};
 use crate::layout::{ShrinkOrder, ShrinkUnit, shrink_widths};
 use crate::list::toggle::ToggleState;
 use crate::list::words::ListWords;
@@ -228,13 +228,14 @@ impl ListRow<'_> {
         }
     }
 
-    /// Takes the toggle columns, their keys, the columns' alignments and the press the collection holds on the row from
+    /// Takes the toggle columns, their keys, the ones that do not flip in this row, the columns' alignments and the press the collection holds on the row from
     /// the facts it recorded for this row: an end-aligned column's text ends at the cell's end (mirrored in a
     /// right-to-left interface) and a numeric column's figures are tabular.
     pub(super) fn adopt_facts(&mut self, env: &EnvView<'_>, id: egui::Id) {
         if let Some(facts) = env.facts_of(id) {
             self.toggle_columns.clone_from(&facts.toggles);
             self.toggle_keys.clone_from(&facts.toggle_keys);
+            self.closed_toggles.clone_from(&facts.closed_toggles);
             self.aligns = facts.aligns.iter().map(|(key, align, tabular)| (key.clone(), halign(*align), *tabular)).collect();
             if self.pressed.is_none() {
                 self.pressed.clone_from(&facts.pressed);
@@ -243,14 +244,25 @@ impl ListRow<'_> {
         }
     }
 
-    /// Hands the collection the names of this row's toggle cells, so its cell nodes read them.
+    /// Hands the collection this row's toggle cells, so its cell nodes read their names and roles and go under the
+    /// row's cell nodes.
     pub(super) fn record_toggle_names(&self, cx: &PartsCx<'_, Self>) {
         let words = cx.words::<ListWords>();
         let label = cx.resolved.label;
+        let id = cx.resolved.id;
+        // A row without a node, or a spacer, reports no cell nodes: the collection's node goes under the row's.
+        let cells = self.node && !self.spacer;
         let names = self
             .toggles
             .iter()
-            .map(|toggle| (toggle.column.clone(), named(toggle.name_pattern(&words), label), toggle.state == ToggleState::Mixed))
+            .enumerate()
+            .map(|(at, toggle)| RowToggle {
+                column: toggle.column.clone(),
+                name: named(toggle.name_pattern(&words), label),
+                mixed: toggle.state == ToggleState::Mixed,
+                check_box: toggle.check_box,
+                cell: if cells { crate::runtime::access::sub_node_id(id, TOGGLE_CELL.at(at as u64)) } else { id },
+            })
             .collect();
         crate::contract::put_toggle_names(cx.ui.ctx(), cx.resolved.id, names);
     }

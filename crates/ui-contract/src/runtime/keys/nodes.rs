@@ -21,12 +21,18 @@ pub(crate) fn redirect_node(ctx: &Context, node: Id, owner: Id, part: PartRef) {
 }
 
 /// Records the expanded state of the node registered by `register_node`: an `Expand` or `Collapse` request on a node
-/// with the state asks to change it, and acts as the node's activation.
-pub(crate) fn register_expanded(ctx: &Context, node: Id, expanded: Option<bool>) {
-    crate::runtime::replay::journal(ctx, || (node, expanded), |ctx, &(node, expanded)| register_expanded(ctx, node, expanded));
+/// with the state asks to change it, and acts as the node's activation. With `toggle`, the part of the owner that opens
+/// the popup and has no node of its own, the request goes to that part instead.
+pub(crate) fn register_expanded(ctx: &Context, node: Id, expanded: Option<bool>, toggle: Option<PartRef>) {
+    crate::runtime::replay::journal(
+        ctx,
+        || (node, expanded, toggle),
+        |ctx, &(node, expanded, toggle)| register_expanded(ctx, node, expanded, toggle),
+    );
     current(ctx, |stage| {
         if let Some(entry) = stage.nodes.get_mut(&node_key(node)) {
             entry.expanded = expanded;
+            entry.toggle = toggle;
         }
     });
 }
@@ -40,6 +46,6 @@ pub(crate) fn register_node(ctx: &Context, node: Id, owner: Id, part: Option<Par
     );
     crate::runtime::replay::note_node_owner(ctx, owner);
     current(ctx, |stage| {
-        stage.nodes.insert(node_key(node), Node { owner, part, focusable, expanded: None });
+        stage.nodes.insert(node_key(node), Node { owner, part, focusable, expanded: None, toggle: None });
     });
 }

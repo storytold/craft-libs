@@ -27,7 +27,7 @@ pub struct RuleLook {
 }
 
 /// The width of a rule.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum RuleWidth {
     /// One physical pixel at every scale.

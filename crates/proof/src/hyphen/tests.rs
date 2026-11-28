@@ -185,3 +185,53 @@ fn polish_heuristic_for_foreign_letters() {
     let c: Vec<char> = "szczérze".chars().collect();
     assert_eq!(heuristic_points_pl(&c), vec![5], "szczé-rze: `rz` stays whole");
 }
+
+#[test]
+fn gujarati_pack_patterns_fit_checks_script_and_exceptions() {
+    let pats = Patterns::parse("1ક 1ત પુ-સ્ત-ક");
+    let gu_word: Vec<char> = "પુસ્તક".chars().collect();
+    assert!(pack_patterns_fit(ProofLang::Gu, &pats, &gu_word));
+    let en_word: Vec<char> = "hyphenation".chars().collect();
+    assert!(!pack_patterns_fit(ProofLang::Gu, &pats, &en_word));
+}
+
+/// CodeRabbit on craft-libs#3905: a word with a joiner in a conjunct still reaches its pack's
+/// exception word (here: no break at all), in Gujarati and Hindi.
+#[test]
+fn indic_pack_exceptions_reach_words_with_joiners() {
+    for (lang, word) in [(ProofLang::Gu, "પુસ્\u{200D}તક"), (ProofLang::Hi, "पुस्\u{200D}तक")] {
+        let pats = Patterns::parse(&format!("1ક 1क \\hyphenation{{{word}}}"));
+        let core: Vec<char> = word.chars().collect();
+        assert!(pack_patterns_fit(lang, &pats, &core), "{lang:?}");
+        assert_eq!(core_breaks_patterns(&pats, &core), (vec![], Source::Dictionary), "{lang:?}");
+    }
+}
+
+/// storytold/vectorcraft#4947: Gujarati text breaks between aksharas, within the paragraph's
+/// limits, where it used to fall to the English rules and get no break at all; a Latin word in
+/// a Gujarati run is still hyphenated as English.
+#[test]
+fn gujarati_breaks_between_aksharas_within_the_limits() {
+    let lim = Limits::default();
+    let gu = |w: &str| hyphenate_word_in(w, &lim, ProofLang::Gu);
+    assert_eq!(gu("વિદ્યાર્થી"), "વિ-દ્યા-ર્થી", "a conjunct is never split");
+    assert_eq!(word_breaks_in("વિદ્યાર્થી", ProofLang::Gu).1, Source::Rules);
+    // A lone consonant at either end is fewer letters than `after_first`/`before_last` allow.
+    assert_eq!(gu("અમદાવાદ"), "અમ-દા-વાદ");
+    assert_eq!(gu("«ગુજરાતી»"), "«ગુ-જ-રા-તી»", "punctuation around the word");
+    assert_eq!(gu("Typography"), hyphenate_word_in("Typography", &lim, ProofLang::En));
+    // A joiner in a conjunct doesn't cut the word in two (each part then too short to break).
+    assert_eq!(gu("પુસ્\u{200D}તક"), "પુ-સ્\u{200D}તક");
+}
+
+/// Hindi text breaks between Devanagari aksharas by the same rules, where it used to get no
+/// break; a Latin word in a Hindi run is still hyphenated as English.
+#[test]
+fn hindi_breaks_between_aksharas_within_the_limits() {
+    let lim = Limits::default();
+    let hi = |w: &str| hyphenate_word_in(w, &lim, ProofLang::Hi);
+    assert_eq!(hi("विद्यार्थी"), "वि-द्या-र्थी", "a conjunct is never split");
+    assert_eq!(word_breaks_in("विद्यार्थी", ProofLang::Hi).1, Source::Rules);
+    assert_eq!(hi("«विद्यार्थी»"), "«वि-द्या-र्थी»", "punctuation around the word");
+    assert_eq!(hi("Typography"), hyphenate_word_in("Typography", &lim, ProofLang::En));
+}

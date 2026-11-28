@@ -97,6 +97,34 @@ fn flag_aliases_stand_for_flag_sets() {
     assert!(undefined.check("kertok"), "the other entries keep their aliases");
     let back = AffixDict::from_bytes(&d.to_bytes().unwrap()).unwrap();
     assert!(back.contains("házokban") && !back.contains("házban"), "aliases are expanded in the compact format");
+
+    // Rule continuations bind the final AF table, even when its declared count is smaller.
+    let late = "SET UTF-8\nFLAG num\nCIRCUMFIX 30\nPFX 7 Y 1\nPFX 7 0 ne/2 .\nSFX 12 Y 1\nSFX 12 0 a/2 .\nAF 1\nAF 7,12\nAF 30\n";
+    let d = AffixDict::from_hunspell(late, "1\ngrad/1\n", &[]).unwrap();
+    assert!(d.contains("grad") && d.contains("negrada"));
+    assert!(!d.contains("negrad") && !d.contains("grada"), "both late continuation aliases carry the circumfix");
+    let bytes = d.to_bytes().unwrap();
+    assert!(miniz_oxide::inflate::decompress_to_vec(&bytes).unwrap().starts_with(b"WCAFF2\nFLAG num\n"));
+    let back = AffixDict::from_bytes(&bytes).unwrap();
+    assert!(back.contains("grad") && back.contains("negrada"));
+    assert!(!back.contains("negrad") && !back.contains("grada"));
+
+    // Repeated aliases across both directions share their final sets, including one already
+    // interned for a stem. Distinct alias indices may name the same continuation flags.
+    let shared = "FLAG num\nAF 3\nAF 7,12\nAF 12\nAF 12\nPFX 7 Y 2\nPFX 7 0 ne/2 .\nPFX 7 0 na/3 .\nSFX 12 Y 2\nSFX 12 0 a/3 .\nSFX 12 0 i/2 .\n";
+    let literal = "FLAG num\nPFX 7 Y 2\nPFX 7 0 ne/12 .\nPFX 7 0 na/12 .\nSFX 12 Y 2\nSFX 12 0 a/12 .\nSFX 12 0 i/12 .\n";
+    let shared = AffixDict::from_hunspell(shared, "2\ngrad/1\nother/2\n", &[]).unwrap();
+    let literal = AffixDict::from_hunspell(literal, "2\ngrad/7,12\nother/12\n", &[]).unwrap();
+    for word in ["grad", "other", "negrad", "nagrad", "grada", "gradi", "othera", "otheri", "negrada", "negradi", "nagrada", "nagradi"] {
+        assert!(shared.contains(word) && literal.contains(word), "{word}");
+    }
+    for word in ["neother", "naother", "gradz"] {
+        assert!(!shared.contains(word) && !literal.contains(word), "{word}");
+    }
+    let bytes = shared.to_bytes().unwrap();
+    assert_eq!(bytes, literal.to_bytes().unwrap(), "alias identity does not change the compact bytes");
+    let back = AffixDict::from_bytes(&bytes).unwrap();
+    assert_eq!(back.to_bytes().unwrap(), bytes, "the shared continuation sets survive compact reloading");
 }
 
 /// CHECKSHARPS answers as Hunspell 1.7 gives them on the same files (`*` correct, `&` not).
@@ -509,4 +537,43 @@ fn displayed_casing_uses_normalization_and_native_homonym_policy() {
     assert!(plain.can_suggest_cased("normal", "NORMAL"));
     assert!(plain.can_suggest_cased("Q", "Q"));
     assert!(!plain.can_suggest_cased(&"x".repeat(MAX_INPUT_BYTES + 1), "NORMAL"));
+}
+
+#[test]
+fn continuation_aliases_use_the_final_mode_and_keep_stem_parsing_lenient() {
+    // AF text uses the final numeric mode; an unused malformed alias is not read strictly.
+    let aff = "AF 2\nAF 1,2\nAF x2\nFLAG num\nSFX 1 Y 1\nSFX 1 0 a/1 .\nSFX 2 Y 1\nSFX 2 0 b .\n";
+    let d = AffixDict::from_hunspell(aff, "1\nw/1\n", &[]).unwrap();
+    assert!(d.check("wa") && d.check("wab"));
+    let dic = "2\nw/1\nodd/2\n";
+    let d = AffixDict::from_hunspell(aff, dic, &[]).unwrap();
+    assert!(d.check("odd") && !d.check("odda") && !d.check("oddb"), "the stem's malformed alias is read leniently");
+    let strict = format!("{aff}SFX 3 Y 1\nSFX 3 0 c/2 .\n");
+    let without_stem = AffixDict::from_hunspell(&strict, "1\nw/1\n", &[]).unwrap_err();
+    assert!(without_stem.contains("`x2` is not a flag number"), "{without_stem}");
+    assert_eq!(
+        AffixDict::from_hunspell(&strict, dic, &[]).unwrap_err(),
+        without_stem,
+        "the lenient stem cache cannot validate a strict continuation"
+    );
+}
+
+#[test]
+fn continuation_alias_errors_keep_the_existing_precedence() {
+    let aliases = "FLAG num\nAF 3\nAF 1,2,3\nAF prefix_bad\nAF suffix_bad\n";
+    let prefix = "PFX 1 Y 1\nPFX 1 0 pre/2 .\n";
+    let suffix = "SFX 2 Y 1\nSFX 2 0 s/3 .\n";
+    let prefix_error = AffixDict::from_hunspell(&format!("{aliases}{prefix}"), "0\n", &[]).unwrap_err();
+    let suffix_error = AffixDict::from_hunspell(&format!("{aliases}{suffix}"), "0\n", &[]).unwrap_err();
+    assert_ne!(prefix_error, suffix_error);
+    let both = format!("{aliases}{suffix}{prefix}");
+    assert_eq!(AffixDict::from_hunspell(&both, "0\n", &[]).unwrap_err(), prefix_error, "prefix errors precede input-earlier suffix errors");
+    let dic = "1\nword/1\n";
+    let stem_error = AffixDict::from_hunspell_capped(aliases, dic, &[], false, 2).unwrap_err();
+    assert!(stem_error.contains("stems carry more than 2 flags"), "{stem_error}");
+    assert_eq!(
+        AffixDict::from_hunspell_capped(&both, dic, &[], false, 2).unwrap_err(),
+        stem_error,
+        "stem aggregate limits precede either continuation error"
+    );
 }

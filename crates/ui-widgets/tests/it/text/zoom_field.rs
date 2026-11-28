@@ -9,7 +9,7 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands, FireSource, fire};
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, ZoomPrecision, with_env};
 use craft_ui::runtime::frame;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -279,6 +279,45 @@ fn a_press_on_a_draft_holding_part_keeps_the_typed_zoom_and_a_press_elsewhere_ap
     );
 }
 
+/// With no typed zoom, Tab leaves the field for the next stop and Shift+Tab comes back to it, so the controls after a
+/// zoom field are reached by keyboard. With a typed zoom, Tab still rewrites it and keeps the focus.
+#[trial]
+fn tab_without_a_typed_zoom_moves_to_the_next_stop_and_shift_tab_returns() {
+    let kept = Kept::new();
+    let app = kept.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        Row::new().show(ui, |ui, _| {
+            let _ = ZoomField::new(ZOOM, Some(app.view.get()), DOCUMENT).show(ui);
+            let _ = Button::new("Zoom Out").show(ui);
+            let _ = Button::new("Zoom In").show(ui);
+        });
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let field = fixture.by_label(ZOOM).expect("the zoom field").node;
+    let zoom_out = fixture.by_label("Zoom Out").expect("the first button").node;
+    assert_eq!(fixture.tree().focused_key(), field, "Tab from nothing focuses the zoom field");
+
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fixture.tree().focused_key(), zoom_out, "Tab from the zoom field focuses the first button after it");
+    fixture.key(Key::Tab, Modifiers::SHIFT).settle();
+    assert_eq!(fixture.tree().focused_key(), field, "Shift+Tab from the button returns to the zoom field");
+    fixture.key(Key::Tab, Modifiers::SHIFT).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fixture.tree().focused_key(), field, "Tab from the stop before it returns to the zoom field");
+
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.type_text("045");
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fixture.tree().focused_key(), field, "Tab with a typed zoom keeps the focus");
+    assert_eq!(text(&fixture), "45", "and rewrites the typed zoom");
+    assert!(close(kept.zoom(), 100.0), "and applies nothing: {}", kept.zoom());
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fixture.tree().focused_key(), zoom_out, "Tab after Enter applied the zoom moves on");
+}
+
 /// The ids of the app's Cut, Copy and Delete that the frames since the last call fired.
 fn app_edits_fired(fixture: &Fixture) -> Vec<String> {
     let edits = [EditCommands::Cut, EditCommands::Copy, EditCommands::Delete].map(|command| CommandRef::from(command).id);
@@ -373,4 +412,33 @@ fn rail_width_zoom_shows_its_whole_value() {
         let run = fixture.texts().iter().find(|run| run.text == text).expect("the zoom value is painted");
         assert!(!run.elided && run.clip.contains_rect(run.rect), "{text} must be visible: {run:?}");
     }
+}
+
+/// A zoom field follows the env's zoom precision as the print preview's row does: whole under `Whole`, with its
+/// fraction under the default.
+#[trial]
+fn a_zoom_field_follows_the_env_zoom_precision() {
+    let shown = |precision: Option<ZoomPrecision>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let show = |ui: &mut Ui| {
+                let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+                ZoomField::new(ZOOM, Some(CanvasView::new(canvas, Point::new(1000.0, 750.0), 1.2575)), DOCUMENT).show(ui);
+            };
+            match precision {
+                Some(precision) => with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(precision);
+                    },
+                    show,
+                ),
+                None => show(ui),
+            }
+        });
+        fixture.settle();
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    };
+    let (whole, fractional) = (shown(Some(ZoomPrecision::Whole)), shown(None));
+    assert!(whole.iter().all(|text| !text.contains('.') && !text.contains(',')), "{whole:?}");
+    assert!(fractional.iter().any(|text| text.contains('.') || text.contains(',')), "{fractional:?}");
 }
