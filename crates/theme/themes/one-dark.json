@@ -1,0 +1,42 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.one-dark",
+  "name": "One Dark",
+  "version": 1,
+  "variants": "dark",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#61afef",
+    "neutral": "#282c34",
+    "status": {
+      "bad": "#e06c75",
+      "good": "#98c379",
+      "info": "#61afef",
+      "warn": "#e5c07b"
+    }
+  },
+  "shape": null,
+  "dark": {
+    "accent.border": "#61afef78",
+    "accent.soft": "#61afef2e",
+    "accent.solid": "#61afef",
+    "caption.close_hover": "#be5046",
+    "caption.close_text": "#d7dae0",
+    "data.scope": "#21252b",
+    "line.border": "#181a1f",
+    "line.control_edge": "#3a3f4b",
+    "line.divider": "#181a1f",
+    "state.hover": "#31363f",
+    "state.pressed": "#353b45",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.background": "#21252b",
+    "surface.canvas": "#21252b",
+    "surface.panel": "#282c34",
+    "surface.sunken": "#1b1d23",
+    "text.faint": "#9da5b4",
+    "text.muted": "#abb2bf",
+    "text.normal": "#d7dae0"
+  }
+}
