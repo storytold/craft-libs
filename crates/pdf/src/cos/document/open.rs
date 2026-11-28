@@ -1,7 +1,10 @@
+use std::sync::Mutex;
+
 use super::reader::find;
 use super::state::{Credentials, Slot};
 use super::xref::XrefIndex;
 use super::{Arc, BTreeMap, CosError, Dict, Document, HashSet, ObjRef, Object};
+use crate::cos::budget::{Budget, CopyScope};
 
 /// More objects than `/Encrypt` and `/ID` refer to in any file, so that one which refers to the page
 /// tree, say, doesn't have a whole document read to open it.
@@ -28,6 +31,7 @@ impl Document {
             object_notes: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: crate::cos::object::MAX_DECODED,
+            copy_budget: Arc::new(Mutex::new(Budget::for_file(0))),
             overlay: BTreeMap::new(),
             next_num: 1,
             header_offset: 0,
@@ -97,6 +101,7 @@ impl Document {
             return Err(CosError::NotPdf);
         }
         let header_offset = header.unwrap_or(0);
+        let copy_budget = Arc::new(Mutex::new(Budget::for_file(data.len())));
         let version = match header {
             Some(h) => String::from_utf8_lossy(&data[(h + 5).min(data.len())..(h + 8).min(data.len())]).trim().to_string(),
             None => "1.4".to_string(),
@@ -118,6 +123,7 @@ impl Document {
             object_notes: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::cos::object::MAX_DECODED),
+            copy_budget,
             overlay: BTreeMap::new(),
             next_num: 1,
             header_offset,
@@ -132,6 +138,7 @@ impl Document {
             out_security: None,
             out_encrypt_num: None,
         };
+        let _copies = CopyScope::enter(&doc.copy_budget);
         let mut log = Vec::new();
         if headerless {
             log.push("the %PDF- header is missing; reading the file as PDF 1.4".into());

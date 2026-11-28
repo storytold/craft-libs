@@ -44,19 +44,35 @@ impl Document {
                 log.push(format!("cross-reference chain loops at offset {off}; stopped"));
                 break;
             }
-            let ((primary, sect_trailer, is_stream), header_relative) = match self.read_compact_section(off as usize) {
-                Ok(Some(v)) => (v, false),
-                Ok(None) => return Ok(None),
-                Err(e) if self.header_offset > 0 => {
-                    log.push(format!("xref at {off} unreadable ({e}); retrying relative to the header"));
-                    match self.read_compact_section(off as usize + self.header_offset)? {
-                        Some(v) => (v, true),
-                        None => return Ok(None),
+            let ((primary, sect_trailer, is_stream), header_relative) = match xref_pos(off, 0, data.len()) {
+                Some(at) => match self.read_compact_section(at) {
+                    Ok(Some(v)) => (v, false),
+                    Ok(None) => return Ok(None),
+                    Err(e) if self.header_offset > 0 => {
+                        log.push(format!("xref at {off} unreadable ({e}); retrying relative to the header"));
+                        match xref_pos(off, self.header_offset, data.len()) {
+                            Some(at) => match self.read_compact_section(at)? {
+                                Some(v) => (v, true),
+                                None => return Ok(None),
+                            },
+                            None => return Err(e),
+                        }
+                    }
+                    // An unreadable older section loses every object only it locates: the
+                    // materialized reader logs it and the file is rebuilt from object headers (#1656).
+                    Err(e) => return Err(e),
+                },
+                None if self.header_offset > 0 => {
+                    log.push(format!("xref at {off} is outside the file; retrying relative to the header"));
+                    match xref_pos(off, self.header_offset, data.len()) {
+                        Some(at) => match self.read_compact_section(at)? {
+                            Some(v) => (v, true),
+                            None => return Ok(None),
+                        },
+                        None => return Err(xref_outside(off, data.len())),
                     }
                 }
-                // An unreadable older section loses every object only it locates: the
-                // materialized reader logs it and the file is rebuilt from object headers (#1656).
-                Err(e) => return Err(e),
+                None => return Err(xref_outside(off, data.len())),
             };
             revisions.push(Revision { xref_offset: off, is_stream, header_relative });
             if primary.renumbered {
@@ -377,23 +393,37 @@ impl Document {
             // Object numbers whose entry in this section was set aside ([`Self::xref_oddities`]).
             let mut odd = Vec::new();
             let rows_before = merged_rows;
-            let ((sect_trailer, is_stream), header_relative) = match self.read_section(off as usize, &mut sect, &mut odd, &mut merged_rows, log) {
-                Ok(v) => (v, false),
-                Err(e) if self.header_offset > 0 => {
-                    log.push(format!("xref at {off} unreadable ({e}); retrying relative to the header"));
-                    sect.clear();
-                    odd.clear();
-                    merged_rows = rows_before;
-                    (self.read_section(off as usize + self.header_offset, &mut sect, &mut odd, &mut merged_rows, log)?, true)
+            let fail_section = |revisions: &[Revision], log: &mut Vec<String>, e: CosError| {
+                // An unreadable older section loses every object only it locates (the page
+                // tree, often): rebuild from object headers, as readers do (#1656).
+                if !revisions.is_empty() {
+                    log.push(format!("older cross-reference section at {off} is unreadable: {e}"));
                 }
-                Err(e) => {
-                    // An unreadable older section loses every object only it locates (the page
-                    // tree, often): rebuild from object headers, as readers do (#1656).
-                    if !revisions.is_empty() {
-                        log.push(format!("older cross-reference section at {off} is unreadable: {e}"));
+                e
+            };
+            let ((sect_trailer, is_stream), header_relative) = match xref_pos(off, 0, data.len()) {
+                Some(at) => match self.read_section(at, &mut sect, &mut odd, &mut merged_rows, log) {
+                    Ok(v) => (v, false),
+                    Err(e) if self.header_offset > 0 => {
+                        log.push(format!("xref at {off} unreadable ({e}); retrying relative to the header"));
+                        sect.clear();
+                        odd.clear();
+                        merged_rows = rows_before;
+                        match xref_pos(off, self.header_offset, data.len()) {
+                            Some(at) => (self.read_section(at, &mut sect, &mut odd, &mut merged_rows, log)?, true),
+                            None => return Err(e),
+                        }
                     }
-                    return Err(e);
+                    Err(e) => return Err(fail_section(&revisions, log, e)),
+                },
+                None if self.header_offset > 0 => {
+                    log.push(format!("xref at {off} is outside the file; retrying relative to the header"));
+                    match xref_pos(off, self.header_offset, data.len()) {
+                        Some(at) => (self.read_section(at, &mut sect, &mut odd, &mut merged_rows, log)?, true),
+                        None => return Err(fail_section(&revisions, log, xref_outside(off, data.len()))),
+                    }
                 }
+                None => return Err(fail_section(&revisions, log, xref_outside(off, data.len()))),
             };
             revisions.push(Revision { xref_offset: off, is_stream, header_relative });
             for (&num, &entry) in &sect {
@@ -646,7 +676,7 @@ impl Document {
             self.revisions
                 .iter()
                 .filter(|r| !r.is_stream)
-                .filter_map(|r| usize::try_from(r.xref_offset).ok().map(|o| if r.header_relative { o.saturating_add(self.header_offset) } else { o }))
+                .filter_map(|r| xref_pos(r.xref_offset, if r.header_relative { self.header_offset } else { 0 }, self.data.len()))
                 .filter_map(|at| shifted_subsection_end(&self.data, at))
                 .collect()
         } else {
@@ -1081,6 +1111,17 @@ pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         return None;
     }
     (from..=hay.len() - needle.len()).rev().find(|&i| &hay[i..i + needle.len()] == needle)
+}
+
+/// `off` (`startxref` or `/Prev`) plus `shift` (the header's offset when the section is counted
+/// from a header that is not at byte 0) as a byte inside a file of `len` bytes. `None` when the
+/// sum overflows or lands outside the file, so the caller refuses it before reading there.
+pub(super) fn xref_pos(off: u64, shift: usize, len: usize) -> Option<usize> {
+    usize::try_from(off).ok()?.checked_add(shift).filter(|at| *at < len)
+}
+
+fn xref_outside(off: u64, len: usize) -> CosError {
+    CosError::Syntax { offset: usize::try_from(off).unwrap_or(len), detail: "cross-reference offset outside the file".into() }
 }
 
 /// The object number a classic xref subsection really starts at. A common producer bug heads the

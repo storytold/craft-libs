@@ -2866,3 +2866,82 @@ fn a_spaced_key_read_from_a_clone_edit_is_not_listed_for_the_source() {
     assert!(doc.repaired_objects().is_empty(), "{:?}", doc.repaired_objects());
     assert!(doc.get(ObjRef::new(3, 0)).as_dict().is_some_and(|d| d.get(b"Universal PDF").is_none()));
 }
+
+fn prefixed(bytes: &[u8]) -> Vec<u8> {
+    let mut out = b"junk-before-header\n".to_vec();
+    out.extend_from_slice(bytes);
+    out
+}
+
+fn rewrite_startxref(bytes: &mut Vec<u8>, value: &str) {
+    let at = bytes.windows(10).rposition(|w| w == b"startxref\n").unwrap() + 10;
+    let end = at + bytes[at..].iter().position(|b| *b == b'\n').unwrap();
+    bytes.splice(at..end, value.bytes());
+}
+
+/// `startxref` past the end of a file whose header is not at byte 0 is refused before the section
+/// is read. `4294967295` is also the value that overflowed the header addition on a 32-bit target.
+#[test]
+fn a_startxref_outside_a_shifted_file_is_refused_before_the_section_is_read() {
+    let body = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "/Root 1 0 R");
+    for value in ["4294967295", "9223372036854775807"] {
+        let mut bytes = prefixed(&body);
+        rewrite_startxref(&mut bytes, value);
+        SECTION_READS.with(|c| c.set(0));
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert_eq!(SECTION_READS.with(|c| c.get()), 0, "{value}");
+        assert_eq!(doc.root(), Some(ObjRef::new(1, 0)), "{value}");
+        assert!(doc.revisions().is_empty(), "{value}: {:?}", doc.repair_log());
+    }
+}
+
+/// `/Prev` past the end, on the same shifted file, is refused before that section is read. The
+/// section `startxref` names is still read.
+#[test]
+fn a_prev_outside_a_shifted_file_is_refused_before_that_section_is_read() {
+    let mut bytes = prefixed(&build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "/Root 1 0 R"));
+    let trailer = bytes.windows(9).rposition(|w| w == b"trailer\n<").unwrap();
+    let size = trailer + bytes[trailer..].windows(6).position(|w| w == b"/Size ").unwrap();
+    bytes.splice(size..size, b"/Prev 4294967295 ".iter().copied());
+    SECTION_READS.with(|c| c.set(0));
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(SECTION_READS.with(|c| c.get()), 2, "{:?}", doc.repair_log());
+    assert_eq!(doc.root(), Some(ObjRef::new(1, 0)));
+}
+
+#[test]
+fn xref_pos_refuses_a_sum_that_overflows_or_lands_outside_the_file() {
+    assert!(super::reader::xref_pos(10, 0, 11).is_some_and(|at| at < 11));
+    assert!(super::reader::xref_pos(10, 5, 16).is_some_and(|at| (10..16).contains(&at) && at != 10));
+    assert!(super::reader::xref_pos(10, 0, 10).is_none(), "the end of the file is outside it");
+    assert!(super::reader::xref_pos(u64::MAX, 1, usize::MAX).is_none(), "the sum overflows");
+    assert!(super::reader::xref_pos(u64::from(u32::MAX), 1, 64).is_none());
+}
+
+/// A string copied out of the file is charged to the document budget. One that fits is kept; one
+/// the allowance cannot hold is not.
+#[test]
+fn a_string_past_the_copy_budget_is_not_read() {
+    let doc = Document::open(Arc::new(build(
+        &["(hi)", "(abcdefghij)", "<< /Type /Catalog /Pages 4 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"],
+        "/Root 3 0 R",
+    )))
+    .unwrap();
+    doc.budget().unwrap().set_for_test(4);
+    assert_eq!(doc.get(ObjRef::new(1, 0)).as_string().map(|s| s.bytes.as_slice()), Some(b"hi".as_slice()));
+    assert!(doc.get(ObjRef::new(2, 0)).as_string().is_none());
+}
+
+/// `xref_entry_is_exact` parses the object at the recorded offset, so a string it copies is
+/// charged. One the allowance cannot hold is not confirmed, though the offset is exact.
+#[test]
+fn an_exact_entry_charges_the_string_it_copies() {
+    let doc = Document::open(Arc::new(build(
+        &["(abcdefghij)", "<< /Type /Catalog /Pages 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"],
+        "/Root 2 0 R",
+    )))
+    .unwrap();
+    assert!(doc.xref_entry_is_exact(1));
+    doc.budget().unwrap().set_for_test(4);
+    assert!(!doc.xref_entry_is_exact(1));
+}

@@ -200,6 +200,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn literal_string(&mut self) -> Result<Vec<u8>, CosError> {
+        let room = crate::cos::budget::copy_room();
         let mut out = Vec::new();
         let mut depth = 1usize;
         while let Some(b) = self.peek() {
@@ -207,25 +208,25 @@ impl<'a> Lexer<'a> {
             match b {
                 b'(' => {
                     depth += 1;
-                    out.push(b);
+                    self.push_copied(&mut out, b, room)?;
                 }
                 b')' => {
                     depth -= 1;
                     if depth == 0 {
-                        return Ok(out);
+                        return self.finish_copy(out);
                     }
-                    out.push(b);
+                    self.push_copied(&mut out, b, room)?;
                 }
                 b'\\' => {
                     let Some(e) = self.peek() else { break };
                     self.pos += 1;
                     match e {
-                        b'n' => out.push(b'\n'),
-                        b'r' => out.push(b'\r'),
-                        b't' => out.push(b'\t'),
-                        b'b' => out.push(8),
-                        b'f' => out.push(12),
-                        b'(' | b')' | b'\\' => out.push(e),
+                        b'n' => self.push_copied(&mut out, b'\n', room)?,
+                        b'r' => self.push_copied(&mut out, b'\r', room)?,
+                        b't' => self.push_copied(&mut out, b'\t', room)?,
+                        b'b' => self.push_copied(&mut out, 8, room)?,
+                        b'f' => self.push_copied(&mut out, 12, room)?,
+                        b'(' | b')' | b'\\' => self.push_copied(&mut out, e, room)?,
                         b'\r' => {
                             if self.peek() == Some(b'\n') {
                                 self.pos += 1;
@@ -243,9 +244,9 @@ impl<'a> Lexer<'a> {
                                     _ => break,
                                 }
                             }
-                            out.push((v & 0xFF) as u8);
+                            self.push_copied(&mut out, (v & 0xFF) as u8, room)?;
                         }
-                        other => out.push(other),
+                        other => self.push_copied(&mut out, other, room)?,
                     }
                 }
                 // End-of-line markers inside strings are normalised to \n (§7.3.4.2).
@@ -253,35 +254,57 @@ impl<'a> Lexer<'a> {
                     if self.peek() == Some(b'\n') {
                         self.pos += 1;
                     }
-                    out.push(b'\n');
+                    self.push_copied(&mut out, b'\n', room)?;
                 }
-                other => out.push(other),
+                other => self.push_copied(&mut out, other, room)?,
             }
         }
+        let _ = self.finish_copy(out);
         Err(self.err("unterminated string"))
     }
 
     fn hex_string(&mut self) -> Result<Vec<u8>, CosError> {
+        let room = crate::cos::budget::copy_room();
         let mut out = Vec::new();
         let mut hi: Option<u8> = None;
         while let Some(b) = self.peek() {
             self.pos += 1;
             if b == b'>' {
                 if let Some(h) = hi {
-                    out.push(h << 4);
+                    self.push_copied(&mut out, h << 4, room)?;
                 }
-                return Ok(out);
+                return self.finish_copy(out);
             }
             if is_whitespace(b) {
                 continue;
             }
-            let Some(v) = hexval(b) else { return Err(self.err("invalid hex digit")) };
+            let Some(v) = hexval(b) else {
+                let _ = self.finish_copy(out);
+                return Err(self.err("invalid hex digit"));
+            };
             match hi.take() {
                 None => hi = Some(v),
-                Some(h) => out.push(h << 4 | v),
+                Some(h) => self.push_copied(&mut out, h << 4 | v, room)?,
             }
         }
+        let _ = self.finish_copy(out);
         Err(self.err("unterminated hex string"))
+    }
+
+    /// Keeps one byte of a string copied out of the file, or refuses once that copy would pass
+    /// the document's [`crate::cos::Budget`].
+    fn push_copied(&self, out: &mut Vec<u8>, b: u8, room: usize) -> Result<(), CosError> {
+        if out.len() >= room {
+            let _ = self.finish_copy(std::mem::take(out));
+            return Err(self.err("copied more text than the file holds"));
+        }
+        out.push(b);
+        Ok(())
+    }
+
+    fn finish_copy(&self, out: Vec<u8>) -> Result<Vec<u8>, CosError> {
+        crate::cos::budget::charge_copy(out.len())?;
+        Ok(out)
     }
 
     fn dict_body(&mut self, depth: usize) -> Result<Dict, CosError> {

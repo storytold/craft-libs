@@ -57,6 +57,12 @@ impl Document {
         self.header_offset
     }
 
+    /// The allowance for bytes copied out of this file ([`crate::cos::Budget`]). A poisoned
+    /// lock is an error.
+    pub fn budget(&self) -> Result<std::sync::MutexGuard<'_, crate::cos::Budget>, CosError> {
+        self.copy_budget.lock().map_err(|_| CosError::Poisoned)
+    }
+
     /// There is no cross-reference chain to append to: the index was rebuilt from object
     /// headers because the file's own was unusable (see [`Self::repair_log`]), or the document
     /// was built from scratch ([`Self::new_empty`]). A save writes such a document in full, even
@@ -73,7 +79,7 @@ impl Document {
         let d = &self.data[..];
         let mut ends: Vec<usize> = Vec::with_capacity(self.revisions.len());
         for r in self.revisions.iter() {
-            let from = (r.xref_offset as usize).saturating_add(self.header_offset).min(d.len());
+            let Some(from) = super::reader::xref_pos(r.xref_offset, self.header_offset, d.len()) else { continue };
             let Some(at) = d[from..].windows(5).position(|w| w == b"%%EOF") else { continue };
             let mut end = from + at + 5;
             while end < d.len() && matches!(d[end], b'\r' | b'\n') && end - (from + at + 5) < 2 {
@@ -218,6 +224,8 @@ impl Document {
     /// position of its object stream. When it does not, [`Self::get`] still finds the object by
     /// searching, but another reader may resolve the number differently. Ignores unsaved edits.
     pub fn xref_entry_is_exact(&self, num: u32) -> bool {
+        // Parsing the object copies its strings out of the file; charge them like a load does.
+        let _copies = crate::cos::budget::CopyScope::enter(&self.copy_budget);
         match self.xref_entry(num) {
             None | Some(XrefEntry::Free { .. }) => true,
             Some(XrefEntry::InFile { offset, generation }) => {
@@ -632,7 +640,10 @@ impl Document {
         // if an abandoned copy had a spaced key: a rare false report, never a missed one.
         let outer = crate::cos::parser::swap_spaced_keys(0);
         let frame = ReadFrame::enter();
-        let loaded = self.load(num, 0).map(Arc::new);
+        let loaded = {
+            let _copies = crate::cos::budget::CopyScope::enter(&self.copy_budget);
+            self.load(num, 0).map(Arc::new)
+        };
         let reads = frame.reads();
         drop(frame);
         // The notes are shared by clones, so a load that read this document's edits (an edited

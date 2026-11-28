@@ -1,6 +1,8 @@
 //! A shared allowance for operations that decode many streams.
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use crate::filters::FilterError;
 
@@ -26,6 +28,100 @@ const IMAGE_WORK_PER_BYTE: u64 = 1 << 13;
 pub const MAX_PAGE_DECODED: usize = 256 << 20;
 /// Form XObjects one page's content walk may enter, each entry counted again.
 pub const MAX_PAGE_FORMS: usize = 50_000;
+
+/// Bytes of text a small file may still copy out. Compression turns a short file into many
+/// pages of text, and those strings are copies, so the floor is a few dozen megabytes; the
+/// file's length raises it. Past the allowance a further string is not read.
+const COPY_FLOOR: usize = 64 << 20;
+const COPY_PER_FILE_BYTE: usize = 64;
+
+/// What a document may still copy out of its file: strings the parser keeps of its own, rather
+/// than a view into the file. The allowance is one per document, shared by every read, so a file
+/// cannot make the reader copy those strings again and again.
+#[derive(Debug)]
+pub struct Budget {
+    used: usize,
+    limit: usize,
+}
+
+impl Budget {
+    pub(crate) fn for_file(len: usize) -> Self {
+        Self { used: 0, limit: len.saturating_mul(COPY_PER_FILE_BYTE).saturating_add(COPY_FLOOR) }
+    }
+
+    /// Charges `n` bytes a caller is about to keep as its own copy of text from the file.
+    /// Refuses, and charges nothing, when that would pass the allowance.
+    pub fn charge_bytes(&mut self, n: usize) -> Result<(), CosError> {
+        match self.used.checked_add(n) {
+            Some(total) if total <= self.limit => {
+                self.used = total;
+                Ok(())
+            }
+            _ => Err(CosError::Syntax { offset: 0, detail: "copied more text than the file holds".into() }),
+        }
+    }
+
+    /// Bytes still allowed ([`Budget::charge_bytes`]).
+    pub fn remaining(&self) -> usize {
+        self.limit.saturating_sub(self.used)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_for_test(&mut self, limit: usize) {
+        self.used = 0;
+        self.limit = limit;
+    }
+}
+
+thread_local! {
+    static COPY_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static COPY_BUDGET: RefCell<Option<Arc<Mutex<Budget>>>> = const { RefCell::new(None) };
+}
+
+/// Makes `budget` the one [`charge_copy`] draws on, until dropped. Re-entering keeps the outer
+/// budget, so a load during another load of the same document shares its allowance.
+pub(crate) struct CopyScope;
+
+impl CopyScope {
+    pub(crate) fn enter(budget: &Arc<Mutex<Budget>>) -> Self {
+        COPY_DEPTH.with(|depth| {
+            if depth.get() == 0 {
+                COPY_BUDGET.with(|slot| *slot.borrow_mut() = Some(Arc::clone(budget)));
+            }
+            depth.set(depth.get().saturating_add(1));
+        });
+        CopyScope
+    }
+}
+
+impl Drop for CopyScope {
+    fn drop(&mut self) {
+        COPY_DEPTH.with(|depth| {
+            let left = depth.get().saturating_sub(1);
+            depth.set(left);
+            if left == 0 {
+                COPY_BUDGET.with(|slot| *slot.borrow_mut() = None);
+            }
+        });
+    }
+}
+
+/// Bytes the active [`Budget`] can still take, or no limit when no document read is in progress.
+pub(crate) fn copy_room() -> usize {
+    COPY_BUDGET.with(|slot| match slot.borrow().as_ref() {
+        Some(budget) => budget.lock().map(|guard| guard.remaining()).unwrap_or(0),
+        None => usize::MAX,
+    })
+}
+
+/// Charges `n` copied bytes to the active [`Budget`]. A read with no document budget is not
+/// charged. A poisoned lock is an error, not a panic.
+pub(crate) fn charge_copy(n: usize) -> Result<(), CosError> {
+    COPY_BUDGET.with(|slot| {
+        let Some(budget) = slot.borrow().clone() else { return Ok(()) };
+        budget.lock().map_err(|_| CosError::Poisoned)?.charge_bytes(n)
+    })
+}
 
 /// The most pixels an image redaction decodes, to clear the ones under a mark or to store again
 /// without the `/JBIG2Globals` it shares with a redacted image (an app's redaction).
