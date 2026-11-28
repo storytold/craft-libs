@@ -108,6 +108,43 @@ fn h264_picture_with_a_short_buffer_is_an_error() {
     assert_eq!(VideoFrame::try_from(h264_picture(7)), Err(FrameError::Plane("buffer is shorter than the plane")));
 }
 
+#[cfg(feature = "hap")]
+#[test]
+fn hap_pictures_split_into_rgb_and_alpha() {
+    use crate::hap::Image;
+    let img = Image { width: 2, height: 2, rgba: (1..=16).collect() };
+    let f = VideoFrame::try_from(img).unwrap();
+    assert_eq!((f.family(), f.subsampling(), f.bit_depth()), (ColorFamily::Rgb, Subsampling::S444, 8));
+    assert_eq!(f.color, ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED });
+    assert_eq!(f.plane(0).unwrap().samples(), &Samples::U8(vec![1, 5, 9, 13]));
+    assert_eq!(f.plane(2).unwrap().samples(), &Samples::U8(vec![3, 7, 11, 15]));
+    assert_eq!(f.alpha().unwrap().samples(), &Samples::U8(vec![4, 8, 12, 16]));
+    assert!(f.pts.is_none());
+}
+
+#[cfg(feature = "hap")]
+#[test]
+fn a_hap_picture_with_the_wrong_size_is_an_error() {
+    use crate::hap::Image;
+    assert!(VideoFrame::try_from(Image { width: 2, height: 2, rgba: vec![0; 15] }).is_err());
+    assert!(VideoFrame::try_from(Image { width: 2, height: 2, rgba: vec![0; 17] }).is_err());
+    assert!(VideoFrame::try_from(Image { width: u32::MAX, height: u32::MAX, rgba: Vec::new() }).is_err());
+}
+
+#[cfg(feature = "hap")]
+#[test]
+fn a_decoded_hap_frame_converts() {
+    use crate::hap::{Decoder, Encoder, Variant};
+    let (w, h) = (20u32, 12u32);
+    let src: Vec<u8> = (0..w * h * 4).map(|i| (i * 5 % 253) as u8).collect();
+    let frame = Encoder::new(w, h, Variant::HapAlpha).unwrap().encode_rgba(&src).unwrap();
+    let img = Decoder::new(w, h).unwrap().decode_rgba(&frame).unwrap();
+    let want_alpha: Vec<u8> = img.rgba.iter().skip(3).step_by(4).copied().collect();
+    let f = VideoFrame::try_from(img).unwrap();
+    assert_eq!((f.width(), f.height()), (20, 12));
+    assert_eq!(f.alpha().unwrap().samples(), &Samples::U8(want_alpha));
+}
+
 #[cfg(feature = "hevc-decode")]
 #[test]
 fn hevc_picture_converts() {
@@ -336,6 +373,71 @@ fn vp8_picture_converts() {
     assert_eq!(f.pts, Some(1));
 }
 
+/// The planes keep their order and their rounded-up chroma size, and what Bink doesn't signal stays unspecified.
+#[cfg(feature = "bink-decode")]
+#[test]
+fn bink_picture_converts() {
+    let p = crate::bink::Picture { width: 3, height: 5, chroma_width: 2, chroma_height: 3, y: vec![1; 15], u: vec![2; 6], v: vec![3; 6] };
+    let f = VideoFrame::try_from(p).unwrap();
+    assert_eq!((f.width(), f.height()), (3, 5));
+    let planes: Vec<_> = f.planes().iter().map(|p| (p.width(), p.height(), p.row_u8(0).unwrap()[0])).collect();
+    assert_eq!(planes, [(3, 5, 1), (2, 3, 2), (2, 3, 3)]);
+    assert_eq!((f.color, f.pts, f.sar), (ColorTags::UNSPECIFIED, None, None));
+}
+
+#[cfg(feature = "rawvideo")]
+#[test]
+fn rawvideo_frames_convert() {
+    use crate::rawvideo::{Frame as R, Kind};
+    let mut yuv = R::new(4, 2, Kind::Yuv422, 10).unwrap();
+    yuv.planes = [(0..8).collect(), vec![100, 101, 102, 103], vec![200, 201, 202, 203]];
+    let f = VideoFrame::try_from(yuv).unwrap();
+    assert_eq!((f.family(), f.subsampling(), f.bit_depth(), f.color), (ColorFamily::YCbCr, Subsampling::S422, 10, ColorTags::UNSPECIFIED));
+    assert_eq!((f.plane(1).unwrap().width(), f.plane(1).unwrap().height()), (2, 2));
+    assert_eq!(f.plane(0).unwrap().samples(), &Samples::U16((0..8).collect()));
+    assert_eq!(f.plane(2).unwrap().samples(), &Samples::U16(vec![200, 201, 202, 203]));
+    assert!(f.alpha().is_none() && f.pts.is_none());
+    let rgb = R::new(3, 2, Kind::Rgb, 8).unwrap();
+    let f = VideoFrame::try_from(rgb).unwrap();
+    assert_eq!((f.family(), f.subsampling(), f.bit_depth()), (ColorFamily::Rgb, Subsampling::S444, 8));
+    assert_eq!(f.color, ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED });
+    assert_eq!(f.plane(2).unwrap().samples(), &Samples::U16(vec![0; 6]));
+}
+
+#[cfg(feature = "rawvideo")]
+#[test]
+fn a_rawvideo_frame_with_short_planes_is_an_error() {
+    use crate::rawvideo::{Frame as R, Kind};
+    let mut f = R::new(4, 2, Kind::Yuv422, 8).unwrap();
+    f.planes[1].pop();
+    assert!(VideoFrame::try_from(f).is_err());
+}
+
+#[cfg(feature = "rawvideo")]
+#[test]
+fn rawvideo_rejects_samples_exceeding_bit_depth() {
+    use crate::rawvideo::{Frame as R, Kind};
+    let mut rgb = R::new(1, 1, Kind::Rgb, 8).unwrap();
+    rgb.planes[0][0] = 255;
+    assert!(VideoFrame::try_from(rgb.clone()).is_ok());
+
+    rgb.planes[0][0] = 256;
+    assert_eq!(VideoFrame::try_from(rgb), Err(FrameError::Plane("sample value exceeds bit depth")));
+}
+
+#[cfg(feature = "rawvideo")]
+#[test]
+fn a_decoded_v210_picture_converts() {
+    use crate::rawvideo::{Layout, decode};
+    // 6 pixels of v210 are one 16-byte group: 48 wide gives 8 groups per row.
+    let data: Vec<u8> = (0..(48 / 6) * 16 * 2).map(|i| (i * 13 % 251) as u8).collect();
+    let pic = decode(Layout::V210, 48, 2, &data).unwrap();
+    let luma = pic.planes[0].clone();
+    let f = VideoFrame::try_from(pic).unwrap();
+    assert_eq!((f.width(), f.height(), f.bit_depth(), f.subsampling()), (48, 2, 10, Subsampling::S422));
+    assert_eq!(f.plane(0).unwrap().samples(), &Samples::U16(luma));
+}
+
 #[cfg(feature = "prores")]
 #[test]
 fn prores_frame_converts() {
@@ -386,7 +488,7 @@ fn dnx_rgb_is_reordered_to_r_g_b() {
     assert_eq!(f.family(), ColorFamily::Rgb);
     let first = |i: usize| f.planes()[i].row_u16(0).and_then(|r| r.first().copied());
     assert_eq!([first(0), first(1), first(2)], [Some(3), Some(1), Some(2)]);
-    assert_eq!(f.color, ColorTags { matrix: 0, ..ColorTags::UNSPECIFIED });
+    assert_eq!(f.color, ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED });
 }
 
 #[cfg(feature = "dnx")]

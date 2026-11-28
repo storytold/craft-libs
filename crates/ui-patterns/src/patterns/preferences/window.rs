@@ -93,8 +93,8 @@ pub struct PreferencesState {
 /// - **App-modal.** While the window is open the app's other windows take no input, show the blocked cursor and
 ///   refuse to close, and a press on one raises the window.
 /// - **Placement.** The window opens in its own OS window where there are any, else as a modal dialog layer
-///   ([`embedded`](PreferencesWindow::embedded) forces the layer). [`remember`](PreferencesWindow::remember) keeps
-///   its place and size across runs.
+///   ([`embedded`](PreferencesWindow::embedded) forces the layer). [`size`](PreferencesWindow::size) sets the size it
+///   opens at. [`remember`](PreferencesWindow::remember) keeps its place and size across runs.
 #[must_use = "show the window with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct PreferencesWindow<'a> {
@@ -114,6 +114,11 @@ pub struct PreferencesWindow<'a> {
     /// Lays the page out as `layout` says ([`PreferencesPage::layout`]); the default is [`PreferencesLayout::Paged`].
     #[prop]
     layout: PreferencesLayout,
+    /// The size the window opens at until the user resizes it, in place of the layout's own ([`DEFAULT_SIZE`] for
+    /// pages, a narrower one for cards). A size under the layout's least ([`MIN_SIZE`] for pages) opens at the least;
+    /// a size that is not finite is ignored.
+    #[prop(quantity = "points, the window's opening size")]
+    size: Option<Vec2>,
     /// Escape keeps the typing in the focused field ([`Dialog::escape_keeps_typing`]): in [`PreferencesMode::Live`]
     /// the typed value stays applied when Escape closes the window. Off by default: Escape cancels the typing.
     #[prop(flag)]
@@ -221,6 +226,7 @@ impl<'a> PreferencesWindow<'a> {
             remember: None,
             mode: PreferencesMode::Staged,
             layout: PreferencesLayout::Paged,
+            size: None,
             escape_keeps_typing: false,
             page_steps: false,
         }
@@ -228,7 +234,7 @@ impl<'a> PreferencesWindow<'a> {
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
     pub fn show<H: PreferencesDraft + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
-        let PreferencesWindow { state, title, embedded, remember, mode, layout, escape_keeps_typing, page_steps } = self;
+        let PreferencesWindow { state, title, embedded, remember, mode, layout, size: asked, escape_keeps_typing, page_steps } = self;
         let page_steps = page_steps && layout == PreferencesLayout::Paged;
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
@@ -264,6 +270,7 @@ impl<'a> PreferencesWindow<'a> {
             PreferencesLayout::Cards => (CARDS_SIZE, CARDS_MIN_SIZE),
             PreferencesLayout::Classic => (CLASSIC_SIZE, MIN_SIZE),
         };
+        let size = asked.filter(|asked| asked.is_finite()).unwrap_or(size);
         let mut open = true;
         // Filed by a swatch press in this pass.
         let mut pick_color = None;

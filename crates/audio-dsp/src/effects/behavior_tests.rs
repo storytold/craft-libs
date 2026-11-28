@@ -132,9 +132,11 @@ fn every_effect_is_deterministic_and_latency_is_constant() {
             f
         };
         let lat0 = (e.create)(SR, 2).latency();
+        // Keep Formants adds voice_pitch's formant stage; no other parameter changes a latency.
+        let want = if e.id == "voice_pitch" { lat0 + voice::VoiceFormant::new(SR, 2).latency() } else { lat0 };
         let mut a = mk();
         let mut b = mk();
-        assert_eq!(a.latency(), lat0, "{}: latency depends on parameters", e.id);
+        assert_eq!(a.latency(), want, "{}: latency depends on parameters", e.id);
         let ya = run(a.as_mut(), &l, &r);
         let yb = run(b.as_mut(), &l, &r);
         assert!(ya.0 == yb.0 && ya.1 == yb.1, "{}: not deterministic", e.id);
@@ -147,7 +149,13 @@ fn latency_is_where_the_impulse_lands() {
     // settings (FFT filter / convolution / existing STFT effects). The click remover repairs a
     // lone impulse in silence as a click, so its latency is checked on noise by
     // `neutral_settings_are_delayed_identity`.
-    for (id, p) in [("fft_filter", vec![]), ("convolution_reverb", vec![("mix", 0.0)])] {
+    for (id, p) in [
+        ("fft_filter", vec![]),
+        ("convolution_reverb", vec![("mix", 0.0)]),
+        ("voice_pitch", vec![]),
+        ("voice_pitch", vec![("formant_follow", 1.0)]),
+        ("voice_formant", vec![]),
+    ] {
         let mut e = fx(id, &p);
         let lat = e.latency();
         assert!(lat > 0, "{id}");
@@ -976,6 +984,8 @@ fn direct_constructors_cap_the_channel_count() {
         channel::Amplify,
         filters::FullParametricEq,
         pitch::PitchShifter,
+        voice::VoicePitch,
+        voice::VoiceFormant,
     );
 }
 

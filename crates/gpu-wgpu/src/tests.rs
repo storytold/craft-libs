@@ -335,6 +335,18 @@ fn device_status_surfaces_loss_even_with_nothing_pending() {
     assert!(matches!(ctx.device_status(), Err(GpuFault::DeviceLost(_))), "device.destroy() must surface through device_status() alone");
 }
 
+/// Every context and probe requests its adapter from one process-wide instance, so opening
+/// contexts on several threads does not load and unload the Vulkan drivers once per context. No
+/// adapter is needed: an instance exists even on a host with no usable backend.
+#[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+#[test]
+fn every_context_and_probe_shares_one_wgpu_instance() {
+    let first = crate::native::instance();
+    let again = std::thread::spawn(crate::native::instance).join().expect("instance() on another thread");
+    assert_eq!(first, again, "a second call, from another thread, must return the same instance");
+    assert_eq!(first, crate::native::instance(), "a later call must return the same instance");
+}
+
 /// Same two guarantees on a real device: empty buffers round-trip (the readback resolves without
 /// mapping, since wgpu refuses an empty map range) and `read_buffer` re-queues completions that
 /// belong to another outstanding request.

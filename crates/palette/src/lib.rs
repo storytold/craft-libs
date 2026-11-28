@@ -1,9 +1,13 @@
-//! GIMP palette (.gpl) reading with neutral RGB8 colours and names.
+//! GIMP palette (.gpl) reading with neutral RGB8 colours and names, and RIFF palette (.pal)
+//! reading with neutral RGB8 colours.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-/// Largest accepted palette, bounding all parsing allocations.
+mod riff;
+pub use riff::parse_riff_pal;
+
+/// Largest accepted GIMP palette, bounding all parsing allocations.
 pub const MAX_BYTES: usize = 1 << 20;
-/// Maximum colours returned; later rows are ignored.
+/// Maximum colours a GIMP palette gives; later rows are ignored.
 pub const MAX_COLORS: usize = 1024;
 /// A named RGB colour. Display-name sanitization belongs to the caller.
 #[derive(Clone, Debug, PartialEq, Eq)]

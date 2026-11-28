@@ -1,5 +1,64 @@
-use craft_jsonrpc::{Limits, ParseError, RpcError, parse_error_response, parse_json, process};
+use craft_jsonrpc::{Handler, Limits, ParseError, Request, RpcError, parse_error_response, parse_json, process, process_legacy_with, process_with};
 use serde_json::{Value, json};
+
+#[derive(Default)]
+struct Session {
+    log: Vec<String>,
+    level: Value,
+}
+
+impl Handler for Session {
+    fn request(&mut self, request: Request<'_>) -> Result<Value, RpcError> {
+        self.log.push(format!("request {}", request.method));
+        match request.method {
+            "level" => Ok(self.level.clone()),
+            _ => Err(RpcError::new(-32601, "Method not found")),
+        }
+    }
+    fn notification(&mut self, request: Request<'_>) {
+        self.log.push(format!("notification {}", request.method));
+        if let Some(level) = request.params.and_then(|params| params.get("level")) {
+            self.level = level.clone();
+        }
+    }
+}
+
+#[test]
+fn one_handler_shares_state_between_requests_and_notifications_in_order() {
+    let input = json!([
+        {"jsonrpc":"2.0", "id":1, "method":"level"},
+        {"jsonrpc":"2.0", "method":"set", "params":{"level":"debug"}},
+        {"jsonrpc":"2.0", "id":2, "method":"level"},
+        {"jsonrpc":"2.0", "id":3, "method":"missing"}
+    ]);
+    let mut session = Session::default();
+    let result = process_with(&input, Limits::default(), &mut session).unwrap().unwrap();
+    assert_eq!(
+        result,
+        json!([
+            {"jsonrpc":"2.0", "id":1, "result":null},
+            {"jsonrpc":"2.0", "id":2, "result":"debug"},
+            {"jsonrpc":"2.0", "id":3, "error":{"code":-32601,"message":"Method not found"}}
+        ])
+    );
+    assert_eq!(session.log, ["request level", "notification set", "request level", "request missing"]);
+    let notification = json!({"jsonrpc":"2.0", "method":"set", "params":{"level":"trace"}});
+    assert!(process_with(&notification, Limits::default(), &mut session).unwrap().is_none());
+    assert_eq!(session.level, "trace");
+    let limits = Limits { max_batch_items: 1, ..Limits::default() };
+    let mut untouched = Session::default();
+    assert_eq!(process_with(&input, limits, &mut untouched), Err(ParseError::BatchTooLarge));
+    assert!(untouched.log.is_empty());
+}
+
+#[test]
+fn one_handler_serves_legacy_envelopes() {
+    let input = json!([{"method":"set", "params":{"level":"info"}}, {"id":"x", "method":"level"}, {"result":1}]);
+    let mut session = Session::default();
+    let result = process_legacy_with(&input, &mut session).unwrap();
+    assert_eq!(result, json!([{"jsonrpc":"2.0", "id":"x", "result":"info"}]));
+    assert_eq!(session.log, ["notification set", "request level"]);
+}
 
 #[test]
 fn batches_preserve_ids_order_and_suppress_notification_replies() {
@@ -114,6 +173,23 @@ fn parse_and_batch_limits_apply_before_dispatch() {
 }
 
 #[test]
+fn parse_failures_map_to_error_responses() {
+    assert_eq!(ParseError::InvalidJson.error_response(), parse_error_response());
+    for error in [ParseError::MessageTooLarge, ParseError::BatchTooLarge] {
+        let reply = error.error_response();
+        assert_eq!(reply["jsonrpc"], "2.0");
+        assert_eq!(reply["id"], Value::Null);
+        assert_eq!(reply["error"]["code"], -32600);
+        assert_eq!(reply["error"]["message"], error.to_string());
+        assert_eq!(RpcError::from(error), error.rpc_error());
+    }
+    let limits = Limits { max_batch_items: 0, ..Limits::default() };
+    let input = json!([{"jsonrpc":"2.0", "id":1, "method":"ping"}]);
+    let error = process(&input, limits, |_| Ok(json!({})), |_| {}).unwrap_err();
+    assert_eq!(error.error_response()["error"]["code"], -32600);
+}
+
+#[test]
 fn invalid_utf8_and_excessive_nesting_are_rejected() {
     assert_eq!(parse_json(&[0xff], Limits::default()), Err(ParseError::InvalidJson));
     let nested = format!("{}0{}", "[".repeat(200), "]".repeat(200));
@@ -133,6 +209,39 @@ fn bounded_line_read_handles_chunks_empty_lines_and_eof() {
 }
 
 #[test]
+fn skipping_an_over_long_line_resumes_at_the_next_message() {
+    use std::io::{BufReader, Cursor};
+    let mut reader = BufReader::with_capacity(2, Cursor::new(b"abcdefgh\nok\nxyzxyz"));
+    assert!(matches!(craft_jsonrpc::read_line(&mut reader, 3), Err(craft_jsonrpc::LineError::TooLong)));
+    assert!(craft_jsonrpc::skip_line(&mut reader).unwrap());
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), Some(b"ok".to_vec()));
+    assert!(matches!(craft_jsonrpc::read_line(&mut reader, 3), Err(craft_jsonrpc::LineError::TooLong)));
+    assert!(!craft_jsonrpc::skip_line(&mut reader).unwrap());
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), None);
+}
+
+#[test]
+fn skipping_a_line_retries_interrupted_reads_and_reports_other_errors() {
+    struct Flaky(Vec<std::io::Result<&'static [u8]>>);
+    impl std::io::Read for Flaky {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Ok(0);
+            }
+            let bytes = self.0.remove(0)?;
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        }
+    }
+    let interrupted = || Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+    let mut reader = std::io::BufReader::new(Flaky(vec![Ok(b"ab"), interrupted(), Ok(b"c\nok\n")]));
+    assert!(craft_jsonrpc::skip_line(&mut reader).unwrap());
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), Some(b"ok".to_vec()));
+    let mut broken = std::io::BufReader::new(Flaky(vec![Err(std::io::Error::other("broken"))]));
+    assert!(craft_jsonrpc::skip_line(&mut broken).is_err());
+}
+
+#[test]
 fn bounded_line_read_propagates_io_errors() {
     struct Broken;
     impl std::io::Read for Broken {
@@ -142,6 +251,28 @@ fn bounded_line_read_propagates_io_errors() {
     }
     let mut reader = std::io::BufReader::new(Broken);
     assert!(matches!(craft_jsonrpc::read_line(&mut reader, 1), Err(craft_jsonrpc::LineError::Io(_))));
+}
+
+#[test]
+fn bounded_line_read_retries_interrupted_reads() {
+    struct Interrupting {
+        chunks: Vec<std::io::Result<&'static [u8]>>,
+    }
+    impl std::io::Read for Interrupting {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.chunks.is_empty() {
+                return Ok(0);
+            }
+            let bytes = self.chunks.remove(0)?;
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        }
+    }
+    let interrupted = || Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+    let mut reader = std::io::BufReader::new(Interrupting { chunks: vec![interrupted(), Ok(b"ab"), interrupted(), Ok(b"c\nd"), interrupted()] });
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), Some(b"abc".to_vec()));
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), Some(b"d".to_vec()));
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), None);
 }
 
 #[test]

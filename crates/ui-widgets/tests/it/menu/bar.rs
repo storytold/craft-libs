@@ -635,3 +635,37 @@ fn a_fields_selection_holds_while_the_menu_bar_has_the_keyboard() {
     let copy = fixture.by_label("Copy").expect("the Edit menu is open");
     assert!(!fixture.tree().is_disabled_key(copy.node), "Copy applies to the field's selection");
 }
+
+/// Whether the latest frame paints a focus ring (a stroke at least two points wide) close around `target`, not around
+/// the whole bar.
+fn ringed(fixture: &mut Fixture, target: egui::Rect) -> bool {
+    let around = |ring: egui::Rect| ring.expand(1.0).contains_rect(target) && target.expand(4.0).contains_rect(ring);
+    fixture.frame_shapes().iter().any(|shape| match shape {
+        egui::Shape::Rect(rect) if rect.stroke.width >= 2.0 => around(rect.rect),
+        egui::Shape::Path(path) if path.stroke.width >= 2.0 => around(egui::Rect::from_points(&path.points)),
+        _ => false,
+    })
+}
+
+/// The title that Tab, F10 or an arrow key moves the keyboard to is ringed, as a focused button is, and the title the
+/// keyboard left is not.
+#[trial]
+fn the_focused_title_shows_the_focus_ring() {
+    let mut rig = rig(Direction::Ltr);
+    let fixture = &mut rig.fixture;
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let (bar, file) = fixture.focused_stop().and_then(|(bar, part)| Some((bar, part?))).expect("Tab focuses a title");
+    let file_rect = fixture.part_rect(bar, file).expect("the focused title's rect");
+    assert!(ringed(fixture, file_rect), "Tab rings the title it focuses");
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    let edit = fixture.focused_stop().and_then(|(_, part)| part).expect("Right focuses the next title");
+    assert_ne!(edit, file, "Right moves to another title");
+    let edit_rect = fixture.part_rect(bar, edit).expect("the next title's rect");
+    assert!(ringed(fixture, edit_rect), "Right rings the title it moves to");
+    assert!(!ringed(fixture, file_rect), "the title the keyboard left loses its ring");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    fixture.key(Key::F10, Modifiers::NONE).settle();
+    let first = fixture.focused_stop().and_then(|(_, part)| part).expect("F10 focuses the first title");
+    let first_rect = fixture.part_rect(bar, first).expect("the first title's rect");
+    assert!(ringed(fixture, first_rect), "F10 rings the title it focuses");
+}

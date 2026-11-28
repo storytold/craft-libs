@@ -225,6 +225,12 @@ pub fn open_change(w: &mut W, tag: &str, a: &ChangeAttrs) {
     w.open(tag, &refs);
 }
 
+/// [`open_change`] for an empty element.
+pub fn empty_change(w: &mut W, tag: &str, a: &ChangeAttrs) {
+    let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    w.empty(tag, &refs);
+}
+
 /// A tracked change element holding the properties before the change: `<tag attrs><inner>…</inner></tag>`.
 fn change_el(w: &mut W, tag: &str, inner: &str, a: &ChangeAttrs, body: impl FnOnce(&mut W)) {
     open_change(w, tag, a);
