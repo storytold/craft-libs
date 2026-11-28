@@ -58,9 +58,10 @@ class FetchTests(unittest.TestCase):
         for error in errors:
             with self.subTest(error=type(error).__name__):
                 with patch.object(fetcher.urllib.request, "urlopen", side_effect=[Broken(error), io.BytesIO(b"font")]) as request:
-                    with patch.object(fetcher.time, "sleep"):
+                    with patch.object(fetcher.time, "sleep") as sleep:
                         self.assertEqual(fetcher.fetch(URL), b"font")
                         self.assertEqual(request.call_count, 2)
+                        sleep.assert_called_once_with(1)
 
     def test_permanent_http_error_is_not_retried(self):
         error = urllib.error.HTTPError(URL, 404, "missing", {}, None)
