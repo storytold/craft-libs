@@ -935,6 +935,98 @@ fn text_size(e: Option<&El>) -> Option<f64> {
 mod tests {
     use super::*;
 
+    // Original small two-pair fixture: only the secondary series supplies categories.
+    fn review6_axis_pairs() -> String {
+        r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+<c:chart><c:plotArea>
+<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Primary</c:v></c:tx><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser>
+<c:axId val="10"/><c:axId val="20"/></c:barChart>
+<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Secondary</c:v></c:tx><c:cat><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>45292</c:v></c:pt></c:numLit></c:cat><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>8</c:v></c:pt></c:numLit></c:val></c:ser>
+<c:axId val="30"/><c:axId val="40"/></c:barChart>
+<c:catAx><c:axId val="10"/><c:axPos val="b"/><c:crossAx val="20"/></c:catAx>
+<c:valAx><c:axId val="20"/><c:scaling><c:max val="50"/></c:scaling><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>
+<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:catAx>
+<c:valAx><c:axId val="40"/><c:scaling><c:max val="1"/></c:scaling><c:axPos val="r"/><c:crossAx val="999"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:valAx>
+<c:valAx><c:axId val="40"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="30"/><c:numFmt formatCode="0.000" sourceLinked="0"/></c:valAx>
+</c:plotArea></c:chart></c:chartSpace>
+"#.into()
+    }
+
+    #[test]
+    fn review6_secondary_scaling_uses_the_group_owned_reciprocal_value_element() {
+        let xml = review6_axis_pairs();
+        let bad = r#"<c:valAx><c:axId val="40"/><c:scaling><c:max val="1"/></c:scaling><c:axPos val="r"/><c:crossAx val="999"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:valAx>"#;
+        let good = r#"<c:valAx><c:axId val="40"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="30"/><c:numFmt formatCode="0.000" sourceLinked="0"/></c:valAx>"#;
+        let category = r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:catAx>"#;
+        let foreign = r#"<c:catAx><c:axId val="999"/><c:axPos val="t"/><c:crossAx val="40"/></c:catAx>"#;
+        for reverse in [false, true] {
+            for stray_reciprocal in [false, true] {
+                let fixture = if reverse { xml.replace(&format!("{bad}\n{good}"), &format!("{good}\n{bad}")) } else { xml.clone() };
+                let fixture = if stray_reciprocal { fixture.replace(category, &format!("{foreign}{category}")) } else { fixture };
+                let c = read_chart_xml(fixture.as_bytes()).unwrap();
+                assert_eq!(c.y_max, Some(50.0));
+                assert_eq!(c.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
+                assert_eq!(c.y2_max, Some(90.0), "reverse={reverse}, stray={stray_reciprocal}");
+                assert_eq!(c.y2_format.as_deref(), Some("0.000"));
+                assert_eq!(c.category_format.as_deref(), Some("mmm-yy"));
+            }
+        }
+        // No unique group-owned pair: retain the old first-ID fallback, not a guessed pair.
+        let ambiguous = xml.replace(good, &format!("{good}{}", good.replace(r#"val="90""#, r#"val="80""#)));
+        let no_partner = xml.replace(category, "");
+        let too_many_ids = xml.replace(r#"<c:axId val="30"/><c:axId val="40"/></c:barChart>"#, r#"<c:axId val="30"/><c:axId val="40"/><c:axId val="70"/></c:barChart>"#);
+        for fixture in [ambiguous, no_partner, too_many_ids] {
+            assert_eq!(read_chart_xml(fixture.as_bytes()).unwrap().y2_max, Some(1.0), "unresolved evidence retains the historical fallback");
+        }
+        let repeated_id = xml.replace(r#"<c:axId val="30"/><c:axId val="40"/></c:barChart>"#, r#"<c:axId val="30"/><c:axId val="40"/><c:axId val="30"/></c:barChart>"#);
+        assert_eq!(read_chart_xml(repeated_id.as_bytes()).unwrap().y2_max, Some(90.0), "two unique IDs still define one pair");
+    }
+
+    #[test]
+    fn review6_secondary_category_format_keeps_the_selected_value_element() {
+        let xml = review6_axis_pairs();
+        let bad = r#"<c:valAx><c:axId val="40"/><c:scaling><c:max val="1"/></c:scaling><c:axPos val="r"/><c:crossAx val="999"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:valAx>"#;
+        let category = r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:catAx>"#;
+        let unrelated = r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="777"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:catAx>"#;
+        let fixture = xml.replace(category, &format!("{unrelated}{category}"));
+        // Removing the invalid value is a legitimate existing reciprocal-category control.
+        for fixture in [fixture.clone(), fixture.replace(bad, "")] {
+            let c = read_chart_xml(fixture.as_bytes()).unwrap();
+            assert_eq!(c.category_format.as_deref(), Some("mmm-yy"));
+            assert_eq!(c.category_label(0), "Jan-24");
+            assert_eq!(c.y2_max, Some(90.0));
+        }
+    }
+
+    #[test]
+    fn review6_primary_used_group_avoids_an_invalid_last_duplicate_and_keeps_old_raw() {
+        let xml = review6_axis_pairs();
+        let bad_secondary = r#"<c:valAx><c:axId val="40"/><c:scaling><c:max val="1"/></c:scaling><c:axPos val="r"/><c:crossAx val="999"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:valAx>"#;
+        let good = r#"<c:valAx><c:axId val="20"/><c:scaling><c:max val="50"/></c:scaling><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>"#;
+        let bad = r#"<c:valAx><c:axId val="20"/><c:scaling><c:max val="1"/></c:scaling><c:axPos val="l"/><c:crossAx val="999"/></c:valAx>"#;
+        let xml = xml.replace(bad_secondary, "").replace(good, &format!("{good}{bad}"));
+        for fixture in [xml.clone(), xml.replace(&format!("{good}{bad}"), &format!("{bad}{good}"))] {
+            let c = read_chart_xml(fixture.as_bytes()).unwrap();
+            assert_eq!(c.y_max, Some(50.0));
+            assert_eq!(c.y2_max, Some(90.0));
+            assert_eq!(c.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
+        }
+        let xml = xml.replace("</c:chartSpace>", r#"<c:extLst><c:ext uri="urn:craft:original-axis-element"><own:preserved xmlns:own="urn:craft:original"/></c:ext></c:extLst></c:chartSpace>"#);
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        for version in 0..=5 {
+            let mut previous = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
+            // The exact earlier first/last-ID interpretations are preserved, not upgraded.
+            assert_eq!(previous.y_max, Some(if version >= 5 { 1.0 } else { 50.0 }), "interpretation{version}");
+            previous.raw = Some(xml.clone());
+            let previous: Chart = serde_json::from_str(&serde_json::to_string(&previous).unwrap()).unwrap();
+            let (written, kept) = crate::chart::write::chart_xml(&previous);
+            assert!(kept, "unchanged interpretation{version} must retain raw XML");
+            assert!(crate::xmlx::parse(&written).unwrap().find(Local("preserved")).is_some());
+        }
+    }
+
     #[test]
     fn point_count_charges_every_retained_vector() {
         let mut c = Chart { categories: vec!["a".into()], category_levels: vec![vec!["x".into(); 2], vec!["y".into(); 3]], ..Default::default() };

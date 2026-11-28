@@ -1456,6 +1456,62 @@ mod tests {
         assert!(hi > 10.0);
         assert_eq!(Chart::sample(ChartType::Pie).series.len(), 1);
     }
+
+    #[test]
+    fn review_6095266494_sparse_stacks_retain_late_points_without_charging_empty_series() {
+        // Original sparse imported-model shape: one retained 20k-slot cache and 999 empty
+        // peers in the same source group, well within the reader's shared point budget.
+        let mut chart = Chart {
+            kind: ChartType::StackedColumn,
+            series: (0..1000).map(|_| Series { kind: Some(ChartType::StackedColumn), source_group: Some(0), ..Default::default() }).collect(),
+            ..Default::default()
+        };
+        chart.series[0].values = vec![None; 20_000];
+        chart.series[0].values[19_999] = Some(500.0);
+        assert_eq!(chart.value_range(), (0.0, 500.0), "empty peers must not hide a finite point retained by the reader");
+        assert_eq!(chart.axis_range(false), Some((0.0, 500.0)));
+        assert!(chart.axis_scale(false, 5).unwrap().1 >= 500.0);
+        let mut alone = chart.clone();
+        alone.series.truncate(1);
+        assert_eq!(chart.value_range(), alone.value_range(), "adding empty series does not change the data extent");
+
+        chart.series[1].values = vec![None; 20_000];
+        chart.series[1].values[19_999] = Some(250.0);
+        assert_eq!(chart.value_range(), (0.0, 750.0), "the same kind and group still share a stack");
+        chart.series[1].source_group = Some(1);
+        assert_eq!(chart.value_range(), (0.0, 500.0), "independent source stacks do not add together");
+        chart.series[1].source_group = Some(0);
+        chart.series[1].kind = Some(ChartType::StackedArea);
+        assert_eq!(chart.axis_range(false), Some((0.0, 500.0)), "independent effective kinds stay separate");
+        chart.series[1].kind = Some(ChartType::StackedColumn);
+        chart.series[1].values[19_999] = Some(-250.0);
+        assert_eq!(chart.axis_range(false), Some((-250.0, 500.0)), "positive and negative stack sums stay independent");
+        chart.series[1].secondary_axis = true;
+        assert_eq!(chart.axis_range(false), Some((0.0, 500.0)));
+        assert_eq!(chart.axis_range(true), Some((-250.0, 0.0)), "the selected value axis still owns its own extent");
+    }
+
+    #[test]
+    fn review_6095266494_percent_range_bounds_are_independent_of_source_group_tokens() {
+        for source_group in [None, Some(0)] {
+            let mut chart = Chart::sample(ChartType::PercentColumn);
+            for series in &mut chart.series {
+                series.source_group = source_group;
+            }
+            assert_eq!(chart.value_range(), (0.0, 1.0));
+            assert_eq!(chart.axis_range(false), Some((0.0, 1.0)));
+            chart.y_max = Some(0.8);
+            assert_eq!(chart.value_range(), (0.0, 0.8), "explicit maximum wins with group {source_group:?}");
+            assert_eq!(chart.axis_range(false), Some((0.0, 0.8)));
+            chart.y_min = Some(0.2);
+            assert_eq!(chart.value_range(), (0.2, 0.8));
+            assert_eq!(chart.axis_range(false), Some((0.2, 0.8)));
+            chart.y_max = None;
+            assert_eq!(chart.value_range(), (0.2, 1.0), "an absent maximum still defaults to one");
+            chart.y_min = None;
+            assert_eq!(chart.value_range(), (0.0, 1.0));
+        }
+    }
 }
 
 /// One histogram bin: `[lo, hi]` (the first bin is closed on both sides, later ones open on the
