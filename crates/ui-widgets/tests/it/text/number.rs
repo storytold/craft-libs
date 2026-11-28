@@ -836,3 +836,151 @@ fn changing_a_number_fields_edit_target_clears_the_old_draft_with_equal_values()
         assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(13.0)));
     }
 }
+
+/// The editor's Undo and Redo belong to the object being edited, even when the next object has the same value.
+#[trial]
+fn changing_a_number_fields_edit_target_discards_the_old_objects_undo_history() {
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+
+    let target = Rc::new(Cell::new(0));
+    let values = Rc::new([Cell::new(Some(START)), Cell::new(Some(START))]);
+    let (shown_target, shown_values) = (target.clone(), values.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let current = shown_target.get();
+        let model = &shown_values[current];
+        let mut value = model.get();
+        NumberField::new("Size", Bind::bound(&mut value)).id_salt("size").edit_target(current).show(ui);
+        model.set(value);
+    });
+    fixture.settle();
+    let field = fixture.by_label("Size").expect("the number field");
+    fixture.click(&field).key(Key::A, Modifiers::COMMAND).type_text("9+9").settle();
+    assert!(fixture.texts().iter().any(|text| text.text == "9+9"));
+    // Advance the fixture's manual clock so the editor seals this typing group in its history.
+    fixture.advance(2.0).settle();
+    fixture.type_text("+1").advance(2.0).settle();
+    assert!(fixture.texts().iter().any(|text| text.text == "9+9+1"));
+    target.set(1);
+    fixture.settle();
+    assert!(!fixture.texts().iter().any(|text| text.text == "9+9"));
+
+    for modifiers in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT, Modifiers::COMMAND] {
+        fixture.key(Key::Z, modifiers).settle();
+        assert!(!fixture.texts().iter().any(|text| text.text.starts_with("9+9")), "Undo and Redo cannot restore another object's draft");
+        fixture.key(Key::Enter, Modifiers::NONE).settle();
+        assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(START)), "neither object adopts the old draft");
+    }
+    fixture.click(&field).key(Key::A, Modifiers::COMMAND).type_text("5+8").key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(13.0)), "the new object still accepts a fresh edit");
+}
+
+/// Reappearing after a hidden pass forgets the old object's editor history and composition, even for equal values.
+#[trial]
+fn a_hidden_number_field_discards_the_old_objects_history_when_switching_targets() {
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+
+    for composing in [false, true] {
+        let visible = Rc::new(Cell::new(true));
+        let target = Rc::new(Cell::new(0));
+        let values = Rc::new([Cell::new(Some(START)), Cell::new(Some(START))]);
+        let id = Rc::new(Cell::new(egui::Id::NULL));
+        let (shown_visible, shown_target, shown_values, shown_id) = (visible.clone(), target.clone(), values.clone(), id.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            if !shown_visible.get() {
+                return;
+            }
+            let current = shown_target.get();
+            let model = &shown_values[current];
+            let mut value = model.get();
+            let out = NumberField::new("Size", Bind::bound(&mut value)).id_salt("size").edit_target(current).show(ui);
+            shown_id.set(out.response.id);
+            model.set(value);
+        });
+        fixture.settle();
+        let field = fixture.by_label("Size").expect("the number field");
+        fixture.click(&field).key(Key::A, Modifiers::COMMAND).type_text("9+9").settle();
+        // Seal separate typing groups using only the fixture's manual clock.
+        fixture.advance(2.0).settle();
+        fixture.type_text("+1").advance(2.0).settle();
+        assert!(fixture.texts().iter().any(|text| text.text == "9+9+1"));
+        if composing {
+            fixture.frame(vec![Event::Ime(egui::ImeEvent::Preedit { text: "99".into(), active_range_chars: None })]).settle();
+            assert!(fixture.texts().iter().any(|text| text.text.contains("99")), "A has a live composition");
+        }
+        assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(START)));
+
+        let stable = id.get();
+        visible.set(false);
+        fixture.idle(1);
+        assert!(fixture.by_label("Size").is_none(), "the field is hidden for a pass");
+        target.set(1);
+        visible.set(true);
+        fixture.settle();
+        let field = fixture.by_label("Size").expect("the reappearing number field");
+        assert_eq!(id.get(), stable, "the same widget edits B");
+        fixture.click(&field).settle();
+        assert!(fixture.focused_stop().is_some_and(|(stop, _)| stop == stable), "B can be refocused");
+        assert!(!fixture.texts().iter().any(|text| text.text.starts_with("9+9") || text.text.contains("99")));
+        if composing {
+            fixture.frame(vec![Event::Ime(egui::ImeEvent::Commit("99".into()))]).settle();
+        }
+        fixture.key(Key::Enter, Modifiers::NONE).settle();
+        assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(START)), "Enter cannot adopt A's draft or composition");
+
+        for modifiers in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT, Modifiers::COMMAND] {
+            fixture.key(Key::Z, modifiers).settle();
+            assert!(
+                !fixture.texts().iter().any(|text| text.text.starts_with("9+9") || text.text.contains("99")),
+                "Undo and Redo cannot restore A's draft"
+            );
+            fixture.key(Key::Enter, Modifiers::NONE).settle();
+            assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(START)), "neither object adopts A's draft");
+        }
+        fixture.key(Key::A, Modifiers::COMMAND).type_text("5+8").key(Key::Enter, Modifiers::NONE).settle();
+        assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(13.0)), "B still accepts fresh input");
+    }
+}
+
+/// A composition begun for one object cannot commit into another object through the same field.
+#[trial]
+fn changing_a_number_fields_edit_target_discards_the_old_objects_composition() {
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+
+    for (leave, queued) in [(false, true), (false, false), (true, false)] {
+        let target = Rc::new(Cell::new(0));
+        let values = Rc::new([Cell::new(Some(START)), Cell::new(Some(START))]);
+        let (shown_target, shown_values) = (target.clone(), values.clone());
+        let mut other = String::new();
+        let mut fixture = Fixture::new(move |ui| {
+            let current = shown_target.get();
+            let model = &shown_values[current];
+            let mut value = model.get();
+            NumberField::new("Size", Bind::bound(&mut value)).id_salt("size").edit_target(current).show(ui);
+            model.set(value);
+            craft_ui::text::TextField::new("Other", Bind::bound(&mut other)).show(ui);
+        });
+        fixture.settle();
+        let field = fixture.by_label("Size").expect("the number field");
+        fixture.click(&field).key(Key::A, Modifiers::COMMAND).settle();
+        fixture.frame(vec![Event::Ime(egui::ImeEvent::Preedit { text: "99".into(), active_range_chars: None })]).settle();
+        assert!(fixture.texts().iter().any(|text| text.text.contains("99")), "the old object has a live preedit");
+        target.set(1);
+        if queued {
+            fixture.frame(vec![Event::Ime(egui::ImeEvent::Preedit { text: "88".into(), active_range_chars: None })]).settle();
+            assert!(!fixture.texts().iter().any(|text| text.text.contains("88")), "preedit queued in the switch frame belongs to the old target");
+        }
+        if leave {
+            fixture.key(Key::Tab, Modifiers::NONE).settle();
+        } else {
+            fixture.settle();
+            fixture.frame(vec![Event::Ime(egui::ImeEvent::Commit("99".into()))]).settle();
+            fixture.key(Key::Enter, Modifiers::NONE).settle();
+        }
+        assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(START)), "the old composition cannot reach the new target (leave={leave})");
+        fixture.click(&field).key(Key::A, Modifiers::COMMAND).type_text("13").key(Key::Enter, Modifiers::NONE).settle();
+        assert_eq!(values[1].get(), Some(13.0), "the new target still accepts fresh input");
+    }
+}

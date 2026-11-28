@@ -68,6 +68,7 @@ pub struct TextOptions {
     /// A parsable draft applies as typed whatever the codec says.
     pub live: bool,
     /// The owner of the current draft, when the same field can edit different values.
+    /// A change retires the old draft, editor history and composition while preserving the field's focus.
     pub edit_target: Option<egui::IdSalt>,
     /// Escape clears the text and commits the empty text while text shows, and goes on to the host once it is empty.
     pub clear_on_escape: bool,
