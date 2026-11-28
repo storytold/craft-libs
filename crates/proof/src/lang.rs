@@ -40,6 +40,8 @@ pub enum ProofLang {
     It,
     /// Croatian (`hr`, `hr-HR`)
     Hr,
+    /// Khmer: optional Aksara language-build dictionary and preferred-spelling rules.
+    Km,
     /// Turkish (`tr`, `tr-TR`, `tr-CY`): the installed Hunspell dictionary (when there is one),
     /// Turkish grammar rules, spelling suggestions and Turkish syllable hyphenation rules.
     Tr,
@@ -99,7 +101,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 18] = [
+    pub const PROOFED: [ProofLang; 19] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnAu,
@@ -108,6 +110,7 @@ impl ProofLang {
         ProofLang::Pt,
         ProofLang::It,
         ProofLang::Hr,
+        ProofLang::Km,
         ProofLang::Tr,
         ProofLang::Ru,
         ProofLang::Cs,
@@ -145,6 +148,8 @@ impl ProofLang {
             ProofLang::It
         } else if primary.eq_ignore_ascii_case("hr") || primary.eq_ignore_ascii_case("hrv") {
             ProofLang::Hr
+        } else if primary.eq_ignore_ascii_case("km") || primary.eq_ignore_ascii_case("khm") {
+            ProofLang::Km
         } else if primary.eq_ignore_ascii_case("tr") || primary.eq_ignore_ascii_case("tur") {
             ProofLang::Tr
         } else if primary.eq_ignore_ascii_case("ru") || primary.eq_ignore_ascii_case("rus") {
@@ -236,6 +241,7 @@ impl ProofLang {
             ProofLang::Pt => "pt",
             ProofLang::It => "it",
             ProofLang::Hr => "hr",
+            ProofLang::Km => "km",
             ProofLang::Tr => "tr",
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
@@ -472,5 +478,14 @@ mod tests {
         for bad in ["", " ", "p", "1pl", "pl--PL", "pl PL", "pl-PL;", "polski język", "-pl", "pl-", "abcdefghi", &"a".repeat(40)] {
             assert_eq!(normalize_tag(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn khmer_tags_resolve_to_the_native_tools() {
+        for tag in ["km", "km-KH", "KM_kh", "khm"] {
+            assert_eq!(ProofLang::from_tag(Some(tag)), ProofLang::Km, "{tag}");
+        }
+        assert_eq!(ProofLang::Km.code(), "km");
+        assert!(ProofLang::Km.is_proofed());
     }
 }

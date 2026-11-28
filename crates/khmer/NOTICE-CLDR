@@ -1,0 +1,15 @@
+Modified CLDR-derived language data
+
+Copyright © 1991-2015 Unicode, Inc. The original SIL places.txt has the same
+996 nonempty name occurrences (including duplicates) as the corresponding
+CLDR 28 Khmer language/script/territory/city values, plus one blank line.
+This identifies matching published content, not an independently proven import
+commit. See PROVENANCE.md and the companion source audit for hashes/evidence.
+
+The data has been modified: SIL splits/cleans place/name strings; Aksara combines
+inputs, changes frequencies and adds/demotes entries; craft-khmer proposes
+lossless JSON-to-TSV conversion and Brotli compression. The combined frequency
+artifact is not unchanged CLDR data. The full historical Unicode notice follows
+in the public LICENSE attribution text and is also in LICENSE-UNICODE-CLDR.
+Embedding remains disabled pending maintainer classification/ADR
+approval. These notices do not approve the data's Embeddable classification.

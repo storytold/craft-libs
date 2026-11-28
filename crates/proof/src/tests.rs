@@ -127,7 +127,7 @@ fn a_pack_proofs_a_language_without_its_own_tools() {
         ],
     );
     packs::set_packs_dir(Some(root.clone()));
-    assert!(nl.is_proofed() && has_dictionary(Some("nl-BE")) && !has_dictionary(Some("fr-FR")));
+    assert!(nl.is_proofed() && has_dictionary(Some("nl-BE")) && !has_dictionary(Some("zxx")));
     assert_eq!(pack_dictionary_file(nl), Some(pack.join("spelling.dic")));
     assert_eq!(pack_dictionary_file(ProofLang::from_tag(Some("nl"))), Some(pack.join("spelling.dic")), "a region falls back to the pack");
     for w in ["huis", "Huis", "huizen", "huisen", "fietsen", "HUIS"] {
@@ -143,8 +143,18 @@ fn a_pack_proofs_a_language_without_its_own_tools() {
     assert!(suggest_in("fietz", 5, nl).contains(&"fiets".to_string()), "{:?}", suggest_in("fietz", 5, nl));
     assert!(check_grammar_in("de de huis", nl).is_empty(), "no grammar rules");
     assert_eq!(hyphen::hyphenate_word_in("xxnaxx", &hyphen::Limits::default(), nl), "xx-naxx");
-    assert!(unchecked(ProofLang::from_tag(Some("fr-FR"))), "a language with no pack stays unchecked");
+    assert!(unchecked(ProofLang::from_tag(Some("zxx"))), "explicitly unchecked content stays unchecked");
     assert_eq!(check_text(text, &[]), english_before, "English is unaffected");
+    // French can be installed on the host too; it must not be an absence fixture.
+    // A synthetic pack gives this assertion the same answer on every platform.
+    let fr = ProofLang::from_tag(Some("fr-FR"));
+    let french = write_pack(&root, "fr", &[("spelling.aff", b"SET UTF-8\n"), ("spelling.dic", "2\nbonjour\nélève\n".as_bytes())]);
+    packs::reload();
+    assert!(has_dictionary(Some("fr-FR")));
+    // An installed fr_FR dictionary may take precedence over the synthetic pack.
+    assert!(pack_dictionary_file(fr).is_some() && french.join("spelling.dic").is_file());
+    assert!(is_correct_for("bonjour", Some("fr-FR")));
+    assert!(!is_correct_for("zxqnotfrench", Some("fr-FR")), "a supported language must not be silently bypassed");
     // A broken dictionary is reported, never a panic.
     std::fs::write(pack.join("spelling.aff"), "SET SHIFT_JIS\n").unwrap();
     packs::reload();
@@ -672,4 +682,89 @@ proptest::proptest! {
             proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
         }
     }
+}
+
+#[test]
+fn missing_dictionary_is_named_only_for_hunspell_languages_without_one() {
+    assert_eq!(dictionary_needed(ProofLang::Pl, false), Some("pl_PL"));
+    assert_eq!(dictionary_needed(ProofLang::Pt, false), Some("pt_BR"));
+    assert_eq!(dictionary_needed(ProofLang::Pl, true), None);
+    assert_eq!(dictionary_needed(ProofLang::Pt, true), None);
+    // Every Hunspell language is named by the first name its module looks for (#3150).
+    for (l, name) in [
+        (ProofLang::It, "it_IT"),
+        (ProofLang::Hr, "hr_HR"),
+        (ProofLang::Tr, "tr_TR"),
+        (ProofLang::Ru, "ru_RU"),
+        (ProofLang::Cs, "cs_CZ"),
+        (ProofLang::Id, "id_ID"),
+        // #3360: each Spanish variety names its own.
+        (ProofLang::Es, "es_ES"),
+        (ProofLang::EsMx, "es_MX"),
+        (ProofLang::Es419, "es_419"),
+        (ProofLang::EsUy, "es_UY"),
+    ] {
+        assert_eq!(dictionary_needed(l, false), Some(name), "{l:?}");
+        assert_eq!(dictionary_needed(l, true), None, "{l:?}");
+    }
+    // English and Khmer use bundled dictionaries; the others use Hunspell.
+    for l in ProofLang::PROOFED {
+        let bundled = l.is_english() || l == ProofLang::Km;
+        assert_eq!(dictionary_needed(l, false).is_some(), !bundled, "{l:?}");
+    }
+    for l in [ProofLang::En, ProofLang::Other] {
+        assert_eq!(dictionary_needed(l, false), None);
+    }
+    // German and Bulgarian spell from a pack or Hunspell dictionary, and name it as the others do.
+    assert_eq!((dictionary_needed(ProofLang::De, false), dictionary_needed(ProofLang::Bg, false)), (Some("de_DE"), Some("bg_BG")));
+    // Installed dictionaries and the built-in English list: no hint.
+    pl::test_dict::install();
+    pt::test_dict::install();
+    es::test_dict::install();
+    for tag in [Some("pl-PL"), Some("pt-BR"), Some("es-ES"), Some("es-MX"), Some("es-419"), Some("es-UY"), Some("en-US"), None] {
+        assert_eq!(missing_dictionary(tag), None, "{tag:?}");
+    }
+    // A pack language names its dictionary too, unless one is installed.
+    assert!(missing_dictionary(Some("fr-FR")).is_none_or(|n| n == "fr_FR"));
+}
+
+#[test]
+fn the_language_table_covers_the_proofed_languages() {
+    for l in ProofLang::PROOFED {
+        assert_eq!(language(l).is_some(), !l.is_english() && l != ProofLang::Km, "{l:?}");
+    }
+    for (i, row) in languages::LANGUAGES.iter().enumerate() {
+        assert!(row.lang.is_proofed(), "{:?}", row.lang);
+        assert!(languages::LANGUAGES.iter().skip(i + 1).all(|other| other.lang != row.lang), "{:?} twice", row.lang);
+    }
+}
+
+#[test]
+fn dictionary_lang_tags() {
+    for l in [None, Some(""), Some("  "), Some("en"), Some("en-US"), Some("en-GB"), Some("EN-us"), Some("en_US")] {
+        assert!(has_dictionary(l), "{l:?}");
+    }
+    // Real languages may have an embedded, downloaded or system dictionary.
+    // Non-linguistic content and invalid/unknown tags are stable absence fixtures.
+    for l in [Some("zxx"), Some("x-none"), Some("-US"), Some("e")] {
+        assert!(!has_dictionary(l), "{l:?}");
+    }
+    // The gate follows the dictionaries, not English: every proofed language is proofed.
+    for d in ProofLang::PROOFED.map(ProofLang::code) {
+        let available = d != "km" || craft_khmer::data_available();
+        assert_eq!(has_dictionary(Some(d)), available, "{d}");
+        assert_eq!(has_dictionary(Some(&format!("{}-XX", d.to_ascii_uppercase()))), available, "{d}");
+    }
+}
+
+#[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+#[test]
+fn non_english_words_are_not_flagged() {
+    for w in ["ąžuolas", "élève", "über", "labas", "bonjour"] {
+        assert!(is_correct_for(w, Some("zxx")), "{w}");
+        assert!(is_correct_for(w, Some("x-none")), "{w}");
+    }
+    assert!(!is_correct_for("helo", Some("en-US")), "English typos still flagged");
+    assert!(!is_correct_for("helo", None), "default language still proofed");
+    assert!(is_correct_for("hello", Some("en-US")));
 }

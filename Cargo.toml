@@ -208,6 +208,7 @@ craft-image-codecs = { path = "crates/image-codecs" }
 craft-dds = { path = "crates/dds" }
 craft-psd = { path = "crates/psd" }
 craft-pst = { path = "crates/pst" }
+craft-khmer = { path = "crates/khmer" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }

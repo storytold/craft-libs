@@ -168,6 +168,9 @@ pub fn licence_texts() -> Vec<(String, String)> {
     }
     out.push(("English word supplement (en-extra.txt)".into(), EXTRA_EN_NOTICE.into()));
     out.extend(crate::data::EMBEDDED_LICENCES.iter().map(|(t, x)| ((*t).to_string(), (*x).to_string())));
+    if craft_khmer::data_available() {
+        out.push(("Khmer segmentation and proofing (SBBIC Khmer / Aksara)".into(), craft_khmer::LICENSE.into()));
+    }
     // Each file is checked against what is left before it is read, so no more is ever read.
     let mut left: u64 = MAX_LICENCE_TOTAL;
     for (p, _) in &scan().packs {
@@ -202,7 +205,17 @@ WordCraft contributors and licensed MIT OR Apache-2.0.";
 /// listed); a build with `CRAFT_PROOF_EMBED`
 /// embeds English and the ones it names (`en`: English only).
 pub fn embedded_locales() -> &'static [&'static str] {
-    crate::data::EMBEDDED_LOCALES
+    if !craft_khmer::data_available() {
+        return crate::data::EMBEDDED_LOCALES;
+    }
+    static WITH_KHMER: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    WITH_KHMER.get_or_init(|| {
+        let mut locales = crate::data::EMBEDDED_LOCALES.to_vec();
+        if !locales.contains(&"km") {
+            locales.push("km");
+        }
+        locales
+    })
 }
 
 /// The scan of the packs folder, made on first use after each change.
@@ -547,7 +560,7 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
         ProofLang::EsUy => &["es-uy", "es-419", "es"],
         ProofLang::De => &["de", "de-1996", "de-de"],
         ProofLang::Pack(l) => return crate::pack_lang::hyphenation_locales(l),
-        ProofLang::En | ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa | ProofLang::Other => &[],
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa | ProofLang::Km | ProofLang::Other => &[],
     };
     names.iter().map(|n| (*n).to_string()).collect()
 }
@@ -647,5 +660,22 @@ mod tests {
         }
         let deep = format!("locale = \"nl\"\nlicence = \"MIT\"\nx = {}{}\n", "[".repeat(40), "]".repeat(40));
         assert!(parse_pack_toml(&deep).is_err());
+    }
+
+    #[test]
+    fn the_default_build_embeds_the_carry_over_locales() {
+        let embed = option_env!("CRAFT_PROOF_EMBED").unwrap_or_default().trim().to_ascii_lowercase();
+        let named: Vec<&str> = if embed.is_empty() { vec!["de", "pl", "pt", "it", "ru"] } else { embed.split(',').map(str::trim).collect() };
+        for l in embedded_locales() {
+            assert!(
+                l.starts_with("en-") || *l == "ru" || (*l == "km" && craft_khmer::data_available()) || named.iter().any(|e| e == l || *e == "all"),
+                "{l} is embedded"
+            );
+        }
+        if cfg!(craft_proof_data) && embed.is_empty() {
+            for l in ["de", "pl", "pt", "it"] {
+                assert!(embedded_locales().contains(&l), "{l} is embedded by default");
+            }
+        }
     }
 }
