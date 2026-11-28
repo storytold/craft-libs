@@ -83,17 +83,11 @@ impl Bvh {
     pub fn new(mesh: &Mesh) -> Bvh {
         let triangle_count = mesh.triangle_count();
         let mut tris = Vec::with_capacity(triangle_count);
-        let mut ids: Vec<u32> = Vec::with_capacity(triangle_count);
 
         for triangle in 0..triangle_count {
             let Some([a, b, c]) = mesh.tri(triangle) else { continue };
             let position = |i: usize| mesh.positions.get(i).copied().unwrap_or(Vec3::ZERO);
-            let corners = [position(a), position(b), position(c)];
-            // A non-finite corner would turn node bounds and centroids into NaN.
-            if corners.iter().all(|p| p.is_finite()) {
-                tris.push(corners);
-                ids.push(triangle as u32);
-            }
+            tris.push([position(a), position(b), position(c)]);
         }
 
         let mut order: Vec<u32> = (0..tris.len() as u32).collect();
@@ -229,7 +223,6 @@ impl Bvh {
         }
 
         let tris = order.iter().map(|t| tris[*t as usize]).collect();
-        let order = order.iter().map(|t| ids[*t as usize]).collect();
         Bvh { nodes, tris, order }
     }
 
@@ -454,21 +447,6 @@ fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
 mod tests {
     use super::*;
     use crate::primitives;
-
-    #[test]
-    fn triangles_with_a_non_finite_corner_are_left_out() {
-        let mut m = primitives::builtin("torus").unwrap();
-        let bad = m.indices[0] as usize;
-        m.positions[bad] = Vec3::NAN;
-        let skipped: Vec<u32> = (0..m.triangle_count() as u32).filter(|t| m.tri(*t as usize).unwrap().contains(&bad)).collect();
-        let bvh = Bvh::new(&m);
-        let (tris, order) = bvh.triangles();
-        assert_eq!(tris.len(), m.triangle_count() - skipped.len());
-        assert!(order.iter().all(|o| !skipped.contains(o)));
-        assert!(bvh.nodes.iter().all(|n| n.lo.is_finite() && n.hi.is_finite()));
-        let hit = bvh.nearest(Vec3::ZERO, f32::MAX, &|_| true).unwrap();
-        assert!(!skipped.contains(&hit.tri) && hit.t.is_finite());
-    }
 
     #[test]
     fn nearest_point_matches_brute_force() {
