@@ -34,6 +34,7 @@ mod explain;
 pub mod format;
 mod id;
 mod identify;
+pub mod palettes;
 mod parts;
 pub mod ramp;
 pub mod report;
@@ -58,6 +59,8 @@ mod edit_tests;
 mod explain_tests;
 #[cfg(test)]
 mod format_tests;
+#[cfg(test)]
+mod palettes_tests;
 #[cfg(test)]
 mod semantic_tests;
 #[cfg(test)]
