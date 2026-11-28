@@ -94,6 +94,8 @@ craft-media = { workspace = true, optional = true }
 craft-jpeg = { workspace = true, optional = true }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
+# Safe SIMD for the H.264 inverse transform and motion-compensation kernels.
+wide = "0.7"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rav1e = { version = "0.8", default-features = false, optional = true }
