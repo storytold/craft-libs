@@ -515,3 +515,33 @@ fn group_titles_sit_at_the_foot_in_the_first_frame() {
         assert!((settled.bottom() - foot).abs() < 0.5, "once settled the group {title} {settled:?} ends on the row's foot ({foot})");
     }
 }
+
+// A minimised ribbon in a slot sized from its content (a top panel that offers last frame's height) takes the height
+// of its strip and the buttons at its end however short the room it is offered, so a slot that once started short (a
+// new window) grows to them instead of clipping them.
+#[trial]
+fn a_minimised_ribbon_takes_its_strips_height_in_a_short_room() {
+    use craft_ui::primitives::IconSpec;
+    use craft_ui::tabs::StripEnd;
+    let took = Rc::new(Cell::new((0.0_f32, 0.0_f32)));
+    let seen = took.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "One"), RibbonTab::new(1, "Two")];
+        let ends = [StripEnd::command("Share", IconSpec::svg(IconId::new("share")), CommandRef::new("share"))];
+        let short = egui::Rect::from_min_size(ui.max_rect().min, vec2(ui.max_rect().width(), 4.0));
+        let mut slot = ui.new_child(egui::UiBuilder::new().max_rect(short));
+        let out = Ribbon::new("Ribbon", &tabs, Bind::given(0)).trailing(&ends).minimised(Bind::given(true)).show(&mut slot, |row, _| {
+            group(row, "a", "Alpha", &["First"]);
+        });
+        let share = out.controls.and_then(|controls| {
+            let ctx = slot.ctx().clone();
+            let layer = slot.layer_id();
+            (0..controls.elements.len()).filter_map(|i| controls.rect_in(&ctx, i, layer)).map(|rect| rect.height()).reduce(f32::max)
+        });
+        seen.set((slot.min_rect().height(), share.unwrap_or(0.0)));
+    });
+    fixture.room(vec2(600.0, 300.0)).settle();
+    let (slot, tallest) = took.get();
+    assert!(tallest > 4.0, "the strip shows its tabs and buttons: {tallest}");
+    assert!(slot + 0.5 >= tallest, "the slot ({slot}) takes the strip's tallest control ({tallest})");
+}
