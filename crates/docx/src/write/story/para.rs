@@ -97,15 +97,25 @@ impl Writer<'_> {
             }
             w.close("w:pPr");
         }
-        // A note's first paragraph starts with its reference mark. When the paragraph holds the
-        // note's reference to itself (notes read from a file, or made by references.footnote),
-        // the mark is written there instead, with that reference's formatting.
+        // A note or comment's first paragraph starts with its reference mark. When a note
+        // paragraph holds the note's reference to itself (notes read from a file, or made by
+        // references.footnote), the mark is written there instead, with that reference's
+        // formatting.
         if !self.holds_own_ref(p)
             && let Some(mark) = self.pending_mark.take()
         {
-            w.raw("<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr>");
-            w.empty(mark, &[]);
-            w.raw("</w:r>");
+            if mark == "w:annotationRef" {
+                w.open("w:r", &[]);
+                w.open("w:rPr", &[]);
+                w.val("w:rStyle", super::section::comment_reference_style(self.doc));
+                w.close("w:rPr");
+                w.empty(mark, &[]);
+                w.close("w:r");
+            } else {
+                w.raw("<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr>");
+                w.empty(mark, &[]);
+                w.raw("</w:r>");
+            }
         }
         // A header's watermark, in its first top-level paragraph (not a table cell or text box).
         if depth == 0

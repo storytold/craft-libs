@@ -140,7 +140,8 @@ pub(crate) struct Writer<'d> {
     pending_watermark: Option<String>,
     /// Paragraphs that need a `w14:paraId` (last paragraph of each comment), by address.
     para_ids: HashMap<usize, String>,
-    /// A note reference mark to put at the start of the next paragraph.
+    /// A note or comment reference mark (`w:footnoteRef`, `w:endnoteRef`, or `w:annotationRef`)
+    /// to put at the start of the next paragraph.
     pending_mark: Option<&'static str>,
     /// The note being written (is footnote, part id): its reference to itself is the mark above.
     current_note: Option<(bool, u32)>,
@@ -288,6 +289,13 @@ impl Writer<'_> {
         self.current_note = Some((foot, part));
         self.blocks(w, blocks, rels, false, 0);
         self.current_note = None;
+        self.pending_mark = None;
+    }
+
+    /// Comment stories: the first paragraph starts with the comment's annotation reference mark.
+    fn comment_blocks(&mut self, w: &mut W, blocks: &Blocks, rels: &mut PartRels) {
+        self.pending_mark = Some("w:annotationRef");
+        self.blocks(w, blocks, rels, false, 0);
         self.pending_mark = None;
     }
 }
