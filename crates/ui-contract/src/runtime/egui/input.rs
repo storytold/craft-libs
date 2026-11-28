@@ -8,7 +8,7 @@ use craft_behavior::one_press::split_after_first_press;
 use craft_behavior::{Buttons, PointerButton, PointerEvent, PointerKind, PointerSample, WheelPhase, WheelSource, WheelUnit};
 use craft_host::target::Os;
 use craft_keymap::{KeyInput, Mods};
-use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
+use egui::{Context, Event, Id, ImeEvent, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
 use std::sync::Arc;
 
 pub use egui::RawInput;
@@ -860,15 +860,22 @@ pub(crate) fn plain_horizontal_arrow_pressed(ctx: &Context) -> bool {
     ctx.input(|input| input.modifiers.is_none() && (input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::ArrowRight)))
 }
 
-/// A Page Up or Page Down press whose own event carries no modifier. The frame's modifiers can already read as none
-/// when the modifier's release follows the Page in the same pass, so a modified Page is told by its event.
-pub(crate) fn plain_page_pressed(ctx: &Context) -> Option<Key> {
-    ctx.input(|input| {
-        input.events.iter().find_map(|event| match event {
-            Event::Key { key, pressed: true, modifiers, .. } if modifiers.is_none() && matches!(*key, Key::PageUp | Key::PageDown) => Some(*key),
-            _ => None,
-        })
-    })
+/// Rewrites this pass's plain Page Up and Page Down presses as Ctrl+Home and Ctrl+End. egui's text widget moves the
+/// caret to the text's start or end for those chords, so a Page keeps its place among the pass's other caret keys and
+/// the last Page in a pass wins. A Page whose own event carries a modifier is left for the app or framework: the
+/// frame's modifiers can already read as none when the modifier's release follows the Page in the same pass.
+pub(crate) fn translate_plain_pages_to_text_bounds(ctx: &Context) {
+    ctx.input_mut(|input| {
+        for event in &mut input.events {
+            if let Event::Key { key, pressed: true, modifiers, .. } = event
+                && modifiers.is_none()
+                && matches!(*key, Key::PageUp | Key::PageDown)
+            {
+                *key = if *key == Key::PageUp { Key::Home } else { Key::End };
+                *modifiers = Modifiers { ctrl: true, ..Modifiers::NONE };
+            }
+        }
+    });
 }
 
 /// An Up, Down, Page Up or Page Down press reached egui this pass.

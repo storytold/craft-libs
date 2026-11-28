@@ -461,17 +461,32 @@ fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
 /// editor does. `takes` holds only for a plain Page on a focused multiline field with no list, completion, step
 /// value or live composition; every other part keeps its own Page behavior. The Page's own event must carry no
 /// modifier too: a released modifier can already read as none by the time the pass runs, with the Page still queued.
-fn page_keys(ctx: &Context, widget: Id, base: &str, takes: bool) {
-    if !takes {
-        return;
+/// A plain Page is rewritten as Ctrl+Home / Ctrl+End before the widget runs, so it keeps its place among the pass's
+/// other caret keys and the last Page in a pass wins.
+fn page_keys(ctx: &Context, takes: bool) {
+    if takes {
+        egui_input::translate_plain_pages_to_text_bounds(ctx);
     }
-    match egui_input::plain_page_pressed(ctx) {
-        Some(egui::Key::PageUp) => select(ctx, widget, 0, 0),
-        Some(egui::Key::PageDown) => {
-            let end = base.chars().count();
-            select(ctx, widget, end, end);
-        }
-        _ => {}
+}
+
+/// Whether a plain Page on this part moves its caret: a focused multiline field with no list, completion, step
+/// value, live composition, or frame modifier. Every other part keeps its own Page behavior.
+fn pages_move_caret(input: &AdapterIn<'_>, state: &TextState, multiline: bool) -> bool {
+    input.focused
+        && multiline
+        && state.preedit.is_none()
+        && !input.list_open
+        && !state.completions.open
+        && !input.options.steps_value
+        && input.ctx.input(|i| i.modifiers.is_none())
+}
+
+/// A secondary press inside the selection keeps it for the edit menu it opens: egui's widget moves the caret to
+/// any press, so the selection from before the press is put back once the widget has run.
+fn restore_kept_selection(ctx: &Context, widget: Id, kept: Option<(usize, usize)>) {
+    let Some((caret, anchor)) = kept else { return };
+    if selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at)) {
+        select(ctx, widget, anchor, caret);
     }
 }
 
@@ -627,29 +642,17 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         line_break: line_break(input.options.submit_key),
         colors: input.options.color_ranges.as_deref(),
     };
-    // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
-    // egui's widget moves the caret to any press, so the selection from before the press is put back.
+    // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do.
     let secondary = crate::runtime::pointer::frame_raw(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
     // Page Up/Down move a multiline field's caret to the start/end, as the framework's own text editor does.
-    // egui's TextEdit has no Page handler, so the adapter sets the selection before showing it; the widget's
-    // caret and scroll then follow. A list, a step field, a live composition, or a modified Page (which belongs
-    // to the app/framework) keeps its behavior.
-    let paged = input.focused
-        && multiline
-        && state.preedit.is_none()
-        && !input.list_open
-        && !state.completions.open
-        && !input.options.steps_value
-        && ctx.input(|i| i.modifiers.is_none());
-    page_keys(ctx, widget, &base, paged);
+    // egui's TextEdit has no Page handler, so a plain Page is rewritten as Ctrl+Home / Ctrl+End before the widget
+    // runs; the widget's own caret handling then applies it in event order with the pass's other keys. A list, a
+    // step field, a live composition, or a modified Page (which belongs to the app/framework) keeps its behavior.
+    page_keys(ctx, pages_move_caret(&input, state, multiline));
     let shown = text_edit::show(input.ui, &env, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
-    if let Some((caret, anchor)) = kept
-        && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
-    {
-        select(ctx, widget, anchor, caret);
-    }
+    restore_kept_selection(ctx, widget, kept);
     // A single line keeps its caret in view through egui's own line offset; a multi-line part scrolls its text itself.
     // The caret is revealed only when it moved (against last pass's, `state.caret`), so a wheel that scrolled it out of
     // view stays where it put the text.

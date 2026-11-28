@@ -297,6 +297,25 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     assert!(first.top() >= field.top() - SNAP, "PageUp scrolls the first line into view: {first:?} in {field:?}");
     assert_eq!(*text.borrow(), before, "the Page keys change no text");
 
+    // A Page keeps its place among the pass's other caret keys: a caret move before it is erased by the
+    // Page, and the last Page in one pass wins.
+    fixture.frame(vec![input::key_press(Key::ArrowLeft, Modifiers::NONE), input::key_press(Key::PageDown, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len(), "PageDown after ArrowLeft ends at the text end, not one character before");
+
+    fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::NONE), input::key_press(Key::PageUp, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "the last Page in one pass wins");
+
+    fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::NONE), input::key_press(Key::ArrowLeft, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len() - 1, "an arrow after a Page continues from the Page's end");
+
+    fixture.frame(vec![input::key_press(Key::ArrowRight, Modifiers::NONE), input::key_press(Key::PageUp, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "PageUp after ArrowRight ends at the text start, not one character in");
+    assert_eq!(*text.borrow(), before, "the Page keys and arrows change no text");
+
     // A modified Page belongs to the app or the framework, not to the field.
     fixture.key(Key::PageDown, Modifiers::COMMAND);
     fixture.idle(2);
