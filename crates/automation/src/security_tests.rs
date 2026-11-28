@@ -170,6 +170,37 @@ fn server_token_sources_and_validation() {
     );
 }
 
+// An unauthenticated connection's reads succeed while its deadline is ahead, however much it sends, and fail once the
+// deadline has passed even with input waiting; after `authenticated` the deadline no longer applies.
+#[trial]
+fn the_authentication_deadline_holds_whatever_the_client_sends() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    server.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let start = Instant::now();
+    let at = std::sync::Arc::new(std::sync::Mutex::new(start));
+    let read_at = std::sync::Arc::clone(&at);
+    let clock: DeadlineClock = std::sync::Arc::new(move || *read_at.lock().unwrap());
+    let mut stream = AuthDeadlineStream::with_clock(server.try_clone().unwrap(), Duration::from_secs(10), clock);
+    let mut byte = [0];
+    // Blank lines and partial frames, each read while the deadline is ahead.
+    for (step, sent) in [b"\n", b" ", b"{", b"\n"].into_iter().enumerate() {
+        *at.lock().unwrap() = start + Duration::from_secs(3 * step as u64);
+        client.write_all(sent).unwrap();
+        assert_eq!(stream.read(&mut byte).unwrap(), 1, "read {step} is before the deadline");
+    }
+    *at.lock().unwrap() = start + Duration::from_secs(10);
+    client.write_all(b"\n").unwrap();
+    let late = stream.read(&mut byte).unwrap_err();
+    assert_eq!(late.kind(), std::io::ErrorKind::TimedOut, "the input sent did not move the deadline: {late}");
+
+    stream.authenticated().unwrap();
+    *at.lock().unwrap() = start + Duration::from_secs(60);
+    assert_eq!(stream.read(&mut byte).unwrap(), 1, "an authenticated connection reads past the deadline");
+}
+
 // A token file create that runs out of time fails with its own error, even when it left a file at
 // the path: that file is not read as another process's. A create that another process beat to the
 // path reads that process's token.

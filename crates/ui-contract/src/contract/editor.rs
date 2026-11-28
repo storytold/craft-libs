@@ -3,7 +3,7 @@
 //! undo state back to the IME engine and AccessKit.
 
 use super::Component;
-use super::cx::{Cx, Edit as _, PartsCx};
+use super::cx::{Cx, CxCore, Edit as _, PartsCx};
 use crate::primitives::{EditorPurpose, EditorState, ImeStamp, ImeSurface};
 use crate::runtime::access::text::{self as text_access, Line, Run, TextFacts};
 
@@ -65,18 +65,26 @@ pub(crate) fn keys_of(base: KeyUse, purpose: EditorPurpose) -> KeyUse {
 /// then keys, text and edit commands). A read-only editor receives only inputs that change no text; undo and redo
 /// the editor cannot do go to the app command.
 pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut super::text::TextStep, keys: KeyUse) {
-    let Some(decl) = step.editor.take() else { return };
+    if step.editor.is_none() {
+        return;
+    }
     // A press that leaves the editor ends its gesture, as a focus loss ends a text field's draft.
     if step.commit_now {
         cx.commit();
     }
-    let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
+    run_core(cx.core, ui, step, keys);
+}
+
+/// The editor step past the commit: the same for every component type, so it is compiled once.
+fn run_core(core: &mut CxCore<'_>, ui: &mut Ui, step: &mut super::text::TextStep, keys: KeyUse) {
+    let Some(decl) = step.editor.take() else { return };
+    let (ctx, id) = (core.ctx.clone(), core.id);
     let widget = ImeSurface::of(id, decl.key).widget();
-    let focusable = super::steps::takes_focus(cx.core.resolved);
+    let focusable = super::steps::takes_focus(core.resolved);
     let focused = egui_editor::show(ui, widget, decl.rect, egui_focus::event_filter(keys.keep, false), focusable);
     // The focus widget is the component's, enabled or not: it is never one of the app's own widgets (`take_app_widgets`).
     crate::runtime::pointer::record_text_widget(&ctx, widget, id);
-    let read_only = cx.core.resolved.read_only || !cx.core.resolved.enabled;
+    let read_only = core.resolved.read_only || !core.resolved.enabled;
     let mut inputs: Vec<(Order, EditorInput)> = Vec::new();
     if focused {
         // Each input goes where its event arrived among the frame's events: an IME edit before the press or text that
@@ -84,12 +92,12 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
         // came before any key, and an intent of no one event (an Escape, a queued edit command) last, as routed.
         let mut placed: Vec<(Order, EditorInput)> = Vec::new();
         placed.extend(ime::take_placed(&ctx, widget, read_only).into_iter().map(|(input, place)| ((place, 0), input)));
-        while let Some(request) = cx.core.intents.take_access_where(text_access::is_text_request) {
+        while let Some(request) = core.intents.take_access_where(text_access::is_text_request) {
             if let Some((anchor, focus)) = text_access::requested_selection(&ctx, id, &request) {
                 placed.push(((0, 1), EditorInput::select(anchor, focus)));
             }
         }
-        while let Some((input, place)) = cx.core.intents.take_editor_input(keys.keep) {
+        while let Some((input, place)) = core.intents.take_editor_input(keys.keep) {
             placed.push(((place.unwrap_or(usize::MAX), 2), input));
         }
         // A stable sort: inputs of one place keep the order they were taken in.
@@ -109,8 +117,8 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
             can
         });
     }
-    cx.core.editor = Some(EditorInfo { widget, rect: decl.rect, purpose: decl.purpose, focused, read_only, commit_now: step.commit_now });
-    cx.core.editor_inputs = inputs;
+    core.editor = Some(EditorInfo { widget, rect: decl.rect, purpose: decl.purpose, focused, read_only, commit_now: step.commit_now });
+    core.editor_inputs = inputs;
 }
 
 /// The editor part's widget, rect, purpose, focus and read-only state of this pass, which a body that runs inside a
