@@ -13,7 +13,7 @@ use crate::runtime::env::{EnvView, ShellEntry};
 use crate::runtime::memory::sub;
 use crate::runtime::windows::{self, ResizeEdge, WindowAction, WindowHit};
 use crate::runtime::{keys, pointer};
-use crate::style::{ComponentStyle as _, UiTokens};
+use crate::style::UiTokens;
 use craft_behavior::{CursorIcon, GesturePhase, HitLevel, HitPriority, PartKey, PointerEvent, PressPhase};
 use craft_host::target::{Caps, WindowChrome, WindowState};
 use craft_keymap::{Chord, Key, Mods};
@@ -215,7 +215,7 @@ fn resized_edge(before: Rect, after: Rect) -> Option<ResizeEdge> {
 /// `rect` moved, at its size, the least distance that puts it inside `bounds`: the one keep rule for a layer's
 /// bounds, whether the user moves the layer or the host places it. On an axis where it is longer than the bounds, its
 /// low edge sits on theirs.
-pub(crate) fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
+pub fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
     let keep = |low: f32, high: f32, bounds_low: f32, bounds_high: f32| low.min(bounds_high - (high - low)).max(bounds_low) - low;
     rect.translate(Vec2::new(keep(rect.min.x, rect.max.x, bounds.min.x, bounds.max.x), keep(rect.min.y, rect.max.y, bounds.min.y, bounds.max.y)))
 }
@@ -402,15 +402,15 @@ impl BodyHooks<'_> {
     /// resize by a step (Shift: four steps), Enter, the command again or a primary press keeps the placement, Escape
     /// restores it, and focus leaving the container ends the mode. The mode holds its chords through the key stage, so no
     /// component under focus sees them. Each step is reported as a `PlacementKind::Keyboard` change.
-    pub(super) fn window_keys<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
-        let (id, ctx) = (cx.core.id, cx.core.ctx.clone());
+    pub(super) fn window_keys(&mut self, props: &ContainerProps, core: &mut CxCore<'_>, style_min: Vec2) {
+        let (id, ctx) = (core.id, core.ctx.clone());
         let (Some(window), Some(overlay)) = (window_instance(props, id), overlay_of(props)) else { return };
         let overlay = overlay.in_screen(crate::runtime::overlay::parent_space(&ctx, id));
         let overlay = &*overlay;
-        let limits = Limits::new(overlay, window_min(props, cx.style.metrics().min_size));
-        let rect = cx.core.rect;
-        let rtl = cx.core.env.direction().is_rtl();
-        let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
+        let limits = Limits::new(overlay, window_min(props, style_min));
+        let rect = core.rect;
+        let rtl = core.env.direction().is_rtl();
+        let mut slot = PlacementSlot::new(&mut *core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
         let step = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Keyboard, continued: false };
         let started = commands::take_for_instance(&ctx, Some(window), false, WindowCommand::from_ref).map(|(command, _)| command);
@@ -480,21 +480,21 @@ impl BodyHooks<'_> {
     /// A drag of the move band or a grip of a layer (not an OS window): the layer follows the pointer within the
     /// limits, and each step is reported. The drag runs from the rect the layer had when the press went down. Escape,
     /// which cancels the press, restores the placement from before.
-    pub(super) fn window_drag<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+    pub(super) fn window_drag(&mut self, props: &ContainerProps, core: &mut CxCore<'_>, style_min: Vec2) {
         let Some(overlay) = overlay_of(props) else { return };
         // A band that moves the window below starts the OS move of the window the layer is shown in.
         if overlay.moves_window {
-            let viewport = pass::current_viewport(&cx.core.ctx);
-            self.window_os(viewport, props, cx);
+            let viewport = pass::current_viewport(&core.ctx);
+            self.window_os(viewport, props, core, style_min);
             return;
         }
-        let id = cx.core.id;
-        let overlay = overlay.in_screen(crate::runtime::overlay::parent_space(&cx.core.ctx, id));
+        let id = core.id;
+        let overlay = overlay.in_screen(crate::runtime::overlay::parent_space(&core.ctx, id));
         let overlay = &*overlay;
-        let limits = Limits::new(overlay, window_min(props, cx.style.metrics().min_size));
-        let rect = cx.core.rect;
+        let limits = Limits::new(overlay, window_min(props, style_min));
+        let rect = core.rect;
         // A part the container did not declare this pass (no band, no grips) has no result.
-        let phase = |key: (PartKey, Option<u64>)| cx.core.results.get(&key).map(|result| result.press.phase);
+        let phase = |key: (PartKey, Option<u64>)| core.results.get(&key).map(|result| result.press.phase);
         let mut pressed = vec![(None, phase((MOVE_BAND, None)))];
         pressed.extend((0..GRIPS.len()).map(|index| (Some(index), phase((GRIP, Some(index as u64))))));
         let Some((grip, phase)) = pressed.into_iter().find_map(|(grip, phase)| match phase? {
@@ -507,7 +507,7 @@ impl BodyHooks<'_> {
         }) else {
             return;
         };
-        let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
+        let mut slot = PlacementSlot::new(&mut *core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
         let (start, pos, gesture) = match phase {
             PressPhase::Down { .. } => {
@@ -563,30 +563,30 @@ impl BodyHooks<'_> {
     /// caller sizes that resize ([`Self::window_resize`]). Where the platform answers the hit test
     /// (`answered_by_platform`), the parts it takes stand for its sink only; the grips of a window its caller sizes
     /// are never its.
-    pub(super) fn window_os<C: Container>(&mut self, viewport: ViewportId, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+    pub(super) fn window_os(&mut self, viewport: ViewportId, props: &ContainerProps, core: &mut CxCore<'_>, style_min: Vec2) {
         let by_caller = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
         if by_caller {
-            let limits = overlay_of(props).map(|overlay| Limits::new(overlay, window_min(props, cx.style.metrics().min_size)));
+            let limits = overlay_of(props).map(|overlay| Limits::new(overlay, window_min(props, style_min)));
             if let Some(limits) = limits {
-                self.window_resize(viewport, &limits, cx.core);
+                self.window_resize(viewport, &limits, core);
             }
         }
-        if answered_by_platform(&cx.core.ctx, viewport) {
+        if answered_by_platform(&core.ctx, viewport) {
             return;
         }
-        let app_moves = windows::app_moves(&cx.core.ctx, viewport);
+        let app_moves = windows::app_moves(&core.ctx, viewport);
         if app_moves {
-            self.window_move(viewport, cx.core);
+            self.window_move(viewport, core);
         }
         // The parts stand only by `WindowParts`, and the results of a part not registered this pass are gone.
         let started =
-            |key: (PartKey, Option<u64>)| cx.core.results.get(&key).is_some_and(|result| matches!(result.press.phase, PressPhase::DragStart { .. }));
+            |key: (PartKey, Option<u64>)| core.results.get(&key).is_some_and(|result| matches!(result.press.phase, PressPhase::DragStart { .. }));
         if !app_moves && started((MOVE_BAND, None)) {
-            windows::act(&cx.core.ctx, viewport, WindowAction::StartMove);
+            windows::act(&core.ctx, viewport, WindowAction::StartMove);
         }
         for (index, (dx, dy, _)) in GRIPS.into_iter().enumerate() {
             if !by_caller && started((GRIP, Some(index as u64))) {
-                windows::act(&cx.core.ctx, viewport, WindowAction::StartResize(edge_of(dx, dy)));
+                windows::act(&core.ctx, viewport, WindowAction::StartResize(edge_of(dx, dy)));
             }
         }
     }
@@ -808,7 +808,9 @@ impl BodyHooks<'_> {
             Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => overlay.movable && stands.band,
             _ => props.header.is_some_and(|header| header.band == crate::contract::DragBand::Move) && stands.band,
         };
-        let band = move_band(props, regions, rect);
+        // A layer's band reaches its frame's edges; an OS window's stays in its header, clear of the edges the
+        // platform hit-tests for resizing.
+        let band = move_band(props, regions, rect, os.is_none() && !moves_window);
         if props.header.is_some() && movable && band.is_positive() {
             // The band lies under the line's own parts and children, like the reorder band, so they keep their presses.
             // On a window the OS frames (macOS `Inset`) it keeps the arrow, as an OS title bar does: the OS's resize
@@ -847,7 +849,7 @@ impl BodyHooks<'_> {
         let handle = grip_band(pcx.tokens);
         let corner = 2.0 * handle;
         let top = top_band(props, &ctx, pcx.id, pcx.tokens);
-        let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
+        let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.text_direction().is_rtl()));
         let caller_sizes = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
         let grip_name = props.resize_name.as_ref().map(|name| pcx.env.resolve(name).as_str().to_owned());
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
@@ -911,10 +913,16 @@ impl BodyHooks<'_> {
 
 /// The move band of a container whose header drags: an inline header's band spans the header's whole line (header,
 /// body and end region), beneath the line's children, so every free point of the line drags; a header on a line of
-/// its own is the band.
-fn move_band(props: &ContainerProps, regions: &Regions, rect: Rect) -> Rect {
+/// its own is the band. With `to_edges` (a layer: a dialog, a floating group) a header on a line of its own drags
+/// from the frame's top and side edges down to where the body starts, so the padding around the title moves the
+/// layer as a title bar does, not only the title's line (photocraft#17112).
+fn move_band(props: &ContainerProps, regions: &Regions, rect: Rect, to_edges: bool) -> Rect {
     if !props.header.is_some_and(|header| header.inline) {
-        return regions.header;
+        if !to_edges {
+            return regions.header;
+        }
+        let bottom = regions.header.max.y.max(regions.body.min.y.min(rect.max.y));
+        return Rect::from_min_max(rect.min, Pos2::new(rect.max.x, bottom)).intersect(rect);
     }
     let line = regions.header.union(regions.body);
     let line = if props.end.is_some() { line.union(regions.end) } else { line };

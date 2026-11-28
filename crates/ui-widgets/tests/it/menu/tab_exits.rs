@@ -20,6 +20,11 @@ struct Rig {
 }
 
 fn rig(exits: bool) -> Rig {
+    rig_with_offer(exits, false)
+}
+
+fn rig_with_offer(exits: bool, offer: bool) -> Rig {
+    let transient = Cell::new(None);
     let ran = Rc::new(Cell::new(0));
     let before = Rc::new(Cell::new(None));
     let after = Rc::new(Cell::new(None));
@@ -39,6 +44,9 @@ fn rig(exits: bool) -> Rig {
                 shown_ran.set(shown_ran.get() + 1);
             }
         });
+        if offer && !focus::focused_rec(ui.ctx()).is_some_and(|rec| Some(rec.stop.id) == transient.get()) {
+            transient.set(Some(Button::new("Offer").show(ui).id));
+        }
         shown_after.set(Some(Button::new("After").show(ui).id));
     });
     fixture.settle();
@@ -80,6 +88,16 @@ fn tab_leaves_a_tab_exits_menu_for_the_stop_after_its_opener() {
     assert!(!rig.menu_open(), "the menu closes");
     assert_eq!(rig.ran.get(), 0, "no row runs");
     assert_eq!(rig.fixture.focused_stop().map(|(id, _)| id), rig.after.get(), "the focus moves to the stop after the opener");
+}
+
+#[trial]
+fn tab_leaves_the_menu_and_continues_past_a_stop_gone_on_arrival() {
+    let mut rig = rig_with_offer(true, true);
+    assert!(rig.fixture.by_label("Offer").is_some(), "the transient stop is the next entry after the opener");
+    rig.tab();
+    assert!(!rig.menu_open(), "the menu closes even though the first Tab destination went away");
+    assert_eq!(rig.ran.get(), 0, "no row runs");
+    assert_eq!(rig.focused(), rig.after.get(), "focus advances to the next still-shown entry");
 }
 
 #[trial]

@@ -1,7 +1,6 @@
 //! Elapsed (wall-clock) time of the default filtering:
-//! `cargo test -p craft-pbr --release --test it -- --ignored --nocapture bench`.
-//! The `parallel` feature is on in this test target even without `--features parallel`, since
-//! the crate's dev-dependency on itself enables it, so the times are not a serial baseline.
+//! `cargo test -p craft-pbr --release --features parallel --test it -- --ignored --nocapture bench`.
+//! The command measures the parallel build. Omitting `--features parallel` measures the serial build.
 
 use std::time::Instant;
 

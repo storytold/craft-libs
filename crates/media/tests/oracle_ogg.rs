@@ -1,9 +1,9 @@
-//! Oracle tests: compare the Ogg demuxer's streams, packet bytes and Opus timing with ffprobe on
-//! ffmpeg-generated fixtures (skipped when ffmpeg/ffprobe are not installed).
+//! Oracle tests: compare the Ogg demuxer's streams, packet bytes and Opus and Vorbis timing with
+//! ffprobe on ffmpeg-generated fixtures (skipped when ffmpeg/ffprobe are not installed).
 
 use super::common;
 
-use craft_media::ogg::{self, Codec, OggFile, OpusTiming};
+use craft_media::ogg::{self, Codec, OggFile, OpusTiming, VorbisTiming};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -184,6 +184,27 @@ fn assert_opus_timing_matches(name: &str, file: &OggFile, s: usize, json: &Value
     eprintln!("{context}: timing of {} packets matches, {} samples", theirs.len(), timing.total);
 }
 
+/// `VorbisTiming` against ffmpeg: from the second packet on, the starts are its pts and the
+/// durations its packet durations (the last one trimmed by the discard padding), and the total is
+/// the sum of those durations. ffmpeg gives the first packet, which returns no samples, a pts and
+/// duration of its own, so it is compared only for returning nothing.
+fn assert_vorbis_timing_matches(name: &str, file: &OggFile, s: usize, json: &Value, ff: usize) {
+    let timing = VorbisTiming::of(&file.streams[s]).unwrap_or_else(|| panic!("{name}: Vorbis headers"));
+    let theirs = ff_packets(json, ff);
+    let context = format!("{name}: Vorbis stream {ff}");
+    assert_eq!(timing.starts.len(), theirs.len(), "{context}: packet count");
+    assert_eq!(timing.durations[0], 0, "{context}: the first packet returns nothing");
+    let last = theirs.len() - 1;
+    for (k, p) in theirs.iter().enumerate().skip(1) {
+        assert_eq!(p.pts, Some(timing.starts[k]), "{context}: start of packet {k}");
+        let duration = p.duration.unwrap() + if k == last { p.discard } else { 0 };
+        assert_eq!(duration, i64::from(timing.durations[k]), "{context}: duration of packet {k}");
+    }
+    let playable: i64 = theirs.iter().skip(1).map(|p| p.duration.unwrap()).sum();
+    assert_eq!((timing.skip, timing.first, timing.total), (0, 0, playable), "{context}: skip, first, total");
+    eprintln!("{context}: timing of {} packets matches, {} samples", theirs.len(), timing.total);
+}
+
 /// Multiplexed streams: each is read on its own, in ffmpeg's order.
 #[test]
 fn grouped_streams() {
@@ -197,6 +218,7 @@ fn grouped_streams() {
     for s in 0..2 {
         assert_opus_timing_matches("grouped.ogg", &file, s, &json, s);
     }
+    assert_vorbis_timing_matches("grouped.ogg", &file, 2, &json, 2);
 }
 
 /// A chained file: two links, each its own stream with its own headers. ffmpeg joins the links of

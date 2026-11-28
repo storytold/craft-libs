@@ -151,6 +151,10 @@ pub(crate) struct RowGroups {
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) stops: Vec<StopRec>,
+    /// The Tab settings of this pass (`BeginIn::tab_all_controls`, `BeginIn::dialog_tab`), kept for the moves the end
+    /// hook makes: a Tab that lands on a stop this pass does not show goes on through this pass's Tab entries.
+    pub(crate) tab_all_controls: bool,
+    pub(crate) dialog_tab: TabReach,
     stop_ids: IdSet,
     /// The egui roots of `stops`.
     stop_roots: IdSet,
@@ -160,8 +164,11 @@ pub(crate) struct State {
     pub(crate) scope_order: Vec<Id>,
     pub(crate) last_scope_order: Vec<Id>,
     pub(super) open: Vec<(Id, usize)>,
-    /// Where a scope's body begins in `stops`; the header's stops come before it, the footer's after the body's.
-    pub(super) body_from: FastMap<Id, usize>,
+    /// Where a scope's body begins in `stops`, and the container whose body it is; the header's stops come before it,
+    /// the footer's after the body's.
+    pub(super) body_from: FastMap<Id, (usize, Id)>,
+    /// Where the body of the container that marked a scope's body ends in `stops`: its end region and footer follow.
+    pub(super) body_end: FastMap<Id, usize>,
     pub(crate) groups: FastMap<Id, Group>,
     pub(crate) last_groups: FastMap<Id, Group>,
     pub(crate) row_sets: Vec<RowGroups>,
@@ -545,14 +552,16 @@ pub(crate) fn has_reachable_stop(ctx: &Context, id: Id) -> bool {
 }
 
 /// Where a request for the component `id` goes when it has no stop of its own: the first stop registered since
-/// `from` (a `stop_count`), which a component inside it holds.
-pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize) -> Option<FocusTarget> {
+/// `from` (a `stop_count`) that the component `prefer` holds, else the first stop registered since `from`, which a
+/// component inside it holds.
+pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize, prefer: Option<Id>) -> Option<FocusTarget> {
     take_app_widgets(ctx, None);
     with(ctx, |state| {
         if state.stop_ids.contains(&id) {
             return None;
         }
-        state.stops.get(from..)?.first().map(target_of)
+        let stops = state.stops.get(from..)?;
+        prefer.and_then(|child| stops.iter().find(|rec| rec.stop.id == child)).or_else(|| stops.first()).map(target_of)
     })
 }
 
@@ -579,13 +588,28 @@ pub(crate) fn focus_in(ctx: &Context, range: std::ops::Range<usize>) -> bool {
 
 /// Marks the stops registered from here on in the innermost open scope as its body's: they come first in Tab
 /// order, then the footer's, then the header's, and initial focus goes to the first of them, not to the title
-/// row's close action. The first mark of a pass stands.
-pub(crate) fn begin_body(ctx: &Context) {
+/// row's close action. The first mark of a pass stands; `container` is the container whose body it is.
+pub(crate) fn begin_body(ctx: &Context, container: Id) {
     take_app_widgets(ctx, None);
     with(ctx, |state| {
         if let Some((scope, _)) = state.open.last().copied() {
             let at = state.stops.len();
-            state.body_from.entry(scope).or_insert(at);
+            state.body_from.entry(scope).or_insert((at, container));
+        }
+    });
+}
+
+/// Ends the body that `container` marked in the innermost open scope (`begin_body`): the stops registered from here on
+/// are its end region's and footer's. A dialog with no field and no default stop starts on its first body stop, never
+/// on one of theirs. A container nested in the body ends nothing.
+pub(crate) fn end_body(ctx: &Context, container: Id) {
+    take_app_widgets(ctx, None);
+    with(ctx, |state| {
+        if let Some((scope, _)) = state.open.last().copied()
+            && state.body_from.get(&scope).is_some_and(|(_, owner)| *owner == container)
+        {
+            let at = state.stops.len();
+            state.body_end.entry(scope).or_insert(at);
         }
     });
 }
@@ -594,6 +618,16 @@ pub(crate) fn begin_body(ctx: &Context) {
 pub(crate) fn register_group(ctx: &Context, group: Group) {
     with(ctx, |state| {
         state.groups.insert(group.id, group);
+    });
+}
+
+/// Names the member Tab arrives at in the roving group `group` registered in the running pass, once its members have
+/// registered. A group not registered in this pass is left as it is.
+pub(crate) fn name_group_arrival(ctx: &Context, group: Id, member: StopKey) {
+    with(ctx, |state| {
+        if let Some(group) = state.groups.get_mut(&group) {
+            group.selected = Some(member);
+        }
     });
 }
 
@@ -680,8 +714,8 @@ pub(crate) fn pop_scope(ctx: &Context) {
     take_app_widgets(ctx, None);
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx));
     let acts = with(ctx, |state| {
-        nav::order_regions(state);
-        nav::initial_focus(state, frame)
+        let body = nav::order_regions(state);
+        nav::initial_focus(state, frame, body)
     });
     apply(ctx, acts);
 }
@@ -1319,18 +1353,25 @@ pub fn focus_in_scope(ctx: &Context, scope: Id) -> Option<bool> {
 /// Only a modal dialog counts: a modeless window's edits belong to the app, so its field reverts its own draft first
 /// and the next Escape closes the window.
 pub(crate) fn escape_closes_dialog(ctx: &Context) -> bool {
-    escaping_dialog(ctx).is_some()
+    escaping_dialog(ctx, true).is_some()
+}
+
+/// Whether the focused stop's innermost layer-like scope is a dialog on top whose Escape closes it, modal or modeless:
+/// an Escape that a field there does not take for itself closes the dialog, so the field keeps the focus instead of
+/// giving it up (`RootEnv::escape_leaves_fields`).
+pub(crate) fn escape_reaches_dialog(ctx: &Context) -> bool {
+    escaping_dialog(ctx, false).is_some()
 }
 
 /// Whether the dialog that [`escape_closes_dialog`] finds keeps the focused field's typing on Escape
 /// (`FocusPolicy::escape_keeps_typing`): the field then commits its draft instead of cancelling it.
 pub(crate) fn escape_keeps_typing(ctx: &Context) -> bool {
-    escaping_dialog(ctx).is_some_and(|policy| policy.escape_keeps_typing)
+    escaping_dialog(ctx, true).is_some_and(|policy| policy.escape_keeps_typing)
 }
 
-/// The policy of the modal dialog on top whose Escape closes it and which holds the focused stop
-/// ([`escape_closes_dialog`]).
-fn escaping_dialog(ctx: &Context) -> Option<FocusPolicy> {
+/// The policy of the dialog on top whose Escape closes it and which holds the focused stop, when `modal` only a modal
+/// one ([`escape_closes_dialog`]).
+fn escaping_dialog(ctx: &Context, modal: bool) -> Option<FocusPolicy> {
     let rec = focused_rec(ctx)?;
     let (id, policy) = with(ctx, |state| {
         let mut at = rec.scope;
@@ -1346,9 +1387,9 @@ fn escaping_dialog(ctx: &Context) -> Option<FocusPolicy> {
         }
         None
     })?;
-    let modal_on_top =
-        crate::runtime::overlay::top(ctx) == Some(id) && crate::runtime::overlay::entry(ctx, id).is_some_and(|entry| entry.rank.is_modal());
-    modal_on_top.then_some(policy)
+    let on_top =
+        crate::runtime::overlay::top(ctx) == Some(id) && crate::runtime::overlay::entry(ctx, id).is_some_and(|entry| !modal || entry.rank.is_modal());
+    on_top.then_some(policy)
 }
 
 /// Whether the focus is in the focus scope of the layer `layer`, or, for an `Initial::KeepAnchor` scope, on the stop

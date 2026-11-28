@@ -46,7 +46,7 @@ pub(crate) struct Escape {
 /// Which fields a derive does not check, and what a type parameter that only those fields name is bound by.
 pub(crate) trait EscapeRule {
     /// `None` when `field` is checked; else `Some(bound)`: what a type parameter that only escaped fields name is bound
-    /// by instead of the derive's trait (`None` keeps the trait).
+    /// by instead of the derive's trait (`None` keeps the trait, an empty bound leaves the parameter unbound).
     fn escape(&self, field: &syn::Field) -> syn::Result<Option<Option<TokenStream>>>;
 }
 
@@ -129,7 +129,9 @@ pub(crate) fn field_checks(
         param.attrs.clear();
         let ident = &param.ident;
         let only_escaped = named_escaped.0.contains(ident) && !named.0.contains(ident);
-        let escape_bound = escaped_bounds.iter().find(|(named, _)| named == ident).map(|(_, bound)| bound);
+        // The first escaped field's bound that binds anything; an empty one (no bound) only when no other is given.
+        let bounds = || escaped_bounds.iter().filter(|(named, _)| named == ident).map(|(_, bound)| bound);
+        let escape_bound = bounds().find(|bound| !bound.is_empty()).or_else(|| bounds().next());
         let bound = match (param_escape, escape_bound) {
             (Some(ParamEscape { bound, .. }), _) if escaped => quote!(#bound),
             (_, Some(bound)) if only_escaped => quote!(#bound),

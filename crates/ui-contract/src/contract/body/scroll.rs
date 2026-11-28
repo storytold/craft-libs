@@ -199,10 +199,11 @@ impl BodyHooks<'_> {
         }
         if let Some(view) = self.view {
             use crate::contract::Pointer as _;
-            let overlay = scroll_of(props).is_some_and(|scroll| scroll.has_overlay());
+            let overlay = scroll_of(props).is_some_and(|scroll| scroll.overlay_hides_at_rest());
             for (bar, span) in self.scroll_geometry(props, view, rtl, tokens) {
                 let overflow = span.content.end - span.content.start > span.visible.end - span.visible.start;
-                // An overlay bar shows while the pointer is over the container, or keeps the press that drags it.
+                // An overlay bar shows while the pointer is over the container, or keeps the press that drags it, unless
+                // it shows at rest.
                 let hidden = overlay && !cx.response.contains_pointer() && !cx.part_if_declared(bar.key).is_some_and(|track| track.pressed());
                 if !overflow || hidden {
                     continue;
@@ -218,12 +219,12 @@ impl BodyHooks<'_> {
     /// it, so the content laid out for the view (out-of-view children skip their run, `runtime::lazy`) is the content
     /// shown. Every input read here is the pass's own, and the strips step by the pass's elapsed time, so a pass that
     /// repeats a frame moves nothing.
-    pub(super) fn scroll_input<C: Container>(&self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+    pub(super) fn scroll_input(&self, props: &ContainerProps, core: &mut CxCore<'_>) {
         use crate::contract::Pointer as _;
         let Some(scroll) = scroll_of(props) else { return };
-        let ctx = cx.core.ctx.clone();
+        let ctx = core.ctx.clone();
         let mut offset = self.offset;
-        if let Some(range) = cx.scroll_moved(SCROLL_Y) {
+        if let Some(range) = core.scroll_moved(SCROLL_Y) {
             offset.y = range.start;
         }
         // Resting the pointer on a strip scrolls toward it at a steady speed.
@@ -231,19 +232,19 @@ impl BodyHooks<'_> {
             let elapsed = crate::runtime::frame::facts(&ctx).elapsed.clamp(0.0, 0.1);
             let step = f64::from(STRIP_ROWS_PER_SECOND * self.row) * elapsed;
             for (strip, toward) in [(STRIP_BACK, -1.0), (STRIP_FORWARD, 1.0)] {
-                if cx.core.results.get(&(strip, None)).is_some_and(|result| result.hovered) {
+                if core.results.get(&(strip, None)).is_some_and(|result| result.hovered) {
                     offset.y += toward * step;
                 }
             }
         }
-        if let Some(range) = cx.scroll_moved(SCROLL_X) {
+        if let Some(range) = core.scroll_moved(SCROLL_X) {
             offset.x = range.start;
         }
-        self.access_scroll(scroll, &mut offset, cx.core);
+        self.access_scroll(scroll, &mut offset, core);
         let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
         let offset = self.clamped(scroll, view, offset);
         if offset != self.offset {
-            queue_jump(&ctx, cx.core.id, offset);
+            queue_jump(&ctx, core.id, offset);
         }
     }
 

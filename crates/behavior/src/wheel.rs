@@ -66,6 +66,15 @@ pub struct Wheel {
     pub lines: Vec2,
     /// Zoom factor; 1 for none.
     pub zoom: f32,
+    /// The wheel motion that reached the share as `zoom` instead of `scroll`, in wheel lines: wheel events under the
+    /// zoom modifier, and the Ctrl+wheel steps the service reads as a touchpad's pinch on Windows and Linux. A line
+    /// event counts its lines (notches) as the device sent them, a point or page event its points over egui's line
+    /// scroll speed. It travels with the zoom share, so a taker can count the notches or lines of a Ctrl+wheel that
+    /// zooms without the zoom speed; zero for a native pinch and for a wheel without the modifier.
+    pub zoom_lines: Vec2,
+    /// The running gesture's `zoom_lines` gathered so far, this share included, for the taker that owns the gesture;
+    /// another taker's share gathers only itself, as with `gathered`.
+    pub zoom_gathered: Vec2,
     /// The modifiers held.
     pub mods: Mods,
     /// The unit the device reported.
@@ -224,6 +233,8 @@ impl Wheel {
             scroll,
             lines: Vec2::ZERO,
             zoom: 1.0,
+            zoom_lines: Vec2::ZERO,
+            zoom_gathered: Vec2::ZERO,
             mods,
             unit,
             phase,
@@ -242,6 +253,13 @@ impl Wheel {
     /// The same gesture with zoom factor `zoom`.
     pub const fn zoom(mut self, zoom: f32) -> Self {
         self.zoom = zoom;
+        self
+    }
+
+    /// The same gesture with `lines` wheel lines of motion that zoom (`Wheel::zoom_lines`).
+    #[must_use]
+    pub const fn zoom_lines(mut self, lines: Vec2) -> Self {
+        self.zoom_lines = lines;
         self
     }
 
@@ -563,13 +581,28 @@ fn for_field(wheel: &Wheel) -> bool {
 
 /// Whether `wheel` carries a pinch, a touch zoom, a rotation or a two-finger pan: the zoom share's values.
 fn pinches(wheel: &Wheel) -> bool {
-    wheel.zoom != 1.0 || wheel.touch_zoom != 1.0 || wheel.rotation != 0.0 || wheel.touch_rotation != 0.0 || wheel.touch_pan != Vec2::ZERO
+    wheel.zoom != 1.0
+        || wheel.zoom_lines != Vec2::ZERO
+        || wheel.touch_zoom != 1.0
+        || wheel.rotation != 0.0
+        || wheel.touch_rotation != 0.0
+        || wheel.touch_pan != Vec2::ZERO
 }
 
 /// `wheel` without the zoom share's values: a scroll share carries no pinch or rotation, so a field or a scroll region
 /// never reads one.
 const fn scroll_only(wheel: Wheel) -> Wheel {
-    Wheel { zoom: 1.0, touch_zoom: 1.0, rotation: 0.0, touch_rotation: 0.0, touch_pan: Vec2::ZERO, zooms: false, ..wheel }
+    Wheel {
+        zoom: 1.0,
+        zoom_lines: Vec2::ZERO,
+        zoom_gathered: Vec2::ZERO,
+        touch_zoom: 1.0,
+        rotation: 0.0,
+        touch_rotation: 0.0,
+        touch_pan: Vec2::ZERO,
+        zooms: false,
+        ..wheel
+    }
 }
 
 /// The split rule. A focused field (a `WheelTaker::field` taker that holds `focus`, or an app's own text field) takes
@@ -715,6 +748,7 @@ fn split_at<O: Copy + PartialEq>(
             Some((_, share)) => {
                 share.scroll += part.scroll;
                 share.zoom *= part.zoom;
+                share.zoom_lines += part.zoom_lines;
                 share.touch_zoom *= part.touch_zoom;
                 share.rotation += part.rotation;
                 share.touch_rotation += part.touch_rotation;

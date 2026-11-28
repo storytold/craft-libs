@@ -449,8 +449,99 @@ impl EncodeOptions {
 /// ```
 #[cfg(feature = "pcm-encode")]
 pub fn wav_float_header(sample_rate: u32, channels: u16, frames: u64) -> Result<Vec<u8>> {
+    float_header(sample_rate, channels, None, frames)
+}
+
+/// [`wav_float_header`] with a BWF `bext` chunk holding `bwf` before the format chunk. The length
+/// still doesn't depend on `frames`, so the header is rewritten in place the same way.
+///
+/// ```
+/// use craft_audio::{BwfInfo, wav_float_header_with_bwf};
+///
+/// let bwf = BwfInfo::default().with_originator("Recorder").with_time_reference(48_000 * 3_600);
+/// let mut file = wav_float_header_with_bwf(48_000, 2, 0, &bwf).unwrap();
+/// let samples = [0.25f32, -0.25, 0.5, -0.5];
+/// file.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+/// let header = wav_float_header_with_bwf(48_000, 2, 2, &bwf).unwrap();
+/// file[..header.len()].copy_from_slice(&header);
+/// assert!(header.windows(4).any(|id| id == b"bext"));
+/// ```
+#[cfg(feature = "pcm-encode")]
+pub fn wav_float_header_with_bwf(sample_rate: u32, channels: u16, frames: u64, bwf: &crate::BwfInfo) -> Result<Vec<u8>> {
+    float_header(sample_rate, channels, Some(bwf), frames)
+}
+
+#[cfg(feature = "pcm-encode")]
+fn float_header(sample_rate: u32, channels: u16, bwf: Option<&crate::BwfInfo>, frames: u64) -> Result<Vec<u8>> {
     if channels == 0 || sample_rate == 0 {
         return Err(AudioError::Encode("a WAV needs channels and a sample rate".into()));
     }
-    wav::header(usize::from(channels), sample_rate, (32, true), None, None, frames, false)
+    wav::header(usize::from(channels), sample_rate, (32, true), bwf, None, frames, false)
+}
+
+/// What [`repair_wav`] wrote into a file.
+#[cfg(feature = "pcm-encode")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WavRepair {
+    /// The whole frames the data chunk holds.
+    pub frames: u64,
+    /// The length of the repaired file. Bytes past it are a partial last frame; truncate the
+    /// file to this length (`File::set_len`) to drop them.
+    pub len: u64,
+}
+
+/// Rewrites the size fields of a PCM or float WAV whose writer stopped before finishing it, such
+/// as a recorder's file after a crash, for the whole frames the file holds. The file must end in
+/// its data chunk: everything after the data chunk's header counts as samples, whatever its size
+/// field says.
+///
+/// It writes these fields and leaves every other byte before the samples as it is, `fmt `, `bext`
+/// and unknown chunks included:
+///
+/// - the RIFF size and the data chunk's size (both `0xFFFF_FFFF` in an RF64 file);
+/// - the frame count, the first field of the first `fact` chunk (`0xFFFF_FFFF` past `u32::MAX` frames);
+/// - in an RF64 file, the RIFF size, data size and frame count at the start of the first `ds64` chunk;
+/// - the pad byte after an odd data length.
+///
+/// A RIFF file that grew past 4 GiB becomes RF64 when it starts with the 28-byte `JUNK` chunk that
+/// [`FileEncoder`] and [`wav_float_header`] write: `RIFF` becomes `RF64` and that `JUNK` chunk
+/// becomes a `ds64` chunk with an empty table. A RIFF file whose 28-byte chunk there already has the
+/// `ds64` id, left by an earlier repair that stopped before writing `RF64`, becomes RF64 the same way.
+///
+/// Errors:
+///
+/// - [`AudioError::Malformed`] when `file` is not a RIFF or RF64 WAVE file, has no data chunk within
+///   its first 100,000 chunks, has its data chunk before its `fmt ` chunk, has a `fmt ` chunk shorter
+///   than 16 bytes or cut short by the end of the file, has 0 channels or 0 bits, has a block size
+///   other than the channels times the bytes per sample, has an extensible `fmt ` chunk with a cbSize
+///   below 22 or more valid bits than bits per sample, or is RF64 without a `ds64` chunk or with a
+///   first `ds64` chunk of 16 to 27 bytes (the WAV reader takes the data size from that chunk).
+/// - [`AudioError::Unsupported`] for a format other than PCM and IEEE float, an extensible format
+///   whose subformat is neither, a sample width the WAV reader does not decode (PCM above 32 bits,
+///   float other than 32 or 64 bits), and unfinished 8-bit mono data of even length (its last byte
+///   may be a sample or a pad byte).
+/// - [`AudioError::TooLarge`] for a RIFF file past 4 GiB that does not start with that `JUNK` or
+///   `ds64` chunk.
+/// - [`AudioError::Io`] when reading, writing or seeking `file` fails.
+///
+/// ```
+/// use craft_audio::{repair_wav, wav_float_header};
+/// use std::io::Cursor;
+///
+/// // A recorder wrote the header for 0 frames, then 2 frames and part of a third, then stopped.
+/// let mut bytes = wav_float_header(48_000, 2, 0).unwrap();
+/// bytes.extend([0.25f32, -0.25, 0.5, -0.5, 0.75].iter().flat_map(|s| s.to_le_bytes()));
+/// let mut file = Cursor::new(bytes);
+/// let repaired = repair_wav(&mut file).unwrap();
+/// assert_eq!(repaired.frames, 2);
+/// let mut bytes = file.into_inner();
+/// bytes.truncate(repaired.len as usize);
+/// let header = wav_float_header(48_000, 2, 2).unwrap();
+/// assert_eq!(bytes[..header.len()], header[..]);
+/// ```
+#[cfg(feature = "pcm-encode")]
+pub fn repair_wav<F: std::io::Read + Write + Seek>(file: &mut F) -> Result<WavRepair> {
+    let (frames, len) = wav::repair(file)?;
+    Ok(WavRepair { frames, len })
 }

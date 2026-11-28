@@ -8,8 +8,11 @@
 //! idle for [`IO_TIMEOUT`] is closed. Tokens are 64 hex characters in either case, kept
 //! lower-cased by the server and compared in constant time with hex letters folded. None of this depends on the transport: the TCP server and a test channel share it.
 
+#[cfg(not(windows))]
 use std::fs::OpenOptions;
-use std::io::{BufRead, Write};
+use std::io::BufRead;
+#[cfg(not(windows))]
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -319,30 +322,34 @@ fn read_token_file(path: &Path) -> Result<String, AutomationError> {
     Ok(token)
 }
 
-fn create_token_file(path: &Path, token: &str) -> Result<(), AutomationError> {
+/// Create the token file `path` holding `token` and a newline. An error keeps the kind of the one
+/// that caused it, with the path in its message.
+fn create_token_file(path: &Path, token: &str) -> std::io::Result<()> {
+    let at = |p: &Path, e: std::io::Error| std::io::Error::new(e.kind(), format!("{}: {e}", p.display()));
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(|e| AutomationError::Io(format!("{}: {e}", parent.display())))?;
+        std::fs::create_dir_all(parent).map_err(|e| at(parent, e))?;
     }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
-    // On Windows the new file has its folder's access list: it is restricted to its user and SYSTEM before the token
-    // is written, and a file that cannot be restricted is removed rather than left for the token to go into later.
+    // On Windows the file is created with an access list of its user and SYSTEM only, so it never has its folder's
+    // access list, and the token is written through the handle that created it.
     #[cfg(windows)]
     {
         use craft_platform::owner_only;
-        if let Err(e) = owner_only::current_user_sid().and_then(|me| owner_only::restrict_to_owner(path, &me)) {
-            drop(file);
-            let _ = std::fs::remove_file(path);
-            return Err(AutomationError::Io(format!("{}: cannot restrict the control token file to its owner: {e}", path.display())));
-        }
+        owner_only::current_user_sid()
+            .and_then(|me| owner_only::create_private_file(path, &me, format!("{token}\n").as_bytes()))
+            .map_err(|e| std::io::Error::new(e.kind(), format!("{}: cannot create the control token file for its owner only: {e}", path.display())))
     }
-    writeln!(file, "{token}").map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).map_err(|e| at(path, e))?;
+        writeln!(file, "{token}").map_err(|e| at(path, e))
+    }
 }
 
 /// The server's token, lower-cased. Both given is
@@ -355,8 +362,19 @@ fn create_token_file(path: &Path, token: &str) -> Result<(), AutomationError> {
 /// file can be reached by others: <why>; restrict it to its owner`), and its trimmed content is
 /// validated. A missing one is created with a generated token (parent directories created,
 /// `create_new`, mode 0600 on Unix, the user and SYSTEM only on Windows, the token and a
-/// newline); losing that create race to another process reads the winner's file instead.
+/// newline); losing that create race to another process reads the winner's file instead. On
+/// Windows a create that does not finish in time fails (`I/O: <path>: cannot create the control
+/// token file for its owner only: <why>`), and a file it left at the path is not read as a winner's.
 pub fn server_token(supplied: Option<&str>, token_file: Option<&Path>) -> Result<String, AutomationError> {
+    server_token_with(supplied, token_file, create_token_file)
+}
+
+/// [`server_token`], with `create` making a missing token file.
+fn server_token_with(
+    supplied: Option<&str>,
+    token_file: Option<&Path>,
+    create: impl FnOnce(&Path, &str) -> std::io::Result<()>,
+) -> Result<String, AutomationError> {
     if supplied.is_some() && token_file.is_some() {
         return Err(token_conflict());
     }
@@ -370,11 +388,11 @@ pub fn server_token(supplied: Option<&str>, token_file: Option<&Path>) -> Result
     };
     match read_token_file(path) {
         Ok(existing) => Ok(existing.to_ascii_lowercase()),
-        Err(AutomationError::Io(_)) if !path.exists() => match create_token_file(path, &token) {
+        Err(AutomationError::Io(_)) if !path.exists() => match create(path, &token) {
             Ok(()) => Ok(token),
-            // Another process won the create-new race.
-            Err(AutomationError::Io(_)) if path.exists() => read_token_file(path).map(|v| v.to_ascii_lowercase()),
-            Err(e) => Err(e),
+            // Another process won the create-new race. A file left by a create that ran out of time is this one's.
+            Err(e) if e.kind() != std::io::ErrorKind::TimedOut && path.exists() => read_token_file(path).map(|v| v.to_ascii_lowercase()),
+            Err(e) => Err(AutomationError::Io(e.to_string())),
         },
         Err(e) => Err(e),
     }
@@ -469,20 +487,40 @@ pub fn configure_stream(stream: &std::net::TcpStream) -> std::io::Result<()> {
     stream.set_write_timeout(Some(IO_TIMEOUT))
 }
 
+/// The time an [`AuthDeadlineStream`] reads its deadline against: [`Instant::now`] in a server, or a time a test sets
+/// by hand.
+pub type DeadlineClock = std::sync::Arc<dyn Fn() -> Instant + Send + Sync>;
+
+/// The real clock, [`Instant::now`].
+pub fn real_clock() -> DeadlineClock {
+    std::sync::Arc::new(Instant::now)
+}
+
 /// A read wrapper that fails once [`AUTH_DEADLINE`] passes without [`Self::authenticated`] being
 /// called, whatever the client sends meanwhile; after that only [`IO_TIMEOUT`] applies.
-#[derive(Debug)]
 pub struct AuthDeadlineStream {
     inner: std::net::TcpStream,
     deadline: Option<std::time::Instant>,
+    clock: DeadlineClock,
+}
+
+impl std::fmt::Debug for AuthDeadlineStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthDeadlineStream").field("inner", &self.inner).field("deadline", &self.deadline).finish_non_exhaustive()
+    }
 }
 
 impl AuthDeadlineStream {
     /// Wraps `inner`; reads fail once `auth_deadline` has passed unauthenticated.
     pub fn new(inner: std::net::TcpStream, auth_deadline: Duration) -> Self {
+        Self::with_clock(inner, auth_deadline, real_clock())
+    }
+
+    /// [`Self::new`] with the deadline read against `clock` instead of the real clock.
+    pub fn with_clock(inner: std::net::TcpStream, auth_deadline: Duration, clock: DeadlineClock) -> Self {
         // A limit too large to represent expires at once rather than never.
-        let now = Instant::now();
-        Self { inner, deadline: Some(now.checked_add(auth_deadline).unwrap_or(now)) }
+        let now = clock();
+        Self { inner, deadline: Some(now.checked_add(auth_deadline).unwrap_or(now)), clock }
     }
 
     /// The handshake succeeded: lift the deadline and restore the idle timeout.
@@ -495,7 +533,7 @@ impl AuthDeadlineStream {
 impl std::io::Read for AuthDeadlineStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if let Some(deadline) = self.deadline {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = deadline.saturating_duration_since((self.clock)());
             if left.is_zero() {
                 return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "not authenticated in time"));
             }

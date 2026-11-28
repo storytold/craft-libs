@@ -1,6 +1,7 @@
 pub(crate) mod access;
 pub(crate) mod alt_text;
 pub(crate) mod chips;
+pub(crate) mod colored;
 pub(crate) mod edit_menu;
 pub(crate) mod edit_run;
 pub(crate) mod fields;
@@ -18,6 +19,7 @@ pub(crate) mod rtl_paragraph;
 pub(crate) mod selectable;
 pub(crate) mod step_arrows;
 pub(crate) mod submit_key;
+pub(crate) mod tab_source;
 pub(crate) mod text_field;
 pub(crate) mod widths;
 pub(crate) mod word_run;

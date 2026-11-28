@@ -440,8 +440,13 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
             flags.set(Flags::MIXED, self.wells[i].paint.same().is_none());
             flags.set(Flags::CHECKED, well == active);
             let shape = if cx.style.round { HitShape::circle(at.center(), at.width() / 2.0) } else { HitShape::Rect(at) };
-            let part =
-                cx.part(WELL.at(i as u64), shape).sense(sense).priority(HitPriority::new(HitLevel::Body, u8::from(front))).flags(flags).focusable();
+            let part = cx
+                .part(WELL.at(i as u64), shape)
+                .sense(sense)
+                .priority(HitPriority::new(HitLevel::Body, u8::from(front)))
+                .flags(flags)
+                .focusable()
+                .tooltip(self.wells[i].label.clone());
             // Focus arrives at the active well, so arriving makes no other well active.
             let part = if well == active { part.selected() } else { part };
             if self.popover {
@@ -449,10 +454,10 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
             }
         }
         let buttons = self.button_rects(cx.style);
-        for (key, button, shown) in [(DEFAULT, buttons[0], self.default_button.is_some()), (SWAP, buttons[1], self.swap_button.is_some())] {
-            if shown {
+        for (key, button, name) in [(DEFAULT, buttons[0], &self.default_button), (SWAP, buttons[1], &self.swap_button)] {
+            if let Some(name) = name {
                 let at = flow.to_physical(button.translate(rect.min.to_vec2()));
-                cx.part(key, at).sense(Sense::CLICK).pointer_only("The host's Default Colours and Swap Colours commands");
+                cx.part(key, at).sense(Sense::CLICK).tooltip(name.clone()).pointer_only("The host's Default Colours and Swap Colours commands");
             }
         }
         cx.roving(Roving::new(NavShape::Flat));
