@@ -96,6 +96,8 @@ mod read;
 pub mod s302m;
 #[cfg(feature = "sbc")]
 pub mod sbc;
+/// Lyrics and markers in ID3v2 tags and FLAC metadata blocks, without audio decoding.
+pub mod tags;
 #[cfg(any(
     feature = "aac-decode",
     feature = "alac-decode",
