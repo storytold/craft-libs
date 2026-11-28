@@ -179,10 +179,33 @@ fn css_length_units(property: &str, value: String) -> String {
     out
 }
 
+/// Normalize supported CSS value identifiers without changing opaque payloads or raw attributes.
+fn css_value(property: &str, value: String) -> String {
+    let mut value = css_length_units(property, value);
+    let token = value.trim();
+    let keywords: &[&str] = match property {
+        "display" => &["none"],
+        "visibility" => &["visible", "hidden", "collapse"],
+        "fill-rule" => &["nonzero", "evenodd"],
+        "stroke-linecap" => &["butt", "round", "square"],
+        "stroke-linejoin" => &["miter", "round", "bevel"],
+        "fill" | "stroke" => &["none", "currentColor"],
+        _ => &[],
+    };
+    let start = value.len() - value.trim_start().len();
+    if let Some(keyword) = keywords.iter().find(|keyword| token.eq_ignore_ascii_case(keyword)) {
+        let end = start + token.len();
+        value.replace_range(start..end, keyword);
+    } else if matches!(property, "fill" | "stroke") && token.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("url(")) {
+        value.replace_range(start..start + 3, "url");
+    }
+    value
+}
+
 /// Collect the declared properties of an element: presentation attributes, then CSS rules
 /// (by specificity and source order, bounded by `charge_css`), then the inline `style` attribute.
-/// Supported numeric length-unit suffixes are normalized only for CSS declarations; raw
-/// presentation attributes retain their existing spelling and length compatibility.
+/// Supported numeric length-unit suffixes and value identifiers are normalized only for
+/// CSS declarations; raw presentation attributes retain their existing spelling and compatibility.
 pub fn declared(n: roxmltree::Node, css: &StyleSheet, charge_css: impl FnMut(usize) -> bool) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for a in n.attributes() {
@@ -193,12 +216,12 @@ pub fn declared(n: roxmltree::Node, css: &StyleSheet, charge_css: impl FnMut(usi
     let mut css_values = HashMap::new();
     css.apply(n.tag_name().name(), n.attribute("id"), n.attribute("class").unwrap_or_default(), &mut css_values, charge_css);
     out.extend(css_values.into_iter().map(|(k, v)| {
-        let v = css_length_units(&k, v);
+        let v = css_value(&k, v);
         (k, v)
     }));
     if let Some(st) = n.attribute("style") {
         for (k, v) in declarations(st) {
-            let v = css_length_units(&k, v);
+            let v = css_value(&k, v);
             out.insert(k, v);
         }
     }
@@ -660,6 +683,125 @@ mod tests {
         assert_eq!(attr_len(rect, "x", 'x', &st, 200.0, 100.0), 100.0);
         assert_eq!(attr_len(rect, "y", 'y', &st, 200.0, 100.0), 0.0);
         assert_eq!(attr_len(rect, "width", 'x', &st, 200.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn css_value_identifier_case() {
+        // CSS Values 3 section 3.1: keywords are ASCII case-insensitive. CSS Syntax 3
+        // section 4.3.4 matches the url function identifier without folding its payload.
+        let seed = Style {
+            fill: Some(PaintRef::Color([0.0, 1.0, 0.0, 1.0])),
+            stroke: Some(PaintRef::Color([0.0, 0.0, 1.0, 1.0])),
+            color: [1.0, 0.0, 0.0, 1.0],
+            ..Style::default()
+        };
+        let evaluate = |property: &str, value: &str, inline: bool| {
+            let declaration = format!("{property}:{value}");
+            let inline_style =
+                if inline { format!(" style=\"{}\"", declaration.replace('&', "&amp;").replace('"', "&quot;")) } else { String::new() };
+            let xml = format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect class=\"a\"{inline_style}/></svg>");
+            let doc = roxmltree::Document::parse(&xml).unwrap();
+            let rect = doc.descendants().find(|n| n.tag_name().name() == "rect").unwrap();
+            let mut css = StyleSheet::default();
+            if !inline {
+                parse_css(&format!(".a {{ {declaration} }}"), &mut css).unwrap();
+                css.index();
+            }
+            let d = declared(rect, &css, |_| true);
+            let mut st = seed.clone();
+            let (opacity, display) = cascade(rect, &css, &mut st, 200.0, 100.0, |_| true);
+            assert_eq!(opacity, 1.0);
+            (d, st, display)
+        };
+        let cases = [
+            ("display", "none", "NONE", seed.clone(), false),
+            ("visibility", "hidden", "HIDDEN", Style { visible: false, ..seed.clone() }, true),
+            ("visibility", "collapse", "CoLlApSe", Style { visible: false, ..seed.clone() }, true),
+            ("visibility", "visible", "VISIBLE", seed.clone(), true),
+            ("fill-rule", "evenodd", "EVENODD", Style { fill_rule: FillRule::EvenOdd, ..seed.clone() }, true),
+            ("fill-rule", "nonzero", "NONZERO", seed.clone(), true),
+            ("stroke-linecap", "round", "ROUND", Style { cap: Cap::Round, ..seed.clone() }, true),
+            ("stroke-linecap", "square", "SqUaRe", Style { cap: Cap::Square, ..seed.clone() }, true),
+            ("stroke-linecap", "butt", "BUTT", seed.clone(), true),
+            ("stroke-linejoin", "round", "ROUND", Style { join: Join::Round, ..seed.clone() }, true),
+            ("stroke-linejoin", "bevel", "BeVeL", Style { join: Join::Bevel, ..seed.clone() }, true),
+            ("stroke-linejoin", "miter", "MITER", seed.clone(), true),
+            ("fill", "none", "NONE", Style { fill: None, ..seed.clone() }, true),
+            ("stroke", "none", "NoNe", Style { stroke: None, ..seed.clone() }, true),
+            ("fill", "currentColor", "CURRENTCOLOR", Style { fill: Some(PaintRef::Current), ..seed.clone() }, true),
+            ("stroke", "currentColor", "CuRrEnTcOlOr", Style { stroke: Some(PaintRef::Current), ..seed.clone() }, true),
+            ("fill", "url('#PaintID')", "URL('#PaintID')", Style { fill: Some(PaintRef::Url("PaintID".into(), None)), ..seed.clone() }, true),
+            (
+                "stroke",
+                "url(\"#StrokeID\") red",
+                "uRl(\"#StrokeID\") red",
+                Style { stroke: Some(PaintRef::Url("StrokeID".into(), Some([1.0, 0.0, 0.0, 1.0]))), ..seed.clone() },
+                true,
+            ),
+        ];
+        // Every lower-case functional control runs before collecting any failing counterpart.
+        for (property, lower, _, expected, display) in &cases {
+            for inline in [false, true] {
+                let (_, actual, actual_display) = evaluate(property, lower, inline);
+                assert_eq!(&actual, expected, "lower control {property}:{lower}, inline={inline}");
+                assert_eq!(&actual_display, display);
+            }
+        }
+        let mut mismatches = Vec::new();
+        for (property, _, mixed, expected, display) in &cases {
+            for inline in [false, true] {
+                let (_, actual, actual_display) = evaluate(property, mixed, inline);
+                if &actual != expected || &actual_display != display {
+                    let origin = if inline { "inline" } else { "stylesheet" };
+                    let sector = if mixed.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("url(")) { "url" } else { "keyword" };
+                    mismatches.push(format!("{property} {sector} {origin}: {mixed}, style={actual:?}, display={actual_display}"));
+                }
+            }
+        }
+        // Preserve raw XML/direct-helper compatibility, including the case-sensitive ID.
+        let raw = roxmltree::Document::parse(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><rect display="NONE" visibility="HIDDEN" fill-rule="EVENODD" stroke-linecap="ROUND" stroke-linejoin="BEVEL" fill="URL('#PaintID')" stroke="CURRENTCOLOR"/></svg>"##,
+        )
+        .unwrap();
+        let rect = raw.descendants().find(|n| n.tag_name().name() == "rect").unwrap();
+        let d = declared(rect, &StyleSheet::default(), |_| true);
+        for attribute in rect.attributes() {
+            assert_eq!(d.get(attribute.name()).map(String::as_str), Some(attribute.value()));
+        }
+        let mut raw_style = seed.clone();
+        assert_eq!(cascade(rect, &StyleSheet::default(), &mut raw_style, 200.0, 100.0, |_| true), (1.0, true));
+        assert_eq!(raw_style, seed);
+        assert_eq!(paint_ref("url('#PaintID')"), Some(Some(PaintRef::Url("PaintID".into(), None))));
+        assert_eq!(paint_ref("URL('#PaintID')"), None);
+        assert_eq!(paint_ref("NONE"), None);
+        assert_eq!(paint_ref("CURRENTCOLOR"), None);
+        // Unsupported expressions and unrelated values must retain their exact spelling.
+        for (property, value) in [
+            ("fill", "var(--Case, URL('#PaintID'))"),
+            ("stroke", "PaintFunction('#PaintID')"),
+            ("fill", "\"URL(#PaintID)\""),
+            ("display", "var(--Case, NONE)"),
+            ("visibility", "inherit"),
+            ("font-size", "LARGE"),
+            ("color", "ReD"),
+        ] {
+            for inline in [false, true] {
+                let (d, _, _) = evaluate(property, value, inline);
+                assert_eq!(d.get(property).map(String::as_str), Some(value));
+            }
+        }
+        // The suffix includes quotes, URI/fragment case and the complete fallback spelling.
+        for property in ["fill", "stroke"] {
+            for inline in [false, true] {
+                let value = "URL('Case/Art.svg#PaintID') ReD";
+                let (d, _, _) = evaluate(property, value, inline);
+                if d.get(property).map(String::as_str) != Some("url('Case/Art.svg#PaintID') ReD") {
+                    let origin = if inline { "inline" } else { "stylesheet" };
+                    mismatches.push(format!("{property} url {origin}: identifier/payload spelling"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "CSS identifier case mismatches: {mismatches:?}");
     }
 
     #[test]

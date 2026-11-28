@@ -107,6 +107,8 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
   (`PbrError::OutOfMemory`). Options out of range give
   `PbrError::BadOption`, and directions that are not finite or have zero length give
   `PbrError::BadDirection`.
+  After size and byte checks pass, a filtering work count above `u64::MAX` returns
+  `PbrError::BadOption`, including when `max_work` is `u64::MAX`. `hammersley` returns coordinates in `0..1`.
 - **Surfaces.** A `Surface` holds a `Material` and the state a renderer applies around it: alpha
   and `AlphaMode`, linear emission, the double-sided and unlit flags, optional `Clearcoat` and
   `Sheen` layers, `TextureBinding`s (the image or file, UV set, wrap modes, UV transform, encoding
@@ -229,9 +231,12 @@ text with naga, alone and with app bindings and `vs` and `fs` entry points, and 
 ## Origin
 
 The algorithms come from the `crates/render/src/ibl.rs` files of TextureCraft and MaterialCraft,
-which held the same filtering code. With a firefly cap of 64, which both apps applied, the
-prefiltered levels match theirs for sources with even sides that are at least twice as wide as
-they are tall. Changes from those files:
+which held the same filtering code. With a firefly cap of 64, 128 samples and a level bias of 1,
+the differential tests measure differences in prefiltered levels at most `1e-5` relative to
+`max(1, |a|, |b|)` for procedural sources of 64 × 32, 128 × 64 and 256 × 128 and synthetic sources
+of 128 × 64. An odd intermediate side
+retains its last column or row when halved, so initially even sources can also differ.
+Changes from those files:
 
 - Halving an odd side keeps its last column or row instead of dropping it.
 - The firefly cap is an option, off by default, and the source level bias is an option.
@@ -240,7 +245,7 @@ they are tall. Changes from those files:
 - Level sizes never grow past the level before, so a source smaller than 4 × 2 is accepted.
 - The source pyramid halves a source while it is wider than 8 or taller than 4, so a source 8 or
   fewer pixels wide and more than 4 tall also gets coarser levels. A source at least twice as wide
-  as it is tall gets the same pyramid as in those files.
+  as it is tall stops at the same pyramid dimensions as in those files.
 - The SH projection reads every pixel of the source instead of a source halved to 128 wide by
   plain averaging, which gave rows near the poles too much weight (a lit top row of a 256 × 128
   source counted twice). It integrates each basis function over the area of each pixel instead of

@@ -573,9 +573,32 @@ impl Component for ListRow<'_> {
             ui.draw().rule(RuleKind::Divider, Pos2::new(rect.left(), y), Pos2::new(rect.right(), y));
             return;
         }
+        self.lead_fill = cx.state().flags.contains(Flags::LEAD).then(|| cx.resolve(&style.surface.fill).egui().into());
         let widths = self.widths(sizes, &|run| ui.draw().layout(run, f32::INFINITY).size().x);
         let placed = self.place(sizes, &widths, rect, rtl);
         self.label_rect = placed.label;
+        if self.lead_fill.is_some() {
+            // Keep the focus ring inside existing row outlines and clear of the row's color marker.
+            let mut focus_bounds = if self.layer || self.run.is_some() { rect.shrink(ui.draw().width(StrokeWidth::Thin)) } else { rect };
+            if let Some((_, width)) = self.stripe {
+                let width = ui.draw().width(width);
+                if rtl {
+                    focus_bounds.max.x = focus_bounds.max.x.min(placed.band.right() - width);
+                } else {
+                    focus_bounds.min.x = focus_bounds.min.x.max(placed.band.left() + width);
+                }
+            }
+            if self.corner_mark {
+                if rtl {
+                    focus_bounds.min.x = focus_bounds.min.x.max(rect.left() + sizes.handle);
+                } else {
+                    focus_bounds.max.x = focus_bounds.max.x.min(rect.right() - sizes.handle);
+                }
+            }
+            if focus_bounds.is_positive() {
+                self.lead_focus_bounds = Some(focus_bounds);
+            }
+        }
         {
             let draw = ui.draw();
             if self.layer && self.divider_below {
@@ -652,7 +675,15 @@ impl Component for ListRow<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> RowOutput {
-        RowOutput { response: cx.response.clone(), event: self.event, open: self.open, menu: self.menu, label: self.label_rect }
+        RowOutput {
+            response: cx.response.clone(),
+            event: self.event,
+            open: self.open,
+            menu: self.menu,
+            label: self.label_rect,
+            lead_fill: self.lead_fill,
+            lead_focus_bounds: self.lead_focus_bounds,
+        }
     }
 }
 

@@ -345,6 +345,78 @@ fn a_narrow_groups_drag_band_narrows_before_the_shown_tab() {
     }
 }
 
+// The host's items before the tab strip count in the room the header keeps: as a group with one or two of them narrows,
+// at both densities and in both directions, the drag band narrows to its least before the shown tab goes below the
+// width a shrunk tab keeps, and the host's items stay inside the group, clear of the band and the shown tab.
+#[trial]
+fn a_narrow_groups_drag_band_leaves_room_for_the_hosts_header_items() {
+    use craft_behavior::IconId;
+    use craft_theme::Size;
+    use craft_ui::buttons::IconButton;
+    use craft_ui::contract::Props as _;
+    use craft_ui::runtime::env::Direction;
+    const HOSTS: [&str; 2] = ["Host one", "Host two"];
+    let tab = |width: f32, (density, direction): (Size, Direction), names: &'static [&'static str], hosts: usize| {
+        let panels: Vec<PanelTitle> = names.iter().enumerate().map(|(at, name)| PanelTitle::new(PanelKey::new(at as u64 + 1), *name)).collect();
+        let group_rect = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(width, 200.0));
+        let grip = Rc::new(Cell::new(None::<Rect>));
+        let seen = Rc::clone(&grip);
+        let mut fixture = Fixture::new(move |ui| {
+            let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key).extra(move |ui, _| {
+                for name in &HOSTS[..hosts] {
+                    IconButton::new(IconId::new("settings")).label(*name).show(ui);
+                }
+            });
+            let out = group.show_at(ui, group_rect, |_, _| ());
+            seen.set(out.output.grip.map(|(rect, _)| rect));
+        });
+        fixture.density(density).direction(direction).settle();
+        let host = HOSTS[..hosts].iter().map(|name| fixture.by_label(name).map(|node| node.rect)).collect::<Vec<_>>();
+        (fixture.by_label("Tools").map(|node| node.rect), grip.get(), host)
+    };
+    for density in [Size::Compact, Size::Comfortable] {
+        // The least a tab shows, found as the trial above finds it, with no host items.
+        let least = (0..260)
+            .filter_map(|step| tab(300.0 - step as f32, (density, Direction::Ltr), &["Tools Options", "Tools"], 0).0)
+            .map(|rect| rect.width())
+            .fold(f32::INFINITY, f32::min);
+        assert!(least.is_finite(), "the other tab shows shrunk in some group ({density:?})");
+        let looks = [Direction::Ltr, Direction::Rtl].map(|direction| (density, direction));
+        for (look, names) in looks.into_iter().flat_map(|look| [(look, &["Tools"][..]), (look, &["Tools", "Swatches"][..])]) {
+            for hosts in 1..=HOSTS.len() {
+                let (Some(natural), _, _) = tab(300.0, look, names, hosts) else { panic!("a wide group shows the tab ({look:?})") };
+                let least = least.min(natural.width());
+                let (_, Some(narrowest), _) = tab(40.0, look, names, 0) else { panic!("a 40 pt group shows the band ({look:?})") };
+                for width in (0..17).map(|step| 40.0 + 8.0 * step as f32) {
+                    let (shown, grip, host) = tab(width, look, names, hosts);
+                    let case = format!("{width} pt, {look:?}, {names:?}, {hosts} host items");
+                    let Some(grip) = grip else { panic!("the band shows ({case})") };
+                    let group = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(width, 200.0));
+                    // With no tab in the strip, the group's own node carries the shown panel's name.
+                    let shown = shown.filter(|shown| shown.width() < group.width() - 0.5);
+                    let shown_width = shown.map_or(0.0, |shown| shown.width());
+                    // A band above its least leaves the line room for the host's items.
+                    if grip.width() > narrowest.width() + 0.5 {
+                        for item in &host {
+                            let Some(item) = item else { panic!("each host item shows ({case})") };
+                            assert!(group.contains_rect(*item), "the host item {item:?} lies inside the group ({case})");
+                            assert!(!grip.intersects(item.shrink(0.5)), "the band {grip:?} does not cover the host item {item:?} ({case})");
+                        }
+                        if let Some(shown) = shown {
+                            assert!(!grip.intersects(shown.shrink(0.5)), "the band {grip:?} does not cover the shown tab {shown:?} ({case})");
+                        }
+                    }
+                    assert!(
+                        shown_width >= least - 1.0 || grip.width() <= narrowest.width() + 0.5,
+                        "the band {grip:?} narrows to {} pt before the shown tab ({shown_width} pt) goes below {least} pt ({case})",
+                        narrowest.width()
+                    );
+                }
+            }
+        }
+    }
+}
+
 // Closable panel tabs stay panel tabs: in a group too narrow for their whole names every tab keeps its place in the
 // strip, the shown one its whole name, and each shows a close button. A middle click closes an inactive tab without
 // showing it first.

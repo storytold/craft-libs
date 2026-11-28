@@ -7,7 +7,7 @@ use crate::contract::{
     Access, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Pad, PaintUi, PartsCx, Role, Sizing, WordSetCx as _,
 };
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use craft_behavior::divider::{self as push, Segment};
 use craft_behavior::{Axis, Metrics, PartKey, Sense};
 use egui::{Rect, Response};
@@ -99,6 +99,9 @@ pub fn section_heights(sections: &[StackSection], total: f32, header: f32) -> Ve
 pub struct StackSectionsStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the divider that has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     sizes: DockSizes,
 }
 
@@ -189,7 +192,7 @@ impl Component for StackSections {
     type Output = StackSectionsOutput;
 
     fn style(cx: &StyleCx<'_>, _: StackSectionsStyleKey) -> StackSectionsStyle {
-        StackSectionsStyle { metrics: Metrics::new(), sizes: DockSizes::style(cx) }
+        StackSectionsStyle { metrics: Metrics::new(), focus: cx.focus_look(), sizes: DockSizes::style(cx) }
     }
 
     fn sense(&self) -> Sense {
