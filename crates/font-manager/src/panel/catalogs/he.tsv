@@ -1,0 +1,181 @@
+# Hebrew (he) rows of the Fonts panel's words, for an app's shared catalog.
+# Format: context<TAB>source<TAB>translation; @id rows name a word by its id, @plural rows list the locale's plural forms.
+# Style and weight names (Regular, Bold, Italic), licence names and product names stay in English.
+# Commands (buttons, links, menu items) use the gender-neutral infinitive (להתקין, להסיר). Instructions that are not
+# commands use יש ל… or אפשר ל…. Placeholders stay as written.
+# Plural forms are one|two|other: 1 is singular, 2 and every other count (including 11 and multiples of 10) are plural.
+@id	fontsPanel.panel	גופנים
+@id	fontsPanel.sansSerif	סאנס־סריף
+@id	fontsPanel.serif	סריף
+@id	fontsPanel.display	תצוגה
+@id	fontsPanel.handwriting	כתב יד
+@id	fontsPanel.monospace	ברוחב אחיד
+@id	fontsPanel.fontStore	מאגר הגופנים
+@id	fontsPanel.system	מערכת
+@id	fontsPanel.settingFailed	לא ניתן היה לשמור את הגדרת ההורדות: {error}
+@id	fontsPanel.craftAppsOnlyFailed	לא ניתן היה להחיל את ההגדרה ״רק באפליקציות Craft״: {error}
+@id	fontsPanel.systemFontsFailed	לא ניתן היה לעדכן את תיקיית הגופנים של המערכת: {error}
+@id	fontsPanel.consentTitle	להוריד מ־{source}?
+@id	fontsPanel.consentText	Craft Font Manager מוריד את {family} ({size}) מ־{source}, ובודק כל קובץ לפני השימוש בו.
+@id	fontsPanel.consentTextHost	Craft Font Manager מוריד את {family} ({size}) מ־{host}, השרת של {source}, מקור שנוסף ידנית, ובודק כל קובץ לפני השימוש בו.
+@id	fontsPanel.consentNote	ההורדות נשארות מותרות עד לכיבוין.
+@id	fontsPanel.consentAllow	להוריד
+@id	fontsBrowse.tabs	גופנים
+@id	fontsBrowse.tabBrowse	עיון
+@id	fontsBrowse.tabInstalled	מותקנים
+@id	fontsBrowse.search	חיפוש
+@id	fontsBrowse.searchCatalogue	חיפוש גופנים לפי שם
+@id	fontsBrowse.searchInstalled	חיפוש בגופנים המותקנים
+@id	fontsBrowse.filters	מסננים
+@id	fontsBrowse.downloads	הורדות
+@id	fontsBrowse.allowDownloads	לאפשר הורדות
+@id	fontsBrowse.downloadsHint	ממקור של כל גופן, רק בעת התקנה או תצוגה מקדימה.
+@id	fontsBrowse.systemFonts	גופני מערכת
+@id	fontsBrowse.craftAppsOnly	לשמור את הגופנים באפליקציות Craft בלבד
+@id	fontsBrowse.craftAppsOnlyHint	כבוי: ההתקנה מעתיקה את הגופנים גם לתיקיית הגופנים של המערכת, לכל היישומים. גופנים שכבר מותקנים שומרים על ההגדרה שלהם.
+@id	fontsBrowse.category	קטגוריה
+@id	fontsBrowse.allCategories	כל הקטגוריות
+@id	fontsBrowse.language	שפה
+@id	fontsBrowse.anyLanguage	כל שפה
+@id	fontsBrowse.languagePlaceholder	שם באנגלית או בשפה עצמה
+@id	fontsBrowse.findLanguage	חיפוש שפה
+@id	fontsBrowse.script	כתב
+@id	fontsBrowse.anyScript	כל כתב
+@id	fontsBrowse.source	מקור
+@id	fontsBrowse.allSources	כל המקורות
+@id	fontsBrowse.show	הצגה
+@id	fontsBrowse.allFonts	כל הגופנים
+@id	fontsBrowse.installed	מותקנים
+@id	fontsBrowse.notInstalled	לא מותקנים
+@id	fontsBrowse.clearFilters	לנקות מסננים
+@id	fontsBrowse.installedNote	כל אפליקציות Craft משתמשות בגופנים שבמאגר הגופנים. גופני מערכת מתווספים ומוסרים בכלי הגופנים של המערכת עצמה.
+@id	fontsBrowse.sample	דוגמה
+@id	fontsBrowse.sentence	משפט
+@id	fontsBrowse.alphabet	אלפבית
+@id	fontsBrowse.numerals	ספרות
+@id	fontsBrowse.sampleText	טקסט לדוגמה
+@id	fontsBrowse.size	גודל
+@id	fontsBrowse.downloadsOff	ההורדות כבויות
+@id	fontsBrowse.installsOffText	שום דבר לא מותקן לפני שההורדות מותרות.
+@id	fontsBrowse.previewsUnavailable	תצוגות מקדימות של גופנים אינן זמינות
+@id	fontsBrowse.previewsUnreachable	אין גישה לשרת התצוגה המקדימה {server}: {error}. יש לבדוק את הכתובת בהגדרות ← מתקדם.
+@id	fontsBrowse.downloadsOffText	גופנים שאינם מותקנים מציגים דוגמה אחרי תצוגה מקדימה. שום דבר לא יורד לפני שההורדות מותרות.
+@id	fontsBrowse.cards	משפחות
+@id	fontsBrowse.noMatch	אין גופנים תואמים
+@id	fontsBrowse.noMatchHint	אפשר לנסות שם אחר או פחות מסננים.
+@id	fontsBrowse.clearSearch	לנקות את החיפוש והמסננים
+@id	fontsBrowse.indexesUnreadable	לא ניתן לקרוא את אינדקסי הגופנים: {error}
+@id	fontsBrowse.sourceError	{source}: {error}
+@id	fontsBrowse.tryAgain	לנסות שוב
+@id	fontsBrowse.looking	חיפוש גופנים מותקנים…
+@id	fontsBrowse.noInstalled	אין גופנים מותקנים תואמים
+@id	fontsBrowse.installedEmpty	גופנים שמותקנים מ״עיון״ מופיעים כאן, לכל אפליקציות Craft.
+@id	fontsBrowse.tryName	אפשר לנסות שם אחר.
+@id	fontsBrowse.installing	בהתקנה
+@id	fontsBrowse.removing	בהסרה
+@id	fontsBrowse.downloading	בהורדה
+@id	fontsBrowse.updatingSystemFonts	בעדכון גופני המערכת
+@id	fontsBrowse.progress	{what} {percent} %
+@id	fontsBrowse.working	{what}…
+@id	fontsBrowse.retry	לנסות שוב
+@id	fontsBrowse.failedInstall	ההתקנה נכשלה
+@id	fontsBrowse.failedRemove	ההסרה נכשלה
+@id	fontsBrowse.failedDownload	ההורדה נכשלה
+@id	fontsBrowse.failedSystemFonts	עדכון גופני המערכת נכשל
+@id	fontsBrowse.install	להתקין
+@id	fontsBrowse.installFamily	להתקין את {family}
+@id	fontsBrowse.installOptions	אפשרויות התקנה נוספות
+@id	fontsBrowse.installAllApps	להתקין עבור כל היישומים
+@id	fontsBrowse.installCraftApps	להתקין עבור אפליקציות Craft בלבד
+@id	fontsBrowse.preview	להציג תצוגה מקדימה
+@id	fontsBrowse.previewFamily	להציג תצוגה מקדימה של {family}
+@id	fontsBrowse.remove	להסיר
+@id	fontsBrowse.removeFamily	להסיר את {family}
+@id	fontsBrowse.notCurated	לא נבדק
+@id	fontsBrowse.notCuratedTip	משפחה זו מגיעה ממקור שנוסף ידנית. Craft לא בודק אותה.
+@id	fontsBrowse.cardSample	דוגמה
+@id	fontDetails.designedBy	עיצוב: {designer}
+@id	fontDetails.installing	בהתקנה
+@id	fontDetails.removing	בהסרה
+@id	fontDetails.downloading	בהורדה
+@id	fontDetails.updatingSystemFonts	בעדכון גופני המערכת
+@id	fontDetails.installed	מותקן
+@id	fontDetails.installedOnSystem	מותקן במערכת זו
+@id	fontDetails.installAll	להתקין הכול
+@id	fontDetails.installAllOptions	אפשרויות נוספות להתקנת הכול
+@id	fontDetails.installAllApps	להתקין עבור כל היישומים
+@id	fontDetails.installCraftApps	להתקין עבור אפליקציות Craft בלבד
+@id	fontDetails.onlyCraftApps	רק באפליקציות Craft: {reason}
+@id	fontDetails.availableToAll	זמין לכל היישומים
+@id	fontDetails.keptInCraftApps	נשמר באפליקציות Craft בלבד
+@id	fontDetails.makeAvailable	להפוך לזמין לכל היישומים
+@id	fontDetails.keepInCraftApps	לשמור באפליקציות Craft בלבד
+@id	fontDetails.copyFailed	ההעתקה לתיקיית הגופנים של המערכת נכשלה: {error}
+@id	fontDetails.copyNameTaken	לא הועתק לתיקיית הגופנים של המערכת: ל־{file} כבר יש את שם הגופן {name}
+@id	fontDetails.copyInTheWay	לא הועתק לתיקיית הגופנים של המערכת: {file} חוסם את המיקום
+@id	fontDetails.removeAll	להסיר הכול
+@id	fontDetails.preview	להציג תצוגה מקדימה
+@id	fontDetails.install	להתקין
+@id	fontDetails.remove	להסיר
+@id	fontDetails.copyright	זכויות יוצרים
+@id	fontDetails.upstream	מקור במעלה הזרם: {url}
+@id	fontDetails.showLicence	להציג את נוסח הרישיון
+@id	fontDetails.showNotice	להציג הודעה
+@id	fontDetails.licenceText	נוסח הרישיון
+@id	fontDetails.noticeText	הודעה
+@id	fontDetails.loadingText	בטעינה…
+@id	fontDetails.defaultStyle	ברירת מחדל
+@id	fontDetails.installStyle	להתקין את {style}
+@id	fontDetails.removeStyle	להסיר את {style}
+@id	fontDetails.downloadSizeLine	הורדה של {size}
+@id	fontDetails.previewNote	התצוגה המקדימה מורידה את הגופן ({size}) להפעלה הנוכחית בלבד, בלי להתקין אותו.
+@id	fontDetails.notCurated	לא נבדק
+@id	fontDetails.notCuratedNote	משפחה זו מגיעה ממקור שנוסף ידנית ({url}). Craft לא בודק את הגופנים שלה ואת הרישיונות שלהם.
+@id	fontDetails.couldntInstall	ההתקנה נכשלה
+@id	fontDetails.couldntRemove	ההסרה נכשלה
+@id	fontDetails.couldntDownload	ההורדה נכשלה
+@id	fontDetails.couldntUpdateSystemFonts	עדכון גופני המערכת נכשל
+@id	fontDetails.retry	לנסות שוב
+@id	fontDetails.systemFontsNote	גופני מערכת מוסרים בכלי הגופנים של המערכת עצמה.
+@id	fontDetails.systemFontsRemoval	מוסרים בכלי הגופנים של המערכת
+@id	fontDetails.source	מקור
+@id	fontDetails.designer	עיצוב
+@id	fontDetails.licence	רישיון
+@id	fontDetails.stylesFact	סגנונות
+@id	fontDetails.filesFact	קבצים
+@id	fontDetails.downloadSize	גודל ההורדה
+@id	fontDetails.scripts	כתבים
+@id	fontDetails.noStyles	אין סגנונות
+@id	fontDetails.languages	שפות · {n}
+@id	fontDetails.languagesMore	{list} ועוד {n}
+@id	fontDetails.progress	{what} {percent}
+@id	fontDetails.progressUnknown	{what}…
+@id	fontSources.title	מקורות גופנים
+@id	fontSources.remove	להסיר
+@id	fontSources.removeSource	להסיר את {source}
+@id	fontSources.notCurated	לא נבדק
+@id	fontSources.changed	השתנה מאז שנוסף
+@id	fontSources.changedNote	האינדקס בכתובת זו אינו זה שהורד ממנה בפעם הראשונה. יש לבדוק את המקור לפני התקנה ממנו.
+@id	fontSources.addASource	הוספת מקור
+@id	fontSources.add	להוסיף
+@id	fontSources.indexAddress	כתובת האינדקס
+@id	fontSources.addWarning	מקור שמוסיפים אינו נבדק: יש להוסיף רק אינדקסים מהימנים. כל גופן עדיין נבדק מול האינדקס שלו לפני השימוש בו.
+@id	fontSources.downloading	הורדת המקורות…
+@id	fontSources.update	לעדכן מקורות
+@id	fontSources.allowToUpdate	לאפשר הורדות כדי לעדכן
+@id	fontSources.added	נוסף. ההורדה תתבצע כשההורדות יותרו.
+@id	fontSources.couldntAdd	לא ניתן היה להוסיף את המקור: {error}
+@id	fontSources.couldntRemove	לא ניתן היה להסיר את המקור: {error}
+@id	axisSliders.weight	משקל
+@id	axisSliders.width	רוחב
+@id	axisSliders.slant	הטיה
+@id	axisSliders.italic	נטוי
+@id	axisSliders.opticalSize	גודל אופטי
+@id	axisSliders.style	סגנון
+@id	axisSliders.custom	מותאם אישית
+@id	common.cancel	לבטל
+@id	common.close	לסגור
+@plural	{n} style|{n} styles	{n} סגנון|{n} סגנונות|{n} סגנונות
+@plural	{n} family|{n} families	{n} משפחה|{n} משפחות|{n} משפחות
+@plural	{n} font source couldn't be loaded|{n} font sources couldn't be loaded	לא ניתן היה לטעון {n} מקור גופנים|לא ניתן היה לטעון {n} מקורות גופנים|לא ניתן היה לטעון {n} מקורות גופנים
+@plural	{n} style installed|{n} styles installed	{n} סגנון מותקן|{n} סגנונות מותקנים|{n} סגנונות מותקנים

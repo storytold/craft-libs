@@ -15,7 +15,7 @@ use craft_font_manager::{CATALOGS, Catalog, FontEnv, FontsPanel, FontsPanelView,
 use craft_font_store::preview::{Fetch, Previews};
 use craft_font_store::{Cancel, FetchError};
 use craft_host::{AppInfo, Host, InlineJobs, Jobs, MemorySections};
-use craft_i18n::I18n;
+use craft_i18n::{Direction, I18n, Lang};
 use craft_ui::contract::Role;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Room, Target, trial};
@@ -767,6 +767,179 @@ fn a_notice_is_read_only_when_asked_while_downloads_are_off() {
 
     rig.allow();
     assert!(rig.fx.texts().iter().any(|painted| painted.text.contains("Copyright Noticed")), "read once downloads are allowed");
+}
+
+/// Commands use the gender-neutral infinitive, placeholders stay in the translation, and the filter column mirrors
+/// under right-to-left. A label is not cut across its line. Arabic keeps that same trailing column.
+#[trial]
+fn hebrew_commands_are_infinitives_and_the_panel_mirrors() {
+    let i18n = loaded_catalogs();
+    let he = i18n.from_code("he").unwrap();
+    assert_commands_are_infinitives(&i18n, he);
+    assert_placeholders_survive(&i18n, he);
+    assert_plural_forms_differ(&i18n, he);
+
+    let wide = Room::Window.size();
+    let english = show_directed(setup_panel("mirror-en"), host_with(Arc::new(MemorySections::default()), Arc::new(InlineJobs)), Direction::Ltr, wide);
+    let hebrew = show_catalog(&i18n, "he", "mirror-he", wide);
+    let arabic = show_catalog(&i18n, "ar", "mirror-ar", wide);
+    assert_mirrored(&english, &hebrew, &arabic, wide.x);
+    let narrow = Vec2::new(700.0, wide.y);
+    let hebrew_narrow = show_catalog(&i18n, "he", "mirror-he-narrow", narrow);
+    let arabic_narrow = show_catalog(&i18n, "ar", "mirror-ar-narrow", narrow);
+    assert!(label_x(&hebrew_narrow, "כל הקטגוריות") > narrow.x * 0.5);
+    assert!(label_x(&arabic_narrow, "كل الفئات") > narrow.x * 0.5);
+    labels_fit(&hebrew_narrow);
+    labels_fit(&arabic_narrow);
+}
+
+fn assert_mirrored(english: &Rig, hebrew: &Rig, arabic: &Rig, width: f32) {
+    assert!(label_x(english, "All categories") < width * 0.5, "filters stay at the leading edge");
+    assert!(label_x(hebrew, "כל הקטגוריות") > width * 0.5, "Hebrew filters mirror to the trailing edge");
+    assert!(label_x(arabic, "كل الفئات") > width * 0.5, "Arabic filters stay on the trailing edge");
+    labels_fit(hebrew);
+    labels_fit(arabic);
+    not_elided(hebrew, "כל הקטגוריות");
+    not_elided(hebrew, "לשמור את הגופנים באפליקציות Craft בלבד");
+    not_elided(hebrew, "להציג תצוגה מקדימה");
+    not_elided(arabic, "كل الفئات");
+    not_elided(arabic, "معاينة");
+}
+
+fn loaded_catalogs() -> Arc<I18n> {
+    let (i18n, problems) = I18n::new(CATALOGS, &["ja", "ar", "he"]);
+    assert!(problems.is_empty() && i18n.check_all().is_empty(), "{problems:?} {:?}", i18n.check_all());
+    Arc::new(i18n)
+}
+
+fn assert_commands_are_infinitives(i18n: &I18n, he: Lang) {
+    let commands = [
+        ("fontsBrowse.install", "Install"),
+        ("fontsBrowse.remove", "Remove"),
+        ("fontsBrowse.preview", "Preview"),
+        ("fontsBrowse.clearFilters", "Clear filters"),
+        ("fontsBrowse.retry", "Retry"),
+        ("fontsBrowse.tryAgain", "Try again"),
+        ("fontsBrowse.allowDownloads", "Allow downloads"),
+        ("fontsPanel.consentAllow", "Download"),
+        ("fontsPanel.consentTitle", "Download from {source}?"),
+        ("fontDetails.installAll", "Install all"),
+        ("fontDetails.removeAll", "Remove all"),
+        ("fontDetails.showNotice", "Show notice"),
+        ("fontDetails.showLicence", "Show licence text"),
+        ("fontDetails.makeAvailable", "Make available to all apps"),
+        ("fontDetails.keepInCraftApps", "Keep in Craft apps only"),
+        ("fontSources.add", "Add"),
+        ("fontSources.update", "Update sources"),
+        ("fontSources.removeSource", "Remove {source}"),
+        ("common.cancel", "Cancel"),
+        ("common.close", "Close"),
+    ];
+    for (id, english) in commands {
+        let text = i18n.tid(he, id, english);
+        assert_ne!(text, english, "{id}");
+        assert!(text.starts_with('ל'), "{id} is not an infinitive: {text}");
+    }
+}
+
+fn assert_placeholders_survive(i18n: &I18n, he: Lang) {
+    let templates = [
+        ("fontsBrowse.installFamily", "Install {family}"),
+        ("fontsBrowse.previewFamily", "Preview {family}"),
+        ("fontsBrowse.removeFamily", "Remove {family}"),
+        ("fontDetails.installStyle", "Install {style}"),
+        ("fontDetails.copyNameTaken", "Not copied to your system's fonts folder: {file} already has the font name {name}"),
+        ("fontDetails.copyInTheWay", "Not copied to your system's fonts folder: {file} is in the way"),
+        ("fontDetails.languagesMore", "{list} and {n} more"),
+        ("fontsBrowse.previewsUnreachable", "Can't reach the preview server {server}: {error}. Check the address in Settings → Advanced."),
+        ("fontsBrowse.progress", "{what} {percent} %"),
+        ("fontsPanel.consentText", "Craft Font Manager downloads {family} ({size}) from {source}, and checks every file before using it."),
+        (
+            "fontsPanel.consentTextHost",
+            "Craft Font Manager downloads {family} ({size}) from {host}, the server of {source}, a source you added, and checks every file before using it.",
+        ),
+        ("fontsBrowse.sourceError", "{source}: {error}"),
+    ];
+    for (id, english) in templates {
+        let text = i18n.tid(he, id, english);
+        for name in placeholder_names(english) {
+            assert!(text.contains(&format!("{{{name}}}")), "{id} dropped {{{name}}}: {text}");
+        }
+    }
+}
+
+fn assert_plural_forms_differ(i18n: &I18n, he: Lang) {
+    let pairs = [
+        ("{n} style", "{n} styles"),
+        ("{n} family", "{n} families"),
+        ("{n} style installed", "{n} styles installed"),
+        ("{n} font source couldn't be loaded", "{n} font sources couldn't be loaded"),
+    ];
+    for (one, other) in pairs {
+        let singular = i18n.trn(he, 1, one, other);
+        let plural = i18n.trn(he, 5, one, other);
+        assert!(!singular.contains("{n}") && !plural.contains("{n}"), "{one}");
+        assert_ne!(without_digits(&singular), without_digits(&plural), "{one}");
+        let two = i18n.trn(he, 2, one, other);
+        assert!(!two.contains("{n}") && two.chars().all(|c| !c.is_ascii_alphabetic()), "{one}: {two}");
+    }
+}
+
+fn placeholder_names(text: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut rest = text;
+    while let Some((_, after)) = rest.split_once('{') {
+        let Some((name, after)) = after.split_once('}') else { break };
+        names.push(name);
+        rest = after;
+    }
+    names
+}
+
+fn without_digits(text: &str) -> String {
+    text.chars().filter(|c| !c.is_ascii_digit()).collect()
+}
+
+fn setup_panel(name: &str) -> (FontsPanel, Arc<FakeStore>) {
+    let root = root(name);
+    let store = Arc::new(FakeStore::new(root.join("store"), HashMap::new()));
+    let panel = FontsPanel::new(Options::new(catalog(&root), store.clone(), Ok(index())));
+    (panel, store)
+}
+
+fn show_catalog(i18n: &Arc<I18n>, code: &str, name: &str, room: Vec2) -> Rig {
+    let (panel, store) = setup_panel(name);
+    let lang = i18n.from_code(code).unwrap();
+    let host = Arc::new(Host::builder(APP).i18n(Arc::clone(i18n)).lang(lang).jobs(Arc::new(InlineJobs)).build());
+    show_directed((panel, store), host, Direction::Rtl, room)
+}
+
+fn show_directed(panel: (FontsPanel, Arc<FakeStore>), host: Arc<Host>, direction: Direction, room: Vec2) -> Rig {
+    let (panel, store) = panel;
+    let panel = Rc::new(RefCell::new(panel));
+    let shown = Rc::clone(&panel);
+    let mut fx = Fixture::new(move |ui| {
+        FontsPanelView::new(&mut shown.borrow_mut()).show(ui);
+    });
+    fx.room(room).host(host).direction(direction);
+    fx.settle();
+    Rig { fx, panel, store }
+}
+
+fn label_x(rig: &Rig, text: &str) -> f32 {
+    rig.fx.texts().iter().find(|painted| painted.text == text).map(|painted| painted.rect.center().x).unwrap_or_else(|| panic!("no painted {text}"))
+}
+
+fn labels_fit(rig: &Rig) {
+    for painted in rig.fx.texts() {
+        let visible = painted.rect.intersect(painted.clip);
+        assert!(visible.width() + 1.0 >= painted.rect.width(), "label cut across: {:?} {:?}", painted.text, painted.rect);
+    }
+}
+
+fn not_elided(rig: &Rig, text: &str) {
+    let found: Vec<_> = rig.fx.texts().iter().filter(|painted| painted.text == text).collect();
+    assert!(!found.is_empty() && found.iter().all(|painted| !painted.elided), "{text} is missing or elided");
 }
 
 #[trial]
