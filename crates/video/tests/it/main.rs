@@ -1,5 +1,9 @@
 //! Integration tests grouped by codec, retaining each former binary's feature gate.
 
+#[cfg(feature = "smacker-decode")]
+#[path = "smacker/main.rs"]
+mod smacker;
+
 #[cfg(feature = "vmd-decode")]
 #[path = "vmd/main.rs"]
 mod vmd;

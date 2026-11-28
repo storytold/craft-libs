@@ -32,6 +32,7 @@ No codec feature is on by default.
 | `hevc` | [`hevc`](src/hevc/decode/README.md) | ITU-T H.265 / HEVC: decoder (`hevc-decode` alone) and encoder (`hevc-encode` alone) |
 | `vp9` | [`vp9`](src/vp9/decode/README.md) | VP9: decoder (`vp9-decode` alone) and encoder (`vp9-encode` alone) |
 | `av1` | [`av1`](src/av1/decode/README.md) | AV1 (AOMedia Video 1): decoder (`av1-decode` alone) and clean-room encoder (`av1-encode`); tiled rav1e fallback for large frames (`av1-large-encode`) |
+| `smacker` | `smacker` | Smacker video (8-bit paletted, `SMK2` and `SMK4`): decoder (`smacker-decode`) |
 | `vmd` | `vmd` | Sierra VMD video (the 8-bit paletted pictures of Sierra and Coktel Vision game videos): decoder (`vmd-decode`) |
 | `bink` | [`bink`](src/bink/README.md) | Bink video (Bink 1, revisions `f` and `i`): decoder (`bink-decode`) |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |
@@ -47,8 +48,8 @@ comes with its codec's feature):
 - Samples keep the decoder's storage, `u8` or `u16`, with a bit depth per plane (HEVC chroma may
   differ from luma). Converting moves the buffers and copies no samples, except for Motion JPEG and
   Hap, whose decoders return interleaved samples (they are split into planes), and paletted video:
-  VMD holds its picture as palette indices in the decoder, so `VideoFrame::try_from(&decoder)`
-  looks them up and writes new 8-bit R, G, B planes.
+  Smacker and VMD hold their pictures as palette indices in the decoder, so
+  `VideoFrame::try_from(&decoder)` looks them up and writes new 8-bit R, G, B planes.
 - Chroma subsampling is a log2 shift per axis, 0 to 3 (FFV1 codes up to 3).
 - Colour is given as ITU-T H.273 code points (`ColorTags`), mapped from each codec's own
   signalling. Codecs that do not signal a value leave it unspecified (2).
@@ -58,6 +59,49 @@ comes with its codec's feature):
 
 The constructors check that every plane's buffer, stride and size fit the frame, so a picture
 with inconsistent fields is an error, not an out-of-bounds read.
+
+## Smacker
+
+`smacker::Decoder` decodes Smacker video, the 8-bit paletted format of 1990s game cutscenes.
+Smacker has no published specification: the decoder is written from the public community
+description of the format (the MultimediaWiki "Smacker" page), with ffmpeg as an external
+oracle. No FFmpeg or other Smacker implementation was read.
+
+```rust
+use craft_media::smacker::{open, split_frame};
+use craft_video::smacker::Decoder;
+
+let bytes = std::fs::read("intro.smk")?;
+let file = open(&bytes)?;
+let mut dec = Decoder::new(&file.video_params())?;
+for frame in &file.frames {
+    let data = file.read(&bytes, frame)?;
+    let parts = split_frame(&data, frame)?;
+    dec.decode(parts.palette, parts.video)?;
+    let (indexes, palette) = (dec.pixels(), dec.palette()); // or dec.to_rgba()
+}
+```
+
+- Output: one palette index a pixel and a 256-entry RGB palette, or RGBA through `to_rgba`.
+  The decoder keeps the picture and the palette between frames, so frames are decoded in order
+  from the first.
+- Block types: mono, full, void and solid, with runs; the `SMK4` double and half full-block
+  modes; palette chunks (set, keep and copy records). A chunk that ends before the last entry
+  keeps the other entries, as the format description gives it; ffmpeg reads on into the
+  frame's other data instead. No real file had such a chunk.
+- A file's ring frame (`SmackerFile::ring_frame`) decodes like any other frame, after the last
+  one. In 216 of the 243 real files with a ring frame, the picture after it equals the first
+  picture; in the other 27 up to 7% of the pixels differ.
+- The header's row doubling and interlacing flags (`Header::Y_DOUBLED`, `Header::Y_INTERLACED`
+  in `craft_media::smacker`) describe how to show the picture and are left to the caller.
+- Bounds: a picture has at most `MAX_PIXELS` pixels (4096x4096), a tree at most its declared
+  size and the 131071 nodes a tree over 16-bit values can have, and a frame that ends early is an error that keeps the
+  blocks decoded before it.
+- Verified: `tests/smacker` compares pictures with ffmpeg on a directory of real files
+  (`CRAFT_SMACKER_SAMPLES`, the first 150 frames of each file, or all with `CRAFT_SMACKER_FRAMES=0`; skipped when it is not set, since real files come from commercial
+  games and are not in the repository). 1,796 files from four games match on every frame: 357 `SMK2` and 1,439 `SMK4`, whose two
+  extra full-block modes many of them use. ffmpeg refuses six more files (4x4 pictures that
+  only carry sound); the decoder reads them without error, with nothing to compare against.
 
 ## Preparing encoder input
 

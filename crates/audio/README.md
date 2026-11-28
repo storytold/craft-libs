@@ -49,6 +49,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `adpcm` | `adpcm::{ima, ms, yamaha, swf}`: decoders and encoders for IMA WAV, Microsoft, Yamaha and Flash ADPCM | craft-media `bitstream` |
 | `s302m` | `s302m::{decode, Encoder}`: SMPTE ST 302M packets (AES3 audio in MPEG-2 transport streams), 2 to 8 channels of 16, 20 or 24 bits | none |
 | `gsm-decode`, `gsm-encode` (`gsm`) | `gsm::Decoder`, `gsm::Encoder`, `gsm::decode`, `gsm::encode`: GSM 06.10 full-rate speech, bit-exact, raw `.gsm` and WAV (GSM 6.10) packings | none |
+| `smacker-decode` | `smacker::decode`, `smacker::pcm`: the audio chunks of a Smacker file (`craft_media::smacker`) to interleaved 8-bit or 16-bit samples. Not part of `decode` or `TrackDecoder` | craft-media `smacker` |
 | `vmd-decode` | `vmd::Decoder`: Sierra VMD sound (8-bit PCM and 16-bit DPCM), frame by frame from `craft_media::vmd` | none |
 | `peaks` | `peaks::Peaks` | none |
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |
@@ -522,6 +523,7 @@ match craft_audio::decode(&bytes, None) {
 | Opus | native | native, packets (`opus::Encoder`; no file writer) |
 | AC-3, E-AC-3 | native | native; `.ac3` / `.eac3` through `encode` / `FileEncoder`, packets through `ac3::encoder::Encoder` |
 | Vorbis, ADPCM, A-law, µ-law | symphonia | — |
+| Smacker audio (DPCM) | native, chunks through `smacker::decode` (not through `decode` / `Decoder`); Bink audio in Smacker files is not decoded | — |
 
 | Container | Demuxer | Timing |
 |---|---|---|
@@ -643,6 +645,7 @@ Each codec module's rustdoc lists the coding tools it implements.
 | MP3 decoder (`mp3`) | ISO/IEC 11172-3, 13818-3 | Layer III, MPEG-1/2/2.5, 8–48 kHz, every bit rate, CBR and VBR; mono, stereo, dual channel, joint stereo (mid/side and intensity); long, short and mixed blocks; bit reservoir; CRC read, not checked; Xing / Info / VBRI and LAME tags; no free format (read through symphonia) | ffmpeg's float decoder: 127–131 dB SNR on LAME streams of every sampling frequency (CBR, VBR, CRC, no reservoir, transients with short blocks) and on this crate's encoder's; intensity stereo and mixed blocks through LAME frames edited to use them (112–131 dB) |
 | MP3 encoder (`mp3`) | ISO/IEC 11172-3, 13818-3 | Layer III, constant bit rate: 32–320 kbit/s at 32/44.1/48 kHz, 8–160 kbit/s at 16/22.05/24 kHz; mono, stereo, joint stereo (mid/side); bit reservoir; long blocks only; no Xing/Info tag, VBR, CRC or free format | ffmpeg decodes every Huffman code as intended; full encodes at every sampling frequency checked with ffprobe and by SNR of ffmpeg's decode |
 | ALAC (`alac`) | Apple's reference implementation | decode and encode, 1–8 channels, 16/20/24/32 bits (decode: any depth 1–32), fast mode, magic cookie in MP4/Matroska and CAF form | Apple's reference: same packets from the encoder (except 24- and 32-bit packets quiet enough to shift off fewer low bytes, such as silence), same samples from both decoders on 766 configurations; ffmpeg: bit-exact both ways |
+| Smacker audio (`smacker`) | the public community description of the format (MultimediaWiki) | Huffman-coded DPCM chunks, unsigned 8-bit and signed 16-bit, mono and stereo; uncompressed chunks; no Bink audio | ffmpeg: sample for sample on the 151 DPCM tracks of real files from four games (`tests/smacker.rs` with `CRAFT_SMACKER_SAMPLES`; 8-bit mono and stereo, 16-bit mono and stereo). No real file with an uncompressed track was available. Most `SMK4` files checked carry Bink audio instead (942 tracks), which is not decoded |
 
 ### ALAC encoding
 

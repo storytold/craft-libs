@@ -32,6 +32,8 @@ mpegts = []
 vmd = []
 # Ogg demuxer (Ogg Opus and Vorbis mapping, `craft_media::ogg`).
 ogg = []
+# Smacker (SMK) demuxer (`craft_media::smacker`).
+smacker = ["bitstream"]
 # Serialize and Deserialize for `Container`, `CodecId`, `CodecParams` and `PcmFormat`.
 serde = ["dep:serde"]
 

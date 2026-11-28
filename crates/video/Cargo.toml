@@ -1,7 +1,7 @@
 [package]
 autotests = false
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Sierra VMD, Bink."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Smacker, Sierra VMD, Bink."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -82,6 +82,9 @@ theora-decode = ["craft-media/bitstream"]
 theora-encode = ["craft-media/bitstream"]
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
+# Smacker video (the 8-bit paletted game video format): decoder; `smacker` turns it on too.
+smacker = ["smacker-decode"]
+smacker-decode = ["craft-media/smacker"]
 # Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
 vmd = ["vmd-decode"]
 vmd-decode = []
@@ -103,7 +106,7 @@ craft-media-testkit = { workspace = true }
 # The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test; the MP4, MPEG-TS and AVI
 # demuxers, for the track decoder's tests; the Ogg page writer, for tests; the VMD and Bink
 # demuxers, for those decoders'.
-craft-media = { workspace = true, features = ["avi", "bink", "isobmff", "mpegts", "ogg", "vmd"] }
+craft-media = { workspace = true, features = ["avi", "bink", "isobmff", "mpegts", "ogg", "smacker", "vmd"] }
 
 [[example]]
 name = "bink_binkdec"

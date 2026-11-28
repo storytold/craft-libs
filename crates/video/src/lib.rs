@@ -19,6 +19,7 @@
 //! | `hevc` | `hevc` | ITU-T H.265 / HEVC: decoder (`hevc-decode`) and encoder (`hevc-encode`) |
 //! | `vp9` | `vp9` | VP9: decoder (`vp9-decode`) and encoder (`vp9-encode`) |
 //! | `av1` | `av1` | AV1 (AOMedia Video 1): decoder (`av1-decode`) and encoder (`av1-encode`) |
+//! | `smacker` | `smacker` | Smacker video (8-bit paletted): decoder (`smacker-decode`) |
 //! | `vmd` | `vmd` | Sierra VMD video (8-bit paletted): decoder (`vmd-decode`) |
 //! | `bink` | `bink` | Bink video (Bink 1, revisions `f` and `i`): decoder (`bink-decode`) |
 //!
@@ -115,6 +116,9 @@ pub mod vp9;
 
 #[cfg(any(feature = "av1-decode", feature = "av1-encode"))]
 pub mod av1;
+
+#[cfg(feature = "smacker-decode")]
+pub mod smacker;
 
 /// Uncompressed AVI and QuickTime pixel layouts.
 pub mod raw_video;

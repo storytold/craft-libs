@@ -44,6 +44,8 @@ pub enum Container {
     MpegTs,
     /// MPEG-1/2 program stream (MPG, VOB).
     MpegPs,
+    /// Smacker (SMK).
+    Smacker,
     /// Sierra VMD (Video and Music Data).
     Vmd,
     /// Bink (BIK).
@@ -70,6 +72,7 @@ impl Container {
             Container::Mxf => "MXF",
             Container::MpegTs => "MPEG-TS",
             Container::MpegPs => "MPEG-PS",
+            Container::Smacker => "Smacker",
             Container::Vmd => "VMD",
             Container::Bink => "Bink",
         }
@@ -144,6 +147,10 @@ pub enum CodecId {
     Dnxhd,
     /// APV (Advanced Professional Video).
     Apv,
+    /// Smacker audio (Huffman-coded DPCM).
+    SmackerAudio,
+    /// Smacker video.
+    SmackerVideo,
     /// Sierra VMD video (8-bit paletted).
     VmdVideo,
     /// Sierra VMD audio (8-bit PCM or 16-bit DPCM).
@@ -189,6 +196,8 @@ impl CodecId {
             CodecId::Theora => "Theora",
             CodecId::Dnxhd => "DNxHD",
             CodecId::Apv => "APV",
+            CodecId::SmackerAudio => "Smacker audio",
+            CodecId::SmackerVideo => "Smacker video",
             CodecId::VmdVideo => "VMD video",
             CodecId::VmdAudio => "VMD audio",
             CodecId::BinkVideo => "Bink Video",
@@ -216,6 +225,7 @@ impl CodecId {
                 | CodecId::Opus
                 | CodecId::Vorbis
                 | CodecId::Speex
+                | CodecId::SmackerAudio
                 | CodecId::VmdAudio
                 | CodecId::BinkAudioRdft
                 | CodecId::BinkAudioDct
@@ -239,6 +249,7 @@ impl CodecId {
                 | CodecId::Theora
                 | CodecId::Dnxhd
                 | CodecId::Apv
+                | CodecId::SmackerVideo
                 | CodecId::VmdVideo
                 | CodecId::BinkVideo
         )
@@ -290,6 +301,7 @@ impl PcmFormat {
 /// | H.264 / HEVC / AV1 | the `avcC` / `hvcC` / `av1C` record |
 /// | VP9 | the MP4 `vpcC` payload, or Matroska's codec feature metadata |
 /// | APV | the `apvC` record |
+/// | Smacker video | the four tree table sizes (little-endian `u32`s), then the Huffman tree data |
 /// | FFV1 | the version 3 configuration record (dimensions are required separately) |
 /// | VMD video, VMD audio | the 816-byte VMD file header |
 ///

@@ -1,7 +1,7 @@
 [package]
 autotests = false
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and ALAC decoders and encoders, AC-3/E-AC-3 decoder and encoder, MP3 decoder and encoder, Opus decoder and encoder, Vorbis encoder, MP1/MP2 decoders."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and ALAC decoders and encoders, AC-3/E-AC-3 decoder and encoder, MP3 decoder and encoder, Opus decoder and encoder, Vorbis encoder, MP1/MP2 decoders, Smacker audio decoder."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -82,6 +82,8 @@ dsd = []
 mpa-encode = ["mpa-decode", "mp3-encode"]
 # Bluetooth Low Complexity Subband Coding (SBC) audio codec (`sbc`).
 sbc = []
+# Smacker audio (Huffman-coded DPCM) chunk decoder (`smacker`).
+smacker-decode = ["craft-media/smacker"]
 # Sierra VMD sound decoder (`vmd::Decoder`): 8-bit PCM and 16-bit DPCM.
 vmd-decode = []
 # Multi-resolution waveform overviews (`peaks`).
@@ -104,7 +106,7 @@ symphonia = { version = "0.6.1", optional = true, default-features = false, feat
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
 # The VMD demuxer, for the VMD sound decoder's tests.
-craft-media = { workspace = true, features = ["vmd"] }
+craft-media = { workspace = true, features = ["smacker", "vmd"] }
 proptest = { workspace = true }
 serde_json = { workspace = true }
 
@@ -123,3 +125,4 @@ required-features = ["decode"]
 [[example]]
 name = "encode"
 required-features = ["lossless-encode", "aac-encode"]
+

@@ -2,8 +2,9 @@
 
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
 clean-room ISO BMFF (MP4), QuickTime (MOV), Matroska (MKV, WebM), MXF and AVI demuxers and muxers,
-an MPEG-2 Systems (transport and program stream) demuxer and transport stream muxer, and Ogg and
-Sierra VMD demuxers, written from the public specifications. No `unsafe`, no panics on malformed
+an MPEG-2 Systems (transport and program stream) demuxer and transport stream muxer, and Ogg,
+Smacker and Sierra VMD demuxers, written from the public specifications
+(Smacker from the public community description of the format). No `unsafe`, no panics on malformed
 input, builds for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `chrono`
 (for `mxf`), `serde` (optional).
 
@@ -24,13 +25,14 @@ that codec crates use to describe a file and configure a decoder.
 | `bink` | `craft_media::bink` | none |
 | `mxf` | `craft_media::mxf` | `chrono` |
 | `mpegts` | `craft_media::mpegts` | none |
+| `smacker` | `craft_media::smacker` | `bitstream` |
 | `vmd` | `craft_media::vmd` | none |
 | (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource`, `craft_media::interleave` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. `ogg`, `avi`, `bink`, `mxf`, `mpegts` and `vmd` are opt-in as well. The features are independent.
+do not read Matroska. `ogg`, `avi`, `bink`, `mxf`, `mpegts`, `smacker` and `vmd` are opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -130,6 +132,7 @@ Other differences:
 - `BitReader`: MSB-first reader with Exp-Golomb (`ue(v)`, `se(v)`, `te(v)`), as used by
   H.264/HEVC/AV1 headers.
 - `BitWriter`: the matching writer, for encoders and header rewriting.
+- `LsbBitReader`: LSB-first reader (bit 0 of each byte first), as used by Smacker.
 - `unescape_rbsp` / `escape_rbsp`: remove or insert H.264/HEVC emulation-prevention bytes.
 - `annexb_nals` / `length_prefixed_nals`: split Annex-B byte streams and AVCC/HVCC samples into
   NAL units.
@@ -1003,6 +1006,44 @@ ffmpeg's decoded sound sample for sample; and files written by `MxfWriter` from 
 which ffprobe must describe like their source and ffmpeg must decode to the same pictures and
 sound.
 
+## `smacker`
+
+A clean-room Smacker (`.smk`) demuxer. Smacker has no published specification: the module is
+written from the public community description of the format (the MultimediaWiki "Smacker" page)
+and from the behaviour of real files, with ffmpeg and ffprobe as external oracles. No FFmpeg,
+libavformat or other Smacker implementation was read.
+
+```rust
+use craft_media::smacker::{open, split_frame};
+
+let bytes = std::fs::read("intro.smk")?;
+let file = open(&bytes)?;
+println!("{}x{}, {} frames", file.header.width, file.header.height, file.frames.len());
+for frame in &file.frames {
+    let data = file.read(&bytes, frame)?;
+    let parts = split_frame(&data, frame)?;
+    // parts.palette, parts.audio[track], parts.video
+}
+```
+
+| Area | Supported |
+|---|---|
+| Signatures | `SMK2`, `SMK4` (`Version`) |
+| Header | picture size, frame count, frame period (`Header::frame_period`), the ring frame, row interlacing and row doubling flags, the seven audio track slots (`AudioTrack`: rate, 8 or 16 bits, mono or stereo, `AudioCoding`) |
+| Frames | `Frame` (offset, size, key frame flag, palette flag, audio track mask); the ring frame, which leads from the last frame back to the first, is `SmackerFile::ring_frame` |
+| Frame contents | `split_frame`: the palette chunk, the chunk of each audio track, the video data |
+| Codec parameters | `SmackerFile::video_params` (`SmackerVideo`; `extradata` is the four tree table sizes and the Huffman tree data), `AudioTrack::codec_params` (`SmackerAudio`, `Pcm`, or `Unknown` for Bink audio) |
+| Shared with the decoders | `ByteTree`, the byte Huffman tree of the video tree data and the audio chunks |
+
+- A file cut short opens with the frames that are whole (`SmackerFile::truncated`).
+- Bounds: the frame tables and the tree data must fit in the file before anything is allocated
+  for them, and every chunk of a frame must fit in the frame.
+- The decoders are `craft_video::smacker` and `craft_audio::smacker`. No muxer.
+- Tests: `src/smacker/tests.rs` builds files with `craft_media_testkit::smacker` (a writer that
+  shares no code with the reader) and runs the hostile-input hammer. Real Smacker files come from
+  commercial games and are not in the repository; the decoder crates compare against ffmpeg on a
+  local directory of them (`CRAFT_SMACKER_SAMPLES`).
+
 ## `vmd`
 
 A clean-room demuxer for Sierra VMD (Video and Music Data), the video format of Sierra's and
@@ -1058,9 +1099,9 @@ streams and picture rate with ffprobe's.
 Always built, with no dependencies, so codec crates share them:
 
 - `Container`: the file format (`Wav`, `Aiff`, `Flac`, `Mp4`, `QuickTime`, `Matroska`, `WebM`,
-  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`, `MpegTs`, `MpegPs`, `Vmd`), with `name()`.
+  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`, `MpegTs`, `MpegPs`, `Smacker`, `Vmd`), with `name()`.
 - `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, `Speex`, …, `H264`, `Hevc`,
-  `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, `VmdVideo`, `VmdAudio`, …, `Unknown`), with `name()`, `is_audio()`,
+  `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, `SmackerVideo`, `SmackerAudio`, `VmdVideo`, `VmdAudio`, …, `Unknown`), with `name()`, `is_audio()`,
   `is_video()`.
 - `PcmFormat`: the layout of uncompressed samples, built with `PcmFormat::int(bits, signed,
   big_endian)` or `PcmFormat::float(bits, big_endian)`.
@@ -1080,7 +1121,7 @@ All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
 `craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from. It is
 always built, so a crate that uses only `bitstream` can name it too. `isobmff::ByteSource`,
-`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource`, `mxf::ByteSource`, `mpegts::ByteSource` and `vmd::ByteSource` are the same trait. It is implemented for `[u8]`,
+`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource`, `mxf::ByteSource`, `mpegts::ByteSource`, `smacker::ByteSource` and `vmd::ByteSource` are the same trait. It is implemented for `[u8]`,
 `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm). `ReadSeekSource` adapts any
 `Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
 custom source (a web `Blob`, a network range reader) to use every container with it.

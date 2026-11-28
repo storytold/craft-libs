@@ -42,6 +42,9 @@ mod s302m_oracle;
 #[cfg(feature = "sbc")]
 #[path = "sbc_oracle.rs"]
 mod sbc_oracle;
+#[cfg(feature = "smacker-decode")]
+#[path = "smacker.rs"]
+mod smacker;
 #[cfg(feature = "vmd-decode")]
 #[path = "vmd.rs"]
 mod vmd;

@@ -5,8 +5,8 @@
 //! subsampling, an optional alpha plane, colour tags as ITU-T H.273 code points, and timing.
 //! Every decoder output converts into it with `VideoFrame::try_from`, behind the codec's feature.
 //! A conversion moves the sample buffers; it does not copy or rescale samples. Paletted video is
-//! the exception: VMD's decoder holds palette indices, and converting it (`&vmd::Decoder`) writes
-//! new 8-bit R, G, B planes from its palette.
+//! the exception: the Smacker and VMD decoders hold palette indices, and converting them
+//! (`&smacker::Decoder`, `&vmd::Decoder`) writes new 8-bit R, G, B planes from their palettes.
 //!
 //! Plane order is fixed by [`ColorFamily`]: `[Y, Cb, Cr]`, `[R, G, B]` or `[Y]`. Decoders that
 //! store RGB in another order (DNx, VP9 and identity-matrix AV1 store G, B, R) are reordered by

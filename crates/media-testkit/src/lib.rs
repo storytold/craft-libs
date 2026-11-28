@@ -17,10 +17,14 @@
 //! `craft_testkit`.
 //! [`vmd`] writes Sierra VMD fixtures, which ffmpeg can read but not write.
 //!
+//! [`smacker`] builds synthetic Smacker trees, streams and files for the tests of the demuxer and
+//! the decoders.
+//!
 //! Failing loudly is what a test helper is for: a wrong `CRAFT_MEDIA_*` setting or an unwritable
 //! fixture directory panics, which fails the test that asked.
 
 pub mod hostile;
+pub mod smacker;
 pub mod vmd;
 
 use std::path::{Path, PathBuf};
