@@ -111,6 +111,9 @@ pub(crate) struct Shared {
     stacking: Vec<ViewportId>,
     /// The windows that got a primary press, each with the root frame of the press, in this root frame and the last.
     presses: Vec<(ViewportId, u64)>,
+    /// The interface zoom the coming frame's window facts were measured at, read in `set_input`: egui-winit measures
+    /// them before the frame, and a zoom the frame sets applies from its first pass.
+    facts_zoom: Option<f32>,
 }
 
 /// One viewport's window record.
@@ -207,6 +210,8 @@ struct Geometry {
     inner: Rect,
     outer: Option<Rect>,
     scale: Option<f32>,
+    /// The interface zoom the rects are recorded at.
+    zoom: f32,
     maximized: bool,
     fullscreen: bool,
 }
@@ -256,6 +261,7 @@ pub(crate) fn install(
         shared.app_id = app_id;
         shared.system = Some(system);
         shared.store = store;
+        shared.facts_zoom = None;
         match frame.zip(layouts) {
             Some((decision, layouts)) => keep_root_frame(shared, decision, layouts),
             None => {
@@ -282,7 +288,7 @@ fn keep_root_frame(shared: &mut Shared, decision: Decision, layouts: LayoutWatch
 
 /// Before the pass, from `set_input`, outside every egui lock: reads the OS services and refreshes the window
 /// info of every viewport the last root input reported. The system tells the pointer in its own points; egui's are
-/// those divided by the interface zoom.
+/// those divided by the interface zoom, the one the coming frame's window facts were measured at.
 pub(crate) fn set_input(ctx: &Context) {
     let system = shared(ctx, |shared| shared.system.clone());
     let zoom = ctx.zoom_factor();
@@ -298,6 +304,7 @@ pub(crate) fn set_input(ctx: &Context) {
         shared.system_pointer = pointer;
         shared.system_buttons = buttons;
         shared.system_command = command;
+        shared.facts_zoom = Some(zoom);
     });
     if discard && let Some(system) = &system {
         system.discard_marked_text();
