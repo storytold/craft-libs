@@ -20,6 +20,7 @@ struct ReadmeExamples;
 
 mod crypt;
 mod drawing;
+mod ffdata;
 mod fib;
 mod fkp;
 mod fmt;
@@ -91,10 +92,13 @@ enum Cost {
     AltText,
     /// A floating object copied into its anchor: past it the object is left out.
     FloatingObject,
+    /// A legacy form field's definition read from the Data stream and copied into its field:
+    /// past it the field has none.
+    FormData,
 }
 
 impl Cost {
-    const ALL: [Cost; 4] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject];
+    const ALL: [Cost; 5] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject, Cost::FormData];
 
     /// What is left out, for the log.
     fn left_out(self) -> &'static str {
@@ -103,6 +107,7 @@ impl Cost {
             Cost::LinkTarget => "some hyperlinks' text is kept without its link",
             Cost::AltText => "some pictures are left without their alt text",
             Cost::FloatingObject => "some floating shapes and pictures are left out",
+            Cost::FormData => "some form fields are left without their definition",
         }
     }
 }
@@ -111,12 +116,12 @@ impl Cost {
 /// the document has been read, [`Work::log`]).
 struct Work {
     left: std::cell::Cell<u64>,
-    dropped: std::cell::Cell<[bool; 4]>,
+    dropped: std::cell::Cell<[bool; 5]>,
 }
 
 impl Work {
     fn new(budget: u64) -> Self {
-        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; 4]) }
+        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; 5]) }
     }
 
     /// Spends `cost` bytes on `what`: false (and `what` noted as left out) when they aren't left.
@@ -160,6 +165,15 @@ thread_local! {
 }
 /// `sprmCPicLocation`: the fc of a picture in the Data stream.
 const C_PIC_LOCATION: u16 = 0x6A03;
+/// `sprmCFData`: the character's `sprmCPicLocation` is a legacy form field's `FFData` in the
+/// Data stream ([MS-DOC] §2.6.1), not a picture. Its operand is a Bool8 (0 or 1), not a
+/// ToggleOperand.
+const C_FDATA: u16 = 0x0806;
+/// The isprm of `sprmCFData` in a Prm0 ([MS-DOC] §2.9.215). A Prm0's operand is one byte, so it
+/// can't carry `sprmCPicLocation`; only a Prm1's grpprl can. Kept out of [`sprm::from_prm0`],
+/// which feeds character formatting. A Word 6/95 Prm0 holds an opcode instead of an isprm, but
+/// those documents go to `read_word6`, which never reaches this check.
+const PRM0_C_FDATA: u8 = 0x47;
 /// `sprmCSymbol`: the record font and character of a symbol character ([MS-DOC] §2.6.1); the
 /// text stream holds the placeholder U+0028 at its position.
 const C_SYMBOL: u16 = 0x6A09;
@@ -784,7 +798,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     Some(f) => {
                         f.depth = f.depth.saturating_add(1);
                     }
-                    None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None, anchor: anchor_props(ctx, cp) }),
+                    None => {
+                        field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None, anchor: anchor_props(ctx, cp), form: String::new() })
+                    }
                 }
                 cp = cp.saturating_add(1);
                 continue;
@@ -815,6 +831,12 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // Inline picture: the CHPX of the anchor carries sprmCPicLocation.
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
+                // In a field's code this character holds the field's legacy form definition,
+                // not a picture.
+                if take_form_data(ctx, field.as_mut(), chpx, ctx.pieces.piece_prm(cp)) {
+                    cp = cp.saturating_add(units);
+                    continue;
+                }
                 let fc_pic = pic_location(chpx);
                 match fc_pic.and_then(|at| pics.get(ctx.data, at)) {
                     Some(p) => {
@@ -891,6 +913,8 @@ struct FieldBuild {
     sep: Option<FieldResult>,
     /// The begin character's revision marks, for the field object's anchor.
     anchor: CharProps,
+    /// The begin character's legacy form definition (`w:ffData`), empty when it has none.
+    form: String,
 }
 
 /// A field's cached result: its text and, as runs, the formatting of that text. A run is added
@@ -964,7 +988,64 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
         return;
     }
     pb.push('\u{FFFC}', f.anchor);
-    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
+    let form = if form_matches(&instr, &f.form) { f.form } else { String::new() };
+    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form });
+}
+
+/// A definition belongs to a form field of its own kind: `FORMTEXT` takes a text definition,
+/// `FORMCHECKBOX` a check box and `FORMDROPDOWN` a drop-down (values are escaped, so these tags
+/// cannot come from the text). No definition always matches.
+fn form_matches(instr: &str, form: &str) -> bool {
+    if form.is_empty() {
+        return true;
+    }
+    let keyword = instr.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+    match keyword.as_str() {
+        "FORMTEXT" => form.contains("<w:textInput>"),
+        "FORMCHECKBOX" => form.contains("<w:checkBox>"),
+        "FORMDROPDOWN" => form.contains("<w:ddList>"),
+        _ => false,
+    }
+}
+
+/// Takes a legacy form field's definition from the U+0001 character whose CHPX is `chpx` and
+/// whose piece's Prm is `prm`, when it is one: `sprmCFData` is on, and the character is in the
+/// code of the open field `field` (after the instruction, before the separator). Its
+/// `sprmCPicLocation` points at the `FFData`. The piece's Prm applies after the CHPX, so a
+/// `sprmCFData` or `sprmCPicLocation` it carries wins over the CHPX's. True when the character
+/// was a definition, whether or not it could be read, so it is not taken for a picture.
+fn take_form_data(ctx: &WalkCtx<'_>, field: Option<&mut FieldBuild>, chpx: &[u8], prm: PrmRef<'_>) -> bool {
+    let Some(f) = field.filter(|f| f.depth == 1 && f.sep.is_none()) else { return false };
+    // A Prm1 grpprl is charged to the work budget, as for `apply_prm`; once that is spent only
+    // the CHPX is read.
+    let (prm_flag, prm_at) = match prm {
+        PrmRef::Sprm0 { isprm: PRM0_C_FDATA, val } => (Some(val == 1), None),
+        PrmRef::Grpprl { grpprl: Some(g), .. } if ctx.work.charge(g.len() as u64, Cost::Formatting) => form_sprms(g),
+        _ => (None, None),
+    };
+    let flagged = prm_flag.unwrap_or_else(|| sprm::iter(chpx).any(|prl| prl.op == C_FDATA && prl.operand.first() == Some(&1)));
+    if !flagged {
+        return false;
+    }
+    if f.form.is_empty() {
+        let at = prm_at.or_else(|| pic_location(chpx));
+        f.form = at.and_then(|at| ffdata::read(ctx.data, at, ctx.work)).unwrap_or_default();
+    }
+    true
+}
+
+/// The last `sprmCFData` (on when its operand is 1) and the last whole `sprmCPicLocation` in a
+/// piece's Prm1 grpprl: applied in order, the last of each wins.
+fn form_sprms(grpprl: &[u8]) -> (Option<bool>, Option<u32>) {
+    let (mut flag, mut at) = (None, None);
+    for prl in sprm::iter(grpprl) {
+        match (prl.op, prl.operand) {
+            (C_FDATA, _) => flag = Some(prl.operand.first() == Some(&1)),
+            (C_PIC_LOCATION, [b0, b1, b2, b3, ..]) => at = Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
+            _ => {}
+        }
+    }
+    (flag, at)
 }
 
 /// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.

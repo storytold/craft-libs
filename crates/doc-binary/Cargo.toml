@@ -26,6 +26,9 @@ thiserror = { workspace = true }
 # Test files are written with an independent compound-file writer, so craft-cfb's reader is
 # checked against another implementation's output.
 cfb = "0.15"
+# A converted `.doc` is written as `.docx` to check what survives (legacy form fields).
+craft-docx = { workspace = true }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 craft-wordmodel = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
 serde_json = "1"
