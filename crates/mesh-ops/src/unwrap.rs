@@ -1,17 +1,15 @@
 //! Automatic UV unwrapping for meshes imported without texture coordinates.
 //!
 //! Triangles are grouped into charts by flood fill across shared (welded) edges while each face
-//! normal stays within 60° of the chart's seed face. Faces whose projected interiors overlap
-//! get separate charts. Charts are rotated to their principal axes and shelf-packed per material
-//! into 0..1 with one uniform scale. Texel density is the same everywhere within a material.
+//! normal stays within 60° of the chart's seed face. Charts are rotated to their principal axes
+//! and shelf-packed per material into 0..1 with one uniform scale. Texel density is the same
+//! everywhere within a material.
 
 use std::collections::{HashMap, VecDeque};
 
 use glam::{DVec2, DVec3, Vec2, Vec3};
 
 use crate::{GeomError, Mesh, Result};
-
-mod projection;
 
 /// Vertices an unwrap accepts, and the most it produces.
 const MAX_UNWRAP_VERTICES: usize = 20_000_000;
@@ -77,7 +75,6 @@ fn face_has_area(positions: [Vec3; 3]) -> bool {
     })
 }
 
-#[derive(Clone)]
 struct Chart {
     material: usize,
     /// The seed face's first corner. Projections are taken relative to it, in `f64`, so they
@@ -286,17 +283,6 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
                     queue.push_back(g);
                 }
             }
-        }
-    }
-
-    let mut chart_faces = vec![Vec::new(); charts.len()];
-    for (face, &chart) in chart_of.iter().enumerate() {
-        chart_faces[chart as usize].push(face);
-    }
-    for (chart, faces) in chart_faces.into_iter().enumerate() {
-        for face in projection::overlapping_faces(mesh, &charts[chart], &faces) {
-            chart_of[face] = charts.len() as u32;
-            charts.push(charts[chart].clone());
         }
     }
 
@@ -511,28 +497,6 @@ mod tests {
     }
 
     #[test]
-    fn tiny_coincident_sheets_keep_separate_charts() {
-        let side = 2.0f32.powi(-40);
-        let gap = Vec3::Z * 2.0f32.powi(-64);
-        let positions = vec![Vec3::ZERO, Vec3::X * side, Vec3::Y * side, gap, gap + Vec3::X * side, gap + Vec3::Y * side];
-        let mut mesh = Mesh::from_parts(positions, None, Vec::new(), vec![0, 1, 2, 3, 4, 5], "sheets").unwrap();
-        assert_eq!(auto_unwrap(&mut mesh, 4.0, 256).unwrap(), 2);
-    }
-
-    #[test]
-    fn a_planar_fan_keeps_one_chart() {
-        let faces = 1024u32;
-        let mut positions = vec![Vec3::ZERO];
-        for i in 0..faces {
-            let angle = i as f32 * std::f32::consts::TAU / faces as f32;
-            positions.push(Vec3::new(angle.cos(), angle.sin(), 0.0));
-        }
-        let indices = (0..faces).flat_map(|i| [0, i + 1, (i + 1) % faces + 1]).collect();
-        let mut mesh = Mesh::from_parts(positions, None, Vec::new(), indices, "fan").unwrap();
-        assert_eq!(auto_unwrap(&mut mesh, 4.0, 256).unwrap(), 1);
-    }
-
-    #[test]
     fn incomplete_or_unaligned_submeshes_leave_the_layout_unchanged() {
         let original = primitives::cube(1.0);
         for variant in 0..3 {
@@ -564,14 +528,6 @@ mod tests {
     fn weld_grid_keeps_distinct_extreme_positions() {
         let positions = [Vec3::splat(-f32::MAX), Vec3::ZERO, Vec3::splat(f32::MAX)];
         assert_eq!(weld_ids(&positions), vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn nearby_welded_positions_do_not_hide_projected_overlap() {
-        let inside = 1.0 - 2.0f32.powi(-22);
-        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X * inside, Vec3::new(1.0, 1.0, 0.0), Vec3::Y * inside];
-        let mut mesh = Mesh::from_parts(positions, None, Vec::new(), vec![0, 1, 2, 3, 4, 5], "nearby").unwrap();
-        assert_eq!(auto_unwrap(&mut mesh, 4.0, 256).unwrap(), 2);
     }
 
     use glam::Vec4;
