@@ -655,6 +655,119 @@ fn an_optional_palette_bound_to_no_colour_selects_nothing_and_a_pick_writes_a_co
     assert_eq!(fixture.tree().selected_of(blue.node), Some(true), "the written colour's swatch is selected");
 }
 
+/// Every pointer click on a swatch or recent colour — plain, single-frame, or modified — reports one pick on release,
+/// a cancelled drag reports none, a secondary press picks nothing, and Space, Enter and AccessKit clicks each pick once.
+#[trial]
+fn each_swatch_pick_reports_once_across_pointer_keyboard_and_access() {
+    let swatches = palette_swatches();
+    let green = swatch("Green");
+    let bound = Rc::new(Cell::new(green));
+    let reports = Reports::default();
+    let (c, r) = (bound.clone(), reports.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = c.get();
+        let shown = SwatchPalette::new("Swatches", Bind::bound(&mut current), &swatches).recent("Recent colours", &RECENT).show(ui);
+        c.set(current);
+        collect(&r, shown);
+    });
+    fixture.room(PALETTE_WIDE).settle();
+    let _ = std::mem::take(&mut *reports.borrow_mut());
+
+    // 1. Plain click on a new colour: one pick, one edit.
+    let red = fixture.by_label("Red").expect("red");
+    fixture.click(&red).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.picked.len(), 1, "plain click picks once: {:?}", taken.picked);
+    assert_eq!(taken.edits.len(), 1, "plain click edits once: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), swatch("Red").to_rgba());
+
+    // 2. Press and release arriving in one OS frame: one pick, one edit.
+    fixture.advance(1.0);
+    let blue = fixture.by_label("Blue").expect("blue");
+    let at = blue.center();
+    fixture
+        .frame_through(vec![
+            moved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        ])
+        .settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.picked.len(), 1, "single-frame click picks once: {:?}", taken.picked);
+    assert_eq!(taken.edits.len(), 1, "single-frame click edits once: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), swatch("Blue").to_rgba());
+
+    // 3. Press dragged off the cell and released elsewhere: no pick.
+    fixture.advance(1.0);
+    let teal = fixture.by_label("Teal").expect("teal");
+    fixture.drag(&teal, Vec2::new(0.0, 200.0)).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert!(taken.picked.is_empty(), "cancelled drag picks nothing: {:?}", taken.picked);
+    assert!(taken.edits.is_empty(), "cancelled drag edits nothing: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), swatch("Blue").to_rgba());
+
+    // 4. Modified primary click (Shift) on a new colour: one pick on release, not press + release.
+    fixture.advance(1.0);
+    let orange = fixture.by_label("Orange").expect("orange");
+    fixture.hold(Modifiers::SHIFT).click(&orange).hold(Modifiers::NONE).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.picked.len(), 1, "Shift+click picks once: {:?}", taken.picked);
+    assert_eq!(taken.edits.len(), 1, "Shift+click edits once: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), swatch("Orange").to_rgba());
+
+    // 5. Modified press dragged off: no pick.
+    fixture.advance(1.0);
+    let violet = fixture.by_label("Violet").expect("violet");
+    fixture.hold(Modifiers::SHIFT).drag(&violet, Vec2::new(0.0, 200.0)).hold(Modifiers::NONE).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert!(taken.picked.is_empty(), "cancelled Shift+drag picks nothing: {:?}", taken.picked);
+    assert!(taken.edits.is_empty(), "cancelled Shift+drag edits nothing: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), swatch("Orange").to_rgba());
+
+    // 6. Recent row modified click: one pick, one edit.
+    fixture.advance(1.0);
+    let recent = fixture.by_label(&RECENT[0].to_hex()).expect("recent");
+    fixture.hold(Modifiers::SHIFT).click(&recent).hold(Modifiers::NONE).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.picked.len(), 1, "recent Shift+click picks once: {:?}", taken.picked);
+    assert_eq!(taken.edits.len(), 1, "recent Shift+click edits once: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), RECENT[0].to_rgba());
+
+    // 7. Secondary press on a swatch: no pick.
+    fixture.advance(1.0);
+    let green_cell = fixture.by_label("Green").expect("green");
+    let at = green_cell.center();
+    fixture
+        .frame(vec![moved(at)])
+        .frame(vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE }])
+        .frame(vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }])
+        .settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert!(taken.picked.is_empty(), "secondary click picks nothing: {:?}", taken.picked);
+    assert!(taken.edits.is_empty(), "secondary click edits nothing: {:?}", taken.edits);
+
+    // 8. AccessKit click on a new colour: one pick, one edit.
+    let green_cell = fixture.by_label("Green").expect("green");
+    fixture.access(AccessActionKind::Click, &green_cell).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.picked.len(), 1, "AccessKit click picks once: {:?}", taken.picked);
+    assert_eq!(taken.edits.len(), 1, "AccessKit click edits once: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), swatch("Green").to_rgba());
+
+    // 9. Keyboard Space and Enter each pick once.
+    fixture.key(Key::ArrowRight, Modifiers::NONE).key(Key::Space, Modifiers::NONE).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.picked.len(), 1, "Space picks once: {:?}", taken.picked);
+    assert_eq!(taken.edits.len(), 1, "Space edits once: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), swatch("Teal").to_rgba());
+
+    fixture.key(Key::ArrowRight, Modifiers::NONE).key(Key::Enter, Modifiers::NONE).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.picked.len(), 1, "Enter picks once: {:?}", taken.picked);
+    assert_eq!(taken.edits.len(), 1, "Enter edits once: {:?}", taken.edits);
+    assert_eq!(bound.get().to_rgba(), swatch("Blue").to_rgba());
+}
+
 /// The Swatches panel over two groups, collecting the edits it reports and never applying them.
 fn swatches_rig(groups: Vec<SwatchGroup>, state: SwatchesState) -> (Fixture, Rc<RefCell<Vec<SwatchEdit>>>) {
     let edits = Rc::new(RefCell::new(Vec::new()));
