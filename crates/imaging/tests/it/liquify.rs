@@ -140,6 +140,31 @@ fn drag(fixture: &mut Fixture, button: fn(Pos2, bool) -> Event, from: Pos2, to: 
     fixture.frame(Vec::new());
 }
 
+/// Where the brush resize readout's Diameter label is painted, if it is.
+fn diameter_label(fixture: &Fixture) -> Option<Pos2> {
+    fixture.texts().iter().find(|run| run.text.starts_with("Diameter")).map(|run| run.rect.min)
+}
+
+// photocraft#11702: an Alt + right-drag resizes the brush, and its readout stays beside the circle's centre (the
+// press point) while the pointer moves away from it to set the values, rather than following the pointer.
+#[trial]
+fn liquify_brush_resize_readout_stays_beside_the_circles_centre() {
+    let (mut fixture, _app) = open();
+    let press = canvas_point(&fixture, by(-100.0, -100.0));
+    fixture.hold(Modifiers::ALT);
+    fixture.frame(vec![pointer::moved(press)]);
+    fixture.frame(vec![pointer::secondary(press, true)]);
+    let mut places = Vec::new();
+    for offset in [by(60.0, 0.0), by(140.0, 50.0), by(220.0, 120.0)] {
+        fixture.frame(vec![pointer::moved(press + offset)]);
+        places.push(diameter_label(&fixture));
+    }
+    fixture.frame(vec![pointer::secondary(press + by(220.0, 120.0), false)]);
+    let first = places[0].expect("the resize shows its readout");
+    assert!(places.iter().all(|at| *at == Some(first)), "the readout stays in one place: {places:?}");
+    assert!(first.distance(press) < 60.0, "beside the press point {press:?}, at {first:?}");
+}
+
 /// Presses at `at` and moves 30 points away, leaving the stroke open.
 fn open_stroke(fixture: &mut Fixture, at: Pos2) {
     fixture.frame(vec![pointer::moved(at)]);

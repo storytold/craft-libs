@@ -209,7 +209,7 @@ impl CanvasTool for BrushPass<'_> {
             *self.dimensions = step.dimensions;
         }
         let rows = self.brush.resize.readout_rows(&cx.units(), &cx.words::<CanvasControlWords>());
-        cx.hud(rows);
+        self.brush.resize.show_readout(cx, rows);
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {

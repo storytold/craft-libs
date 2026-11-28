@@ -20,7 +20,7 @@
 //!
 //! A brush tool returns [`BrushCursor::cursor`] from `CanvasTool::cursor`. The app shows [`BrushResize::preview`] or
 //! [`BrushCursor::tip_cell`] at the canvas rect in the canvas body, and the tool hands
-//! [`BrushResize::readout_rows`] to `ToolContext::readout`.
+//! [`BrushResize::readout_rows`] to [`BrushResize::show_readout`], which places them beside the circle's centre.
 
 pub(crate) mod cursor;
 pub(crate) mod falloff;

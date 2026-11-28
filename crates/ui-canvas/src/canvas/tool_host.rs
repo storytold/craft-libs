@@ -249,11 +249,12 @@ impl ToolInput {
     }
 }
 
-/// Labelled values for the pointer's side, as a tool handed them over with [`ToolContext::readout`].
+/// Labelled values beside the pointer, or beside the point a tool named, as it handed them over with
+/// [`ToolContext::readout`], [`ToolContext::hud`] or [`ToolContext::hud_at`].
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ToolReadout {
-    /// The pointer on screen.
+    /// The screen point the box sits beside: the pointer, or the point given to [`ToolContext::hud_at`].
     pub at: Pos2,
     /// The rows: a label and its value.
     pub rows: Vec<(Label, String)>,
@@ -281,8 +282,8 @@ pub struct ToolHostResponse {
     pub scroll: Option<Vec2>,
     /// The cursor the tool asked for, after the host requested it.
     pub cursor: Option<Cursor>,
-    /// The values the tool wants beside the pointer. The host has painted them already; this is the data for
-    /// automation.
+    /// The values the tool wants beside the pointer (or the point it named). The host has painted them already; this is
+    /// the data for automation.
     pub readout: Option<ToolReadout>,
     /// The view a tool set with [`ToolContext::set_view`] this pass (the last one, inside the document with Overscroll
     /// off), else the canvas's own ([`ToolPass::view`]): the one view the app copies into its own. A view that
@@ -736,10 +737,13 @@ impl<'m> ToolHost<'m> {
             cursor::request_within(&ctx, wanted.clone(), CursorPriority::Tool, cursor::CursorRegion::new(ui.layer_id(), view));
             response.cursor = Some(wanted);
         }
-        if let Some(at) = current.map(|pointer| pointer.pos) {
+        if let Some(pointer) = current.map(|pointer| pointer.pos) {
             let gate = readouts_shown(&ctx);
-            // One box per pass: a hud replaces a readout asked for in the same pass.
-            let (rows, paints) = if requests.hud.is_some() { (requests.hud, true) } else { (requests.readout, gate) };
+            // One box per pass: a hud replaces a readout asked for in the same pass, and may name its own place.
+            let (at, rows, paints) = match requests.hud {
+                Some((rows, at)) => (at.unwrap_or(pointer), Some(rows), true),
+                None => (pointer, requests.readout, gate),
+            };
             if let Some(rows) = rows {
                 if paints {
                     crate::contract::ghost::readout(&ctx, &env.view(), at, &rows);

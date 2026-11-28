@@ -196,11 +196,10 @@ impl LiquifyCanvasTool<'_> {
         self.settings.brush.density = dimensions.level * 100.0;
     }
 
+    /// The resize's readout beside the circle's centre.
     fn show_readout(&self, cx: &mut ToolContext<'_>) {
         let rows = self.canvas.resize.readout_rows(&cx.units(), &cx.words::<CanvasControlWords>());
-        if !rows.is_empty() {
-            cx.hud(rows);
-        }
+        self.canvas.resize.show_readout(cx, rows);
     }
 
     fn begin_resize(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
