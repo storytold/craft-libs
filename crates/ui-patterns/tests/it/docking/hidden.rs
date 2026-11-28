@@ -94,6 +94,22 @@ fn shift_tab_keeps_the_panels_the_host_names_docked_and_floating_and_tab_hides_t
 }
 
 #[trial]
+fn the_standard_chrome_hiding_hides_every_dock_panel_and_floating_window_yet_keeps_the_body() {
+    let room = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+    let chrome = ShellCx::detached(WindowKey::main(), BodyMode::Normal, room).with_chrome_hidden(true);
+    assert_eq!(
+        shown_under(chrome.clone(), true),
+        BTreeSet::from([CANVAS]),
+        "the standard Tab hides keeps the protected canvas alone, whatever the host names"
+    );
+    assert_eq!(
+        shown_under(chrome.with_edge_reveal(RevealEdge::Start, true), false),
+        BTreeSet::from([CANVAS, TOOLBAR]),
+        "the start edge's reveal shows the start dock alone, as under Tab"
+    );
+}
+
+#[trial]
 fn a_revealed_edge_shows_its_dock_alone_under_tab_and_shift_tab() {
     let room = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
     let tab = ShellCx::detached(WindowKey::main(), BodyMode::Only, room);

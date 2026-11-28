@@ -122,6 +122,9 @@ struct Inner {
     edges: [bool; 3],
     tabs: bool,
     panels_hidden: bool,
+    /// In standard screen mode the user hid the editor's chrome with Tab: the docks, rails and floating panels of the
+    /// body hide with the shell's bars, while the body itself and the document tabs stay.
+    chrome_hidden: bool,
     regions: ShellRegions,
     float_bounds: Rect,
     region: Option<Rect>,
@@ -197,6 +200,7 @@ impl ShellCx {
             edges: [false; 3],
             tabs: true,
             panels_hidden: false,
+            chrome_hidden: false,
             regions,
             float_bounds,
             region: None,
@@ -221,6 +225,13 @@ impl ShellCx {
     /// The panels are hidden while the tools and bars stay (Shift+Tab), or shown.
     pub fn with_panels_hidden(mut self, hidden: bool) -> Self {
         Arc::make_mut(&mut self.inner).panels_hidden = hidden;
+        self
+    }
+
+    /// The editor's chrome is hidden: the user pressed Tab in standard screen mode, so the shell's bars and rails are
+    /// gone and the body's docks, rails and floating panels go with them, while the body and the document tabs stay.
+    pub fn with_chrome_hidden(mut self, hidden: bool) -> Self {
+        Arc::make_mut(&mut self.inner).chrome_hidden = hidden;
         self
     }
 
@@ -280,11 +291,18 @@ impl ShellCx {
         self.inner.panels_hidden
     }
 
-    /// Whether the dock at `edge` shows: in normal mode and during the Tab reveal unless the panels are hidden, and the
-    /// `Start` and `End` docks also while that edge's reveal is on, in body-only mode or while the panels are hidden.
+    /// Whether the user hid the editor's chrome with Tab in standard screen mode: the shell's bars are gone and the
+    /// body's docks and floating panels hide with them, while the body and the document tabs stay.
+    pub fn chrome_hidden(&self) -> bool {
+        self.inner.chrome_hidden
+    }
+
+    /// Whether the dock at `edge` shows: in normal mode and during the Tab reveal unless the panels are hidden or the
+    /// editor's chrome is, and the `Start` and `End` docks also while that edge's reveal is on, in body-only mode or
+    /// while the panels are hidden.
     pub fn dock_visible(&self, edge: super::PaneEdge) -> bool {
         let inner = &*self.inner;
-        let base = !inner.panels_hidden && (inner.mode == BodyMode::Normal || inner.tab_reveal);
+        let base = !inner.panels_hidden && !inner.chrome_hidden && (inner.mode == BodyMode::Normal || inner.tab_reveal);
         base || match edge {
             super::PaneEdge::Start => self.edge_revealed(RevealEdge::Start),
             super::PaneEdge::End => self.edge_revealed(RevealEdge::End),
@@ -293,9 +311,9 @@ impl ShellCx {
     }
 
     /// Whether floating frames show: in normal mode; in body-only mode only during the Tab reveal; never while the
-    /// panels are hidden.
+    /// panels are hidden or the editor's chrome is.
     pub fn floating_visible(&self) -> bool {
-        !self.inner.panels_hidden && (self.inner.mode == BodyMode::Normal || self.inner.tab_reveal)
+        !self.inner.panels_hidden && !self.inner.chrome_hidden && (self.inner.mode == BodyMode::Normal || self.inner.tab_reveal)
     }
 
     /// The same skeleton with its revealed rects registered under `id`, which stays the same across passes. Without
@@ -344,17 +362,19 @@ impl ShellCx {
     }
 
     /// Are slots shown by a reveal (Tab or edge) on this pass? Only body-only mode reveals with Tab; an edge reveals in
-    /// body-only mode and while the panels are hidden.
+    /// body-only mode, while the panels are hidden, and while the editor's chrome is.
     pub fn revealed(&self) -> bool {
         let inner = &*self.inner;
         let body_only = inner.mode == BodyMode::Only;
-        (body_only && inner.tab_reveal) || ((body_only || inner.panels_hidden) && inner.edges.iter().any(|on| *on))
+        let hides_docks = body_only || inner.panels_hidden || inner.chrome_hidden;
+        (body_only && inner.tab_reveal) || (hides_docks && inner.edges.iter().any(|on| *on))
     }
 
-    /// Is the edge reveal on for `edge`? False while the panels show in normal mode, and during the Tab reveal.
+    /// Is the edge reveal on for `edge`? False while the panels show in normal mode with the editor's chrome shown,
+    /// and during the Tab reveal.
     pub fn edge_revealed(&self, edge: RevealEdge) -> bool {
         let inner = &*self.inner;
-        (inner.mode == BodyMode::Only || inner.panels_hidden) && !inner.tab_reveal && inner.edges[edge.index()]
+        (inner.mode == BodyMode::Only || inner.panels_hidden || inner.chrome_hidden) && !inner.tab_reveal && inner.edges[edge.index()]
     }
 
     /// The body rect and the shown slots of this pass.
@@ -390,12 +410,25 @@ pub struct ShellEntry(#[doc(hidden)] pub Option<ShellCx>);
 impl crate::contract::MemoProps for ShellEntry {
     fn key(&self, key: &mut crate::contract::MemoKey) {
         let Some(shell) = &self.0 else { return key.write_u32(0) };
-        let Inner { window, mode, tab_reveal, edges, tabs, panels_hidden, regions, float_bounds, region, page_band, reveals: _, dialog: _ } =
-            &*shell.inner;
+        let Inner {
+            window,
+            mode,
+            tab_reveal,
+            edges,
+            tabs,
+            panels_hidden,
+            chrome_hidden,
+            regions,
+            float_bounds,
+            region,
+            page_band,
+            reveals: _,
+            dialog: _,
+        } = &*shell.inner;
         key.write_u32(1);
         key.feed_hash(window);
         key.feed_hash(&std::mem::discriminant(mode));
-        (*tab_reveal, *edges, *tabs, *panels_hidden).key(key);
+        (*tab_reveal, *edges, *tabs, *panels_hidden, *chrome_hidden).key(key);
         regions.body.key(key);
         key.write_u32(regions.slots.len() as u32);
         for (slot, rect) in &regions.slots {

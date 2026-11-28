@@ -327,6 +327,9 @@ struct Placed<'a, S> {
     title: bool,
     /// The options bar: it follows the place, and it is the options bar's height at every edge.
     options: bool,
+    /// An editor bar or rail: the user's Tab in standard screen mode hides it, while the title and the status bar
+    /// stay.
+    bars: bool,
     /// The slot's name in the shell's words, for a slot of the canvas preset.
     named: Option<fn(&ShellWords) -> Label>,
     version: VersionFn<'a, S>,
@@ -458,6 +461,8 @@ pub struct AppShellOutput {
 pub struct ChromeState {
     /// The user hid every panel, tool and bar.
     pub hidden: bool,
+    /// In standard screen mode the user hid the editor's bars and rails with Tab; the title and status slots stay.
+    pub chrome_hidden: bool,
     /// The panels are hidden while the tools and bars stay.
     pub panels_hidden: bool,
     /// The edge whose slots a reveal shows, when one is on.
@@ -477,7 +482,12 @@ pub fn chrome_state(ctx: &Context, viewport: ViewportId) -> ChromeState {
 impl ChromeState {
     /// What `reveal` says: the one source of a pass's output and of [`chrome_state`].
     fn of(reveal: &Reveal) -> Self {
-        ChromeState { hidden: reveal.hidden(), panels_hidden: reveal.panels_hidden(), revealed: reveal.revealed_edge() }
+        ChromeState {
+            hidden: reveal.hidden(),
+            chrome_hidden: reveal.chrome_hidden(),
+            panels_hidden: reveal.panels_hidden(),
+            revealed: reveal.revealed_edge(),
+        }
     }
 }
 
@@ -505,7 +515,9 @@ impl Outcome for AppShellOutput {
 ///   Tab; the pointer at the top, start or end edge shows that edge's slots, unless a button is held or a popup is
 ///   open or `edge_reveal` is off. Revealed slots cover the body and leave its rect as it is. A screen-mode change ends
 ///   a reveal. The shell takes its own window's Tab toggles from the frame state in the pass that records them: in
-///   normal mode Tab hides every slot and panel and shows them again.
+///   standard screen mode Tab hides the editor's bars and rails (the [`options_bar`](Self::options_bar) and the slots
+///   put by [`top`](Self::top), [`bottom`](Self::bottom), [`start`](Self::start) and [`end`](Self::end)) and shows them
+///   again, while the title and status slots stay shown; in the other normal-mode screen it hides every slot and panel.
 /// - **Canvas preset.** [`title_bar_if`](Self::title_bar_if), [`options_bar`](Self::options_bar),
 ///   and [`status`](Self::status) add the slots of a document editor under the keys of [`slots`](super::slots),
 ///   named by `ShellWords`; the toolbar is a panel of the dock, not a slot; each takes the host's `visible` flag, passed every frame.
@@ -633,8 +645,16 @@ impl<'a, S> AppShell<'a, S> {
 
     /// The title slot with a slot of your own, for a title that follows the host's menu bar flag.
     pub fn title(mut self, slot: Slot, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.title =
-            Some(Placed { slot, edge: PaneEdge::Top, title: true, options: false, named: None, version: Box::new(version), add: Box::new(add) });
+        self.title = Some(Placed {
+            slot,
+            edge: PaneEdge::Top,
+            title: true,
+            options: false,
+            bars: false,
+            named: None,
+            version: Box::new(version),
+            add: Box::new(add),
+        });
         self
     }
 
@@ -649,7 +669,8 @@ impl<'a, S> AppShell<'a, S> {
         self.title(Slot::new(keys::TITLE).visible(visible).reveal_if(visible), version, add)
     }
 
-    /// The options bar, a top slot keyed `"options"` that reveals in body-only mode.
+    /// The options bar, a top slot keyed `"options"` that reveals in body-only mode and hides when the user hides the
+    /// editor's chrome in standard screen mode.
     pub fn options_bar(
         mut self,
         visible: bool,
@@ -662,6 +683,7 @@ impl<'a, S> AppShell<'a, S> {
             edge: PaneEdge::Top,
             title: false,
             options: true,
+            bars: true,
             named: Some(|words| words.options.clone()),
             version: Box::new(version),
             add: Box::new(add),
@@ -669,7 +691,8 @@ impl<'a, S> AppShell<'a, S> {
         self
     }
 
-    /// The status bar, a bottom slot keyed `"status"` that never reveals.
+    /// The status bar, a bottom slot keyed `"status"` that never reveals and stays shown while the user hides the
+    /// editor's chrome in standard screen mode.
     pub fn status(mut self, visible: bool, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
         let slot = Slot::new(keys::STATUS).visible(visible);
         self.slots.push(Placed {
@@ -677,6 +700,7 @@ impl<'a, S> AppShell<'a, S> {
             edge: PaneEdge::Bottom,
             title: false,
             options: false,
+            bars: false,
             named: Some(|words| words.status.clone()),
             version: Box::new(version),
             add: Box::new(add),
@@ -727,7 +751,7 @@ impl<'a, S> AppShell<'a, S> {
         version: impl Fn(&S) -> Option<u64> + 'a,
         add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a,
     ) -> Self {
-        self.slots.push(Placed { slot, edge, title: false, options: false, named: None, version: Box::new(version), add: Box::new(add) });
+        self.slots.push(Placed { slot, edge, title: false, options: false, bars: true, named: None, version: Box::new(version), add: Box::new(add) });
         self
     }
 
@@ -818,14 +842,17 @@ impl<'a, S> AppShell<'a, S> {
             let paged = page.is_some();
             let toggles = take_chrome_toggles(&ctx, viewport, &window);
             if !paged {
-                kept.reveal.apply(&toggles, host_only, allow_reveal);
+                kept.reveal.apply(&toggles, host_only, allow_reveal, mode == ScreenMode::Standard);
             }
             let only = kept.reveal.only(host_only);
+            // In standard screen mode the user's Tab hides the editor's bars and rails; those slots hide and reveal
+            // like they do in body-only mode, while the title and status slots and the body's own parts stay.
+            let bars = kept.reveal.chrome_hidden();
             let pointer = pointer::frame(&ctx);
             let frozen = !pointer.buttons.is_empty() || any_open(&ctx, OpenFilter::Keys);
             let rtl = cx.env.direction().is_rtl();
             if !paged {
-                kept.reveal.track(Tracking::new(only, allow_reveal, edge_reveal), Aim::new(pointer.pos, frozen, cx.rect, rtl));
+                kept.reveal.track(Tracking::new(only || bars, allow_reveal, edge_reveal), Aim::new(pointer.pos, frozen, cx.rect, rtl));
             }
 
             // Every shown slot's rect and the body's, before any slot runs. Slots that a reveal shows in body-only mode
@@ -833,7 +860,9 @@ impl<'a, S> AppShell<'a, S> {
             let plan = |is_dropped: bool| {
                 let visible: Vec<bool> = slots
                     .iter()
-                    .map(|placed| !bare && !paged && kept.reveal.shows(&placed.slot, placed.edge, only, allow_reveal, mode, is_dropped))
+                    .map(|placed| {
+                        !bare && !paged && kept.reveal.shows(&placed.slot, placed.edge, only || (bars && placed.bars), allow_reveal, mode, is_dropped)
+                    })
                     .collect();
                 let claims: Vec<Claim> = slots
                     .iter()
@@ -844,7 +873,7 @@ impl<'a, S> AppShell<'a, S> {
                         key: placed.slot.key(),
                         edge: placed.edge,
                         extent: placed.extent(&tokens, &kept.measured),
-                        overlay: covers(&placed.slot, only),
+                        overlay: covers(&placed.slot, only || (bars && placed.bars)),
                     })
                     .collect();
                 let regions = layout(cx.rect, &claims, rtl);
@@ -887,6 +916,7 @@ impl<'a, S> AppShell<'a, S> {
                 .with_tabs(tabs)
                 .with_tab_reveal(kept.reveal.tab())
                 .with_panels_hidden(chrome.panels_hidden)
+                .with_chrome_hidden(chrome.chrome_hidden)
                 .with_reveals_key(sub(cx.id, "reveals"));
             // The room an embedded shell shows: its rect less what a scroll or a parent clips. Its dialogs are contained in
             // it.
@@ -964,7 +994,7 @@ impl<'a, S> AppShell<'a, S> {
                     for (placed, shown) in slots.iter_mut().zip(&visible) {
                         let floats = floating && placed.options;
                         // A floating bar is a layer over the body: it shows with the covering slots in every mode.
-                        if !*shown || if floats { !covering } else { covers(&placed.slot, only) != covering } {
+                        if !*shown || if floats { !covering } else { covers(&placed.slot, only || (bars && placed.bars)) != covering } {
                             continue;
                         }
                         let by_content = placed.sized_by_content();
