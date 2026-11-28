@@ -648,6 +648,12 @@ impl<K: TextureKey> TextureStore<K> {
                 }
                 return None;
             };
+            if baseline.is_some() && factor > 1 {
+                if let Some(entry) = inner.entries.get_mut(key) {
+                    entry.patchable = false;
+                }
+                return None;
+            }
             let sent = if factor > 1 { reduce_image(&image, factor) } else { image };
             let uploaded = byte_size(texels(sent.size));
             if uploaded > 0 {

@@ -399,7 +399,15 @@ fn pending_job_does_not_overwrite_installed_region_update() {
     // Now job B finishes late in the worker thread:
     jobs.run_all();
 
-    // Frame 4: Run next frame. Verify obsolete job B did NOT overwrite rev C!
+    // Drain finished work while held so state() cannot re-render C, and verify job B did NOT overwrite rev C:
+    thumbs.hold(true);
+    frame(&mut frames, || {
+        let _ = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+    });
+    assert_eq!(thumbs.cache().texture_revision(&ctx, &1), Some(rev_c), "finished job B did not overwrite revision C before re-render");
+    thumbs.hold(false);
+
+    // Frame 5: Run next frame. Verify rev C is still resident!
     frame(&mut frames, || {
         let state = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
         match state {
@@ -593,17 +601,114 @@ fn full_put_and_checked_patch_interleaving_preserves_consistent_revision_and_pix
 
         apply_deltas(&mut pixels);
         let final_rev = store.texture_revision(&ctx, &1).expect("resident revision");
-        if final_rev == rev_b {
-            assert!(pixels.iter().all(|&p| p == shade(100)), "Ready(B) must have pure B pixels, no mixed patch pixels");
-        } else if final_rev == rev_c {
-            for y in 0..LARGE {
-                for x in 0..LARGE {
-                    let expected = if x < SMALL && y < SMALL { shade(200) } else { shade(10) };
-                    assert_eq!(pixels[y * LARGE + x], expected, "Ready(C) must have A + patch C pixels at ({x}, {y})");
-                }
-            }
-        } else {
-            panic!("unexpected final revision: {final_rev:?}");
-        }
+        assert_eq!(final_rev, rev_b, "both orderings must end at revision B");
+        assert!(pixels.iter().all(|&p| p == shade(100)), "Ready(B) must have pure B pixels, no mixed patch pixels");
     }
+}
+
+#[trial]
+fn put_region_checked_rejects_reduced_texture() {
+    let frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    ctx.input_mut(|i| i.max_texture_side = 256);
+    let store = TextureStore::<u32>::in_context(&ctx, "test-reduced-checked", TextureStoreOptions::thumbnails());
+    let rev_1 = Revision::new(1);
+    let rev_2 = Revision::new(2);
+    store.put(&ctx, 1, rev_1, ColorImage::filled([512, 512], shade(50)));
+
+    assert!(store.put_region_checked(&ctx, &1, Some(rev_1), rev_2, [0, 0], square(SMALL, shade(200))).is_none());
+    assert_eq!(store.texture_revision(&ctx, &1), Some(rev_1));
+    assert!(store.put_region(&ctx, &1, rev_2, [0, 0], square(SMALL, shade(200))).is_some());
+    assert_eq!(store.texture_revision(&ctx, &1), Some(rev_2));
+}
+
+#[trial]
+fn thumbnails_geometry_change_requests_full_render() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let thumbs = Thumbnails::<u32>::in_context(&ctx, "test-geom-change", ThumbnailOptions::new());
+    let source = TestPatchSource { seen_patchable: Cell::new(false), seen_resident_revision: Cell::new(None), render_count: Cell::new(0) };
+
+    let req_large = ThumbRequest::for_cell(LARGE as f32, 1.0);
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req_large, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+    assert!(!source.seen_patchable.get());
+
+    // Same geometry is patchable
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req_large, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+    assert!(source.seen_patchable.get());
+
+    // Different side is NOT patchable
+    let req_other_side = ThumbRequest::for_cell((LARGE + 32) as f32, 1.0);
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req_other_side, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+    assert!(!source.seen_patchable.get());
+    assert_eq!(source.seen_resident_revision.get(), None);
+
+    // Different region crop is NOT patchable
+    let req_crop = req_other_side.region(egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(0.5, 0.5)));
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req_crop, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+    assert!(!source.seen_patchable.get());
+    assert_eq!(source.seen_resident_revision.get(), None);
+}
+
+#[trial]
+fn thumbnails_rejected_patch_respects_render_budget() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let thumbs = Thumbnails::<u32>::in_context(&ctx, "test-budget-fallback", ThumbnailOptions::new().renders_per_pass(1));
+    let source = FallbackOnRejectSource { phase: Cell::new(1), saw_fallback_request: Cell::new(false) };
+    let req = ThumbRequest::for_cell(LARGE as f32, 1.0);
+
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+
+    // Phase 2: patch is rejected, budget (1) is exhausted, so fallback waits for the next pass
+    source.phase.set(2);
+    frame(&mut frames, || {
+        let state = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+        assert!(matches!(state, TextureState::Loading { stand_in: Some(_), .. }), "waits for next pass: {state:?}");
+    });
+    assert!(!source.saw_fallback_request.get(), "fallback did not run in the same pass");
+
+    // Next pass: force_full gives patchable: false so full render runs
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+    assert!(source.saw_fallback_request.get(), "fallback ran on next pass");
+}
+
+#[trial]
+fn loader_patch_rejected_reports_rejection_without_unpatching_newer_entry() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let (loader, jobs) = loader_with(&ctx, 1, 16);
+    let rev_1 = Revision::new(1);
+    let rev_2 = Revision::new(2);
+    let rev_3 = Revision::new(3);
+
+    loader.cache().put(&ctx, 1, rev_1, square(LARGE, shade(10)));
+    frame(&mut frames, || {
+        loader.request(&ctx, &1, rev_2, Priority::VISIBLE, || {
+            move |_| Ok(LoadedPicture::Region { baseline: rev_1, origin: [0, 0], image: square(SMALL, shade(200)) })
+        });
+    });
+    // Newer texture rev_3 lands while rev_2's region job is in flight (via another path)
+    loader.cache().put(&ctx, 1, rev_3, square(LARGE, shade(50)));
+    assert!(loader.cache().is_patchable(&ctx, &1));
+
+    jobs.run_all();
+    frame(&mut frames, || {
+        let _ = loader.ask(&ctx, &1, rev_2, Priority::VISIBLE);
+    });
+    assert!(loader.patch_rejected(&ctx, &1, rev_2), "loader reports rejected patch for rev_2");
+    assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(rev_3), "newer entry rev_3 preserved");
+    assert!(loader.cache().is_patchable(&ctx, &1), "newer entry rev_3 stays patchable");
 }
