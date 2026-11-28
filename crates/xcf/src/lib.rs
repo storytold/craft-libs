@@ -15,9 +15,11 @@
 //! Layer modes, colour tags and composite settings are kept as the numbers GIMP wrote; what
 //! they mean to an application is the application's to decide.
 
+pub mod samples;
 #[cfg(test)]
 mod tests;
 mod tiles;
+pub mod transport;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -133,17 +135,17 @@ impl Precision {
             },
             _ => match code {
                 100 => p(1, false, true),
-                150 => p(1, false, false),
+                150 | 175 => p(1, false, false),
                 200 => p(2, false, true),
-                250 => p(2, false, false),
+                250 | 275 => p(2, false, false),
                 300 => p(4, false, true),
-                350 => p(4, false, false),
+                350 | 375 => p(4, false, false),
                 500 => p(2, true, true),
-                550 => p(2, true, false),
+                550 | 575 => p(2, true, false),
                 600 => p(4, true, true),
-                650 => p(4, true, false),
+                650 | 675 => p(4, true, false),
                 700 => p(8, true, true),
-                750 => p(8, true, false),
+                750 | 775 => p(8, true, false),
                 c => Err(invalid(format!("unknown precision {c}"))),
             },
         }
@@ -555,6 +557,7 @@ impl Image {
 
 /// A parsed XCF file: its [`Image`] and the pixels behind it.
 pub struct Xcf<'a> {
+    precision_code: u32,
     c: Cursor<'a>,
     image: Image,
     channels: Vec<usize>,
@@ -591,7 +594,8 @@ impl<'a> Xcf<'a> {
         if (width as usize).saturating_mul(height as usize).saturating_mul(16) > MAX_PIXEL_BYTES {
             return Err(invalid("the canvas exceeds the 1 GiB pixel limit"));
         }
-        let precision = if version >= 4 { Precision::from_header(version, c.u32()?)? } else { Precision::GAMMA8 };
+        let precision_code = if version >= 4 { c.u32()? } else { 150 };
+        let precision = Precision::from_header(version, precision_code)?;
         let base_type = match base_type {
             0 => BaseType::Rgb,
             1 => BaseType::Gray,
@@ -651,7 +655,7 @@ impl<'a> Xcf<'a> {
             let layer = layer(c.at(ptr), &image, &mut meta_budget)?;
             image.layers.push(layer);
         }
-        Ok(Xcf { c, image, channels, meta_budget: Cell::new(meta_budget) })
+        Ok(Xcf { precision_code, c, image, channels, meta_budget: Cell::new(meta_budget) })
     }
 
     /// The file's header and structure.
@@ -661,7 +665,7 @@ impl<'a> Xcf<'a> {
 
     /// Decodes the pixels of layer `index` of [`Image::layers`]; `None` for a layer that has
     /// none (a group). The decoded samples (4 bytes each) are taken from `budget` before
-    /// anything is allocated. `keep_going` is asked every 64 tiles.
+    /// anything is allocated. `keep_going` is checked before work and during tile traversal.
     pub fn layer_pixels(&self, index: usize, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<Option<Pixels>> {
         let layer = self.image.layers.get(index).ok_or_else(|| invalid("no such layer"))?;
         if layer.hierarchy == 0 {
@@ -711,36 +715,24 @@ impl<'a> Xcf<'a> {
     /// Reads a hierarchy: the first level's tiles into floats, `source_channels` as stored
     /// (indexed pixels expand to RGB here).
     fn hierarchy(&self, hptr: usize, source_channels: usize, indexed: bool, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<Pixels> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
         let precision = self.image.precision;
-        let mut c = self.c.at(hptr);
-        let (w, h, bpp) = (c.u32()?, c.u32()?, c.u32()? as usize);
-        if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
-            return Err(invalid(format!("drawable size {w}x{h} is out of range")));
-        }
-        let expected_bpp = source_channels.checked_mul(precision.bytes).ok_or_else(|| invalid("bpp overflow"))?;
-        if bpp != expected_bpp {
-            return Err(invalid(format!("{bpp} bytes per pixel where {expected_bpp} were expected")));
-        }
+        let head = self.hierarchy_head(hptr, source_channels)?;
+        let (w, h, bpp) = (head.width, head.height, head.bpp);
         let channels = if indexed { source_channels + 2 } else { source_channels };
         let count = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(channels)).ok_or_else(|| invalid("drawable overflow"))?;
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the pixel limit"))?;
-        let lptr = c.ptr()?;
-        let mut l = self.c.at(lptr);
-        if (l.u32()?, l.u32()?) != (w, h) {
-            return Err(invalid("the level does not match its hierarchy"));
-        }
         let across = w.div_ceil(TILE) as usize;
-        let down = h.div_ceil(TILE) as usize;
-        let mut tiles = Vec::with_capacity(across * down);
-        for _ in 0..across * down {
-            let p = l.ptr()?;
-            if p == 0 {
-                return Err(invalid("the tile list ends before every tile"));
-            }
-            tiles.push(p);
+        let tiles = self.hierarchy_tiles(&head, false, keep_going)?;
+        if !keep_going() {
+            return Err(Error::Cancelled);
         }
-        let mut data = vec![0.0f32; count];
+        let mut data = Vec::new();
+        data.try_reserve_exact(count).map_err(|_| invalid("not enough memory for drawable samples"))?;
+        data.resize(count, 0.0f32);
         let stride = w as usize * channels;
         let side = TILE as usize;
         for (i, &at) in tiles.iter().enumerate() {
@@ -749,8 +741,10 @@ impl<'a> Xcf<'a> {
             }
             let (tx, ty) = (i % across, i / across);
             let (tw, th) = ((w as usize - tx * side).min(side), (h as usize - ty * side).min(side));
-            let end = tiles.get(i + 1).copied().filter(|&n| n > at).unwrap_or(self.c.b.len());
-            let input = self.c.b.get(at..end.min(self.c.b.len())).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
+            // A tile may precede its level table, but must not decode table bytes.
+            let boundary = if at < head.level { head.level } else { self.c.b.len() };
+            let end = tiles.get(i + 1).copied().unwrap_or(boundary).min(boundary);
+            let input = self.c.b.get(at..end).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
             let raw = tiles::decode(input, self.image.compression, bpp, tw * th)?;
             for (py, row) in raw.chunks_exact(tw * bpp).enumerate() {
                 let start = (ty * side + py) * stride + tx * side * channels;
@@ -773,6 +767,36 @@ impl<'a> Xcf<'a> {
         }
         Ok(Pixels { width: w, height: h, channels, data })
     }
+}
+
+/// The first level has one increasing offset per tile, then a zero terminator.
+/// Validate before allocating the output or deriving a compressed tile's byte extent.
+fn tile_offsets(level: &mut Cursor<'_>, level_start: usize, count: usize, keep_going: &dyn Fn() -> bool) -> Result<Vec<usize>> {
+    let mut tiles = Vec::new();
+    tiles.try_reserve_exact(count).map_err(|_| invalid("not enough memory for tile offsets"))?;
+    for index in 0..count {
+        if index % 64 == 0 && !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let offset = level.ptr()?;
+        if offset == 0 {
+            return Err(invalid("the tile list ends before every tile"));
+        }
+        if offset >= level.b.len() {
+            return Err(invalid("a tile pointer is outside the file"));
+        }
+        if tiles.last().is_some_and(|&previous| offset <= previous) {
+            return Err(invalid("tile offsets must increase"));
+        }
+        tiles.push(offset);
+    }
+    if level.ptr()? != 0 {
+        return Err(invalid("the tile list is missing its zero terminator"));
+    }
+    if tiles.iter().any(|offset| (level_start..level.pos).contains(offset)) {
+        return Err(invalid("a tile points into its own level table"));
+    }
+    Ok(tiles)
 }
 
 fn image_props(c: &mut Cursor<'_>, image: &mut Image) -> Result<()> {

@@ -1738,6 +1738,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabz2"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f77ccd2dfd6403f3ff2c5764e49471f390c2a3700777a15bebd88c9606292bd"
+
+[[package]]
 name = "craft"
 version = "0.1.0"
 dependencies = [
@@ -4898,8 +4904,11 @@ dependencies = [
 name = "craft-xcf"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "crabz2",
  "craft-testkit",
  "flate2",
+ "lzma-rust2",
  "thiserror 2.0.21",
 ]
 
@@ -8608,6 +8617,15 @@ checksum = "297e814c836ae64db86b36cf2a557ba54368d03f6afcd7d947c266692f71115e"
 dependencies = [
  "byteorder",
  "crc",
+]
+
+[[package]]
+name = "lzma-rust2"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1c46f3fcd2e888afdb01a07efc071cb21300e07c68d32c3e8b01b5c8cb1fcaa"
+dependencies = [
+ "sha2 0.11.1",
 ]
 
 [[package]]
