@@ -20,6 +20,9 @@
 //! - `pins` (feature `pins`): the version, source and features of pinned dependencies, and packages
 //!   an app forbids, read from `cargo metadata` (`cargo xtask pdf-deps`).
 //! - `stats` (feature `stats`): files, lines and tests of Rust per workspace crate (`cargo xtask stats`).
+//! - [`icon`]: PNG images packed into a Windows `.ico` ([`icon::ico::pack`]) or a macOS `.icns`
+//!   ([`icon::icns::pack`]), with [`icon::png_size`] and readers for an app's test of its committed
+//!   icons.
 //! - `version` (feature `version`): `cargo xtask version [set X.Y.Z[-pre]]`, which reads and sets the
 //!   `[workspace.package]` version of the root `Cargo.toml` and moves the workspace crates' path
 //!   dependency pins with it.
@@ -47,6 +50,7 @@
 //! ```
 
 pub mod assets;
+pub mod icon;
 #[cfg(feature = "lock")]
 pub mod lock;
 pub mod names;

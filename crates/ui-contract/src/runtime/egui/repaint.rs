@@ -18,7 +18,7 @@ pub(crate) fn request_of(ctx: &Context, viewport: egui::ViewportId) {
 
 /// Asks for one pass of `viewport` after `seconds`; the earliest request of a frame wins.
 pub(crate) fn request_after(ctx: &Context, viewport: egui::ViewportId, seconds: f64) {
-    crate::runtime::replay::note_wake(ctx, crate::runtime::frame::clock(ctx) + seconds);
+    crate::runtime::replay::note_wake_in(ctx, seconds);
     ctx.request_repaint_after_for(std::time::Duration::from_secs_f64(seconds.max(0.0)), viewport);
 }
 
