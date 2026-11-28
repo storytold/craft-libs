@@ -1,0 +1,38 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.solarized-light",
+  "name": "Solarized Light",
+  "version": 1,
+  "variants": "light",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#268bd2",
+    "neutral": "#eee8d5",
+    "status": {
+      "bad": "#dc322f",
+      "good": "#859900",
+      "info": "#268bd2",
+      "warn": "#b58900"
+    }
+  },
+  "shape": null,
+  "light": {
+    "accent.border": "#268bd278",
+    "accent.soft": "#268bd22e",
+    "accent.solid": "#268bd2",
+    "caption.close_hover": "#dc322f",
+    "caption.close_text": "#fdf6e3",
+    "line.border": "#eee8d5",
+    "line.control_edge": "#93a1a1",
+    "line.divider": "#eee8d5",
+    "state.hover": "#eee8d5",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.background": "#eee8d5",
+    "surface.canvas": "#fdf6e3",
+    "surface.panel": "#fdf6e3",
+    "surface.sunken": "#eee8d5",
+    "text.normal": "#073642"
+  }
+}
