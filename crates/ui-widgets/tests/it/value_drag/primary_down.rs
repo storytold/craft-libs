@@ -140,7 +140,8 @@ impl Rig {
         Self { fixture, state, fields }
     }
     fn geometry(&mut self, row: usize) -> Geometry {
-        for _ in 0..((row + 1) * if self.fields { 2 } else { 1 }) {
+        // An inline slider field's slider is its first stop, before its number field.
+        for _ in 0..(if self.fields { row * 2 + 1 } else { row + 1 }) {
             self.fixture.key(Key::Tab, Modifiers::NONE).settle();
         }
         let owner = self.fixture.focused_stop().expect("naturally focused real Slider child").0;

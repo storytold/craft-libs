@@ -21,7 +21,8 @@ use crate::primitives::{ContentPainterCx, HAlign, IconSpec, PaintShape, StrokeWi
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{Label, Units};
 use crate::style::{
-    ComponentStyle, Corners, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceLook, SurfaceStyle, TextLook, UiTokens,
+    ComponentStyle, Corners, DataColor, Flags, FocusLook, IconLook, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceLook, SurfaceStyle,
+    TextLook, UiTokens,
 };
 use craft_behavior::{AccessAction, AccessData, Flow, IconId, Insets, Metrics, Mixed, NavShape, PartKey, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
@@ -243,6 +244,8 @@ pub struct TileStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The name.
     #[style(text)]
     name: TextLook,
@@ -896,6 +899,7 @@ impl Component for Tile<'_> {
                     sizes.inset,
                 ))
                 .gap(sizes.tight),
+            focus: cx.focus_look(),
             name: if key.card {
                 TextLook::new(key.card_text.name_role(), ink(c(text.normal)))
             } else {

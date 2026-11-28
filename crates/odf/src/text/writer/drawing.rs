@@ -383,7 +383,7 @@ impl Writer {
         for m in members {
             let (x, y) = (at.0 + m.x, at.1 + m.y);
             match &m.inline {
-                Inline::Shape { kind, w, h, float, blocks, look, path } => {
+                Inline::Shape { kind, w, h, float, blocks, look, path, .. } => {
                     self.drawing_shape(*kind, (*w, *h), Place::Member(x, y, float.as_deref()), (look, path.as_deref()), blocks, out)
                 }
                 Inline::Image(img) => self.image(img, Place::Member(x, y, img.float.as_deref()), out),
@@ -673,6 +673,7 @@ mod tests {
         let mut w = Writer::with_prefix("wc");
         w.reserved = std::sync::Arc::new(std::iter::once("Pictures/wcimage1.png".to_string()).collect());
         let img = model::Img {
+            link: None,
             data: std::sync::Arc::new(vec![1, 2, 3]),
             ext: "png".into(),
             w: 10.0,

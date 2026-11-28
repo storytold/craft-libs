@@ -33,7 +33,7 @@ name = "StatusReadout"
 old = "craft_ui::patterns::status_readout::StatusReadout"
 new = "craft_ui::bars::StatusReadout"
 status = "moved"
-note = "A `Pattern` shown inside the body of a status `Bar` with `StatusReadout::new(view: Bind<CanvasView>, document: Size, item, &values).show(ui)`; `StatusReadout::new(id_salt)` and `show(ui, zoom, item, values)` are gone. The field shows the device percent of the bound view and writes a typed or scrubbed zoom into it about its centre, inside the document's zoom range. The output is `StatusReadoutOutput { response, zoom: Option<Response>, view: Option<EditEvent<CanvasView>>, item }`. `StatusReadoutLabels` is `StatusReadoutWords`; `labels(..)` is gone (words come from the scope)."
+note = "A `Pattern` shown inside the body of a status `Bar` with `StatusReadout::new(zoom: Bind<f64>, document: Size, item, &values).show(ui)`; `StatusReadout::new(id_salt)` and `show(ui, zoom, item, values)` are gone. The field shows the device percent of the bound zoom (view points per document unit) and writes a typed or scrubbed zoom into it, inside the document's zoom range. The output is `StatusReadoutOutput { response, zoom: Option<Response>, zoom_edits: EditEvents<f64>, item, invalid_zoom }`. `StatusReadoutLabels` is `StatusReadoutWords`; `labels(..)` is gone (words come from the scope)."
 
 [[type]]
 name = "AlignBar"
