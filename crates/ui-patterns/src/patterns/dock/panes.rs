@@ -561,6 +561,7 @@ impl<'a> PaneFrame<'a> {
         let mut props = ContainerProps::new()
             .mount(Mount::Pane(pane))
             .surface(SurfaceKind::Panel)
+            .edge_rule(true)
             .pad(Pad::Regular)
             .sizing(Sizing::Fill)
             .focus(FocusPolicy::PANE)

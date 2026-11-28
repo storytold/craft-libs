@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_gray_rgb_and_rgba_with_odd_widths() {
+    fn feature_config_round_trips_gray_rgb_and_rgba_with_odd_widths() {
         for layout in [ChannelLayout::Gray, ChannelLayout::Rgb, ChannelLayout::Rgba] {
             let img = pattern(13, 7, layout);
             let bytes = encode(&img, Plan { layout, sample: SampleType::U8 }).unwrap();
@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn standard_type_is_blue_first_and_rle_expands() {
+    fn feature_config_standard_type_is_blue_first_and_rle_expands() {
         let f = file(24, 1, &[], 0, 1, 1, &[1, 2, 3, 0]);
         assert_eq!(decode(&f, &Limits::default()).unwrap().data(), &[3, 2, 1]);
         // 0x80 0x00 is a literal 0x80; 0x80 n v is n + 1 copies of v. The 2x2 image has stride 2.
@@ -224,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn colour_mapped_and_one_bit_files() {
+    fn feature_config_colour_mapped_and_one_bit_files() {
         // Two entries: red plane, green plane, blue plane.
         let map = [10, 20, 30, 40, 50, 60];
         let f = file(8, 1, &map, 1, 2, 1, &[0, 1]);
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn one_bit_files_with_a_colour_map_read_as_colour() {
+    fn feature_config_one_bit_files_with_a_colour_map_read_as_colour() {
         // Two entries: red plane, green plane, blue plane; bit 0 is entry 0.
         let map = [10, 20, 30, 40, 50, 60];
         let f = file(1, 1, &map, 1, 3, 1, &[0b0100_0000, 0]);
@@ -248,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn the_unused_first_byte_of_standard_32_bit_pixels_is_not_alpha() {
+    fn feature_config_the_unused_first_byte_of_standard_32_bit_pixels_is_not_alpha() {
         let img = decode(&file(32, 1, &[], 0, 1, 1, &[0, 30, 20, 10]), &Limits::default()).unwrap();
         assert_eq!((img.layout(), img.data()), (ChannelLayout::Rgba, &[10, 20, 30, 255][..]));
         // In the RGB-ordered type the first byte is the alpha the writer stores there.
@@ -257,13 +257,13 @@ mod tests {
     }
 
     #[test]
-    fn an_output_buffer_too_large_to_allocate_is_an_error() {
+    fn feature_config_an_output_buffer_too_large_to_allocate_is_an_error() {
         assert!(reserve(usize::MAX).is_err());
         assert!(reserve(16).is_ok());
     }
 
     #[test]
-    fn hostile_input_is_an_error_not_a_panic() {
+    fn feature_config_hostile_input_is_an_error_not_a_panic() {
         let img = pattern(9, 5, ChannelLayout::Rgb);
         let good = encode(&img, Plan { layout: ChannelLayout::Rgb, sample: SampleType::U8 }).unwrap();
         for len in 0..good.len() {

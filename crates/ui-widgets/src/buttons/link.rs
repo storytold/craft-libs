@@ -77,6 +77,11 @@ pub struct Link {
     #[style_key]
     #[prop]
     tone: Option<Tone>,
+    /// The link sits on the inverse surface (a toast): it reads in `text.on_inverse` in place of the accent or the
+    /// tone, and stays underlined whatever the app's `LinkLook`.
+    #[style_key]
+    #[prop(flag)]
+    on_inverse: bool,
     /// The text before and after the link when it sits in a sentence.
     sentence: Option<(Label, Label)>,
     laid: Laid,
@@ -86,8 +91,17 @@ impl Link {
     /// A link labelled `label`, in body type.
     pub fn new(label: impl Into<Label>) -> Self {
         use crate::contract::Props as _;
-        Link { common: Common::new(), url: None, role: TypeRole::Body, wrap: Wrap::Line, tone: None, sentence: None, laid: Laid::default() }
-            .label(label)
+        Link {
+            common: Common::new(),
+            url: None,
+            role: TypeRole::Body,
+            wrap: Wrap::Line,
+            tone: None,
+            on_inverse: false,
+            sentence: None,
+            laid: Laid::default(),
+        }
+        .label(label)
     }
 
     /// Sets the link in a wrapped paragraph `before` + the label + `after`, in the body ink. Only the link's characters
@@ -141,15 +155,18 @@ impl Component for Link {
     type Output = ButtonOutput;
 
     fn style(cx: &StyleCx<'_>, key: LinkStyleKey) -> LinkStyle {
+        let fixed = |color| {
+            TextLook::new(TypeRole::Body, Stateful::new(color).off(States::new(color, color, color, cx.color(cx.tokens.color.text.disabled))))
+        };
         let text = match key.tone {
-            Some(tone) => {
-                let color = cx.tone(tone);
-                TextLook::new(TypeRole::Body, Stateful::new(color).off(States::new(color, color, color, cx.color(cx.tokens.color.text.disabled))))
-            }
+            _ if key.on_inverse => fixed(cx.color(cx.tokens.color.text.on_inverse)),
+            Some(tone) => fixed(cx.tone(tone)),
             // PLAN: `link_look` takes the enabled state while the style is per key, so the off state is the look's own.
             None => cx.link_look(true),
         };
-        LinkStyle { metrics: Metrics::new(), focus: cx.focus_look(), text, underline: cx.env::<super::LinkLook>() == super::LinkLook::Underlined }
+        // On the inverse surface the link reads in the text's own ink, so the underline is its only mark.
+        let underline = key.on_inverse || cx.env::<super::LinkLook>() == super::LinkLook::Underlined;
+        LinkStyle { metrics: Metrics::new(), focus: cx.focus_look(), text, underline }
     }
 
     /// A middle click opens the link in a new tab. In a sentence the node only hovers: its parts take the click.

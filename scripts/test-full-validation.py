@@ -25,7 +25,8 @@ COMMANDS = [
 # Repository-file bytes must never become bash -c source in a mock-only harness.
 SOURCE = r"""
 set -euo pipefail
-unset CRAFT_HOSTILE_DIVISOR PROPTEST_CASES
+unset PROPTEST_CASES
+export CRAFT_HOSTILE_DIVISOR=1
 if [[ "${RUNNER_OS:-}" = Windows ]]; then
   powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
 fi
@@ -53,7 +54,7 @@ def run(os_name, fail=""):
                CRAFT_HOSTILE_DIVISOR="8", PROPTEST_CASES="64")
     mock = r"""
 cargo() {
-  test -z "${CRAFT_HOSTILE_DIVISOR+x}" && test -z "${PROPTEST_CASES+x}" || return 29
+  test "${CRAFT_HOSTILE_DIVISOR-}" = 1 && test -z "${PROPTEST_CASES+x}" || return 29
   printf '%s\n' "$*"
   if [ "$*" = "$FAIL" ]; then return 17; fi
 }
@@ -112,7 +113,7 @@ class FullValidation(unittest.TestCase):
         self.assertIn("bash scripts/ci-full-validation.sh", text)
         self.assertIn("github.event.label.name != 'full-validation' && github.run_id", text)
         self.assertIn("github.event.action != 'labeled' || github.event.label.name == 'full-validation'", text)
-        self.assertNotIn("CRAFT_HOSTILE_DIVISOR=", text)
+        self.assertNotIn("CRAFT_HOSTILE_DIVISOR=8", text)
         self.assertNotIn("PROPTEST_CASES=", text)
 
     def test_pdf_contracts_are_separate_and_uncapped(self):

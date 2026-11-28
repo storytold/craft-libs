@@ -254,6 +254,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
         &self.items
     }
 
+    fn shows_row_focus(&self) -> bool {
+        true
+    }
+
     fn filtered<'s>(&self, source: &'s dyn ItemSource<K>, env: &Env, kept: Option<&K>) -> Option<Box<dyn ItemSource<K> + 's>> {
         let filter = self.filter.as_ref()?;
         let matcher = Matcher::new(&env.folder(), &filter.query);

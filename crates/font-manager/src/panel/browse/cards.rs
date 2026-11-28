@@ -1,7 +1,7 @@
 //! The family card and the collection of cards the panel lists.
 
 use craft_ui::buttons::{SplitButton, SplitOutput};
-use craft_ui::contract::{Entry, Props as _, Styled as _, clicked};
+use craft_ui::contract::{ActivateOn, Entry, Props as _, Styled as _, clicked};
 
 use super::{
     Access, Badge, Button, Collection, CollectionProps, CollectionResponse, Common, Component, ComponentStyle, ContainerProps, Cow, Cx, DisplayOrder,
@@ -440,7 +440,7 @@ pub struct FamilyCardsStyle {
     metrics: Metrics,
 }
 
-/// The family cards of one list: one Tab stop, Up and Down move the lead, Enter or a double click activates a card.
+/// The family cards of one list: one Tab stop, Up and Down move the lead, Enter or a click activates a card.
 #[derive(craft_ui::contract::Component)]
 #[component(collection)]
 pub struct FamilyCards {
@@ -457,7 +457,7 @@ impl FamilyCards {
         FamilyCards {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Single),
+            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::Click),
         }
         .label(label)
     }
