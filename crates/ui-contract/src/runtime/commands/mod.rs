@@ -381,7 +381,7 @@ impl CommandState {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ResolvedCommand {
-    /// The state's title, else the command's label, else its id.
+    /// The state's title, else the command's label in the host's language (the label is the English key), else its id.
     pub label: Arc<str>,
     /// The command's catalogue label (the registry's), whatever title the state sets; `None` for a command the
     /// registry does not define.

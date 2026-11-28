@@ -8,6 +8,7 @@ use super::{
 use crate::contract::Revision;
 use crate::runtime::egui::sizing::{Rerun, request_discard};
 use crate::runtime::egui::{pass, repaint};
+use crate::runtime::env::Env;
 use crate::runtime::focus::EditSet;
 #[cfg(feature = "testing")]
 use crate::runtime::measure::Resolve;
@@ -271,7 +272,8 @@ struct Gens {
 /// The generations of one viewport's own vantage facts.
 #[derive(Clone, Copy, Default, PartialEq)]
 struct ViewGens {
-    /// Read by every resolution in the viewport: a dialog owns the keys at its focus.
+    /// Read by every resolution in the viewport: a dialog owns the keys at its focus, and the host translates the
+    /// labels.
     keys: u64,
     /// Read by a resolution that picks an instance or reaches by focus: the chain last focused in the viewport and the
     /// instances of its focus chain inside the top modal layer.
@@ -291,6 +293,8 @@ struct View {
     /// The focused stop's edits and those of them that do nothing now. The focus record changes only in an end hook,
     /// so the value `begin` reads holds for the pass.
     edits: Option<(EditSet, EditSet)>,
+    /// The generation of the host the viewport's labels are translated with (`Host::generation`; `None` without one).
+    host: Option<u64>,
     gens: ViewGens,
 }
 /// A press's double-press matcher, its time, and whether a binding's command accepts the press where it lands.
@@ -835,7 +839,9 @@ impl Board {
         let chord = self.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command));
         let chord_text = chord.and_then(|chord| self.keymap.as_ref()?.shown_text.get(&chord).cloned());
         let resolved = ResolvedCommand {
-            label: shown.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
+            label: shown
+                .and_then(|s| s.title_ref().cloned())
+                .unwrap_or_else(|| def.map_or_else(|| Arc::from(command.id.as_str()), |def| translated(ctx, &def.label))),
             catalog_label: def.map(|def| Arc::from(def.label.as_str())),
             icon: shown.and_then(|s| s.icon_ref().cloned()).or_else(|| def.and_then(|def| def.icon.clone())),
             chord,
@@ -1470,6 +1476,13 @@ fn vantage_under(ctx: &Context, layer: Id, stop: Option<(focus::StopRec, Vec<Id>
     })
 }
 
+/// A command set's `label`, the English key, in the language of the running viewport's host; English without the
+/// host's catalogs or a row for it.
+fn translated(ctx: &Context, label: &str) -> Arc<str> {
+    let host = Env::host_of(ctx);
+    Arc::from(host.as_deref().and_then(|host| Some(host.i18n()?.t(host.lang(), label))).unwrap_or(label))
+}
+
 /// `command` as seen by `instance` (`None` for the app) from `from` (`None`: the key focus of the running pass), with
 /// the gate applied, and the inputs it was made from; `reads` holds what the caller read to find the instance.
 fn resolve_in(
@@ -2085,6 +2098,7 @@ pub(crate) fn begin(ctx: &Context) {
     let returning = focused.filter(|_| !shortcuts.keys.is_empty()).and_then(|focused| Returning::of(ctx, focused));
     let shell = frame::shell_root(ctx, viewport);
     let edits = focused_edits(ctx, viewport);
+    let host = Env::host_of(ctx).map(|host| host.generation());
     let taken = with(ctx, |board| {
         if board.held_open != held_open {
             board.held_open = held_open;
@@ -2132,6 +2146,11 @@ pub(crate) fn begin(ctx: &Context) {
         let view = board.views.entry(viewport).or_default();
         if view.dialog_keys != shortcuts.dialog {
             view.dialog_keys = shortcuts.dialog;
+            view.gens.keys += 1;
+        }
+        // A command's label is translated with the viewport's host: another host (another language) shows it anew.
+        if view.host != host {
+            view.host = host;
             view.gens.keys += 1;
         }
         if view.inside_modal != inside_modal {

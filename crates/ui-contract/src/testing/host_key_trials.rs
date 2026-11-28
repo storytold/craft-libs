@@ -1429,6 +1429,33 @@ fn a_declared_edit_keeps_the_app_s_title() {
     assert_eq!(declared_retitled, undeclared_retitled, "and the app's new title");
 }
 
+/// A library command no state titles shows its set's label in the host's language, with the English label as the key,
+/// and follows the host to another language; its catalogue label stays English (#4004).
+#[trial]
+fn a_library_command_s_label_follows_the_host_s_language() {
+    use craft_host::{AppInfo, Host, InlineJobs};
+    let (i18n, problems) = craft_i18n::I18n::from_owned([("de".to_owned(), String::new(), "\tCut\tAusschneiden\n".to_owned())], &["de"]);
+    assert!(problems.is_empty(), "{problems:?}");
+    let i18n = Arc::new(i18n);
+    let german = i18n.from_code("de");
+    assert!(german.is_some(), "the catalog offers de");
+    let Some(german) = german else { return };
+    let english = Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(i18n).jobs(Arc::new(InlineJobs)).build());
+    let (_, mut show) = host_window();
+    let mut frames = Frames::new();
+    frames.host(Arc::new(english.with_lang(german)));
+    frames.idle(2, &mut show);
+    let translated = crate::runtime::commands::resolve(&frames.ctx, EditCommands::Cut);
+    frames.host(english);
+    frames.idle(2, &mut show);
+    let back = crate::runtime::commands::resolve(&frames.ctx, EditCommands::Cut);
+    assert!(translated.catalog_label.is_some(), "Cut is a library command");
+    let Some(catalog) = translated.catalog_label.as_deref() else { return };
+    assert_ne!(&*translated.label, catalog, "in German the label is the catalog's row for Cut");
+    assert_eq!(translated.catalog_label, back.catalog_label, "the catalogue label is the same in both languages");
+    assert_eq!(&*back.label, catalog, "back in English the label is the set's again");
+}
+
 #[trial]
 fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     let edits = EditSet::NONE.with(EditCommand::Cut).with(EditCommand::Copy).with(EditCommand::Paste);
