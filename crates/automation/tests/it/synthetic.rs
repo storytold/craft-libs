@@ -606,3 +606,184 @@ fn ui_move_refuses_a_missing_coordinate() {
         assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "ui.move {params} queued nothing");
     }
 }
+
+/// A rig whose UI refuses every pressed key named in `refused`, reporting it to `channel` as the running pass's
+/// refusal, polls the channel's input waiters at the end of each pass as an application does, and records which
+/// request each pass carried.
+fn refusing_rig(channel: &Rc<RefCell<craft_automation::control::ControlChannel>>, refused: &'static [Key]) -> (Rig, Rc<RefCell<Vec<Option<u64>>>>) {
+    let running = Rc::new(RefCell::new(Vec::new()));
+    let (seen, channel) = (running.clone(), channel.clone());
+    let fx = Fixture::new(move |ui| {
+        let host = WindowHost::of(ui.ctx());
+        seen.borrow_mut().push(host.injected_running_request());
+        let pressed: Vec<Key> =
+            ui.input(|i| i.events.iter().filter_map(|e| if let Event::Key { key, pressed: true, .. } = e { Some(*key) } else { None }).collect());
+        for key in pressed.into_iter().filter(|key| refused.contains(key)) {
+            let request = host.injected_running_request().expect("a pressed key comes from injected input");
+            channel.borrow_mut().input_refused(request, &format!("{key:?} is not available"));
+        }
+        channel.borrow_mut().poll_input(&host);
+    });
+    (Rig { fx, passes: Rc::default() }, running)
+}
+
+/// Queues `ui.key` for `key` in the main window and parks its reply on the request's own number.
+fn queue_key(rig: &Rig, channel: &Rc<RefCell<craft_automation::control::ControlChannel>>, key: &str) -> std::sync::mpsc::Receiver<Value> {
+    queue_key_in(rig, channel, key, ViewportId::ROOT)
+}
+
+/// [`queue_key`] for the window `viewport`.
+fn queue_key_in(
+    rig: &Rig,
+    channel: &Rc<RefCell<craft_automation::control::ControlChannel>>,
+    key: &str,
+    viewport: ViewportId,
+) -> std::sync::mpsc::Receiver<Value> {
+    use craft_automation::control::{ControlRequest, Reply};
+    let host = rig.host();
+    input_method("ui.key", &json!({"key": key}), &host, viewport, &map).expect("a method").expect("valid");
+    let (req, reply) = ControlRequest::new("ui.key", json!({"key": key}));
+    channel.borrow_mut().settle(req, Reply::after_input_request(host.injected_last_request()), None, 0.0);
+    reply
+}
+
+/// Two input requests in flight: each reply carries only the refusals its own input caused, and input that caused
+/// none still replies `ok`.
+#[trial]
+fn each_input_reply_carries_only_its_own_requests_refusals() {
+    use craft_automation::control::ControlChannel;
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (mut rig, _) = refusing_rig(&channel, &[Key::B, Key::C]);
+    rig.fx.settle();
+    let a = queue_key(&rig, &channel, "A");
+    let b = queue_key(&rig, &channel, "B");
+    let c = queue_key(&rig, &channel, "C");
+    let host = rig.host();
+    for _ in 0..32 {
+        rig.fx.frame(Vec::new());
+        if host.injected_idle() {
+            break;
+        }
+    }
+    // The pass after the input settled answers its waiters.
+    rig.fx.frame(Vec::new());
+    assert_eq!(a.try_recv().expect("A is answered"), json!({"ok": true, "result": null}));
+    assert_eq!(b.try_recv().expect("B is answered"), json!({"ok": false, "error": "B is not available", "errors": ["B is not available"]}));
+    assert_eq!(c.try_recv().expect("C is answered"), json!({"ok": false, "error": "C is not available", "errors": ["C is not available"]}));
+}
+
+/// Input cancelled after a request's input ran keeps that request's own reply; the request whose input was still
+/// queued or running is cancelled.
+#[trial]
+fn cancelled_input_keeps_the_replies_of_requests_that_already_ran() {
+    use craft_automation::control::ControlChannel;
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (mut rig, running) = refusing_rig(&channel, &[Key::A]);
+    rig.fx.settle();
+    let a = queue_key(&rig, &channel, "A");
+    let b = queue_key(&rig, &channel, "B");
+    let host = rig.host();
+    let b_number = host.injected_last_request();
+    for _ in 0..32 {
+        rig.fx.frame(Vec::new());
+        if running.borrow().last().copied().flatten() == Some(b_number) {
+            break;
+        }
+    }
+    assert_eq!(running.borrow().last().copied().flatten(), Some(b_number), "B's input is running");
+    assert!(a.try_recv().is_err() && b.try_recv().is_err(), "nothing is answered while input remains");
+    assert!(channel.borrow_mut().cancel_input(&host, "the test cancelled it"));
+    assert_eq!(a.try_recv().expect("A is answered"), json!({"ok": false, "error": "A is not available", "errors": ["A is not available"]}));
+    assert_eq!(b.try_recv().expect("B is answered"), json!({"ok": false, "error": "input cancelled: the test cancelled it"}));
+}
+
+/// Past `MAX_INPUT_REFUSALS` a reply keeps the first refusals and says it is truncated; a refusal for a request no
+/// reply waits on goes to no one.
+#[trial]
+fn a_reply_with_too_many_refusals_is_truncated_and_idle_passes_report_nothing() {
+    use craft_automation::control::{ControlChannel, MAX_INPUT_REFUSALS};
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let flood = channel.clone();
+    let mut rig = Rig {
+        fx: Fixture::new(move |ui| {
+            let host = WindowHost::of(ui.ctx());
+            if let Some(request) = host.injected_running_request() {
+                for i in 0..MAX_INPUT_REFUSALS + 3 {
+                    flood.borrow_mut().input_refused(request, &format!("refusal {i}"));
+                }
+            }
+            flood.borrow_mut().poll_input(&host);
+        }),
+        passes: Rc::default(),
+    };
+    rig.fx.settle();
+    let reply = queue_key(&rig, &channel, "A");
+    let host = rig.host();
+    assert!(!channel.borrow_mut().input_refused(host.injected_last_request() + 1, "unknown"), "no reply waits on that request");
+    for _ in 0..32 {
+        rig.fx.frame(Vec::new());
+        if host.injected_idle() {
+            break;
+        }
+    }
+    rig.fx.frame(Vec::new());
+    let answer = reply.try_recv().expect("answered");
+    assert_eq!(answer["truncated"], true, "{answer}");
+    let first: Vec<Value> = (0..MAX_INPUT_REFUSALS).map(|i| json!(format!("refusal {i}"))).collect();
+    assert_eq!(answer["errors"], Value::Array(first), "the first refusals are kept, in order");
+    assert_eq!(answer["error"], "refusal 0");
+}
+
+/// A window the rig never runs a pass of: input queued there stays queued.
+fn idle_window() -> ViewportId {
+    ViewportId::from_hash_of("a window with no passes")
+}
+
+/// Request numbers count across windows, but each window runs its own queue: input still queued in
+/// one window has not run because a later request ran in another, so a cancel cancels it.
+#[trial]
+fn input_queued_in_another_window_is_not_taken_for_run() {
+    use craft_automation::control::ControlChannel;
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (mut rig, _) = refusing_rig(&channel, &[Key::B]);
+    rig.fx.settle();
+    let elsewhere = queue_key_in(&rig, &channel, "A", idle_window());
+    let main = queue_key(&rig, &channel, "B");
+    let host = rig.host();
+    for _ in 0..32 {
+        rig.fx.frame(Vec::new());
+        if !host.injected_request_queued(host.injected_last_request()) {
+            break;
+        }
+    }
+    rig.fx.frame(Vec::new());
+    assert!(main.try_recv().is_err() && elsewhere.try_recv().is_err(), "the other window's input keeps both waiting");
+    assert!(channel.borrow_mut().cancel_input(&host, "the test cancelled it"));
+    assert_eq!(elsewhere.try_recv().expect("A is answered"), json!({"ok": false, "error": "input cancelled: the test cancelled it"}));
+    assert_eq!(main.try_recv().expect("B is answered"), json!({"ok": false, "error": "B is not available", "errors": ["B is not available"]}));
+}
+
+/// Withdrawing one window's input cancels the requests it dropped; a request queued in another
+/// window keeps waiting, and is answered once its own input has run.
+#[trial]
+fn a_withdrawal_keeps_the_waiters_of_input_it_did_not_drop() {
+    use craft_automation::control::ControlChannel;
+    use craft_automation::synthetic::TARGET_CHANGED;
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (mut rig, _) = refusing_rig(&channel, &[]);
+    rig.fx.settle();
+    let dropped = queue_key(&rig, &channel, "A");
+    let elsewhere = queue_key_in(&rig, &channel, "B", idle_window());
+    let host = rig.host();
+    host.withdraw_injected(ViewportId::ROOT);
+    rig.fx.frame(Vec::new());
+    let answer = dropped.try_recv().expect("the withdrawn request is answered");
+    assert!(answer["error"].as_str().is_some_and(|error| error.contains(TARGET_CHANGED)), "{answer}");
+    assert!(elsewhere.try_recv().is_err(), "the other window's request still waits on its input");
+    assert!(host.injected_request_queued(host.injected_last_request()), "its input is still queued");
+}

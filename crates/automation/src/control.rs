@@ -129,6 +129,15 @@ pub enum Reply {
     },
     /// Synthetic input was queued: reply once the app has processed all of it.
     AfterInput,
+    /// Synthetic input was queued as the window host's request `request`
+    /// ([`WindowHost::injected_last_request`] right after queuing it): reply once the app has
+    /// processed all of it, with the refusals that request's own input caused
+    /// ([`ControlChannel::input_refused`]).
+    #[non_exhaustive]
+    AfterInputRequest {
+        /// The window host's number for the request.
+        request: u64,
+    },
     /// A command started a background job and the caller waits: reply with its result when it
     /// has been applied, or with its error or `cancelled`.
     AfterJob(JobId),
@@ -162,6 +171,11 @@ impl Reply {
         Self::Screenshot { token, path: params.path, region: params.region, viewport }
     }
 
+    /// [`Reply::AfterInputRequest`] for the window host's request `request`.
+    pub fn after_input_request(request: u64) -> Self {
+        Self::AfterInputRequest { request }
+    }
+
     /// `Done` with the [`result_reply`] of a method's result.
     pub fn from_result(r: Result<Value, String>) -> Self {
         Self::Done(result_reply(r))
@@ -177,6 +191,47 @@ pub fn result_reply(r: Result<Value, String>) -> ControlResponse {
     }
 }
 
+/// At most this many refusals are kept for one input request's reply; it says `"truncated": true`
+/// when more were reported.
+pub const MAX_INPUT_REFUSALS: usize = 64;
+
+/// The reply for input that was processed with `refusals` (none: `{"ok": true, "result": null}`),
+/// else `{"ok": false, "error": <first>, "errors": [...]}`, with `"truncated": true` when
+/// [`MAX_INPUT_REFUSALS`] dropped some.
+pub fn input_reply(refusals: &[String], truncated: bool) -> ControlResponse {
+    match refusals.first() {
+        None => json!({"ok": true, "result": null}),
+        Some(first) if truncated => json!({"ok": false, "error": first, "errors": refusals, "truncated": true}),
+        Some(first) => json!({"ok": false, "error": first, "errors": refusals}),
+    }
+}
+
+/// A reply waiting on synthetic input, and the refusals its request's input caused.
+struct InputWaiter {
+    reply: Sender<ControlResponse>,
+    /// The window host's number for its request; `None` for [`Reply::AfterInput`], which collects
+    /// no refusals.
+    request: Option<u64>,
+    refusals: Vec<String>,
+    truncated: bool,
+    /// A step of its request was seen running.
+    started: bool,
+    /// Its request's input has run: it started and none of its steps is still queued.
+    ran: bool,
+}
+
+impl InputWaiter {
+    /// A waiter for `request`.
+    fn new(reply: Sender<ControlResponse>, request: Option<u64>) -> Self {
+        Self { reply, request, refusals: Vec::new(), truncated: false, started: false, ran: false }
+    }
+
+    /// Its reply once its input was processed.
+    fn processed(&self) -> ControlResponse {
+        input_reply(&self.refusals, self.truncated)
+    }
+}
+
 /// The requests waiting for the app, and the replies waiting on input, jobs and screenshots.
 ///
 /// Per frame: `while let Some(req) = channel.next_request() { let outcome = app.handle(&req); channel.settle(ctx, req, outcome, document); }`
@@ -186,7 +241,7 @@ pub fn result_reply(r: Result<Value, String>) -> ControlResponse {
 #[non_exhaustive]
 pub struct ControlChannel {
     rx: Receiver<ControlRequest>,
-    input_waiters: Vec<Sender<ControlResponse>>,
+    input_waiters: Vec<InputWaiter>,
     job_waiters: Vec<(JobId, Sender<ControlResponse>)>,
     tree_waiters: Vec<Sender<ControlResponse>>,
     held_waiters: Vec<(DialogId, u64, Sender<ControlResponse>)>,
@@ -238,7 +293,8 @@ impl ControlChannel {
             Reply::Done(v) => {
                 let _ = reply.send(v);
             }
-            Reply::AfterInput => self.input_waiters.push(reply),
+            Reply::AfterInput => self.input_waiters.push(InputWaiter::new(reply, None)),
+            Reply::AfterInputRequest { request } => self.input_waiters.push(InputWaiter::new(reply, Some(request))),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
             Reply::AccessTree => self.tree_waiters.push(reply),
             Reply::AfterHeldOk { dialog, open, refused } => {
@@ -262,36 +318,93 @@ impl ControlChannel {
         }
     }
 
-    /// The pass that consumed the injected input ended: reply
-    /// `{"ok": true, "result": null}` to every [`Reply::AfterInput`] waiter. Call it only after a
-    /// pass that reached the end of the UI with the injected queue empty; an early-returning pass
-    /// keeps the waiters.
+    /// Something injected input asked for was refused (a disabled command, a dialog's refused
+    /// OK) in a pass that carries request `request`'s step
+    /// ([`WindowHost::injected_running_request`]): `error` goes to that request's
+    /// [`Reply::AfterInputRequest`] reply. A blank error is ignored; past [`MAX_INPUT_REFUSALS`]
+    /// the reply is marked truncated. True when a waiter took it.
+    pub fn input_refused(&mut self, request: u64, error: &str) -> bool {
+        self.note_started(request);
+        let error = error.trim();
+        let Some(waiter) = self.input_waiters.iter_mut().find(|waiter| waiter.request == Some(request)) else { return false };
+        if error.is_empty() {
+            return false;
+        }
+        if waiter.refusals.len() >= MAX_INPUT_REFUSALS {
+            waiter.truncated = true;
+        } else {
+            waiter.refusals.push(error.to_owned());
+        }
+        true
+    }
+
+    /// A step of request `request` is running.
+    fn note_started(&mut self, request: u64) {
+        for waiter in self.input_waiters.iter_mut().filter(|waiter| waiter.request == Some(request)) {
+            waiter.started = true;
+        }
+    }
+
+    /// At the end of a pass: the waiters whose request started and has no step left queued have
+    /// run. Read before a withdrawal or cancel drops queued steps, so a dropped request never
+    /// counts as run.
+    fn note_ran(&mut self, host: &WindowHost) {
+        if let Some(request) = host.injected_running_request() {
+            self.note_started(request);
+        }
+        for waiter in self.input_waiters.iter_mut().filter(|waiter| waiter.started && !waiter.ran) {
+            waiter.ran = waiter.request.is_some_and(|request| !host.injected_request_queued(request));
+        }
+    }
+
+    /// The pass that consumed the injected input ended: reply to every input waiter,
+    /// `{"ok": true, "result": null}` or its refusals ([`input_reply`]). Call it only after a pass
+    /// that reached the end of the UI with the injected queue empty; an early-returning pass keeps
+    /// the waiters.
     pub fn input_processed(&mut self) {
         for waiter in self.input_waiters.drain(..) {
-            let _ = waiter.send(json!({"ok": true, "result": null}));
+            let _ = waiter.reply.send(waiter.processed());
         }
     }
 
     /// The injected input was dropped (the window lost it, a modal took over): reply
-    /// `{"ok": false, "error": "input cancelled: {reason}"}` to every [`Reply::AfterInput`]
-    /// waiter.
+    /// `{"ok": false, "error": "input cancelled: {reason}"}` to every input waiter, except a
+    /// [`Reply::AfterInputRequest`] whose input had already run (as [`Self::poll_input`] saw at
+    /// the end of a pass), which gets its own reply as [`Self::input_processed`] gives it.
     pub fn input_cancelled(&mut self, reason: &str) {
         for waiter in self.input_waiters.drain(..) {
-            let _ = waiter.send(json!({"ok": false, "error": format!("input cancelled: {reason}")}));
+            let reply = if waiter.ran { waiter.processed() } else { json!({"ok": false, "error": format!("input cancelled: {reason}")}) };
+            let _ = waiter.reply.send(reply);
         }
     }
 
+    /// The host withdrew queued input ([`TARGET_CHANGED`]): a [`Reply::AfterInputRequest`] whose
+    /// request still has steps queued (input of a viewport the withdrawal did not cover) keeps
+    /// waiting; the others are answered as [`Self::input_cancelled`] answers them.
+    fn input_withdrawn(&mut self, host: &WindowHost) {
+        let (waiting, answered): (Vec<_>, Vec<_>) = std::mem::take(&mut self.input_waiters)
+            .into_iter()
+            .partition(|waiter| !waiter.ran && waiter.request.is_some_and(|request| host.injected_request_queued(request)));
+        self.input_waiters = answered;
+        self.input_cancelled(TARGET_CHANGED);
+        self.input_waiters = waiting;
+    }
+
     /// Answers the [`Reply::AfterInput`] waiters from the window host's input state: with
-    /// `input cancelled` when the host withdrew queued input ([`TARGET_CHANGED`]), with success
+    /// `input cancelled` when the host withdrew queued input ([`TARGET_CHANGED`]) (a request whose
+    /// input ran, or whose input the withdrawal did not cover, is not cancelled), with success
     /// once nothing is queued or in flight. Call it once per pass, at the end of the pass (after its
     /// UI ran): the step that pass consumed counts as run, so the reply goes out with that pass
-    /// ([`WindowHost::injected_idle_at_pass_end`]). Called between passes, it waits for the pass. It also has the host
-    /// keep its access trees, which `control` targets and `ui.find` read.
+    /// ([`WindowHost::injected_idle_at_pass_end`]). Called between passes, it waits for the pass. It
+    /// also notes which requests' input has run, and has the host keep its access trees, which
+    /// `control` targets and `ui.find` read.
     pub fn poll_input(&mut self, host: &WindowHost) {
         host.keep_access_trees();
         if host.take_injected_withdrawn() {
-            self.input_cancelled(TARGET_CHANGED);
-        } else if host.injected_idle_at_pass_end() {
+            self.input_withdrawn(host);
+        }
+        self.note_ran(host);
+        if host.injected_idle_at_pass_end() {
             self.input_processed();
         }
     }
