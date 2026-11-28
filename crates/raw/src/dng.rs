@@ -193,11 +193,12 @@ pub(crate) fn is_plain_cfa_tiff(tiff: &Tiff, bytes: &[u8]) -> bool {
     }
     match info.compression {
         t::compression::NONE => true,
-        t::compression::JPEG => info
-            .chunks(bytes.len() as u64)
-            .first()
-            .and_then(|c| craft_tiff::image::chunk_bytes(bytes, c))
-            .is_some_and(|src| crate::ljpeg::frame_info(src).is_ok()),
+        t::compression::JPEG => info.chunks(bytes.len() as u64).first().and_then(|c| craft_tiff::image::chunk_bytes(bytes, c)).is_some_and(|src| {
+            match crate::dctjpeg::is_dct(src) {
+                true => crate::dctjpeg::frame_info(src).is_ok(),
+                false => crate::ljpeg::frame_info(src).is_ok(),
+            }
+        }),
         _ => false,
     }
 }

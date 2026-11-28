@@ -3,7 +3,7 @@
 #[cfg(feature = "dng")]
 use crate::unpack::inflate;
 use crate::unpack::{f16_to_f32, f24_to_f32, read_u16s, undo_diff_u16, undo_float_predictor, unpack_lsb, unpack_msb, unpack_words32_msb_with};
-use crate::{Limits, RawData, RawError, Result, ljpeg};
+use crate::{Limits, RawData, RawError, Result, dctjpeg, ljpeg};
 use craft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
 use craft_tiff::{ByteOrder, tags::compression as comp};
 use rayon::prelude::*;
@@ -83,9 +83,18 @@ pub(crate) fn check_image(data: &[u8], info: &ImageInfo, limits: &Limits) -> Res
     // bytes are counted once per chunk that points at them here: tiles may legitimately share one payload (identical
     // tiles written once), and each copy is decoded in full, so every reference brings its payload's samples. The
     // unique-byte bound above still caps what a small payload shared by a large grid can make the output reserve.
-    let referenced = chunks.iter().fold(0u64, |sum, c| sum.saturating_add(chunk_bytes(data, c).map_or(0, |b| b.len() as u64)));
-    if info.compression == comp::JPEG && referenced.saturating_mul(32) < total as u64 {
-        return Err(RawError::Corrupt(format!("{referenced} bytes of lossless JPEG data cannot hold {total} samples")));
+    // A DCT chunk (Blackmagic's lossy CinemaDNG) codes a flat 8 x 8 block in two bits at least (a DC code and an EOB
+    // code), so 256 samples per byte; its own bound keeps the unique-byte cap above.
+    if info.compression == comp::JPEG {
+        let (mut referenced, mut capacity) = (0u64, 0u64);
+        for b in chunks.iter().filter_map(|c| chunk_bytes(data, c)) {
+            let per_byte = if dctjpeg::is_dct(b) { DCT_SAMPLES_PER_BYTE } else { 32 };
+            referenced = referenced.saturating_add(b.len() as u64);
+            capacity = capacity.saturating_add((b.len() as u64).saturating_mul(per_byte));
+        }
+        if capacity < total as u64 {
+            return Err(RawError::Corrupt(format!("{referenced} bytes of JPEG data cannot hold {total} samples")));
+        }
     }
     // Validate that the source actually contains the declared image before reporting a format
     // limitation. A truncated unsupported float DNG must not be mistaken for a valid raw and
@@ -125,7 +134,21 @@ pub(crate) fn read_image_in(
             {
                 match info.compression {
                     7 => {
-                        ljpeg::frame_info(src)?;
+                        if dctjpeg::is_dct(src) {
+                            // the full read checks every DCT tile's frame before decoding it, so this checks them all
+                            let planar = info.planar == 2 && info.samples_per_pixel > 1;
+                            let cpp = if planar { 1 } else { info.samples_per_pixel as usize };
+                            for c in info.chunks(data.len() as u64) {
+                                let src = chunk_bytes(data, &c).ok_or_else(|| RawError::Corrupt("chunk offset past end of file".into()))?;
+                                if dctjpeg::is_dct(src) {
+                                    check_dct_chunk(src, info, &c, cpp, limits)?;
+                                } else {
+                                    ljpeg::frame_info(src)?;
+                                }
+                            }
+                        } else {
+                            ljpeg::frame_info(src)?;
+                        }
                     }
                     comp::JPEG_XL => {
                         let planar = info.planar == 2 && info.samples_per_pixel > 1;
@@ -290,6 +313,49 @@ fn chunk_samples(c: &Chunk, ccpp: usize) -> usize {
     (c.width as usize).saturating_mul(c.height as usize).saturating_mul(ccpp)
 }
 
+/// Whether a DCT frame's samples, copied in raster order, fill whole rows of a `cw`-wide tile with `cpp` samples
+/// per pixel and cover `vh..=ch` of its rows. Blackmagic codes each frame row as several tile rows side by side
+/// (a 1032 x 2176 tile as a 2064 x 1088 frame), so the frame width may be a whole multiple of the tile width.
+fn dct_frame_fits(fw: usize, fh: usize, fc: usize, cw: usize, vh: usize, ch: usize, cpp: usize) -> bool {
+    let rows_per_frame_row = if cw == 0 || !fw.is_multiple_of(cw) { 0 } else { fw / cw };
+    let rows = fh.saturating_mul(rows_per_frame_row);
+    fc == cpp && rows_per_frame_row > 0 && rows >= vh && rows <= ch
+}
+
+/// The fewest DCT samples per entropy byte [`check_image`] allows: a flat 8 x 8 block in a 1-bit DC and a 1-bit EOB code.
+const DCT_SAMPLES_PER_BYTE: u64 = 256;
+
+/// What both header and full reads require of a DCT chunk from its headers: integer samples, the tile and frame sample
+/// limits [`decode_chunk`] applies, and a frame that fits the tile ([`check_dct_frame`]).
+fn check_dct_chunk(src: &[u8], info: &ImageInfo, c: &Chunk, cpp: usize, limits: &Limits) -> Result<()> {
+    if info.sample_format == 3 {
+        return Err(dct_float());
+    }
+    let (cw, ch, _, vh) = chunk_dims(info, c);
+    let n = cw.checked_mul(ch).and_then(|v| v.checked_mul(cpp)).ok_or(RawError::Limit("chunk too large"))?;
+    if n > limits.samples() {
+        return Err(RawError::Limit("chunk too large"));
+    }
+    let (fw, fh, fc, _) = dctjpeg::frame_info(src)?;
+    if fw.checked_mul(fh).and_then(|v| v.checked_mul(fc)).is_none_or(|v| v > n.saturating_mul(2)) {
+        return Err(RawError::Limit("JPEG too large"));
+    }
+    check_dct_frame(fw, fh, fc, cw, vh, ch, cpp)
+}
+
+/// A DCT JPEG tile decodes to integer samples, which a floating-point (SampleFormat 3) image cannot hold.
+fn dct_float() -> RawError {
+    RawError::Unsupported("floating-point samples in DCT JPEG tiles".into())
+}
+
+/// [`dct_frame_fits`] as the error both header and full reads give for a frame that doesn't fit.
+fn check_dct_frame(fw: usize, fh: usize, fc: usize, cw: usize, vh: usize, ch: usize, cpp: usize) -> Result<()> {
+    if dct_frame_fits(fw, fh, fc, cw, vh, ch, cpp) {
+        return Ok(());
+    }
+    Err(RawError::Corrupt(format!("DCT JPEG tile is {fw}x{fh}x{fc}, expected rows of {cw}x{cpp} samples, {vh}..{ch} of them")))
+}
+
 /// Consecutive index ranges of `chunks` whose combined nominal samples (`ccpp` per pixel) stay within the group size
 /// [`read_image`] uses for an image of `total` samples (at least one chunk per range). A decoder that holds its
 /// decoded tiles until it copies them decodes one range at a time, so it holds a group's frames beside the output,
@@ -345,8 +411,19 @@ fn decode_chunk(
         }
         comp::JPEG => {
             // A frame may hold at most twice the tile's samples, with no floor: a 65,536-sample floor let each of
-            // many tiny tiles decode (and keep) a frame far larger than the tile budget counts (storytold/lightcraft#4024)
-            let f = ljpeg::decode(src, n.saturating_mul(2))?;
+            // many tiny tiles decode (and keep) a frame far larger than the tile budget counts (storytold/lightcraft#4024).
+            // Blackmagic's lossy CinemaDNG DCT-codes (SOF0/SOF1, 12-bit) its tiles under this compression code too.
+            let limit = n.saturating_mul(2);
+            let f = if dctjpeg::is_dct(src) {
+                if float {
+                    return Err(dct_float());
+                }
+                let f = dctjpeg::decode(src, limit)?;
+                check_dct_frame(f.width, f.height, f.components, cw, vh, ch, cpp)?;
+                f
+            } else {
+                ljpeg::decode(src, limit)?
+            };
             if f.data.len() < n {
                 // Some writers encode edge tiles smaller than nominal: accept a frame that covers the rows inside the image.
                 if f.data.is_empty() || f.data.len() % (cw * cpp) != 0 || f.data.len() / (cw * cpp) < vh {
@@ -1074,6 +1151,175 @@ mod lossy_tests {
             read_image(&zlib, &info(zlib.len() as u64), ByteOrder::Little, Packing::Msb, &Limits::default()),
             Err(RawError::Corrupt(_))
         ));
+    }
+
+    #[test]
+    fn dct_header_and_full_reads_agree_on_tile_shape() {
+        // A 16 x 8 TIFF tile, with its visible height and component layout varied below.
+        for (fw, fh, height, cpp, planar, fits) in [
+            (16, 8, 8, 1, 1, true),
+            (32, 4, 8, 1, 1, true),   // two tile rows per frame row
+            (16, 4, 4, 1, 1, true),   // edge tile coded only to its visible height
+            (32, 2, 4, 1, 1, true),   // both layouts together
+            (8, 8, 8, 1, 1, false),   // narrower than a tile row
+            (16, 4, 8, 1, 1, false),  // missing visible rows
+            (16, 16, 8, 1, 1, false), // more than the nominal rows
+            (24, 8, 8, 1, 1, false),  // partial tile rows
+            (16, 8, 8, 3, 1, false),  // one frame component for three interleaved samples
+            (16, 8, 8, 3, 2, true),   // planar chunks each need only one component
+            (32, 4, 8, 3, 2, true),
+        ] {
+            let mut jpg = Vec::new();
+            jpeg_encoder::Encoder::new(&mut jpg, 100).encode(&vec![128; fw as usize * fh as usize], fw, fh, jpeg_encoder::ColorType::Luma).unwrap();
+            let planes = if planar == 2 { cpp as usize } else { 1 };
+            let info = ImageInfo {
+                width: 16,
+                height,
+                bits_per_sample: vec![8; cpp as usize],
+                samples_per_pixel: cpp,
+                compression: comp::JPEG,
+                photometric: 32803,
+                planar,
+                predictor: 1,
+                sample_format: 1,
+                new_subfile_type: 0,
+                layout: Layout::Tiles { tile_width: 16, tile_height: 8 },
+                offsets: vec![0; planes],
+                byte_counts: vec![jpg.len() as u64; planes],
+            };
+            for mode in [crate::Mode::Header, crate::Mode::Full] {
+                let result = read_image_in(mode, &jpg, &info, ByteOrder::Little, Packing::Msb, &Limits::default());
+                if fits {
+                    let samples = if mode == crate::Mode::Header { 0 } else { 16 * height as usize * cpp as usize };
+                    assert_eq!(
+                        result,
+                        Ok(RawData::U16(vec![128; samples])),
+                        "{mode:?}, frame {fw}x{fh}, height {height}, cpp {cpp}, planar {planar}"
+                    );
+                } else {
+                    assert!(
+                        matches!(&result, Err(RawError::Corrupt(m)) if m.starts_with("DCT JPEG tile")),
+                        "{mode:?}, frame {fw}x{fh}, height {height}, cpp {cpp}, planar {planar}: {result:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dct_frames_fit_whole_tile_rows() {
+        // (frame w, h, components) against a 1032-wide tile, 2176 rows, all visible, one sample per pixel
+        let fits = |w, h, c| dct_frame_fits(w, h, c, 1032, 2176, 2176, 1);
+        assert!(fits(1032, 2176, 1));
+        assert!(fits(2064, 1088, 1), "Blackmagic: two tile rows per frame row");
+        assert!(!fits(2064, 1000, 1), "too few rows");
+        assert!(!fits(2064, 1100, 1), "more rows than the tile");
+        assert!(!fits(1000, 2176, 1), "partial rows");
+        assert!(!fits(1032, 2176, 3), "components");
+        assert!(!fits(0, 2176, 1));
+        // an edge tile may stop after its visible rows
+        assert!(dct_frame_fits(2064, 600, 1, 1032, 1200, 2176, 1));
+    }
+
+    /// A grey 8-bit DCT JPEG of `w` x `h` and an image of `tiles` (16 x 8 tiles in one row) whose tile `k` is `jpgs[k]`.
+    fn dct_tiles(jpgs: &[Vec<u8>], width: u32, height: u32, tile: (u32, u32), sample_format: u16) -> (Vec<u8>, ImageInfo) {
+        let mut file = Vec::new();
+        let (mut offsets, mut byte_counts) = (vec![], vec![]);
+        for j in jpgs {
+            offsets.push(file.len() as u64);
+            byte_counts.push(j.len() as u64);
+            file.extend(j);
+        }
+        let info = ImageInfo {
+            width,
+            height,
+            bits_per_sample: vec![if sample_format == 3 { 16 } else { 8 }],
+            samples_per_pixel: 1,
+            compression: comp::JPEG,
+            photometric: 32803,
+            planar: 1,
+            predictor: 1,
+            sample_format,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: tile.0, tile_height: tile.1 },
+            offsets,
+            byte_counts,
+        };
+        (file, info)
+    }
+
+    fn grey_jpeg(w: u16, h: u16) -> Vec<u8> {
+        let mut jpg = Vec::new();
+        jpeg_encoder::Encoder::new(&mut jpg, 100).encode(&vec![128; w as usize * h as usize], w, h, jpeg_encoder::ColorType::Luma).unwrap();
+        jpg
+    }
+
+    fn both_modes(file: &[u8], info: &ImageInfo, limits: &Limits) -> [Result<RawData>; 2] {
+        [crate::Mode::Header, crate::Mode::Full].map(|mode| read_image_in(mode, file, info, ByteOrder::Little, Packing::Msb, limits))
+    }
+
+    #[test]
+    fn dct_header_reads_check_every_tile() {
+        let (file, info) = dct_tiles(&[grey_jpeg(16, 8), grey_jpeg(16, 8)], 32, 8, (16, 8), 1);
+        let [header, full] = both_modes(&file, &info, &Limits::default());
+        assert_eq!(header, Ok(RawData::U16(vec![])));
+        assert_eq!(full, Ok(RawData::U16(vec![128; 256])));
+        // the second tile's frame is 24 wide: partial tile rows, rejected by both reads
+        let (file, info) = dct_tiles(&[grey_jpeg(16, 8), grey_jpeg(24, 8)], 32, 8, (16, 8), 1);
+        for r in both_modes(&file, &info, &Limits::default()) {
+            assert!(matches!(&r, Err(RawError::Corrupt(m)) if m.starts_with("DCT JPEG tile")), "{r:?}");
+        }
+        // a second tile whose frame header is zero-sized fails both reads too
+        let mut zero = grey_jpeg(16, 8);
+        let sof = zero.windows(2).position(|b| b == [0xff, 0xc0]).unwrap();
+        zero[sof + 5..sof + 7].copy_from_slice(&[0, 0]);
+        let (file, info) = dct_tiles(&[grey_jpeg(16, 8), zero], 32, 8, (16, 8), 1);
+        for r in both_modes(&file, &info, &Limits::default()) {
+            assert!(matches!(&r, Err(RawError::Corrupt(m)) if m.contains("frame header")), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn dct_header_reads_apply_the_sample_limits() {
+        // a 32 x 16 tile over a 16 x 8 image: the image's 128 samples pass a 200-sample limit, the tile's 512 do not
+        let (file, info) = dct_tiles(&[grey_jpeg(32, 16)], 16, 8, (32, 16), 1);
+        let [header, full] = both_modes(&file, &info, &Limits::default());
+        assert_eq!((header, full), (Ok(RawData::U16(vec![])), Ok(RawData::U16(vec![128; 128]))));
+        let limits = Limits { max_samples: 200, ..Limits::default() };
+        for r in both_modes(&file, &info, &limits) {
+            assert!(matches!(r, Err(RawError::Limit("chunk too large"))), "{r:?}");
+        }
+        // a 16 x 48 frame for a 16 x 16 tile is over the decoder's twice-the-tile budget: a limit error in both reads
+        let (file, info) = dct_tiles(&[grey_jpeg(16, 48)], 16, 16, (16, 16), 1);
+        for r in both_modes(&file, &info, &Limits::default()) {
+            assert!(matches!(r, Err(RawError::Limit("JPEG too large"))), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn dct_tiles_of_floating_point_images_are_refused() {
+        let (file, info) = dct_tiles(&[grey_jpeg(16, 8), grey_jpeg(16, 8)], 32, 8, (16, 8), 3);
+        for r in both_modes(&file, &info, &Limits::default()) {
+            assert!(matches!(&r, Err(RawError::Unsupported(m)) if m.contains("floating-point")), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn dct_tiles_are_not_held_to_the_lossless_byte_ratio() {
+        // a flat 512 x 512 DCT tile codes 262 144 samples in about 4 KB: over 32 samples per byte, within 256
+        let jpg = grey_jpeg(512, 512);
+        assert!((jpg.len() as u64) * 32 < 512 * 512 && (jpg.len() as u64) * DCT_SAMPLES_PER_BYTE >= 512 * 512, "{}", jpg.len());
+        let (file, info) = dct_tiles(&[jpg], 512, 512, (512, 512), 1);
+        let [header, full] = both_modes(&file, &info, &Limits::default());
+        assert_eq!(header, Ok(RawData::U16(vec![])));
+        assert_eq!(full, Ok(RawData::U16(vec![128; 512 * 512])));
+        // lossless chunks keep their bound: the same bytes as a lossless frame header cannot hold the image
+        let mut lossless = grey_jpeg(512, 512);
+        let sof = lossless.windows(2).position(|b| b == [0xff, 0xc0]).unwrap();
+        lossless[sof + 1] = 0xc3;
+        let (file, info) = dct_tiles(&[lossless], 512, 512, (512, 512), 1);
+        let r = read_image_in(crate::Mode::Header, &file, &info, ByteOrder::Little, Packing::Msb, &Limits::default());
+        assert!(matches!(&r, Err(RawError::Corrupt(m)) if m.contains("cannot hold")), "{r:?}");
     }
 }
 
