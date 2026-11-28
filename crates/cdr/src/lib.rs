@@ -146,8 +146,9 @@ pub fn read_cmx(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
 /// The file holds an index, so that a reader that finds the tables and pages through it, rather
 /// than by their chunk ids, opens it: the header gives where the master index starts, the index
 /// list (`LIST indx`) gives where each table, page, page reference list and layer starts, and the
-/// page, layer and group records give their instruction counts and where they end; a group's
-/// record also gives the edges of its curves. The record of a page with a size holds the edges of
+/// page, layer and group records give their instruction counts. A page's record also gives where
+/// its end-page instruction starts, and a group's record gives where the instruction after its
+/// end-group instruction starts and the edges of its curves. The record of a page with a size holds the edges of
 /// its curves, or of the page when it has none. The header's bounds and instruction count are not
 /// written.
 pub fn write_cmx(drawing: &Drawing, limits: Limits) -> Result<Written, Error> {

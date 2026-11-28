@@ -976,14 +976,29 @@ fn chunk_ids(b: &[u8]) -> std::collections::HashMap<usize, [u8; 4]> {
     ids
 }
 
-/// The field list at `at` of `b`: each field's tag and where its data starts.
-fn field_starts(b: &[u8], mut at: usize) -> Vec<(u8, usize)> {
+/// The field list at `at` of `b`, in an instruction that ends at `end`: each field's tag and where
+/// its data starts. A field shorter than its 3 header bytes, or past `end`, fails the test.
+fn field_starts(b: &[u8], mut at: usize, end: usize) -> Vec<(u8, usize)> {
     let mut out = Vec::new();
     while b[at] != 0xff {
+        let len = u16_at(b, at + 1);
+        assert!(len >= 3 && at + len <= end, "a field of length {len} at {at}, in an instruction that ends at {end}");
         out.push((b[at], at + 3));
-        at += u16_at(b, at + 1);
+        at += len;
     }
     out
+}
+
+#[test]
+#[should_panic(expected = "a field of length 0")]
+fn a_field_of_length_0_fails_the_check() {
+    field_starts(&[1, 0, 0, 0xff], 0, 4);
+}
+
+#[test]
+#[should_panic(expected = "a field of length 9")]
+fn a_field_past_its_instruction_fails_the_check() {
+    field_starts(&[1, 9, 0, 0, 0xff], 0, 5);
 }
 
 #[test]
@@ -1115,12 +1130,12 @@ fn page_records(b: &[u8], page_entries: &[[usize; 4]]) -> (Vec<usize>, Vec<(usiz
         let mut open: Vec<Open> = Vec::new();
         let mut count = 0;
         while at < end {
-            let size = u16_at(b, at);
+            let size = instruction_size(b, at, end);
             let code = u16_at(b, at + 2);
             count += 1;
             match code {
                 9 | 11 | 13 => {
-                    let f1 = field_starts(b, at + 4).iter().find(|(t, _)| *t == 1).unwrap().1;
+                    let f1 = field_starts(b, at + 4, at + size).iter().find(|(t, _)| *t == 1).unwrap().1;
                     if code == 11 {
                         seen_layers.push(at);
                     }
@@ -1131,7 +1146,7 @@ fn page_records(b: &[u8], page_entries: &[[usize; 4]]) -> (Vec<usize>, Vec<(usiz
                     open.push((code, f1, count - 1, 0, None));
                 }
                 67 => {
-                    let f2 = field_starts(b, at + 4).iter().find(|(t, _)| *t == 2).unwrap().1;
+                    let f2 = field_starts(b, at + 4, at + size).iter().find(|(t, _)| *t == 2).unwrap().1;
                     for i in 0..u16_at(b, f2) {
                         let p = f2 + 2 + 8 * i;
                         let (x, y) = (u32_at(b, p) as i32, u32_at(b, p + 4) as i32);
@@ -1148,6 +1163,33 @@ fn page_records(b: &[u8], page_entries: &[[usize; 4]]) -> (Vec<usize>, Vec<(usiz
         }
     }
     (seen_layers, groups)
+}
+
+/// The size of the instruction at `at` of `b`, in a page that ends at `end`. These files hold
+/// only short instructions, so the long form (0xFFFF), a size shorter than the 4-byte header or
+/// one past `end` fails the test.
+fn instruction_size(b: &[u8], at: usize, end: usize) -> usize {
+    let size = u16_at(b, at);
+    assert!(size != 0xFFFF && size >= 4 && at + size <= end, "an instruction of size {size} at {at}, in a page that ends at {end}");
+    size
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 0")]
+fn an_instruction_of_size_0_fails_the_check() {
+    instruction_size(&[0, 0, 67, 0], 0, 4);
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 65535")]
+fn a_long_instruction_fails_the_check() {
+    instruction_size(&[0xff, 0xff, 67, 0, 8, 0, 0, 0], 0, 8);
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 8")]
+fn an_instruction_past_its_page_fails_the_check() {
+    instruction_size(&[8, 0, 67, 0], 0, 4);
 }
 
 #[test]
