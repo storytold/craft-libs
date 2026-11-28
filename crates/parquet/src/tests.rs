@@ -534,3 +534,28 @@ fn a_repeated_padded_decimal_cannot_pass_the_decimal_budget() {
     assert_eq!((result.unwrap().rows, calls), (64, 64));
     assert_eq!(read(&bytes).unwrap().rows.len(), 64);
 }
+
+fn text_value_file(value: Vec<u8>) -> Vec<u8> {
+    let schema = Arc::new(parse_message_type("message test { REQUIRED BYTE_ARRAY s (UTF8); }").unwrap());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Arc::new(WriterProperties::builder().build())).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    col.typed::<ByteArrayType>().write_batch(&[ByteArray::from(value)], None, None).unwrap();
+    col.close().unwrap();
+    group.close().unwrap();
+    writer.into_inner().unwrap()
+}
+
+#[test]
+fn invalid_utf8_text_fails_with_a_short_error() {
+    // The record reader's own error listed every byte: 10,485,908 bytes of message for a 1 MiB value.
+    let bytes = text_value_file(vec![0xFF; 4 << 10]);
+    for error in [read(&bytes).unwrap_err(), read_rows(&bytes, &LIMITS, |_| Ok(())).unwrap_err()] {
+        let message = error.to_string();
+        assert!(message.contains("not valid UTF-8") && message.len() < 200, "{} bytes", message.len());
+    }
+    let bytes = text_value_file(vec![0xFF; MAX_TEXT_BYTES + 1]);
+    assert!(read_rows(&bytes, &LIMITS, |_| Ok(())).unwrap_err().to_string().contains("1 MiB text-cell budget"));
+    let bytes = text_value_file("é".repeat(MAX_TEXT_BYTES / 2).into_bytes());
+    assert_eq!(read(&bytes).unwrap().rows[0][0], Value::Text("é".repeat(MAX_TEXT_BYTES / 2)));
+}

@@ -5,11 +5,18 @@
 use bytes::Bytes;
 use parquet::{
     basic::{ConvertedType, LogicalType, Repetition, TimeUnit, Type as Physical},
+    bloom_filter::Sbbf,
+    column::page::PageReader,
     data_type::{BoolType, ByteArray, ByteArrayType, Decimal, DoubleType},
     errors::ParquetError,
-    file::{reader::FileReader, serialized_reader::SerializedFileReader, writer::SerializedFileWriter},
-    record::Field,
-    schema::types::Type,
+    file::{
+        metadata::{ColumnChunkMetaData, RowGroupMetaData},
+        reader::{FileReader, RowGroupReader},
+        serialized_reader::SerializedFileReader,
+        writer::SerializedFileWriter,
+    },
+    record::{Field, reader::RowIter},
+    schema::types::{SchemaDescriptor, Type},
 };
 use std::{collections::HashSet, sync::Arc};
 
@@ -251,30 +258,95 @@ fn read_buffer(
     // The page budget counts a dictionary entry once, but every row that refers to it hands the
     // length check and the formatter the whole entry again.
     let mut decimal_bytes_read = 0usize;
+    // The record reader's UTF-8 error lists every byte of an invalid value, about ten bytes of
+    // message per byte of input, so text columns are read as unannotated bytes and checked here.
+    let mut text = Vec::with_capacity(cols);
+    let mut plain = Vec::with_capacity(cols);
+    for field in fields {
+        let basic = field.get_basic_info();
+        let is_text = field.get_physical_type() == Physical::BYTE_ARRAY
+            && (matches!(basic.logical_type_ref(), Some(LogicalType::String | LogicalType::Enum | LogicalType::Json))
+                || matches!(basic.converted_type(), ConvertedType::UTF8 | ConvertedType::ENUM | ConvertedType::JSON));
+        text.push(is_text);
+        plain.push(if is_text {
+            Arc::new(Type::primitive_type_builder(field.name(), Physical::BYTE_ARRAY).with_repetition(basic.repetition()).build()?)
+        } else {
+            field.clone()
+        });
+    }
+    let schema = Arc::new(SchemaDescriptor::new(Arc::new(Type::group_type_builder(info.schema().name()).with_fields(plain).build()?)));
     let mut values = Vec::with_capacity(cols);
-    for row in reader.get_row_iter(None)? {
-        if count >= rows {
-            return Err(invalid("Parquet contains more rows than its metadata declares"));
-        }
-        let row = row?;
-        values.clear();
-        for (name, field) in row.into_columns() {
-            if let Field::Decimal(decimal @ Decimal::Bytes { .. }) = &field {
-                decimal_bytes_read = decimal_bytes_read.saturating_add(decimal.data().len());
-                if decimal_bytes_read > decimal_budget {
-                    return Err(invalid("Parquet decimal data exceeds the 512 MiB decoded-data budget; select a smaller table first"));
-                }
-                decimal_length(&name, decimal)?;
+    for group in 0..reader.num_row_groups() {
+        let inner = reader.get_row_group(group)?;
+        let group = PlainText { metadata: plain_text_metadata(inner.metadata(), &schema)?, inner };
+        for row in RowIter::from_row_group(None, &group)? {
+            if count >= rows {
+                return Err(invalid("Parquet contains more rows than its metadata declares"));
             }
-            values.push(value(field)?);
+            let row = row?;
+            values.clear();
+            for ((name, field), is_text) in row.into_columns().into_iter().zip(&text) {
+                if *is_text {
+                    values.push(text_value(&name, field)?);
+                    continue;
+                }
+                if let Field::Decimal(decimal @ Decimal::Bytes { .. }) = &field {
+                    decimal_bytes_read = decimal_bytes_read.saturating_add(decimal.data().len());
+                    if decimal_bytes_read > decimal_budget {
+                        return Err(invalid("Parquet decimal data exceeds the 512 MiB decoded-data budget; select a smaller table first"));
+                    }
+                    decimal_length(&name, decimal)?;
+                }
+                values.push(value(field)?);
+            }
+            on_row(&values)?;
+            count += 1;
         }
-        on_row(&values)?;
-        count += 1;
     }
     if count != rows {
         return Err(invalid("Parquet row count does not match its metadata"));
     }
     Ok(ReadSummary { columns: fields.iter().map(|f| Column { name: f.name().into() }).collect(), rows })
+}
+
+/// A row group whose column descriptors come from `metadata`, which drops the text annotations, so
+/// the record reader hands text values over as bytes. Pages still come from `inner`.
+struct PlainText<'a> {
+    inner: Box<dyn RowGroupReader + 'a>,
+    metadata: RowGroupMetaData,
+}
+impl RowGroupReader for PlainText<'_> {
+    fn metadata(&self) -> &RowGroupMetaData {
+        &self.metadata
+    }
+    fn num_columns(&self) -> usize {
+        self.metadata.num_columns()
+    }
+    fn get_column_page_reader(&self, i: usize) -> parquet::errors::Result<Box<dyn PageReader>> {
+        self.inner.get_column_page_reader(i)
+    }
+    fn get_column_bloom_filter(&self, _: usize) -> Option<&Sbbf> {
+        None
+    }
+    fn get_row_iter(&self, projection: Option<Type>) -> parquet::errors::Result<RowIter<'_>> {
+        RowIter::from_row_group(projection, self)
+    }
+}
+/// Copies the row count and each column's value count and codec under `schema`'s descriptors. The
+/// record reader reads nothing else from a row group's metadata; `inner` keeps the page offsets.
+fn plain_text_metadata(group: &RowGroupMetaData, schema: &Arc<SchemaDescriptor>) -> Result<RowGroupMetaData> {
+    if group.num_columns() != schema.num_columns() {
+        return Err(invalid("Parquet row-group columns do not match the schema"));
+    }
+    let columns = group
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            ColumnChunkMetaData::builder(schema.column(i)).set_num_values(column.num_values()).set_compression(column.compression()).build()
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(RowGroupMetaData::builder(schema.clone()).set_num_rows(group.num_rows()).set_column_metadata(columns).build()?)
 }
 
 fn value(field: Field) -> Result<Value> {
@@ -349,6 +421,20 @@ fn finite(number: f64) -> Result<Value> {
         return Err(invalid("Non-finite Parquet numbers are not supported"));
     }
     Ok(Value::Float(number))
+}
+/// Converts one value of a text column read as raw bytes, checking its length before copying it.
+fn text_value(name: &str, field: Field) -> Result<Value> {
+    let bytes = match field {
+        Field::Null => return Ok(Value::Null),
+        Field::Bytes(bytes) => bytes,
+        _ => return Err(invalid("Binary and nested Parquet values are not supported")),
+    };
+    if bytes.len() > MAX_TEXT_BYTES {
+        return Err(invalid("A Parquet text cell exceeds the 1 MiB text-cell budget"));
+    }
+    String::from_utf8(bytes.data().to_vec())
+        .map(Value::Text)
+        .map_err(|_| Error::Format(format!("A value in Parquet text field {name:?} is not valid UTF-8")))
 }
 fn text(s: String) -> Result<String> {
     if s.len() > MAX_TEXT_BYTES {
