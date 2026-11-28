@@ -211,7 +211,14 @@ impl<V: NumberValue> Codec for Ruled<V> {
     }
 
     fn applies_as_typed(&self, text: &str) -> bool {
-        !self.snap && !self.mixed && is_plain(self.unwritten(text)) && matches!(self.inner.parse(self.unwritten(text), &None), Ok(Some(_)))
+        let text = self.unwritten(text);
+        // The `+` an explicit-plus field writes is the number's own sign, so its own text is plain input there, as a
+        // negative number's `-` is; on a plain field a leading `+` stays the relative input `is_plain` refuses.
+        let plain = match text.trim_start().strip_prefix('+') {
+            Some(rest) if self.inner.writes_sign() => rest,
+            _ => text,
+        };
+        !self.snap && !self.mixed && is_plain(plain) && matches!(self.inner.parse(text, &None), Ok(Some(_)))
     }
 
     fn filter(&self, c: char) -> bool {

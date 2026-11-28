@@ -111,6 +111,10 @@ pub struct SliderField<'a> {
     /// ([`NumberField::select_on_focus`]): a click on the value selects it, a drag across it keeps the range.
     #[prop(flag)]
     select_on_focus: bool,
+    /// The number field writes a positive value with its sign ([`NumberField::explicit_plus`]), and a value that
+    /// rounds to zero unsigned: the slider and its field show that value the same way.
+    #[prop(flag)]
+    explicit_plus: bool,
     /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
     field_width: f32,
     /// The field's range alert of this pass, which `finish` reports.
@@ -170,6 +174,7 @@ impl<'a> SliderField<'a> {
             marks: None,
             short: false,
             select_on_focus: false,
+            explicit_plus: false,
             field_width: 0.0,
             out_of_range: None,
         }
@@ -208,6 +213,7 @@ impl<'a> SliderField<'a> {
             marks: self.marks.clone(),
             short: self.short,
             select_on_focus: self.select_on_focus,
+            explicit_plus: self.explicit_plus,
         }
     }
 }
@@ -239,6 +245,7 @@ struct Look {
     marks: Option<FieldMarks>,
     short: bool,
     select_on_focus: bool,
+    explicit_plus: bool,
 }
 
 /// The composite's check, which its children check their values with.
@@ -316,6 +323,7 @@ impl Look {
             None => field,
         };
         let field = if self.select_on_focus { field.select_on_focus() } else { field };
+        let field = if self.explicit_plus { field.explicit_plus() } else { field };
         let field = match self.unit_kind {
             Some(kind) => field.unit_kind(kind),
             None => field,

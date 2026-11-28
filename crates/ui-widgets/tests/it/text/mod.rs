@@ -13,6 +13,7 @@ pub(crate) mod number;
 pub(crate) mod number_derived;
 pub(crate) mod number_length;
 pub(crate) mod number_look;
+pub(crate) mod number_plus;
 pub(crate) mod number_scrub_step;
 pub(crate) mod number_select;
 pub(crate) mod rtl_paragraph;

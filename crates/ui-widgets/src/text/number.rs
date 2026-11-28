@@ -216,6 +216,10 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
     #[prop]
     fixed_decimals: Option<usize>,
+    /// A positive value is written with its `+` and a value that rounds to zero unsigned (`NumberCodec::explicit_plus`),
+    /// whichever codec the field reads with: a rotation angle or an offset from a neutral value.
+    #[prop(flag)]
+    explicit_plus: bool,
     /// The number the held name stands for: while the value is a name, the field shows this number in parentheses in
     /// place of the name's label; the presets row keeps the label.
     #[prop(quantity = "field value")]
@@ -308,6 +312,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             derived: false,
             commit_decimals: None,
             fixed_decimals: None,
+            explicit_plus: false,
             name_number: None,
             max_decimals: None,
             lengths: None,
@@ -516,6 +521,12 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The field's codec: the one set, else the env's locale and the spellings of the unit kind (a length field
     /// reads every length spelling).
     fn number_codec(&self, units: &Units) -> NumberCodec {
+        let codec = self.own_codec(units);
+        if self.explicit_plus { codec.explicit_plus() } else { codec }
+    }
+
+    /// [`number_codec`](Self::number_codec) before the field's sign rule.
+    fn own_codec(&self, units: &Units) -> NumberCodec {
         self.codec.clone().unwrap_or_else(|| {
             let reader = match self.lengths {
                 Some(lengths) => units.length_reader(lengths),
