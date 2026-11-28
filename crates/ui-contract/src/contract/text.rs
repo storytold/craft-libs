@@ -612,11 +612,20 @@ pub(crate) fn run<C: Component>(
     let mut state = std::mem::take(cx.core.memory.shown::<TextState>(state_id));
     // A part that was not shown last pass lost its focus, and its typing run with it: the run is forgotten (step 4
     // ended its gesture without putting back the value from before it), and the part starts afresh from its value.
-    if !crate::runtime::memory::shown_last_pass(&ctx, id) {
-        state = TextState::default();
-    } else if state.edit_target != part.options.edit_target {
-        // The old target's draft and gesture must never reach the new target's binding.
-        cx.cancel(CancelReason::HostChanged);
+    let shown_last_pass = crate::runtime::memory::shown_last_pass(&ctx, id);
+    if !shown_last_pass || state.edit_target != part.options.edit_target {
+        // The old target's draft and gesture must never reach the new target's binding. A hidden part's gesture
+        // already ended, but its widget may still retain history and composition.
+        if shown_last_pass {
+            cx.cancel(CancelReason::HostChanged);
+        }
+        let widget = adapter::text_id(id, part.key);
+        adapter::clear_history(&ctx, widget);
+        crate::runtime::ime::request_interrupt(&ctx, widget);
+        // Input was folded before this part ran; discard events already queued for the old target too.
+        let _ = crate::runtime::ime::take(&ctx, widget, false);
+        // A focus change may already have handed the old composition to this adapter.
+        let _ = crate::runtime::ime::take_leaving(&ctx, widget);
         state = TextState::default();
     }
     state.edit_target = part.options.edit_target;
