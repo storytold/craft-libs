@@ -132,6 +132,10 @@ pub struct EditPath {
     /// whose subpaths are not copied that way (PhotoCraft: the pen draft and Type Paths, where the drag moves the
     /// subpath).
     pub copies: bool,
+    /// Whether Direct Selection with only the command modifier (Command on macOS, Ctrl elsewhere)
+    /// selects and drags the pressed subpath ([`PathEdit::MoveSubpath`]). Off by default; the host enables it only for eligible
+    /// paths, independently of the modifiers of later passes of the same press.
+    pub command_selects_subpath: bool,
 }
 
 impl Default for EditPath {
@@ -143,13 +147,21 @@ impl Default for EditPath {
 impl EditPath {
     /// The path the host keys `key`, made of `subpaths`, in the overlay's colour, taking copies of its subpaths.
     pub fn new(key: u64, subpaths: Vec<EditSubpath>) -> Self {
-        Self { key, subpaths, color: None, copies: true }
+        Self { key, subpaths, color: None, copies: true, command_selects_subpath: false }
     }
 
     /// The path taking copies of its subpaths ([`copies`](Self::copies)) or not.
     #[must_use]
     pub fn copies(mut self, copies: bool) -> Self {
         self.copies = copies;
+        self
+    }
+
+    /// The path allowing Direct Selection's command-only whole-subpath press or keeping its
+    /// ordinary anchor/segment press. The host can leave hidden or otherwise ineligible paths off.
+    #[must_use]
+    pub fn command_selects_subpath(mut self, on: bool) -> Self {
+        self.command_selects_subpath = on;
         self
     }
 
@@ -373,6 +385,17 @@ pub enum PathEdit {
         /// The move, in document units.
         by: Vec2,
     },
+    /// Move every anchor and handle of exactly one subpath, leaving the other subpaths alone.
+    /// This explicit receipt distinguishes a temporary whole-subpath drag from an anchor move.
+    #[non_exhaustive]
+    MoveSubpath {
+        /// The path's host key.
+        path: u64,
+        /// The subpath moved.
+        subpath: usize,
+        /// The move, in document units.
+        by: Vec2,
+    },
     /// Move a direction handle to `to`. A smooth knot keeps its other handle collinear, unless
     /// `alone`, which also makes the knot a corner (the host's rule).
     #[non_exhaustive]
@@ -400,6 +423,10 @@ pub enum PathEdit {
         t: f64,
         /// How far the point at `t` moves, in document units.
         by: Vec2,
+        /// Keep the two facing handles on their original rays, without changing opposite handles
+        /// or anchors. Straight segments, retracted handles and near-anchor parameters keep the
+        /// ordinary bend. False for the existing [`bend_segment`](Self::bend_segment) constructor.
+        constrain: bool,
     },
     /// Convert Point: `None` makes a corner with retracted handles; `Some(out)` a smooth point
     /// whose out handle is at `out` and whose in handle mirrors it.
@@ -516,6 +543,11 @@ impl PathEdit {
         PathEdit::MoveAnchors { path, anchors, by }
     }
 
+    /// Move a subpath, including every anchor and handle, without changing its siblings.
+    pub fn move_subpath(path: u64, subpath: usize, by: Vec2) -> Self {
+        PathEdit::MoveSubpath { path, subpath, by }
+    }
+
     /// Moves the `side` handle of `knot` to `to`; `alone` keeps the other handle where it is.
     pub fn move_handle(path: u64, knot: KnotRef, side: HandleSide, to: Point, alone: bool) -> Self {
         PathEdit::MoveHandle { path, knot, side, to, alone }
@@ -523,7 +555,14 @@ impl PathEdit {
 
     /// Bends the segment leaving `segment` so its point at `t` moves by `by`.
     pub fn bend_segment(path: u64, segment: KnotRef, t: f64, by: Vec2) -> Self {
-        PathEdit::BendSegment { path, segment, t, by }
+        PathEdit::BendSegment { path, segment, t, by, constrain: false }
+    }
+
+    /// Bend a curved segment by changing only the lengths of its two facing handles along
+    /// their original rays. Anchors, opposite handles and smooth flags stay unchanged. Straight,
+    /// retracted-handle and near-anchor cases retain [`bend_segment`](Self::bend_segment)'s result.
+    pub fn bend_segment_constrained(path: u64, segment: KnotRef, t: f64, by: Vec2) -> Self {
+        PathEdit::BendSegment { path, segment, t, by, constrain: true }
     }
 
     /// Converts `knot` to a corner (`out` is `None`) or to a smooth point whose out handle is at `out`.
@@ -573,6 +612,7 @@ impl PathEdit {
     pub fn path(&self) -> u64 {
         match *self {
             PathEdit::MoveAnchors { path, .. }
+            | PathEdit::MoveSubpath { path, .. }
             | PathEdit::MoveHandle { path, .. }
             | PathEdit::BendSegment { path, .. }
             | PathEdit::Convert { path, .. }
