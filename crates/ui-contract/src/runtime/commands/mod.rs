@@ -407,7 +407,8 @@ pub struct ResolvedCommand {
     /// The command is an edit a focused component takes as its own (it has an `EditCommand` link): a control bound to
     /// it keeps the focus where it is on a press, so the edit reaches the focused component.
     pub edit: bool,
-    pub(crate) command: CommandRef,
+    /// Shared by every fact that shows this resolution, so a settled view's facts copy no command.
+    pub(crate) command: Arc<CommandRef>,
     /// Something besides the command's own state refuses it: the gate, the modal rule, the instance's liveness or a
     /// focused component whose edit does nothing now. A key whose app-scope command its state alone disables is
     /// declined (`FrameOutput::declined`); a refused one is not.
@@ -781,7 +782,7 @@ struct ShownFact {
 /// What a [`ShownFact`] shows: a bound component's command, or the commands a container holds.
 #[derive(Clone, Debug, PartialEq)]
 enum ShownCommands {
-    Bound(CommandRef),
+    Bound(Arc<CommandRef>),
     Held(Arc<[CommandRef]>),
 }
 
@@ -789,7 +790,7 @@ impl ShownFact {
     /// Whether the fact shows `command`.
     fn shows(&self, command: &CommandRef) -> bool {
         match &self.commands {
-            ShownCommands::Bound(bound) => bound == command,
+            ShownCommands::Bound(bound) => **bound == *command,
             ShownCommands::Held(held) => held.contains(command),
         }
     }
@@ -813,17 +814,17 @@ fn register_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label
 
 /// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
 /// turns hold bindings on.
-pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &[CommandRef], label: Label) {
+pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &Arc<[CommandRef]>, label: Label) {
     if !commands.is_empty() {
-        register_shown(ctx, layer, rect, label, ShownCommands::Held(commands.into()));
+        register_shown(ctx, layer, rect, label, ShownCommands::Held(Arc::clone(commands)));
     }
 }
 
 /// Records that the bound component of `command` was shown at `rect` in `layer`, with `label`, for this pass and
 /// viewport: the report step calls it for a component wholly inside its clip.
 // PLAN: the caller is the report step (menus-w3); until it lands nothing in this crate calls it.
-pub(crate) fn note_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &CommandRef) {
-    register_shown(ctx, layer, rect, label, ShownCommands::Bound(command.clone()));
+pub(crate) fn note_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &Arc<CommandRef>) {
+    register_shown(ctx, layer, rect, label, ShownCommands::Bound(Arc::clone(command)));
 }
 
 /// How many shown-command registrations the running viewport's last pass made: one per bound component and one per
@@ -831,7 +832,23 @@ pub(crate) fn note_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub fn shown_registrations(ctx: &Context) -> usize {
-    Facts::<ShownFact>::of_last_pass(ctx).len()
+    Facts::<ShownFact>::with_last_pass(ctx, <[ShownFact]>::len)
+}
+
+/// The commands the bound components of the running viewport's last pass showed, in registration order: the values
+/// the facts hold, so two passes that copied no command give the same allocations.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn shown_commands(ctx: &Context) -> Vec<Arc<CommandRef>> {
+    Facts::<ShownFact>::with_last_pass(ctx, |facts| {
+        facts
+            .iter()
+            .filter_map(|fact| match &fact.commands {
+                ShownCommands::Bound(command) => Some(Arc::clone(command)),
+                ShownCommands::Held(_) => None,
+            })
+            .collect()
+    })
 }
 
 /// Where `command` was shown in the last pass: a bound component's clipped rect or a holder's rect. `None` unless it
@@ -839,11 +856,14 @@ pub fn shown_registrations(ctx: &Context) -> usize {
 pub fn shown(ctx: &Context, command: &CommandRef) -> Option<Shown> {
     let viewport = pass::current_viewport(ctx);
     let scrim = overlay::top_modal_in(ctx, viewport).and_then(|top| top.cover);
-    Facts::<ShownFact>::of_last_pass(ctx)
-        .into_iter()
-        .filter(|fact| fact.shows(command))
-        .find(|fact| !areas::rects_over(ctx, fact.layer, scrim).iter().any(|over| over.intersects(fact.rect)))
-        .map(|fact| Shown { rect: fact.rect, viewport, label: fact.label, holder: matches!(fact.commands, ShownCommands::Held(_)) })
+    // The rects over a fact are read outside the facts' record, which `with_last_pass` holds.
+    let showing: Vec<ShownFact> = Facts::<ShownFact>::with_last_pass(ctx, |facts| facts.iter().filter(|fact| fact.shows(command)).cloned().collect());
+    showing.into_iter().find(|fact| !areas::rects_over(ctx, fact.layer, scrim).iter().any(|over| over.intersects(fact.rect))).map(|fact| Shown {
+        rect: fact.rect,
+        viewport,
+        label: fact.label,
+        holder: matches!(fact.commands, ShownCommands::Held(_)),
+    })
 }
 
 /// Where a command was shown, from [`shown`].

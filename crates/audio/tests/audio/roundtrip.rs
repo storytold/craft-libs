@@ -1,4 +1,7 @@
-use craft_audio::{AudioBuffer, BitDepth, EncodeFormat, EncodeOptions, SampleFormat, decode, detect_container, encode, probe};
+use craft_audio::{
+    AudioBuffer, BitDepth, BwfInfo, EncodeFormat, EncodeOptions, SampleFormat, decode, detect_container, encode, probe, wav_float_header,
+    wav_float_header_with_bwf,
+};
 
 fn sine(sr: u32, channels: usize, frames: usize) -> AudioBuffer {
     let mut b = AudioBuffer::new(sr, channels as u16, frames);
@@ -63,4 +66,27 @@ fn wav_and_aiff_roundtrip_all_depths_and_layouts() {
             }
         }
     }
+}
+
+#[test]
+fn float_wav_header_with_bwf_keeps_its_bext_as_the_file_grows() {
+    let take = sine(48_000, 2, 1_000);
+    let bwf = BwfInfo::default()
+        .with_description("take 3")
+        .with_originator("recorder")
+        .with_origination("2026-11-20", "18:30:00")
+        .with_time_reference(48_000 * 66_600);
+    let mut file = wav_float_header_with_bwf(48_000, 2, 0, &bwf).unwrap();
+    let len = file.len();
+    assert!(len > wav_float_header(48_000, 2, 0).unwrap().len());
+    file.extend(take.interleaved().iter().flat_map(|s| s.to_le_bytes()));
+    file[..len].copy_from_slice(&wav_float_header_with_bwf(48_000, 2, 600, &bwf).unwrap());
+    let (info, decoded) = decode(&file, None).unwrap();
+    assert_eq!((info.bwf.as_ref(), decoded.frames()), (Some(&bwf), 600));
+    file[..len].copy_from_slice(&wav_float_header_with_bwf(48_000, 2, 1_000, &bwf).unwrap());
+    let opts = EncodeOptions::default().with_bit_depth(BitDepth::Float32).with_bwf(bwf.clone());
+    assert_eq!(file, encode(&take, &opts).unwrap());
+    let big = wav_float_header_with_bwf(48_000, 2, 600_000_000, &bwf).unwrap();
+    assert_eq!((&big[..4], big.len()), (&b"RF64"[..], len));
+    assert!(wav_float_header_with_bwf(48_000, 0, 0, &bwf).is_err());
 }

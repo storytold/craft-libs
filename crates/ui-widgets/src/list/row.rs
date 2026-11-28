@@ -470,6 +470,9 @@ pub struct ListRow<'a> {
     /// The row's menu button was clicked: its rect, where the menu hangs.
     pub(super) menu: Option<Rect>,
     pub(super) label_rect: Rect,
+    /// The lead fill resolved during paint, when the row's state is available.
+    pub(super) lead_fill: Option<craft_theme::Rgba>,
+    pub(super) lead_focus_bounds: Option<egui::Rect>,
     /// The placed rect of each cell node, by the node's part: the access step reads them as the cells' bounds.
     pub(super) cell_bounds: Vec<(PartRef, Rect)>,
 }
@@ -570,6 +573,8 @@ impl<'a> ListRow<'a> {
             open: None,
             menu: None,
             label_rect: Rect::NOTHING,
+            lead_fill: None,
+            lead_focus_bounds: None,
             cell_bounds: Vec::new(),
         }
         .label(label)

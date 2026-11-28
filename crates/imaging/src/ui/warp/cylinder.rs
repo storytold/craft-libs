@@ -405,7 +405,7 @@ impl Component for CylinderWarp<'_> {
                 results.push((handle, result.press));
             }
         }
-        if let Some((hover_pos, press)) = cx.part_if_declared(BODY).map(|result| (result.hover_pos, result.press)) {
+        if let Some((hover_pos, press)) = cx.part_if_declared(BODY).map(|result| (cx.hover_pos(BODY), result.press)) {
             let on_surface = hover_pos.is_some_and(|at| self.mesh.surface_at(space.view.to_doc(at)).is_some());
             if on_surface {
                 cx.cursor(CursorIcon::Move, craft_behavior::CursorPriority::Part);

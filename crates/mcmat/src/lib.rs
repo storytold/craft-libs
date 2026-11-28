@@ -248,11 +248,31 @@ mod tests {
     fn rejects_ambiguous_or_nonlocal_resource_members() {
         for name in ["resources/../../x", "resources/a\\x", "/x", "maps/color.png", "resources/C:/x", "preview.png"] {
             assert!(write(b"x", [(name, &b"x"[..])]).is_err());
-            let mut zip = Writer::new();
-            zip.add(MANIFEST_ENTRY, MARKER, Compression::Stored).unwrap();
-            zip.add(SOURCE_ENTRY, b"x", Compression::Deflated).unwrap();
-            zip.add(name, b"x", Compression::Stored).unwrap();
-            assert!(Material::open(&zip.finish().unwrap(), Limits::default()).is_err());
+            let placeholder = "x".repeat(name.len());
+            let bytes = {
+                let mut zip = Writer::new();
+                zip.add(MANIFEST_ENTRY, MARKER, Compression::Stored).unwrap();
+                zip.add(SOURCE_ENTRY, b"x", Compression::Deflated).unwrap();
+                match zip.add(name, b"x", Compression::Stored) {
+                    Ok(()) => zip.finish().unwrap(),
+                    Err(_) => {
+                        let mut zip = Writer::new();
+                        zip.add(MANIFEST_ENTRY, MARKER, Compression::Stored).unwrap();
+                        zip.add(SOURCE_ENTRY, b"x", Compression::Deflated).unwrap();
+                        zip.add(&placeholder, b"x", Compression::Stored).unwrap();
+                        let mut b = zip.finish().unwrap();
+                        let p = placeholder.as_bytes();
+                        let n = name.as_bytes();
+                        for i in 0..b.len().saturating_sub(p.len()) {
+                            if &b[i..i + p.len()] == p {
+                                b[i..i + p.len()].copy_from_slice(n);
+                            }
+                        }
+                        b
+                    }
+                }
+            };
+            assert!(Material::open(&bytes, Limits::default()).is_err());
         }
         assert!(write(b"x", [("resources/A", &b"a"[..]), ("resources/a", &b"b"[..])]).is_err());
     }

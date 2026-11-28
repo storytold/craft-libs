@@ -8,7 +8,8 @@
 //!
 //! - **Unset or empty:** the table is empty and the app uses its own and system fonts.
 //! - **Set:** every selected face in `fonts/manifest.txt` is embedded with `include_bytes!`.
-//! - **Set, but not readable as a checkout:** a `cargo::warning` and an empty table.
+//! - **Set, but not readable as a checkout:** a `cargo::warning` and an empty table. A selected
+//!   font file whose SHA-256 is not the one its manifest line gives counts as unreadable.
 //! - **`CRAFT_FONTS_REQUIRED=1`** (release builds; any other value is ignored): a missing or
 //!   unreadable checkout, no selected face, or a requested script without a face is an [`Error`].
 //!
@@ -56,7 +57,6 @@ mod cmap;
 pub mod coverage;
 mod embed;
 mod manifest;
-#[cfg(feature = "subset")]
 mod sha256;
 #[cfg(test)]
 mod tests;
