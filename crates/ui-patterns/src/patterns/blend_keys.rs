@@ -141,13 +141,14 @@ impl BlendShortcut {
     }
 }
 
-/// The entries of a blend mode list, with a separator above each group head ([`BlendShortcut::starts_group`]) and
-/// none first. An unlettered mode never heads a group. `label` gives each mode's text. One rule for every blend
-/// list: the Layers panel, tool modes, parameter dialogs and Layer Style.
+/// The entries of a blend mode list, with a separator above each group head and none first. A group head is a
+/// lettered mode that [`BlendShortcut::starts_group`], or any entry marked with
+/// [`BlendKeyEntry::heads_group`]. An unlettered mode heads a group only when it is marked. `label` gives each
+/// mode's text. One rule for every blend list: the Layers panel, tool modes, parameter dialogs and Layer Style.
 pub fn blend_entries<K: Clone>(modes: &[BlendKeyEntry<K>], label: impl Fn(&BlendKeyEntry<K>) -> Label) -> Vec<Entry<K>> {
     let mut entries = Vec::with_capacity(modes.len() + 5);
     for (at, mode) in modes.iter().enumerate() {
-        if at > 0 && mode.shortcut.is_some_and(BlendShortcut::starts_group) {
+        if at > 0 && mode.is_group_head() {
             entries.push(Entry::separator());
         }
         entries.push(Entry::new(mode.key.clone(), label(mode)));
@@ -177,18 +178,35 @@ pub struct BlendKeyEntry<K> {
     pub key: K,
     /// The mode's Shift+Alt+ letter position, if it has one.
     pub shortcut: Option<BlendShortcut>,
+    /// Whether this entry starts a group of its own list, whatever its letter ([`heads_group`](Self::heads_group)).
+    pub group_head: bool,
 }
 
 impl<K> BlendKeyEntry<K> {
     /// The mode `key` at letter position `shortcut`.
     pub fn new(key: K, shortcut: BlendShortcut) -> Self {
-        Self { key, shortcut: Some(shortcut) }
+        Self { key, shortcut: Some(shortcut), group_head: false }
     }
 
     /// A mode without a letter (Darker Color, Lighter Color, Subtract, Divide): Shift+= and Shift+- reach
     /// it, no letter does.
     pub fn unlettered(key: K) -> Self {
-        Self { key, shortcut: None }
+        Self { key, shortcut: None, group_head: false }
+    }
+
+    /// This entry starts a group in its list: [`blend_entries`] puts a separator above it (unless it is first). For
+    /// a list whose groups differ from the layer menu's, such as Photoshop's Apply Image Blending, where Add and
+    /// Subtract (no letters) form a group of their own after Hard Mix. Letters and steps are unchanged.
+    #[must_use]
+    pub fn heads_group(mut self) -> Self {
+        self.group_head = true;
+        self
+    }
+
+    /// Whether [`blend_entries`] puts a separator above this entry: marked with [`heads_group`](Self::heads_group),
+    /// or a lettered mode that [`BlendShortcut::starts_group`].
+    pub fn is_group_head(&self) -> bool {
+        self.group_head || self.shortcut.is_some_and(BlendShortcut::starts_group)
     }
 
     /// Behind (Shift+Alt+Q), for a painting tool that offers it. Without such an entry Shift+Alt+Q is consumed
