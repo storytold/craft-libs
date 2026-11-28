@@ -118,10 +118,13 @@ pub struct Rediscovery {
 }
 
 impl Rediscovery {
-    /// The device hierarchy or a device changed: query again at the next chance.
+    /// The device hierarchy or a device changed: query again at the next chance, or, while a
+    /// refresh is already failing, at its next retry.
     pub fn request(&mut self) {
+        if !self.pending {
+            self.last_try = None;
+        }
         self.pending = true;
-        self.last_try = None;
     }
 
     /// Whether to query the devices now.
@@ -230,6 +233,8 @@ mod tests {
         rediscovery.apply(&mut state, start, Err("BadAlloc"));
         assert!(pressure(state.handle(10, [(2, 1023.5)])) > 0.4, "the pen still reports pressure");
         assert!(!rediscovery.due(start + RETRY_EVERY / 2), "no query on every event while it fails");
+        rediscovery.request();
+        assert!(!rediscovery.due(start + RETRY_EVERY / 2), "nor on every further device change");
         assert!(rediscovery.due(start + RETRY_EVERY), "but another one later");
 
         // A successful empty reply does remove the pen
