@@ -48,10 +48,24 @@ use std::path::PathBuf;
 
 /// The least and greatest scale, in percent.
 const SCALE_RANGE: std::ops::RangeInclusive<f64> = 1.0..=1000.0;
-/// The least and greatest quality.
-const QUALITY_RANGE: std::ops::RangeInclusive<f64> = 1.0..=100.0;
 /// The key of the save request the dialog files at Export.
 const SAVE_KEY: &str = "export";
+
+/// The Quality scale a format's row offers: the format's own steps when it declares them, else the
+/// 1 to 100 percent scale every format has used until now.
+fn quality_range(format: &ExportFormat) -> std::ops::RangeInclusive<f64> {
+    let steps = format.quality_steps();
+    f64::from(*steps.start())..=f64::from(*steps.end())
+}
+
+/// The captions under the two ends of a format's own Quality scale; none on the percent scale.
+fn quality_marks(format: &ExportFormat, words: &ExportWords) -> Vec<(f64, Label)> {
+    let scale = match &format.quality_scale {
+        Some(scale) => scale,
+        None => return Vec::new(),
+    };
+    vec![(f64::from(*scale.start()), words.quality_low.clone()), (f64::from(*scale.end()), words.quality_high.clone())]
+}
 
 /// What the dialog keeps while it is open besides the settings: the preview request it has numbered, the answer the app
 /// gave, the preview view and the scale edit the last pass refused.
@@ -688,13 +702,15 @@ impl Pass<'_> {
             check(ui, &words.lossless, "lossless", &mut options.lossless);
         }
         if format.quality && !(format.lossless && options.lossless) {
+            let range = quality_range(format);
             row(ui, &words.quality, "quality", |ui| {
-                let field = SliderField::new(words.quality.clone(), Bind::given(f64::from(options.quality)), QUALITY_RANGE)
+                let field = SliderField::new(words.quality.clone(), Bind::given(f64::from(options.quality)), range.clone())
                     .step(1.0)
                     .layout(SliderFieldLayout::Inline)
+                    .marks_labelled(quality_marks(format, words))
                     .show(ui);
                 if let Some(value) = field.value() {
-                    options.quality = value.round().clamp(*QUALITY_RANGE.start(), *QUALITY_RANGE.end()) as u8;
+                    options.quality = value.round().clamp(*range.start(), *range.end()) as u8;
                 }
             });
         }
@@ -816,11 +832,13 @@ impl Pass<'_> {
         }
     }
 
-    /// The format list picked `index`: the format takes the app's default quality (and WebP mode).
+    /// The format list picked `index`: the format takes the app's default quality, in its own scale
+    /// when it declares one.
     fn switch(&self, options: &mut ExportOptions, index: usize) {
         let Some(format) = self.formats.get(index) else { return };
         options.format = format.id.to_owned();
-        let clamp = |quality: u8| quality.clamp(*QUALITY_RANGE.start() as u8, *QUALITY_RANGE.end() as u8);
+        let range = quality_range(format);
+        let clamp = |quality: u8| quality.clamp(*range.start() as u8, *range.end() as u8);
         match format.id {
             "jpg" => options.quality = clamp(self.defaults.jpeg_quality),
             "webp" => {

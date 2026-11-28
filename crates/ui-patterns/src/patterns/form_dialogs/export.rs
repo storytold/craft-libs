@@ -35,6 +35,10 @@ craft_ui::words! {
         file_settings: "export.fileSettings" = "File Settings";
         format: "export.format" = "Format";
         quality: "export.quality" = "Quality";
+        /// The caption under the first step of a format's Quality scale.
+        quality_low: "export.qualityLow" = "Low";
+        /// The caption under the last step of a format's Quality scale.
+        quality_high: "export.qualityHigh" = "High";
         lossless: "export.lossless" = "Lossless";
         transparency: "export.transparency" = "Transparency";
         image_size: "export.imageSize" = "Image Size";
@@ -93,6 +97,13 @@ pub struct ExportFormat {
     /// Shows Quality (JPG, lossy WebP).
     #[prop]
     pub quality: bool,
+    /// The Quality scale this format offers: whole steps from its first to its last value, with the
+    /// row captioning the two ends. `None`, which every format used before this row option existed,
+    /// keeps the 1 to 100 percent scale. A value outside the scale is clamped into it, by the row, by
+    /// the format switch and by [`ExportOptions::fitted`]: an app that wants an older, wider quality
+    /// to land on the nearest step of a scale it owns maps it before it hands the settings here.
+    #[prop]
+    pub quality_scale: Option<std::ops::RangeInclusive<u8>>,
     /// Shows Lossless (WebP); Quality hides while it is checked.
     #[prop]
     pub lossless: bool,
@@ -110,7 +121,13 @@ pub struct ExportFormat {
 impl ExportFormat {
     /// A format with no options: `id` is also its extension.
     pub fn new(id: &'static str, name: &'static str) -> Self {
-        ExportFormat { id, name, extension: id, quality: false, lossless: false, transparency: false, bits: &[], max_side: None }
+        ExportFormat { id, name, extension: id, quality: false, quality_scale: None, lossless: false, transparency: false, bits: &[], max_side: None }
+    }
+
+    /// The Quality scale this format's row holds: its own whole steps when it declares them, else the
+    /// 1 to 100 percent scale.
+    pub fn quality_steps(&self) -> std::ops::RangeInclusive<u8> {
+        self.quality_scale.clone().unwrap_or(QUALITY)
     }
 
     /// PNG, JPG, WebP, TIFF, TGA and ICO.
@@ -389,7 +406,7 @@ const MIN_SIDE: f64 = 1.0;
 impl ExportOptions {
     /// The options as the controls can hold them for a document of size `source`: a format the list has (the first
     /// when not), a resample method of `methods` (Automatic when listed, else the first; any method when `methods` is empty), a quality
-    /// of 1 to 100, and a size the document can take. A linked pixel width keeps its width and
+    /// the format's scale holds (1 to 100 unless the format declares its own steps), and a size the document can take. A linked pixel width keeps its width and
     /// takes the height from this document (the last export's proportions would stretch another shape); unlinked
     /// pixels stay as asked when in range; anything out of range becomes 100 percent.
     #[must_use]
@@ -402,7 +419,8 @@ impl ExportOptions {
         if !methods.is_empty() && !methods.contains(&self.resample) {
             self.resample = if methods.contains(&default_resample()) { default_resample() } else { methods[0] };
         }
-        self.quality = self.quality.clamp(*QUALITY.start(), *QUALITY.end());
+        let steps = formats.iter().find(|format| format.id == self.format).map_or(QUALITY, ExportFormat::quality_steps);
+        self.quality = self.quality.clamp(*steps.start(), *steps.end());
         let in_range = |side: u32| (MIN_SIDE..=MAX_DOCUMENT_SIDE).contains(&f64::from(side));
         self.size = match self.size {
             ExportSize::Pixels { width, height } if !self.lock_aspect && in_range(width) && in_range(height) => self.size,
