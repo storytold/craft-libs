@@ -34,6 +34,7 @@ mod gpx;
 mod iptc;
 pub mod jxl;
 pub mod mpf;
+pub mod nikon;
 pub mod tags;
 mod xmp;
 mod xmp_merge;
@@ -162,7 +163,7 @@ pub struct Metadata {
     pub label: Option<String>,
     /// Face/pet/focus/barcode regions (`mwg-rs:Regions`), read from XMP only.
     pub regions: Vec<Region>,
-    /// Where the camera focused, from its maker notes ([`focus`]; Sony only for now), on the upright photo.
+    /// Where the camera focused, from its maker notes ([`focus`]: checked Sony bodies and the Nikon D800E), on the upright photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<FocusPoint>,
     /// Fujifilm in-camera film recipe from the MakerNote. Not written back.

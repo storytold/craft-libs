@@ -1,6 +1,7 @@
 //! Exif / TIFF tags → [`Metadata`] (CIPA DC-008 Exif 2.32, TIFF 6.0, DNG 1.7 tag semantics).
 
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
+use craft_tiff::makernote::MakerNote;
 use craft_tiff::{FieldType, Ifd, ParseOptions, Tiff, TiffError, tags as t};
 
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
@@ -26,14 +27,19 @@ pub fn try_read_exif(bytes: &[u8]) -> Result<Metadata, TiffError> {
 pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata, TiffError> {
     let data = strip_exif_header(bytes);
     let tiff = Tiff::parse_with(data, opts)?;
-    let mut m = from_tiff(&tiff);
+    // a Nikon note, parsed once for the lens, the ISO and the focus point
+    let nikon = nikon_note_of(&tiff);
+    let mut m = from_tiff_with(&tiff, &|| nikon.as_ref());
     // Panasonic (and some Canons) write no LensModel, only the name in their maker note
     if m.lens_model.is_none() {
         m.lens_model = panasonic_lens(data, &tiff).or_else(|| canon_maker_note_lens(data, &tiff));
     }
     fill_from_panasonic_raw(&mut m, data, &tiff, opts);
     // the maker note's values are offsets into the stream, which `from_tiff` doesn't have
-    m.focus = crate::focus::read(data, &tiff, m.make.as_deref(), m.model.as_deref(), m.orientation);
+    m.focus = match &nikon {
+        Some(note) => m.model.as_deref().and_then(|model| crate::focus::nikon(note, model, m.orientation)),
+        None => crate::focus::read(data, &tiff, m.make.as_deref(), m.model.as_deref(), m.orientation),
+    };
     Ok(m)
 }
 
@@ -83,6 +89,13 @@ fn without_iso_overflow(iso: Option<u32>, tiff: &Tiff) -> Option<u32> {
 
 /// Build [`Metadata`] from a parsed TIFF stream (IFD0 + Exif + GPS; DNG tags as fallbacks).
 pub fn from_tiff(tiff: &Tiff) -> Metadata {
+    // a Nikon note is parsed only when a field it fills is missing
+    let note = std::cell::OnceCell::new();
+    from_tiff_with(tiff, &|| note.get_or_init(|| nikon_note_of(tiff)).as_ref())
+}
+
+/// [`from_tiff`] with the stream's Nikon maker note supplied by `nikon` (asked for only when needed).
+fn from_tiff_with<'n>(tiff: &Tiff, nikon: &dyn Fn() -> Option<&'n MakerNote>) -> Metadata {
     let ifd0 = tiff.ifds.first();
     let exif = tiff.exif();
     let gps = tiff.gps();
@@ -107,7 +120,7 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     }
     // Nikon DSLRs write neither LensModel nor LensSpecification, only the same four values in their maker note
     if m.lens_spec.is_none() {
-        m.lens_spec = nikon_lens_spec(exif, m.make.as_deref(), tiff.order);
+        m.lens_spec = nikon().and_then(|n| crate::nikon::lens_spec(&n.ifd));
     }
     m.orientation = ifd0.and_then(|i| i.u16(t::ORIENTATION)).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif);
     m.rating = ifd0.and_then(|i| i.i64(t::RATING)).map(|r| {
@@ -127,6 +140,13 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
         _ => None,
     }
     .map(|v| v.min(u32::MAX as u64) as u32);
+    // Nikon bodies leave ISOSpeedRatings out above their top native ISO (Hi 0.3 and up on a D800E), or write only its
+    // overflow marker (a LONG field or an extended measurement of 65535 is a real ISO): the maker note still says
+    if without_iso_overflow(m.iso, tiff).is_none()
+        && let Some(iso) = nikon().and_then(|n| crate::nikon::iso(&n.ifd))
+    {
+        m.iso = Some(iso);
+    }
     m.focal_length = pos(either(t::FOCAL_LENGTH).and_then(|v| v.get_f64(0)));
     m.focal_length_35mm = pos(exif.and_then(|e| e.f64(t::FOCAL_LENGTH_35MM)));
     m.exposure_bias = exif.and_then(|e| e.f64(t::EXPOSURE_BIAS)).filter(|v| v.is_finite() && v.abs() < 100.0);
@@ -299,28 +319,22 @@ fn canon_maker_note_lens(data: &[u8], tiff: &Tiff) -> Option<String> {
     text(Some(&mn.ifd), CANON_LENS_MODEL)
 }
 
-/// Nikon maker note tag `0x0084` (Lens in the ExifTool Nikon tag names): shortest and longest focal length, then the
-/// widest aperture at each, as rationals, like Exif LensSpecification. Zero for a lens that doesn't report itself.
-const NIKON_LENS: u16 = 0x0084;
-
-/// The lens a Nikon camera records in its maker note, when it's plausible.
-fn nikon_lens_spec(exif: Option<&Ifd>, make: Option<&str>, order: craft_tiff::ByteOrder) -> Option<[f64; 4]> {
-    let make = make?;
-    if !make.trim().to_ascii_uppercase().starts_with("NIKON") {
-        return None;
-    }
-    let note = exif?.bytes(t::MAKER_NOTE)?;
-    let mn = craft_tiff::makernote::parse_makernote(note, 0, note.len() as u64, order, make)?;
-    let s = mn.ifd.f64s(NIKON_LENS)?;
-    let [short, long, wide, narrow] = s.as_slice() else { return None };
-    let focal = |f: f64| f.is_finite() && f > 0.0 && f < 10_000.0;
-    let aperture = |a: f64| a.is_finite() && a > 0.0 && a < 100.0;
-    (focal(*short) && focal(*long) && long >= short && aperture(*wide) && aperture(*narrow)).then_some([*short, *long, *wide, *narrow])
+/// The Nikon type-3 maker note of a parsed stream, from the Exif IFD's MakerNote bytes alone (a type-3 note counts its
+/// offsets from its own header, so the enclosing stream isn't needed). `None` for another make or kind of note.
+fn nikon_note_of(tiff: &Tiff) -> Option<MakerNote> {
+    let make = tiff.ifds.first()?.string(t::MAKE)?;
+    let note = tiff.exif()?.bytes(t::MAKER_NOTE)?;
+    crate::nikon::parse_note(note, 0, note.len() as u64, tiff.order, &make)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// Nikon maker note tags the tests write: Lens (`0x0084`), ISO (`0x0002`) and ISOInfo (`0x0025`).
+    const NIKON_LENS: u16 = 0x0084;
+    const NIKON_ISO: u16 = 0x0002;
+    const NIKON_ISO_INFO: u16 = 0x0025;
     use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
 
     fn capture_time_tiff(original: Option<&str>, digitized: Option<&str>, ifd0_time: Option<&str>, xmp: Option<&str>) -> Vec<u8> {
@@ -817,6 +831,54 @@ pub(crate) mod tests {
         assert_eq!(read_exif(&nikon_exif("NIKON CORPORATION", Some([(0, 1), (0, 1), (0, 1), (0, 1)]), None)).lens_spec, None);
         assert_eq!(read_exif(&nikon_exif("NIKON CORPORATION", Some([(200, 1), (80, 1), (28, 10), (28, 10)]), None)).lens_spec, None);
         assert_eq!(read_exif(&nikon_exif("NIKON CORPORATION", None, None)).lens_spec, None);
+    }
+
+    /// A Nikon Exif block laid out as a D800E NEF shot at Hi 0.3 is: no ISOSpeedRatings, no maker note `0x0002`, only
+    /// ISOInfo (`0x0025`, 14 bytes; byte 0 = 136, ISOExpansion `0x0101`), unless `note_iso` / `exif_tags` add them.
+    fn nikon_hi_iso_exif(make: &str, iso_info: Option<u8>, note_iso: Option<u16>, exif_tags: &[(u16, Value)]) -> Vec<u8> {
+        let mut note = IfdBuilder::new();
+        note.set(0x0001, Value::Undefined(b"0210".to_vec()));
+        if let Some(v) = note_iso {
+            note.set(NIKON_ISO, Value::Short(vec![0, v]));
+        }
+        if let Some(raw) = iso_info {
+            note.set(NIKON_ISO_INFO, Value::Undefined(vec![raw, 1, 12, 0, 1, 1, 60, 1, 12, 0, 0, 0, 0, 1]));
+        }
+        let mut blob = b"Nikon\0\x02\x10\0\0".to_vec();
+        blob.extend(TiffWriter::new(ByteOrder::Big, false).write(&[note]).unwrap());
+        let mut exif = IfdBuilder::new();
+        exif.set(t::MAKER_NOTE, Value::Undefined(blob));
+        for (tag, v) in exif_tags {
+            exif.set(*tag, v.clone());
+        }
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii(make.into()));
+        ifd0.set_child(t::EXIF_IFD, exif);
+        TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn nikon_hi_iso_without_exif_iso_comes_from_the_maker_note() {
+        let nikon = "NIKON CORPORATION";
+        let iso = |info, note, exif: &[(u16, Value)]| read_exif(&nikon_hi_iso_exif(nikon, info, note, exif)).iso;
+        let short = |v: u16| (t::ISO_SPEED, Value::Short(vec![v]));
+        // Hi 0.3 (ISOInfo 136) is above ISO 6400 and below Hi 0.5 (138)
+        let hi03 = iso(Some(136), None, &[]).unwrap();
+        let hi05 = iso(Some(138), None, &[]).unwrap();
+        assert!(6400 < hi03 && hi03 < hi05, "{hi03} {hi05}");
+        // the stated ISOs win over the derived one, another make's note is not read, and a zero says nothing
+        assert_eq!(iso(Some(136), None, &[short(6400)]), Some(6400));
+        assert_eq!(iso(Some(136), Some(3200), &[]), Some(3200));
+        assert_eq!(read_exif(&nikon_hi_iso_exif("Canon", Some(136), None, &[])).iso, None);
+        assert_eq!(iso(Some(0), None, &[]), None);
+        assert_eq!(iso(Some(0xff), None, &[]), None, "an unset ISOInfo byte");
+        // ISOSpeedRatings holding only its overflow marker: the maker note says what the ISO was
+        assert_eq!(iso(Some(136), None, &[short(u16::MAX)]), Some(hi03));
+        assert_eq!(iso(None, None, &[]), None);
+        // but 65535 in a LONG field, or as an extended measurement, is an ISO the camera measured
+        assert_eq!(iso(Some(136), None, &[(t::ISO_SPEED, Value::Long(vec![65535]))]), Some(65535));
+        let measured = [short(u16::MAX), (t::RECOMMENDED_EXPOSURE_INDEX, Value::Long(vec![65535]))];
+        assert_eq!(iso(Some(136), None, &measured), Some(65535));
     }
 
     pub(crate) fn sample_exif(order: ByteOrder) -> Vec<u8> {

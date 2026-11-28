@@ -2,7 +2,8 @@
 //! panel's "All Metadata"). Names follow the public TIFF 6.0 / EXIF 2.3 / DNG specifications;
 //! common enumerations are spelled out, everything else is shown as stored. Maker notes and
 //! binary blobs are summarised by size; of a maker note only the lens name is listed (the
-//! Panasonic one, as Panasonic writes no Exif LensModel).
+//! Panasonic one, as Panasonic writes no Exif LensModel), and a Nikon note's fields are spelled out
+//! as `Nikon` rows ([`crate::nikon`]).
 
 use craft_tiff::{Ifd, Tiff, Value};
 
@@ -294,35 +295,26 @@ fn raw_image_ifd(ifd0: &Ifd) -> Option<&Ifd> {
     ifd0.sub_ifds.iter().find(|s| matches!(s.u32(0x0106), Some(32803 | 34892)))
 }
 
-/// Nikon maker note `NEFCompression` (0x0093) spelled out, per the public Nikon tag documentation.
-fn nef_compression(v: u32) -> Option<&'static str> {
-    Some(match v {
-        1 => "Lossy (type 1)",
-        2 => "Uncompressed",
-        3 => "Lossless",
-        4 => "Lossy (type 2)",
-        5 => "Striped packed 12 bits",
-        6 => "Uncompressed (reduced to 12 bit)",
-        7 => "Unpacked 12 bits",
-        8 => "Small",
-        9 => "Packed 12 bits",
-        10 => "Packed 14 bits",
-        13 => "High Efficiency",
-        14 => "High Efficiency*",
-        _ => return None,
-    })
-}
-
-/// Nikon maker note NEFCompression of a raw file, spelled out; `None` for other files or values.
-fn nikon_nef_compression(tiff: &Tiff, bytes: &[u8]) -> Option<&'static str> {
+/// The Nikon type-3 maker note in this TIFF stream (`bytes` starts at its header), when Make says Nikon.
+fn nikon_note(tiff: &Tiff, bytes: &[u8]) -> Option<craft_tiff::makernote::MakerNote> {
     let ifd0 = tiff.ifds.first()?;
     let make = ifd0.string(0x010f)?;
-    if !make.to_ascii_uppercase().starts_with("NIKON") {
-        return None;
-    }
     let e = ifd0.exif.as_ref()?.get(0x927c)?;
-    let mn = craft_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
-    nef_compression(mn.ifd.u32(0x0093)?)
+    crate::nikon::parse_note(bytes, e.offset, e.count() as u64, tiff.order, &make)
+}
+
+/// The Nikon maker note's fields as `Nikon` rows ([`crate::nikon`]), and its NEFCompression in a raw's Compression
+/// row (`raw`): the note parsed once for both.
+fn nikon_rows(bytes: &[u8], tiff: &Tiff, raw: bool, out: &mut Vec<TagRow>) {
+    let Some(mn) = nikon_note(tiff, bytes) else { return };
+    if raw
+        && let Some(words) = crate::nikon::note_nef_compression(&mn.ifd)
+        && let Some(row) = out.iter_mut().find(|r| r.group == "TIFF" && r.tag == 0x0103)
+    {
+        row.value = words.to_string();
+    }
+    let model = tiff.ifds.first().and_then(|i| i.string(0x0110));
+    out.extend(crate::nikon::rows(&mn.ifd, mn.order, model.as_deref()));
 }
 
 /// The Panasonic maker note's lens name (LensType, `0x0051`) as a row, the name `photo.inspect` shows as the lens.
@@ -365,12 +357,8 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
         && let Ok(t) = Tiff::parse(bytes)
     {
         let mut rows = tag_rows(&t);
-        if let Some(words) = nikon_nef_compression(&t, bytes)
-            && let Some(row) = rows.iter_mut().find(|r| r.group == "TIFF" && r.tag == 0x0103)
-        {
-            row.value = words.to_string();
-        }
         panasonic_lens_row(bytes, &t, &mut rows);
+        nikon_rows(bytes, &t, true, &mut rows);
         (rows, crate::fuji::recipe_from_exif(bytes))
     } else {
         let Some(exif) = crate::embedded(bytes).exif else { return Vec::new() };
@@ -378,6 +366,7 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
         let Ok(t) = Tiff::parse(data) else { return Vec::new() };
         let mut rows = tag_rows(&t);
         panasonic_lens_row(data, &t, &mut rows);
+        nikon_rows(data, &t, false, &mut rows);
         (rows, crate::fuji::recipe_from_exif(&exif))
     };
     if let Some(recipe) = recipe {
