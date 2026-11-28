@@ -96,7 +96,9 @@ pub struct WindowSpec {
 
 impl WindowSpec {
     /// A tool window (a native dock window): its own title row in place of the OS title bar
-    /// (`craft_window::policy::tool_frame`), no caption buttons, a palette level, no taskbar entry.
+    /// (`craft_window::policy::tool_frame`), no caption buttons, a palette level, no taskbar entry. On Windows it has
+    /// the [tool-window style](https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles), which
+    /// also keeps it out of Alt-Tab, while it has no taskbar entry.
     pub fn tool() -> Self {
         WindowSpec { kind: WindowKind::Tool, level: WindowLevel::Palette, taskbar: false, ..Self::dialog() }
     }

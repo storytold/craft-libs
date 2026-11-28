@@ -105,6 +105,8 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         level: standing.level,
         resizable: open.resizable,
         taskbar: spec.taskbar,
+        // A tool window without a taskbar entry also stays out of Alt-Tab on Windows.
+        tool_window: spec.kind == WindowKind::Tool && !spec.taskbar,
         // The builder's visibility opens a window the app's state hides already hidden, and only opens it: egui would
         // send each later change of it as a command beside the one below.
         hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint || (hidden && record.facts.is_none())),

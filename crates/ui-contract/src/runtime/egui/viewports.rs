@@ -35,6 +35,8 @@ pub(crate) struct Spec<'a> {
     pub resizable: bool,
     /// Whether the window has a taskbar or Dock entry.
     pub taskbar: bool,
+    /// Whether the window has the Windows tool-window style (no taskbar or Alt-Tab entry); other platforms ignore it.
+    pub tool_window: bool,
     /// Whether the window opens hidden; [`set_visible`] reveals it.
     pub hidden: bool,
     /// Whether the window takes OS focus when it opens.
@@ -47,8 +49,12 @@ pub(crate) struct Spec<'a> {
 
 /// Opens (or keeps) the OS viewport `id` and runs `body` once for each pass the viewport gets in this call.
 pub(crate) fn show_immediate<T>(ctx: &Context, id: ViewportId, spec: &Spec<'_>, mut body: impl FnMut(&mut Ui) -> T) -> T {
-    let mut builder =
-        ViewportBuilder::default().with_title(spec.title).with_resizable(spec.resizable).with_taskbar(spec.taskbar).with_window_level(spec.level);
+    let mut builder = ViewportBuilder::default()
+        .with_title(spec.title)
+        .with_resizable(spec.resizable)
+        .with_taskbar(spec.taskbar)
+        .with_tool_window(spec.tool_window)
+        .with_window_level(spec.level);
     if spec.hidden {
         builder = builder.with_visible(false);
     }
