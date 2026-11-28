@@ -2,6 +2,7 @@
 //! room and scrolls its text inside; a bound caret goes both ways.
 
 use craft_behavior::PartKey;
+use craft_host::target::Os;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Stack;
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -326,6 +327,38 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::COMMAND), Event::ModifiersChanged(Modifiers::NONE)]);
     fixture.idle(2);
     assert_eq!(caret.get(), 0, "a PageDown event carrying Cmd leaves the caret alone when the pass reports no modifier");
+
+    // The modifier can go down after the Page in the same pass: the Page's own event still carries none,
+    // so the field moves the caret even though the frame now reports Shift.
+    fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::NONE), Event::ModifiersChanged(Modifiers::SHIFT)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len(), "a plain PageDown moves to the end when Shift goes down after it");
+}
+
+#[trial]
+fn page_keys_reach_the_text_bounds_on_macos() {
+    let text = Rc::new(RefCell::new("a\nb\nc".to_owned()));
+    let caret = Rc::new(Cell::new(0usize));
+    let (shown, bound) = (text.clone(), caret.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut at = bound.get();
+        let mut held = shown.borrow_mut();
+        TextField::new("Notes", Bind::bound(&mut *held)).lines(2).caret(Bind::bound(&mut at)).show(ui);
+        drop(held);
+        bound.set(at);
+    });
+    fixture.os(Os::Mac);
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len(), "PageDown reaches the end on macOS");
+
+    fixture.key(Key::PageUp, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "PageUp reaches the start on macOS");
 }
 
 /// The clear part empties the field in the pass that takes its click: the field's node reads empty after that one pass,
