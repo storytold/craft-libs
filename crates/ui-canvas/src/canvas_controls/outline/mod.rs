@@ -5,6 +5,8 @@
 mod hover;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
+#[cfg(feature = "testing")]
+pub(crate) mod trials;
 
 use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
@@ -29,6 +31,145 @@ const EDGE_ALPHA: f32 = 0.95;
 
 /// How far, in screen points, a flattened curve may leave the path.
 const FLATTEN_TOLERANCE: f64 = 0.25;
+
+/// What the host asks a [`HoverShape::Mask`] tint to look like, resolved once per pass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MaskLook {
+    /// The alpha the tint multiplies a texel's coverage by.
+    fill: f32,
+    /// The edge band: `None` keeps the framework's one-texel edge at [`EDGE_ALPHA`], `Some(0)` draws
+    /// no band, and `Some(depth)` makes it `depth` texels deep.
+    band: Option<usize>,
+}
+
+impl MaskLook {
+    /// The look of `opacity` (a share 0..=1 of the tint's alpha) and `edge_width` (document units of
+    /// outline along the mask's edge). A host that gives neither, or a value that is not a number,
+    /// keeps the framework's own look: the tint never vanishes or turns opaque on a wild setting.
+    fn of(mask: &HoverMask, opacity: Option<f32>, edge_width: Option<f32>) -> Self {
+        let fill = match opacity {
+            Some(v) if v.is_finite() => v.clamp(0.0, 1.0),
+            _ => FILL_ALPHA,
+        };
+        let band = match edge_width {
+            Some(w) if w.is_finite() => Some(band_depth(mask, w)),
+            _ => None,
+        };
+        MaskLook { fill, band }
+    }
+}
+
+/// The step, in document units, between two texels of `mask`: `HoverMask::sampled` takes one texel
+/// per document unit until the long side reaches its ceiling, so this is that step. Its grid is at
+/// least 1 x 1 even for an empty mask, so the division has no zero case.
+fn texel_step(mask: &HoverMask) -> f64 {
+    let [across, _] = mask.size();
+    (mask.bounds().width() / across as f64).max(1.0)
+}
+
+/// The depth, in texels, of an edge `units` document units wide: at least one texel, since a width
+/// under one texel still gets the only texel the grid has, and never more than the mask is deep.
+/// 0 units asks for no band.
+fn band_depth(mask: &HoverMask, units: f32) -> usize {
+    if units <= 0.0 {
+        return 0;
+    }
+    let step = texel_step(mask);
+    let [across, down] = mask.size();
+    ((f64::from(units) / step).round() as usize).clamp(1, across.max(down))
+}
+
+/// Which covered texels of `mask` sit within `depth` texels of a texel that is not covered, or of the
+/// mask's own border. The distance is counted over the eight neighbours (Chebyshev), which costs two
+/// passes over the grid: the mask is a preview at `HoverMask::MAX_TEXELS` at most, and an exact
+/// Euclidean band would need a second grid and a square root per texel for a difference no preview
+/// shows.
+fn band_texels(mask: &HoverMask, depth: usize) -> Vec<bool> {
+    let [across, down] = mask.size();
+    let depth = depth.min(across.max(down));
+    let covered: Vec<bool> = (0..down).flat_map(|y| (0..across).map(move |x| mask.coverage(x, y) >= 0.5)).collect();
+    let far = (depth + 1) as u32;
+    let mut dist: Vec<u32> = covered.iter().map(|&on| if on { far } else { 0 }).collect();
+    // A covered texel on the grid's border is beside an uncovered one (outside the mask).
+    for y in 0..down {
+        for x in 0..across {
+            if covered[y * across + x] && (x == 0 || y == 0 || x + 1 == across || y + 1 == down) {
+                dist[y * across + x] = dist[y * across + x].min(1);
+            }
+        }
+    }
+    let near = |dist: &mut Vec<u32>, here: usize, from: usize| {
+        let through = dist[from].saturating_add(1);
+        if through < dist[here] {
+            dist[here] = through;
+        }
+    };
+    for y in 0..down {
+        for x in 0..across {
+            let here = y * across + x;
+            if y > 0 {
+                near(&mut dist, here, (y - 1) * across + x);
+                if x > 0 {
+                    near(&mut dist, here, (y - 1) * across + x - 1);
+                }
+                if x + 1 < across {
+                    near(&mut dist, here, (y - 1) * across + x + 1);
+                }
+            }
+            if x > 0 {
+                near(&mut dist, here, y * across + x - 1);
+            }
+        }
+    }
+    for y in (0..down).rev() {
+        for x in (0..across).rev() {
+            let here = y * across + x;
+            if y + 1 < down {
+                near(&mut dist, here, (y + 1) * across + x);
+                if x > 0 {
+                    near(&mut dist, here, (y + 1) * across + x - 1);
+                }
+                if x + 1 < across {
+                    near(&mut dist, here, (y + 1) * across + x + 1);
+                }
+            }
+            if x + 1 < across {
+                near(&mut dist, here, y * across + x + 1);
+            }
+        }
+    }
+    (0..dist.len()).map(|i| covered[i] && dist[i] <= depth as u32).collect()
+}
+
+fn tint(mask: &HoverMask, color: Color32, look: &MaskLook) -> ColorImage {
+    let [width, height] = mask.size();
+    // The edge, worked out once for the whole mask: no host width keeps the framework's own
+    // one-texel edge, width 0 asks for no band, and any other depth is the band's texels.
+    let band: Option<Vec<bool>> = match look.band {
+        None => None,
+        Some(0) => Some(Vec::new()),
+        Some(depth) => Some(band_texels(mask, depth)),
+    };
+    let on_edge = |x: usize, y: usize| match &band {
+        None => mask.is_edge(x, y),
+        Some(band) => band.get(y * width + x).is_some_and(|on| *on),
+    };
+    let mut pixels = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let covered = mask.coverage(x, y);
+            let alpha = if covered <= 0.0 {
+                0.0
+            } else if on_edge(x, y) {
+                EDGE_ALPHA
+            } else {
+                look.fill * covered
+            };
+            pixels.push(Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (alpha.clamp(0.0, 1.0) * 255.0).round() as u8));
+        }
+    }
+    ColorImage::new([width, height], pixels)
+}
 
 /// About how many points one flattened segment may have (the tolerance stays at `FLATTEN_TOLERANCE` for segments
 /// up to about 250k screen points across).
@@ -182,29 +323,13 @@ fn stroke_run(painter: &ContentPainterCx<'_>, style: &OutlineStyle, run: Vec<Pos
     painter.painter.extend(run_shapes(style, run, closed, color, width));
 }
 
-fn tint(mask: &HoverMask, color: Color32) -> ColorImage {
-    let [width, height] = mask.size();
-    let mut pixels = Vec::with_capacity(width * height);
-    for y in 0..height {
-        for x in 0..width {
-            let covered = mask.coverage(x, y);
-            let alpha = if covered <= 0.0 {
-                0.0
-            } else if mask.is_edge(x, y) {
-                EDGE_ALPHA
-            } else {
-                FILL_ALPHA * covered
-            };
-            pixels.push(Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (alpha.clamp(0.0, 1.0) * 255.0).round() as u8));
-        }
-    }
-    ColorImage::new([width, height], pixels)
-}
-
-fn paint_mask(painter: &ContentPainterCx<'_>, id: egui::Id, view: &CanvasView, mask: &HoverMask, color: Color32) {
+fn paint_mask(painter: &ContentPainterCx<'_>, id: egui::Id, view: &CanvasView, mask: &HoverMask, color: Color32, look: &MaskLook) {
     let ctx = painter.painter.ctx();
     let store = TextureStore::<(egui::Id, u64)>::in_context(ctx, "canvas_controls.hover_mask", TextureStoreOptions::frames());
-    let texture = store.get_or_put(ctx, (id, mask.generation()), Revision::of(&color.to_array()), || tint(mask, color));
+    // The look is part of the key: the same mask tinted at another opacity or with another edge is a
+    // different image, and `get_or_put` would otherwise keep the first one.
+    let key = (color.to_array(), look.fill.to_bits(), look.band);
+    let texture = store.get_or_put(ctx, (id, mask.generation()), Revision::of(&key), || tint(mask, color, look));
     let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
     let mut mesh = Mesh::with_texture(texture.sized().id);
     for (pos, uv) in view.quad(mask.bounds()).into_iter().zip(uvs) {
@@ -227,12 +352,20 @@ pub struct HoverOutline {
     /// The line and tint colour (a layer's colour); the overlay line colour by default.
     #[prop]
     color: Option<DataColor>,
+    /// The share of the tint's alpha a mask's coverage is multiplied by (0..=1, clamped); the
+    /// framework's own [`FILL_ALPHA`] by default.
+    #[prop(quantity = "opacity share")]
+    tint_opacity: Option<f32>,
+    /// How far, in document units, the near-opaque band along a mask's edge reaches; the
+    /// framework's one-texel edge by default, `Some(0.0)` for no band at all.
+    #[prop(quantity = "document units")]
+    edge_width: Option<f32>,
 }
 
 impl HoverOutline {
     /// The outline of `shape`, named `label`.
     pub fn new(label: impl Into<Label>, shape: Option<HoverShape>) -> Self {
-        HoverOutline { common: Common::new(), shape, color: None }.label(label)
+        HoverOutline { common: Common::new(), shape, color: None, tint_opacity: None, edge_width: None }.label(label)
     }
 }
 
@@ -272,7 +405,10 @@ impl Component for HoverOutline {
                     stroke_run(&painter, style, points, closed, self.color, style.medium);
                 }
             }
-            HoverShape::Mask(mask) => paint_mask(&painter, cx.id, &view, mask, self.color.map_or(style.line.egui(), |color| color.0)),
+            HoverShape::Mask(mask) => {
+                let look = MaskLook::of(mask, self.tint_opacity, self.edge_width);
+                paint_mask(&painter, cx.id, &view, mask, self.color.map_or(style.line.egui(), |color| color.0), &look);
+            }
         }
     }
 
