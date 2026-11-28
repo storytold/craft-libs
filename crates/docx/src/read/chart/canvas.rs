@@ -68,7 +68,28 @@ pub(super) fn stroke(out: &mut Vec<GraphicItem>, segs: Vec<PathSeg>, color: Rgb,
     }
 }
 
-fn swatch(out: &mut Vec<GraphicItem>, x: f32, y: f32, color: Rgb) {
+/// A line through `pts` drawn one segment at a time, each in the colour of the point it ends at
+/// (`colour(i)` for the segment into point `i`), as Word draws a series that varies colours by
+/// point. A missing point breaks the line. `close` adds the segment from the last point back to
+/// the first, in the first point's colour (radar). Word draws that one first, so with two points
+/// it lies under the segment from the first point to the second.
+pub(super) fn point_segments(out: &mut Vec<GraphicItem>, pts: &[Option<(f32, f32)>], close: bool, colour: impl Fn(usize) -> Rgb, width: f32) {
+    let n = pts.len();
+    let mut segment = |from: usize, to: usize| {
+        if let (Some(Some((x0, y0))), Some(Some((x1, y1)))) = (pts.get(from), pts.get(to)) {
+            stroke(out, vec![PathSeg::Move(*x0, *y0), PathSeg::Line(*x1, *y1)], colour(to), width);
+        }
+    };
+    if close && n >= 2 {
+        segment(n - 1, 0);
+    }
+    for k in 1..n {
+        segment(k - 1, k);
+    }
+}
+
+fn swatch(out: &mut Vec<GraphicItem>, x: f32, y: f32, color: Option<Rgb>) {
+    let Some(color) = color else { return };
     out.push(GraphicItem::Shape {
         rect: [x, y, SWATCH, SWATCH],
         kind: ShapeKind::Rectangle,
@@ -132,12 +153,12 @@ pub(super) const SWATCH: f32 = 7.0;
 const SEP: f32 = 10.0;
 
 /// Legend in the given side of `area`; returns the area left for the plot.
-pub(super) fn legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], pos: Pos, area: Rect, fs: f32) -> Rect {
+pub(super) fn legend(out: &mut Vec<GraphicItem>, entries: &[(String, Option<Rgb>)], pos: Pos, area: Rect, fs: f32) -> Rect {
     if entries.is_empty() {
         return area;
     }
     // Entry texts are cut to a share of the chart, so a long name can't push the legend out.
-    let entries: Vec<(String, Rgb)> = entries.iter().map(|(s, c)| (clip_text(s, area.w * LEGEND_SHARE, fs), *c)).collect();
+    let entries: Vec<(String, Option<Rgb>)> = entries.iter().map(|(s, c)| (clip_text(s, area.w * LEGEND_SHARE, fs), *c)).collect();
     match pos {
         Pos::Right | Pos::Left => side_legend(out, &entries, pos == Pos::Left, area, fs),
         Pos::Top | Pos::Bottom => row_legend(out, &entries, pos == Pos::Top, area, fs),
@@ -146,7 +167,7 @@ pub(super) fn legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], pos:
 
 /// A legend in a column at the left or right of `area`, keeping only the entries that fit above
 /// its bottom; returns the area left for the plot.
-fn side_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], left: bool, area: Rect, fs: f32) -> Rect {
+fn side_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Option<Rgb>)], left: bool, area: Rect, fs: f32) -> Rect {
     let lh = fs * LINE;
     let entries = entries.get(..((area.h / lh).floor().max(0.0) as usize).min(entries.len())).unwrap_or(&[]);
     if entries.is_empty() {
@@ -173,7 +194,7 @@ fn side_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], left: bool
 
 /// A legend in centred rows the width of `area` above or below it (at most
 /// [`MAX_LEGEND_ROWS`], and half its height); returns the area left for the plot.
-fn row_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], top: bool, area: Rect, fs: f32) -> Rect {
+fn row_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Option<Rgb>)], top: bool, area: Rect, fs: f32) -> Rect {
     let lh = fs * LINE;
     let max_rows = MAX_LEGEND_ROWS.min((area.h / 2.0 / lh).floor().max(1.0) as usize);
     let rows = legend_rows(entries, area.w, fs, max_rows);
@@ -199,8 +220,8 @@ fn row_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], top: bool, 
 
 /// Legend entries (text, colour, text width) packed into at most `max_rows` rows of `width`
 /// points; the entries past the last row are left out.
-fn legend_rows(entries: &[(String, Rgb)], width: f32, fs: f32, max_rows: usize) -> Vec<Vec<(String, Rgb, f32)>> {
-    let mut rows: Vec<Vec<(String, Rgb, f32)>> = Vec::new();
+fn legend_rows(entries: &[(String, Option<Rgb>)], width: f32, fs: f32, max_rows: usize) -> Vec<Vec<(String, Option<Rgb>, f32)>> {
+    let mut rows: Vec<Vec<(String, Option<Rgb>, f32)>> = Vec::new();
     let mut row_w = 0.0;
     for (s, c) in entries {
         let w = text_w(s, fs);

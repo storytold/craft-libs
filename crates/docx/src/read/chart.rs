@@ -1,9 +1,9 @@
 //! Charts (ECMA-376 Part 1 §21.2): the cached data of a `c:chartSpace` drawn as items in points.
 //!
-//! Bar and column (clustered, stacked or 100% stacked), line, area, pie, doughnut and scatter
-//! charts are drawn from the first supported chart type of the plot area, with their values as
+//! Bar and column (clustered, stacked or 100% stacked), line, area, pie, doughnut, scatter and
+//! bubble charts are drawn from the first supported chart type of the plot area, with their values as
 //! data labels where `c:dLbls` shows them (`c:showVal`). Radar charts (standard, with markers or
-//! filled) draw as spokes, concentric grid polygons and one polygon per series. A chart of only other types (stock, bubble…)
+//! filled) draw as spokes, concentric grid polygons and one polygon per series. A chart of only other types (stock, surface…)
 //! draws a placeholder: its frame, its title and the type it is. Text widths are estimated ([`CHAR_W`] em a character), so label places are approximate.
 
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -30,13 +30,13 @@ use canvas::{Rect, clip_text, legend, text};
 #[cfg(test)]
 use format::{civil, excel_stamp, format_value};
 pub(crate) use model::Axis;
-use model::{Grouping, Kind, Pos, Series};
+use model::{BubbleOpts, Grouping, Kind, Pos, Series};
 pub(crate) use parse::chart_axes;
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
 use parse::{read_series, text_size, title_of};
 #[cfg(test)]
-use plot::{Scale, narrow, nice_scale};
+use plot::{BUBBLE_COVER, Scale, narrow, nice_scale};
 use plot::{backdrop, cartesian, label};
 use polar::{pie, radar};
 
@@ -93,9 +93,9 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     }
     if let Some(pos) = chart.legend {
         // Word lists bar series in the order they are drawn: reversed for clustered horizontal bars
-        // and for stacked columns with a vertical legend.
+        // and for stacked columns with a vertical legend. A legend of categories keeps their order.
         let vertical = matches!(pos, Pos::Left | Pos::Right);
-        let reverse = chart.kind == Kind::Bar && if chart.horizontal { !chart.stacked() } else { chart.stacked() && vertical };
+        let reverse = chart.kind == Kind::Bar && !chart.point_legend && if chart.horizontal { !chart.stacked() } else { chart.stacked() && vertical };
         let mut entries = chart.legend_entries();
         if reverse {
             entries.reverse();
@@ -117,7 +117,7 @@ fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect) -> Rect {
     Rect { y: area.y + lh + PAD, h: (area.h - lh - PAD).max(1.0), ..area }
 }
 
-/// A chart whose plot area holds only chart types WordCraft doesn't draw (stock, bubble…): its
+/// A chart whose plot area holds only chart types WordCraft doesn't draw (stock, surface…): its
 /// frame with a light border, its title and a line saying which type it is, so it isn't blank
 /// space. Nothing when the plot area has no chart type at all, or a supported one with nothing
 /// to draw.
@@ -204,7 +204,6 @@ fn chartex_name(layout: &str) -> &'static str {
 fn unsupported_name(name: &str) -> &'static str {
     match name {
         "c:stockChart" => "Stock chart",
-        "c:bubbleChart" => "Bubble chart",
         "c:surfaceChart" | "c:surface3DChart" => "Surface chart",
         "c:ofPieChart" => "Pie of pie chart",
         "c:bar3DChart" => "3-D bar chart",
@@ -231,8 +230,15 @@ struct Chart {
     /// Radar: points carry markers (`c:radarStyle` = `marker`).
     radar_marks: bool,
     vary: bool,
+    /// The legend lists the categories, not the series: pie and doughnut charts, a chart that
+    /// varies colours by point, and one that could (one series, not area or filled radar) with a
+    /// point coloured on its own, as Word does (#5978).
+    point_legend: bool,
     /// Number of categories (scatter: points per series at most).
     n: usize,
+    /// How many automatic series colours Word counts: the highest series `c:idx` (else place in
+    /// the file) + 1.
+    series_n: usize,
     cats: Vec<String>,
     series: Vec<Series>,
     accents: Vec<Rgb>,
@@ -247,6 +253,8 @@ struct Chart {
     date1904: bool,
     /// Outline of the plot area, when the file draws one.
     plot_border: Option<Rgb>,
+    /// Bubble sizing; `None` for other chart types.
+    bubble: Option<BubbleOpts>,
 }
 
 #[cfg(test)]

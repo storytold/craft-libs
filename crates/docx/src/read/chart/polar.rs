@@ -1,4 +1,4 @@
-use super::canvas::{Rect, clip_text, fill, stroke, text, text_w, widest};
+use super::canvas::{Rect, clip_text, fill, point_segments, stroke, text, text_w, widest};
 use super::format::format_value;
 use super::model::{DataLabel, Kind, LabelPos, Series};
 use super::plot::{Axes, has_values};
@@ -33,7 +33,10 @@ pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             arc(&mut segs, (cx, cy, r), a, b);
         }
         segs.push(PathSeg::Close);
-        fill(out, segs, c.point_colour(0, i));
+        // A slice with its own `a:noFill`, or in a series with one, is left empty (Word).
+        if s.fills(i) {
+            fill(out, segs, c.point_colour(0, i));
+        }
         if let Some(text) = label_of(s, i) {
             // Halfway across the ring (pie: two thirds out from the centre).
             let at = if inner > 0.0 { (r + inner) / 2.0 } else { r * 0.65 };
@@ -92,11 +95,24 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         if c.radar_fill {
             fill(out, segs.clone(), col);
         }
-        stroke(out, segs, col, s.line_w.unwrap_or(LINE_W));
+        let w = s.line_w.unwrap_or(LINE_W);
+        if c.segmented(j) {
+            let pts: Vec<Option<(f32, f32)>> = ring.iter().map(|p| Some((p.0 as f32, p.1 as f32))).collect();
+            point_segments(out, &pts, true, |i| c.line_colour(j, i), w);
+        } else {
+            stroke(out, segs, col, w);
+        }
         for (i, p) in ring.iter().enumerate() {
-            if c.radar_marks && s.values.get(i).copied().flatten().is_some() {
+            if c.draws_markers(j) && s.values.get(i).copied().flatten().is_some() {
                 let rect = [p.0 as f32 - MARKER / 2.0, p.1 as f32 - MARKER / 2.0, MARKER, MARKER];
-                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(col), stroke: None, stroke_width: 0.0, alpha: 1.0 });
+                out.push(GraphicItem::Shape {
+                    rect,
+                    kind: ShapeKind::Ellipse,
+                    fill: Some(c.point(j, i).and_then(|p| p.marker).unwrap_or_else(|| c.auto_point_colour(j, i))),
+                    stroke: None,
+                    stroke_width: 0.0,
+                    alpha: 1.0,
+                });
             }
             if let Some(text) = label_of(s, i) {
                 labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false, pos: LabelPos::Above, off: 0.0 });
