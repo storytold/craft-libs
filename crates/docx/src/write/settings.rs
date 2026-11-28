@@ -360,6 +360,11 @@ pub(super) fn core_xml(doc: &Document) -> Vec<u8> {
         ("dc:description", &c.description),
         ("cp:lastModifiedBy", &last_modified_by),
         ("cp:category", &c.category),
+        ("dc:language", &c.language),
+        ("cp:contentStatus", &c.content_status),
+        ("dc:identifier", &c.identifier),
+        ("cp:version", &c.version),
+        ("cp:lastPrinted", &c.last_printed),
     ] {
         if !v.is_empty() {
             w.leaf(tag, &[], v);

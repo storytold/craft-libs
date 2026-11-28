@@ -66,6 +66,21 @@ pub struct CoreProps {
     pub created: String,
     pub modified: String,
     pub revision: u32,
+    /// The document's language (`dc:language`, an RFC 4646 tag such as `es-ES`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub language: String,
+    /// Status (`cp:contentStatus`): "Draft", "Final"…
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub content_status: String,
+    /// `dc:identifier`: a reference number the author gives the document.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub identifier: String,
+    /// `cp:version`: the author's version number.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    /// When the document was last printed (`cp:lastPrinted`, W3CDTF).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_printed: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
