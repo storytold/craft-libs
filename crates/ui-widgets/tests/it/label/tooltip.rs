@@ -337,6 +337,25 @@ fn a_tooltip_of_a_control_in_an_inspector_cell_keeps_its_text_width() {
     assert!(inspector < room / 4.0, "the tooltip does not span the window: {inspector} of {room}");
 }
 
+/// The lower button contains the pointer but cannot start a tooltip through the control on top.
+#[trial]
+fn a_covered_enabled_button_does_not_show_its_tooltip() {
+    let rect = Rect::from_min_size(Pos2::new(30.0, 50.0), Vec2::new(120.0, 36.0));
+    let hit = Rc::new(Cell::new((false, false, false)));
+    let seen = Rc::clone(&hit);
+    let mut fixture = Fixture::new(move |ui| {
+        let under = Button::new("Under").id_salt("under").tooltip(STROKE_TIP.to_owned()).show_at(ui, rect);
+        let over = Button::new("Over").id_salt("over").show_at(ui, rect);
+        seen.set((under.response.contains_pointer(), under.response.hovered(), over.response.hovered()));
+    });
+    fixture.settle();
+    fixture.frame(vec![moved(rect.center())]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert_eq!(hit.get(), (true, false, true), "the pointer is inside both buttons but only the upper one wins hover");
+    assert!(!fixture.texts().iter().any(|run| run.text == STROKE_TIP), "the covered button's tooltip stays hidden");
+}
+
 /// A press on a control hides its tooltip until the pointer leaves the control, so what the press opens (a popover
 /// under a swatch) is not covered; a rest after the pointer came back shows it again.
 #[trial]
