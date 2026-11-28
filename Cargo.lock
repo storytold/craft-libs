@@ -1898,6 +1898,7 @@ dependencies = [
  "craft-print",
  "craft-proof",
  "craft-proto",
+ "craft-protobuf",
  "craft-ps",
  "craft-psd",
  "craft-pst",
@@ -3931,6 +3932,13 @@ dependencies = [
  "log",
  "proptest",
  "zeroize",
+]
+
+[[package]]
+name = "craft-protobuf"
+version = "0.1.0"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]

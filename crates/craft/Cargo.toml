@@ -230,6 +230,7 @@ craft-gpu-yuv = { workspace = true, optional = true }
 craft-ipp = { workspace = true, optional = true }
 craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
+craft-protobuf = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
 craft-shared-vec = { workspace = true, optional = true }
@@ -238,6 +239,8 @@ craft-i18n-build = { workspace = true, optional = true }
 craft-pbr = { workspace = true, optional = true }
 
 [features]
+protobuf = ["dep:craft-protobuf"]
+
 ui = [
     "dep:craft-ui",
     "dep:egui",
