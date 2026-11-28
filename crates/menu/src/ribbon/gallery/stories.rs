@@ -172,8 +172,7 @@ fn gallery_rendered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let options = ThumbnailOptions::new();
     let thumbnails = Thumbnails::<u64>::in_context(ui.ctx(), "craft_menu.gallery.story", options);
     let source = FakeThumbSource::<u64>::new().later(true);
-    let items: Vec<GalleryItem<'_, usize>> = (0..COUNT)
-        .map(|at| GalleryItem { key: at, label: name(at), face: GalleryFace::Rendered { key: at as u64, thumbnails: &thumbnails, source: &source } })
-        .collect();
+    let items: Vec<GalleryItem<'_, usize>> =
+        (0..COUNT).map(|at| GalleryItem { key: at, label: name(at), face: GalleryFace::rendered(at as u64, &thumbnails, &source) }).collect();
     show(ui, &items)
 }

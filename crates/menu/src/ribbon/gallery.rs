@@ -226,6 +226,8 @@ pub enum GalleryFace<'a> {
         thumbnails: &'a Thumbnails<u64>,
         /// What renders the thumbnail.
         source: &'a dyn ThumbSource<u64>,
+        /// Whether the transparency grid shows behind transparent pixels.
+        checker: bool,
     },
     /// A tile painted directly.
     Paint(&'a dyn Fn(&ContentPainterCx, Rect)),
@@ -250,7 +252,17 @@ impl<'a> GalleryFace<'a> {
 
     /// A thumbnail under `key`, rendered by `source` into `thumbnails`.
     pub fn rendered(key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64>) -> Self {
-        GalleryFace::Rendered { key, thumbnails, source }
+        GalleryFace::Rendered { key, thumbnails, source, checker: true }
+    }
+
+    /// Whether a rendered thumbnail shows the transparency grid behind its transparent pixels (default on). Off for a
+    /// thumbnail that is a mask on the surface it sits on, such as an equation symbol. Other faces ignore it.
+    #[must_use]
+    pub fn checker(mut self, on: bool) -> Self {
+        if let GalleryFace::Rendered { checker, .. } = &mut self {
+            *checker = on;
+        }
+        self
     }
 
     /// The picture this face shows, `size` high and `aspect` times as wide. It is decoration: the tile that holds it
@@ -258,7 +270,9 @@ impl<'a> GalleryFace<'a> {
     fn picture(&self, aspect: ThumbAspect, size: ThumbSize) -> Picture<'a> {
         let picture = match self {
             GalleryFace::Image { key, revision, image } => Picture::new(Label::default(), *key, *image).revision(*revision),
-            GalleryFace::Rendered { key, thumbnails, source } => Picture::rendered(Label::default(), *key, thumbnails, *source),
+            GalleryFace::Rendered { key, thumbnails, source, checker } => {
+                Picture::rendered(Label::default(), *key, thumbnails, *source).checker(*checker)
+            }
             GalleryFace::Paint(paint) => {
                 let paint = *paint;
                 Picture::painter(Label::default(), aspect, move |cx: &ContentPainterCx<'_>, rect: Rect| paint(cx, rect))
