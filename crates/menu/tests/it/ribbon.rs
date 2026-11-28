@@ -515,3 +515,17 @@ fn group_titles_sit_at_the_foot_in_the_first_frame() {
         assert!((settled.bottom() - foot).abs() < 0.5, "once settled the group {title} {settled:?} ends on the row's foot ({foot})");
     }
 }
+
+/// Hovering a group glows behind it without moving it: its rect is where it was before and after the pointer rests on
+/// it, with motion on.
+#[trial]
+fn hovering_a_group_glows_behind_it_without_moving_it() {
+    let shown = Rc::new(Cell::new(0));
+    let controls: Controls = Rc::new(RefCell::new(None));
+    let mut fixture = slide_rig(&shown, &controls, Direction::Ltr, MotionMode::Full);
+    let before = fixture.by_role(Role::GROUP)[0].rect;
+    fixture.frame(vec![Event::PointerMoved(before.center())]);
+    fixture.idle(60);
+    let after = fixture.by_role(Role::GROUP)[0].rect;
+    assert_eq!(before, after, "the glow paints behind the group and moves nothing");
+}

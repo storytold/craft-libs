@@ -2,7 +2,7 @@
 
 use std::hash::Hash;
 
-use craft_behavior::IconId;
+use craft_behavior::{IconId, MotionMode};
 use craft_keymap::CommandRef;
 use craft_ui::buttons::{Arrangement, Button, ControlPlace, IconButton};
 use craft_ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Sizing, Trigger};
@@ -137,7 +137,9 @@ impl<'a> RibbonGroup<'a> {
     /// sets the line its neighbours sit on: an open group stands at the row's top, and a collapsed group's button sits
     /// in the middle of its height. Returns the rect it took.
     fn unit(&self, ui: &mut Ui, id: Id, add: &mut dyn FnMut(&mut Ui), level: GroupLevel, room: &TitleRoom) -> Rect {
-        Stack::new()
+        // The glow paints behind the content, in a slot reserved before it and filled once the group's rect is known.
+        let behind = ui.painter().add(egui::Shape::Noop);
+        let rect = Stack::new()
             .id(id)
             .label(self.title.clone())
             .sizing(Sizing::FillHeight)
@@ -152,8 +154,29 @@ impl<'a> RibbonGroup<'a> {
                 });
             })
             .output
-            .rect
+            .rect;
+        let strength = glow(ui, id, rect);
+        if strength > 0.0 {
+            let fill = ui.visuals().selection.bg_fill.gamma_multiply(GLOW_ALPHA * strength);
+            ui.painter().set(behind, egui::Shape::rect_filled(rect.shrink(1.0), GLOW_RADIUS, fill));
+        }
+        rect
     }
+}
+
+/// The peak opacity of a hovered group's glow, and its corner radius in points.
+const GLOW_ALPHA: f32 = 0.14;
+const GLOW_RADIUS: egui::CornerRadius = egui::CornerRadius::same(4);
+
+/// The glow's strength, 0 to 1, eased toward whether the pointer is over `rect`. Motion off jumps to the settled value.
+fn glow(ui: &mut Ui, id: Id, rect: Rect) -> f32 {
+    let over = rect.is_finite() && ui.rect_contains_pointer(rect);
+    let motion = Env::of(ui).motion;
+    if motion.mode == MotionMode::Off {
+        return f32::from(u8::from(over));
+    }
+    let secs = motion.tokens.hover.millis as f32 / 1000.0;
+    ui.ctx().animate_bool_with_time(id.with("ribbon.group.glow"), over, secs)
 }
 
 /// Where a group's title goes: at its foot, on a line `line` high.
