@@ -32,6 +32,7 @@ pub(crate) mod runtime;
 pub(crate) mod suite_rtl;
 pub(crate) mod suite_rules;
 pub(crate) mod suite_title;
+pub(crate) mod tab_presence;
 pub(crate) mod table;
 pub(crate) mod tabs;
 pub(crate) mod text;
