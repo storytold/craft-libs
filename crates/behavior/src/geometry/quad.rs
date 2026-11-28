@@ -109,7 +109,7 @@ pub enum ScaleRule {
 
 /// What the box's content allows. PhotoCraft: editable type refuses distort and perspective
 /// (those drags scale, and Skew mode keeps it a parallelogram); Content-Aware Scale only scales
-/// and moves.
+/// and moves, and greys its whole right-click menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct BoxAllow {
@@ -121,12 +121,15 @@ pub struct BoxAllow {
     pub distort: bool,
     /// Warping is allowed.
     pub warp: bool,
+    /// The box's right-click menu is live: off, every row is greyed and its mode and preset picks
+    /// do nothing (PhotoCraft's Content-Aware Scale box, photocraft#16733).
+    pub menu: bool,
 }
 
 impl BoxAllow {
     /// What the content allows: turning, skewing and distorting.
     pub const fn new(rotate: bool, skew: bool, distort: bool) -> Self {
-        BoxAllow { rotate, skew, distort, warp: true }
+        BoxAllow { rotate, skew, distort, warp: true, menu: true }
     }
 
     /// Whether the content allows warping.
@@ -134,11 +137,17 @@ impl BoxAllow {
         self.warp = warp;
         self
     }
+
+    /// Whether the box's right-click menu is live (see [`BoxAllow::menu`]).
+    pub const fn with_menu(mut self, menu: bool) -> Self {
+        self.menu = menu;
+        self
+    }
 }
 
 impl Default for BoxAllow {
     fn default() -> Self {
-        BoxAllow { rotate: true, skew: true, distort: true, warp: true }
+        BoxAllow { rotate: true, skew: true, distort: true, warp: true, menu: true }
     }
 }
 
