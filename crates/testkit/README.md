@@ -284,11 +284,15 @@ A capture keeps at most `MAX_RECORDS` (4,096) records and `MAX_BYTES` (1 MiB) of
 Run process-wide captures in a binary of their own, for example a `[[test]]` with `harness = false`:
 
 ```rust
+fn drop_the_plugin() {
+    log::warn!("plugin dropped off the main thread");
+}
+
 fn main() {
     let capture = craft_testkit::log::capture_global(log::LevelFilter::Warn).expect("capture");
     std::thread::Builder::new()
         .name("audio".into())
-        .spawn(|| drop_the_plugin())
+        .spawn(drop_the_plugin)
         .expect("spawn")
         .join()
         .expect("join");
