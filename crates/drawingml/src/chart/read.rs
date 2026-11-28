@@ -455,11 +455,10 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
         Some(n) if n.attr_local("sourceLinked") != Some("1") => n.attr_local("formatCode").map(str::to_string),
         n => source_format(a).or_else(|| n.and_then(|n| n.attr_local("formatCode")).map(str::to_string)),
     };
-    // `c:tickLblPos val="none"` hides the labels just as `c:delete` does.
-    let deleted = |a: &El| {
-        a.child(Local("delete")).and_then(|d| d.attr_local("val").and_then(value::to_bool)) == Some(true)
-            || a.child(Local("tickLblPos")).and_then(|c| c.attr_local("val")) == Some("none")
-    };
+    // `c:delete` removes the axis; `c:tickLblPos val="none"` keeps it but hides its labels.
+    // Either way it shows no labels (`deleted`), and only the first is the axis deleted.
+    let axis_deleted = |a: &El| a.child(Local("delete")).and_then(|d| d.attr_local("val").and_then(value::to_bool)) == Some(true);
+    let deleted = |a: &El| axis_deleted(a) || a.child(Local("tickLblPos")).and_then(|c| c.attr_local("val")) == Some("none");
     // A gridline whose `c:spPr/a:ln` has `a:noFill` is not drawn, though the element is there.
     let grid = |a: &El, k: &str| {
         a.child(Local(k))
@@ -477,7 +476,15 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
             c.y2_hidden = deleted(a);
         }
     }
-    let cat_ax = pa.child(Local("catAx")).or_else(|| pa.child(Local("dateAx"))).or_else(|| pa.children(Local("valAx")).find(|a| !vertical(a)));
+    // The category axis is the one the primary value axis crosses: a combo chart's secondary
+    // pair has a category axis of its own (often deleted), which may come first.
+    let cross = val_ax.and_then(|v| v.child(Local("crossAx")).and_then(|c| c.attr_local("val")));
+    let is_cat = |a: &&El| matches!(a.local(), "catAx" | "dateAx") || (a.is(Local("valAx")) && !vertical(a));
+    let cat_ax = cross
+        .and_then(|id| pa.elements().filter(is_cat).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) == Some(id)))
+        .or_else(|| pa.child(Local("catAx")))
+        .or_else(|| pa.child(Local("dateAx")))
+        .or_else(|| pa.children(Local("valAx")).find(|a| !vertical(a)));
     if let Some(v) = val_ax {
         c.gridlines = grid(v, "majorGridlines");
         c.minor_gridlines = grid(v, "minorGridlines");
@@ -494,8 +501,11 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
             .filter(|b: &f64| b.is_finite() && *b >= 2.0);
         c.y_format = format_code(v);
         c.y_hidden = deleted(v);
+        c.y_deleted = axis_deleted(v);
     }
     if let Some(a) = cat_ax {
+        c.cat_hidden = deleted(a);
+        c.cat_deleted = axis_deleted(a);
         c.cat_reversed =
             a.child(Local("scaling")).and_then(|s| s.child(Local("orientation")).and_then(|c| c.attr_local("val"))).is_some_and(|o| o == "maxMin");
         c.axis_titles.0 = a.child(Local("title")).map(|t| rich_text(t).unwrap_or_else(|| "Axis Title".into()));

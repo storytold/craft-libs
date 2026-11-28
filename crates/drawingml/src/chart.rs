@@ -408,11 +408,24 @@ pub struct Chart {
     pub y_log_base: Option<f64>,
     /// The value axis' number format (an Excel format code such as `#,##0` or `0.0%`).
     pub y_format: Option<String>,
-    /// The value axis is deleted (`c:delete`): no labels, though gridlines may stay.
+    /// The value axis shows no labels, though gridlines may stay: it is deleted (`c:delete`, see
+    /// [`Chart::y_deleted`]) or its labels are hidden (`c:tickLblPos val="none"`).
     pub y_hidden: bool,
+    /// The value axis is deleted (`c:delete`), not only its labels hidden; implies `y_hidden`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub y_deleted: bool,
     /// The category axis runs backwards (`c:orientation val="maxMin"`): right to left, or on a
     /// horizontal bar chart top to bottom (the default puts the first category at the bottom).
     pub cat_reversed: bool,
+    /// The category axis shows no labels, as [`Chart::y_hidden`] for the value axis: deleted
+    /// (`c:delete`, see [`Chart::cat_deleted`]) or with its labels hidden (`c:tickLblPos
+    /// val="none"`). For a scatter or bubble chart, the X value axis.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cat_hidden: bool,
+    /// The category axis is deleted (`c:delete`), not only its labels hidden; implies
+    /// `cat_hidden`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cat_deleted: bool,
     /// A combo chart's secondary value axis: bounds, major unit and number format.
     pub y2_min: Option<f64>,
     pub y2_max: Option<f64>,
@@ -563,7 +576,10 @@ impl Default for Chart {
             y_log_base: None,
             y_format: None,
             y_hidden: false,
+            y_deleted: false,
             cat_reversed: false,
+            cat_hidden: false,
+            cat_deleted: false,
             y2_min: None,
             y2_max: None,
             y2_major: None,

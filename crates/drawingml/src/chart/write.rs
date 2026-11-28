@@ -480,6 +480,12 @@ fn data_labels(w: &mut Writer, c: &Chart, show: bool) {
 const AX_CAT: u32 = 50_001;
 const AX_VAL: u32 = 50_002;
 
+/// `c:tickLblPos` for an axis: `none` when only its labels are hidden; a deleted axis says so
+/// with `c:delete` instead.
+fn tick_labels(hidden: bool, deleted: bool) -> &'static str {
+    if hidden && !deleted { "none" } else { "nextTo" }
+}
+
 fn axes(w: &mut Writer, c: &Chart, g: Group) {
     let horizontal = c.kind.horizontal() && g == Group::Bar;
     let (cat_pos, val_pos) = if horizontal { ("l", "b") } else { ("b", "l") };
@@ -489,7 +495,7 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.open("c:scaling", &[]);
         w.tag("c:orientation").attr("val", "minMax").empty();
         w.close();
-        w.tag("c:delete").attr("val", 0).empty();
+        w.tag("c:delete").attr("val", u8::from(c.cat_deleted)).empty();
         w.tag("c:axPos").attr("val", "b").empty();
         if let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
@@ -500,7 +506,7 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
             .empty();
         w.tag("c:majorTickMark").attr("val", "out").empty();
         w.tag("c:minorTickMark").attr("val", "none").empty();
-        w.tag("c:tickLblPos").attr("val", "nextTo").empty();
+        w.tag("c:tickLblPos").attr("val", tick_labels(c.cat_hidden, c.cat_deleted)).empty();
         tx_pr(w, c);
         w.tag("c:crossAx").attr("val", AX_VAL).empty();
         w.tag("c:crosses").attr("val", "autoZero").empty();
@@ -512,7 +518,7 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.open("c:scaling", &[]);
         w.tag("c:orientation").attr("val", if c.cat_reversed { "maxMin" } else { "minMax" }).empty();
         w.close();
-        w.tag("c:delete").attr("val", 0).empty();
+        w.tag("c:delete").attr("val", u8::from(c.cat_deleted)).empty();
         w.tag("c:axPos").attr("val", cat_pos).empty();
         if let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
@@ -523,7 +529,7 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
             .empty();
         w.tag("c:majorTickMark").attr("val", "none").empty();
         w.tag("c:minorTickMark").attr("val", "none").empty();
-        w.tag("c:tickLblPos").attr("val", "nextTo").empty();
+        w.tag("c:tickLblPos").attr("val", tick_labels(c.cat_hidden, c.cat_deleted)).empty();
         tx_pr(w, c);
         w.tag("c:crossAx").attr("val", AX_VAL).empty();
         w.tag("c:crosses").attr("val", "autoZero").empty();
@@ -547,7 +553,7 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.tag("c:min").attr("val", fmt_num(m)).empty();
     }
     w.close();
-    w.tag("c:delete").attr("val", 0).empty();
+    w.tag("c:delete").attr("val", u8::from(c.y_deleted)).empty();
     w.tag("c:axPos").attr("val", val_pos).empty();
     if c.gridlines {
         w.empty("c:majorGridlines", &[]);
@@ -564,7 +570,7 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
     }
     w.tag("c:majorTickMark").attr("val", "none").empty();
     w.tag("c:minorTickMark").attr("val", "none").empty();
-    w.tag("c:tickLblPos").attr("val", "nextTo").empty();
+    w.tag("c:tickLblPos").attr("val", tick_labels(c.y_hidden, c.y_deleted)).empty();
     tx_pr(w, c);
     w.tag("c:crossAx").attr("val", AX_CAT).empty();
     w.tag("c:crosses").attr("val", "autoZero").empty();
@@ -1205,6 +1211,74 @@ mod tests {
             let back_entry = &read(&written).legend_entries[0];
             assert_eq!((back_entry.size, back_entry.bold), (Some(back), Some(false)), "{size} pt");
         }
+    }
+
+    /// A deleted axis (`c:delete val="1"`) is read, the category axis included, and a rebuilt
+    /// part keeps it deleted. An axis whose labels alone are hidden (`c:tickLblPos val="none"`)
+    /// keeps its axis, and an axis that is there stays there (#3832).
+    #[test]
+    fn a_deleted_axis_is_read_and_stays_deleted_after_an_edit() {
+        let read = |xml: &[u8]| crate::chart::read::read_chart_xml(xml).unwrap();
+        let val = r#"<c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val>"#;
+        // A column chart's category axis, and a scatter chart's X value axis; `ax` goes in
+        // every axis.
+        let bar = |ax: &str| {
+            format!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/>{val}</c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/>{ax}<c:axPos val="b"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/>{ax}<c:axPos val="l"/><c:crossAx val="1"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#
+            )
+        };
+        let scatter = |ax: &str| {
+            format!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:scatterChart><c:scatterStyle val="marker"/><c:ser><c:idx val="0"/><c:xVal><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt></c:numLit></c:yVal></c:ser><c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/>{ax}<c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/>{ax}<c:axPos val="l"/><c:crossAx val="1"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#
+            )
+        };
+        let rebuilt = |c: &Chart| {
+            let mut e = c.clone();
+            e.title = Some("Units".into());
+            e.raw = None;
+            let (out, kept) = super::chart_xml(&e);
+            assert!(!kept);
+            read(&out)
+        };
+        // (what each axis holds, labels hidden, axis deleted)
+        let cases = [
+            (r#"<c:delete val="1"/>"#, true, true),
+            (r#"<c:delete val="0"/><c:tickLblPos val="none"/>"#, true, false),
+            (r#"<c:delete val="0"/><c:tickLblPos val="nextTo"/>"#, false, false),
+        ];
+        for (name, xml) in [("column", &bar as &dyn Fn(&str) -> String), ("scatter", &scatter)] {
+            for (ax, hidden, deleted) in cases {
+                let want = (hidden, deleted, hidden, deleted);
+                let c = read(xml(ax).as_bytes());
+                assert_eq!((c.cat_hidden, c.cat_deleted, c.y_hidden, c.y_deleted), want, "{name}, {ax}");
+                let b = rebuilt(&c);
+                assert_eq!((b.cat_hidden, b.cat_deleted, b.y_hidden, b.y_deleted), want, "{name}, {ax}, after an edit");
+            }
+        }
+    }
+
+    /// The category axis is the one the primary value axis crosses: a combo chart's deleted
+    /// secondary category axis, listed first, doesn't hide it (#3832).
+    #[test]
+    fn a_deleted_secondary_category_axis_leaves_the_primary_shown() {
+        let read = |xml: &[u8]| crate::chart::read::read_chart_xml(xml).unwrap();
+        let ser = |i: u32| {
+            format!(
+                r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>"#
+            )
+        };
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart>{}<c:axId val="3"/><c:axId val="4"/></c:lineChart><c:catAx><c:axId val="3"/><c:delete val="1"/><c:axPos val="b"/><c:crossAx val="4"/></c:catAx><c:catAx><c:axId val="1"/><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:delete val="0"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx><c:valAx><c:axId val="4"/><c:delete val="0"/><c:axPos val="r"/><c:crossAx val="3"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#,
+            ser(0),
+            ser(1)
+        );
+        let c = read(xml.as_bytes());
+        assert!(!c.cat_hidden && !c.cat_deleted, "the primary category axis (1) is shown");
+        let mut e = c.clone();
+        e.raw = None;
+        e.title = Some("Units".into());
+        let back = read(&super::chart_xml(&e).0);
+        assert!(!back.cat_hidden && !back.cat_deleted, "and still shown after an edit");
     }
 
     #[test]
