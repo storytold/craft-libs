@@ -434,8 +434,14 @@ impl WarpMesh {
         let (mesh, thirds) = self.split_base(preset);
         let (column, row, u, v, _) = mesh.nearest(p);
         let kind = tool.filter(|_| !quick).unwrap_or_else(|| mesh.quick_split(bounds, column, row, u, v));
-        let free = |c: f64| (SPLIT_EDGE..=1.0 - SPLIT_EDGE).contains(&c);
-        let split = match (kind != WarpSplit::Horizontal && free(u), kind != WarpSplit::Vertical && free(v)) {
+        // A line counts as on an existing one by its distance from it in the document, so a wide patch takes a new
+        // line as close beside its edge as a narrow one does.
+        let here = mesh.patch_point(column, row, u, v);
+        let free = |along_u: bool| {
+            let edge = |c: f64| if along_u { mesh.patch_point(column, row, c, v) } else { mesh.patch_point(column, row, u, c) };
+            here.distance(edge(0.0)).min(here.distance(edge(1.0))) >= SPLIT_EDGE
+        };
+        let split = match (kind != WarpSplit::Horizontal && free(true), kind != WarpSplit::Vertical && free(false)) {
             (true, true) => WarpSplit::Cross,
             (true, false) => WarpSplit::Vertical,
             (false, true) => WarpSplit::Horizontal,
@@ -457,9 +463,9 @@ impl WarpMesh {
     }
 }
 
-/// How close to a patch's edge, as a share of the patch, a split line may lie before it counts as
-/// on the existing line: a line half a pixel beside another is a new one.
-const SPLIT_EDGE: f64 = 0.001;
+/// How close to a patch's edge, in document units, a split line may lie before it counts as on the
+/// existing line: a line half a pixel beside another is a new one, whatever the patch's size.
+const SPLIT_EDGE: f64 = 0.25;
 
 /// The lines a pointer would insert ([`WarpMesh::split_at`]).
 #[derive(Clone, Copy, Debug)]

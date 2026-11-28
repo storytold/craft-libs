@@ -268,6 +268,20 @@ fn a_split_less_than_a_pixel_beside_a_line_is_a_new_line_and_one_on_it_is_none()
     }
 }
 
+/// The same on a wide mesh: 0.6 px beside the middle line of patches 2000 px wide is a new line too (as a share of
+/// the patch it is 0.03 %, which a tolerance by share took for the line itself).
+#[trial]
+fn a_split_beside_a_line_of_a_wide_mesh_is_a_new_line() {
+    let centre = RECT.center();
+    let wide = DocRect::new(centre.x - 2000.0, centre.y - 1500.0, centre.x + 2000.0, centre.y + 1500.0);
+    for (beside, inserted) in [(0.6, true), (0.0, false)] {
+        let mut h = harness_with(WarpMesh::identity(wide, 2, 2), 0.0, false, Some(WarpSplit::Vertical));
+        let at = h.screen(Point::new(centre.x + beside + 0.5, centre.y - 30.0));
+        h.click(at, Modifiers::NONE);
+        assert_eq!(h.size().0, if inserted { 3 } else { 2 }, "{beside} beside: {:?}", h.mesh().us);
+    }
+}
+
 fn warped(mesh: &mut WarpMesh) {
     for (k, p) in mesh.points.iter_mut().enumerate() {
         *p += doc_shift((k % 5) as f64 * 3.0, (k % 7) as f64 * 2.0);
