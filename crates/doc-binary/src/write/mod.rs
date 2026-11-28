@@ -110,7 +110,8 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocbinError> {
             r
         })
         .collect();
-    let papx = fkp::papx_pages(&papx_runs);
+    let has_pic = !t.pictures.data.is_empty();
+    let papx = fkp::papx_pages(&papx_runs, &mut t.pictures.data)?;
     let papx_pn = (word.len() / 512) as u32;
     for p in &papx.pages {
         word.extend_from_slice(p);
@@ -238,7 +239,6 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocbinError> {
     tbl.put(pair::STTBF_FFN, &styles::font_table(&t.look.fonts));
 
     // ---- FIB.
-    let has_pic = !t.pictures.data.is_empty();
     let fib = fib(cb_mac, [ccp_text, ccp_ftn, ccp_hdd, ccp_edn], &tbl.pairs, has_pic);
     if let Some(head) = word.get_mut(..FIB_LEN) {
         head.copy_from_slice(&fib);
@@ -246,7 +246,7 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocbinError> {
 
     // ---- The compound file.
     let mut streams: Vec<(&str, Vec<u8>)> = vec![("WordDocument", word), ("1Table", tbl.bytes)];
-    if has_pic {
+    if !t.pictures.data.is_empty() {
         streams.push(("Data", std::mem::take(&mut t.pictures.data)));
     }
     streams.push(("\u{5}SummaryInformation", summary::stream(&doc.core)));

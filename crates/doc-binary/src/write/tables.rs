@@ -15,9 +15,11 @@ const T_CANT_SPLIT90: u16 = 0x3403;
 const T_TABLE_HEADER: u16 = 0x3404;
 const T_CANT_SPLIT: u16 = 0x3466;
 const T_TABLE_BORDERS80: u16 = 0xD605;
+const T_AUTOFIT: u16 = 0x3615;
 const T_ROW_HEIGHT: u16 = 0x9407;
 const T_DEF_TABLE: u16 = 0xD608;
 const T_DEF_TABLE_SHD: [u16; 3] = [0xD612, 0xD616, 0xD60C];
+const T_SET_BRC: u16 = 0xD62F;
 const T_TABLE_BORDERS: u16 = 0xD613;
 const T_TABLE_WIDTH: u16 = 0xF614;
 const T_VERT_MERGE: u16 = 0xD62B;
@@ -51,7 +53,11 @@ pub(crate) fn row_end(t: &Table, ri: usize, rows: usize, style_borders: Option<B
     }
     let gap = tp.cell_margins.map_or(DEFAULT_GAP, |m| m[1]).clamp(0.0, 100.0);
     g.i16(T_DXA_GAP_HALF, twips(gap));
-    let indent = tp.indent.unwrap_or(0.0);
+    if !tp.fixed {
+        g.u8(T_AUTOFIT, 1);
+    }
+    let skipped_width: f32 = t.grid.iter().take((row.props.grid_before as usize).min(MAX_CELLS)).sum();
+    let indent = tp.indent.unwrap_or(0.0) + skipped_width;
     g.i16(T_DXA_LEFT, twips(indent + gap));
     if let Some(m) = tp.cell_margins {
         // CSSAOperand: itcFirst, itcLim, grfbrc (top 1, left 2, bottom 4, right 8), ftsWidth
@@ -100,7 +106,7 @@ pub(crate) fn row_end(t: &Table, ri: usize, rows: usize, style_borders: Option<B
     g.var(T_TABLE_BORDERS, &b);
 
     // Cell edges: each cell spans its grid columns (from the row's `grid_before`), else its own
-    // preferred width; the edges start at the table's indent.
+    // preferred width; the edges start at the row's first occupied column.
     let widths = cell_widths(t, ri);
     let mut edges: Vec<i16> = Vec::with_capacity(n + 1);
     let mut x = twips(indent);
@@ -114,6 +120,7 @@ pub(crate) fn row_end(t: &Table, ri: usize, rows: usize, style_borders: Option<B
     for e in &edges {
         body.extend_from_slice(&e.to_le_bytes());
     }
+    let mut colour_overrides = Grpprl::default();
     for (ci, cell) in cells.iter().enumerate() {
         let mut grf: u16 = 0;
         match cell.props.vmerge {
@@ -129,14 +136,26 @@ pub(crate) fn row_end(t: &Table, ri: usize, rows: usize, style_borders: Option<B
         body.extend_from_slice(&grf.to_le_bytes());
         body.extend_from_slice(&(twips(widths.get(ci).copied().unwrap_or(0.0)) as u16).to_le_bytes());
         let cb = cell_borders(&borders, cell.props.borders.as_ref(), ri, rows, ci, n);
-        for side in [cb.top, cb.left, cb.bottom, cb.right] {
-            body.extend_from_slice(&side.as_ref().map_or([0; 4], brc80));
+        for (mask, side) in [(1, cb.top), (2, cb.left), (4, cb.bottom), (8, cb.right)] {
+            let fallback = side.as_ref().map_or([0; 4], brc80);
+            body.extend_from_slice(&fallback);
+            // TC80 stores a palette index. Override only colours that it cannot represent.
+            if let Some(border) = side
+                && border.is_visible()
+                && border.color != crate::fmt::ico(fallback[2])
+            {
+                let mut operand = [0; 11];
+                operand[..3].copy_from_slice(&[ci as u8, ci as u8 + 1, mask]);
+                operand[3..].copy_from_slice(&brc(&border));
+                colour_overrides.var(T_SET_BRC, &operand);
+            }
         }
     }
     let cb = u16::try_from(body.len() + 1).unwrap_or(u16::MAX);
     let mut op = cb.to_le_bytes().to_vec();
     op.extend_from_slice(&body);
     g.raw(T_DEF_TABLE, &op);
+    g.extend(&colour_overrides);
 
     // Cell shading, in three arrays of up to 22 cells each.
     if cells.iter().any(|c| c.props.shading.is_some()) || tp.shading.is_some() {

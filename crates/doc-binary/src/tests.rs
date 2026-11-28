@@ -608,10 +608,18 @@ fn papx_fkp(entries: &[(u32, u16, Vec<u8>)]) -> Vec<u8> {
         let half = (data_at / 2) as u8;
         page[rgbx_at + i * 13] = half;
         let grp = [e.1.to_le_bytes().as_slice(), e.2.as_slice()].concat();
-        let cb = ((grp.len() + 2) / 2) as u8;
-        page[data_at] = cb;
-        page[data_at + 1..data_at + 1 + grp.len()].copy_from_slice(&grp);
-        data_at += 1 + grp.len() + ((1 + grp.len()) & 1);
+        // PapxInFkp uses a second size byte for even lengths. Padding inside
+        // the grpprl would turn a standalone six-byte reference into seven bytes.
+        if grp.len().is_multiple_of(2) {
+            page[data_at] = 0;
+            data_at += 1;
+            page[data_at] = (grp.len() / 2) as u8;
+        } else {
+            page[data_at] = grp.len().div_ceil(2) as u8;
+        }
+        data_at += 1;
+        page[data_at..data_at + grp.len()].copy_from_slice(&grp);
+        data_at += grp.len();
     }
     page[511] = n as u8;
     page
@@ -3147,4 +3155,232 @@ fn formatting_runs_break_where_the_chpx_changes() {
     // "aaaa" bold, "bbbb" plain plus the field's anchor (3 bytes, default formatting), "ccd" bold
     // (the run from the field to CP 20), "d(ee" italic.
     assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
+}
+
+#[test]
+fn doc_cell_borders_survive_import_and_range_overrides() {
+    let mut row = t_def_table(&[0, 100, 200, 300, 400, 500]);
+    // Opcode, cb, cell count, six boundaries, then the first TC80's flags and width.
+    row[21..25].copy_from_slice(&[16, 1, 1, 0]); // top: single 2 pt
+    row.extend(sprm_cb(0xD620, &[0, 2, 4, 8, 1, 1, 0])); // bottom: single 1 pt
+    row.extend(sprm_cb(0xD62F, &[1, 2, 4, 0, 0, 0, 0, 255, 255, 255, 255])); // second cell: clear bottom
+    let doc = word_table_doc(row, vec![], vec![]);
+    let cells = &doc.body[0].as_table().expect("table").rows[0].cells;
+    let first = cells[0].props.borders.expect("first cell borders");
+    assert_eq!(first.top.expect("TC80 top").width, 2.0);
+    assert_eq!(first.bottom.expect("range bottom").width, 1.0);
+    assert!(!cells[1].props.borders.expect("second cell borders").bottom.expect("cleared border").is_visible());
+}
+
+#[test]
+fn doc_rows_share_grid_at_their_actual_cell_edges() {
+    let doc =
+        word_table_doc(t_def_edges(&[-100, 100, 400, 900, 1000, 1400]), t_def_edges(&[-100, 100, 500, 900, 1000, 1400]), t_def_edges(&[-100, 1400]));
+    let table = doc.body[0].as_table().expect("table");
+    assert!(table.props.fixed);
+    assert_eq!(table.grid, vec![10.0, 15.0, 5.0, 20.0, 5.0, 20.0]);
+    assert_eq!(table.rows[0].cells[2].span(), 2);
+    assert_eq!(table.rows[1].cells[1].span(), 2);
+    assert_eq!(table.rows[2].cells[0].span(), 6);
+}
+
+/// A malformed later row must not partially replace the first row's grid or cell spans.
+#[test]
+fn doc_rows_keep_original_grid_when_boundary_count_mismatches() {
+    let doc = word_table_doc(
+        t_def_edges(&[0, 100, 300, 600, 1000, 1500]),
+        t_def_edges(&[0, 250, 500, 1000, 1500]), // Four columns, but five content cells.
+        t_def_edges(&[0, 1500]),
+    );
+    let table = doc.body[0].as_table().expect("table");
+    assert_eq!(table.grid, [5.0, 10.0, 15.0, 20.0, 25.0]);
+    assert_eq!(table.rows.iter().map(|row| row.cells.len()).collect::<Vec<_>>(), [5, 5, 1]);
+    for row in &table.rows {
+        assert_eq!((row.props.grid_before, row.props.grid_after), (0, 0));
+        assert!(row.cells.iter().all(|cell| cell.span() == 1));
+    }
+}
+
+/// Equal and descending edges both reject reconciliation even when the cell count matches.
+#[test]
+fn doc_rows_keep_original_grid_when_boundaries_do_not_increase() {
+    for edges in [[0, 100, 300, 300, 1000, 1500], [0, 100, 600, 300, 1000, 1500]] {
+        let doc = word_table_doc(t_def_edges(&[0, 100, 300, 600, 1000, 1500]), t_def_edges(&edges), t_def_edges(&[0, 1500]));
+        let table = doc.body[0].as_table().expect("table");
+        assert_eq!(table.grid, [5.0, 10.0, 15.0, 20.0, 25.0]);
+        assert_eq!(table.rows.iter().map(|row| row.cells.len()).collect::<Vec<_>>(), [5, 5, 1]);
+        for row in &table.rows {
+            assert_eq!((row.props.grid_before, row.props.grid_after), (0, 0));
+            assert!(row.cells.iter().all(|cell| cell.span() == 1));
+        }
+    }
+}
+
+/// Individually valid rows may exceed the shared grid's 63-column limit only when combined.
+#[test]
+fn doc_rows_keep_original_grid_when_combined_edges_exceed_limit() {
+    use crate::table::{ParaOut, RowInfo};
+    use craft_wordmodel::para::Paragraph;
+
+    for last_odd_edge in [63, 65] {
+        let row_edges = [
+            (0..=62).step_by(2).map(|edge| edge as f32).collect::<Vec<_>>(),
+            (1..=last_odd_edge).step_by(2).map(|edge| edge as f32).collect::<Vec<_>>(),
+        ];
+        let mut paras = Vec::new();
+        for edges in &row_edges {
+            for _ in 1..edges.len() {
+                let mut info = RowInfo::default();
+                info.in_table = true;
+                info.cell_mark = true;
+                paras.push(ParaOut { para: Paragraph::new(), end_cp: 0, row: Some(Box::new(info)) });
+            }
+            let mut info = RowInfo::default();
+            info.in_table = true;
+            info.cell_mark = true;
+            info.ttp = true;
+            info.edges = edges.clone();
+            paras.push(ParaOut { para: Paragraph::new(), end_cp: 0, row: Some(Box::new(info)) });
+        }
+        let blocks = crate::table::assemble(paras);
+        let table = blocks[0].as_table().expect("table");
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0].cells.len(), 31);
+        assert_eq!(table.rows[1].cells.len(), (last_odd_edge / 2) as usize);
+        if last_odd_edge == 63 {
+            // Exactly 64 distinct edges (63 columns) is allowed, proving the rows are valid.
+            assert_eq!(table.grid, vec![1.0; 63]);
+            assert_eq!((table.rows[0].props.grid_before, table.rows[0].props.grid_after), (0, 1));
+            assert_eq!((table.rows[1].props.grid_before, table.rows[1].props.grid_after), (1, 0));
+            assert!(table.rows.iter().flat_map(|row| &row.cells).all(|cell| cell.span() == 2));
+        } else {
+            // One additional edge would need 64 columns: preserve the whole original shape.
+            assert_eq!(table.grid, vec![2.0; 31]);
+            for row in &table.rows {
+                assert_eq!((row.props.grid_before, row.props.grid_after), (0, 0));
+                assert!(row.cells.iter().all(|cell| cell.span() == 1));
+            }
+        }
+    }
+}
+
+#[test]
+fn doc_table_autofit_is_preserved() {
+    let row = [t_def_edges(&[0, 100, 200, 300, 400, 500]), grpprl(&[(0x3615, &[1])])].concat();
+    let doc = word_table_doc(row, vec![], vec![]);
+    assert!(!doc.body[0].as_table().expect("table").props.fixed);
+    let reopened = read(&crate::write(&doc).expect("write DOC")).expect("reopen DOC");
+    assert!(!reopened.body[0].as_table().expect("table").props.fixed);
+}
+
+#[test]
+fn doc_preserves_offset_rows_and_edge_widths_through_save() {
+    let row = [t_def_edges(&[100, 200, 300, 400, 500, 600]), grpprl(&[(0x9601, &100i16.to_le_bytes()), (0x9602, &0i16.to_le_bytes())])].concat();
+    let doc = word_table_doc(row, t_def_edges(&[0, 100, 200, 300, 400, 500]), t_def_edges(&[0, 600]));
+    let check = |doc: &craft_wordmodel::Document| {
+        let table = doc.body[0].as_table().expect("table");
+        assert_eq!(table.props.indent.unwrap_or_default(), 0.0);
+        assert_eq!(table.rows[0].props.grid_before, 1);
+        assert_eq!(table.rows[0].cells[0].props.width, Some(5.0));
+        assert_eq!(table.rows[2].cells[0].props.width, Some(30.0));
+    };
+    check(&doc);
+    check(&read(&crate::write(&doc).expect("write DOC")).expect("reopen DOC"));
+}
+
+#[test]
+fn doc_missing_indent_uses_source_edges() {
+    for (later_start, expected_indent, skipped) in [(0, 0.0, 1), (100, 5.0, 0)] {
+        let doc = word_table_doc(
+            t_def_edges(&[100, 200, 300, 400, 500, 600]),
+            t_def_edges(&[later_start, 200, 300, 400, 500, 600]),
+            t_def_edges(&[later_start, 600]),
+        );
+        let table = doc.body[0].as_table().expect("table");
+        assert_eq!(table.props.indent.unwrap_or_default(), expected_indent);
+        assert_eq!(table.rows[0].props.grid_before, skipped);
+    }
+}
+
+#[test]
+fn doc_full_colour_cell_border_survives_save() {
+    let mut row = t_def_edges(&[0, 100, 200, 300, 400, 500]);
+    row.extend(sprm_cb(0xD62F, &[1, 2, 4, 12, 34, 56, 0, 16, 1, 0, 0]));
+    let source = word_table_doc(row, vec![], vec![]);
+    let reopened = read(&crate::write(&source).expect("write DOC")).expect("reopen DOC");
+    for doc in [&source, &reopened] {
+        let cells = &doc.body[0].as_table().expect("table").rows[0].cells;
+        let bottom = cells[1].props.borders.and_then(|b| b.bottom).expect("bottom border");
+        assert_eq!(bottom.color, Some(craft_wordmodel::Rgb(12, 34, 56)));
+        assert_eq!(bottom.width, 2.0);
+        assert_ne!(cells[0].props.borders.and_then(|b| b.bottom).and_then(|b| b.color), bottom.color);
+    }
+}
+
+#[test]
+fn merged_cell_uses_outer_source_borders() {
+    for outer in [[0, 0, 0, 0, 16, 1, 0, 0], [0, 0, 0, 0, 255, 255, 255, 255]] {
+        let mut row = t_def_edges(&[0, 100, 200, 300, 400, 500]);
+        row.extend(sprm_cb(0xD620, &[0, 1, 10, 8, 1, 1, 0]));
+        let mut override_right = vec![1, 2, 8];
+        override_right.extend(outer);
+        row.extend(sprm_cb(0xD62F, &override_right));
+        row.extend(grpprl(&[(0x5624, &[0, 2])]));
+        let doc = word_table_doc(row, vec![], vec![]);
+        let merged = &doc.body[0].as_table().expect("table").rows[0].cells[0];
+        assert_eq!(merged.span(), 2);
+        let borders = merged.props.borders.expect("outer borders");
+        assert_eq!(borders.left.expect("first cell left").width, 1.0);
+        assert_eq!(borders.right.expect("last cell right"), crate::fmt::brc_bytes(&outer).expect("expected border"));
+    }
+}
+
+/// Append a length-prefixed PrcData and return its sprmPHugePapx reference.
+fn store_papx(data: &mut Vec<u8>, properties: &[u8]) -> Vec<u8> {
+    let reference = grpprl(&[(0x6646, &(data.len() as u32).to_le_bytes())]);
+    data.extend_from_slice(&(properties.len() as u16).to_le_bytes());
+    data.extend_from_slice(properties);
+    reference
+}
+
+#[test]
+fn chained_papx_uses_terminal_style_and_row_properties() {
+    let mut data = Vec::new();
+    let row = [grpprl(&[(0x2416, &[1]), (0x2417, &[1])]), t_def_edges(&[0, 400])].concat();
+    let terminal = [grpprl(&[(0x4600, &7u16.to_le_bytes())]), row.clone()].concat();
+    let next = store_papx(&mut data, &terminal);
+    // The tail of a replaced record must not change the terminal style or end-of-row mark.
+    let intermediate = [next, grpprl(&[(0x4600, &9u16.to_le_bytes()), (0x2417, &[0])])].concat();
+    let inline = store_papx(&mut data, &intermediate);
+    let bytes = (terminal.len() + intermediate.len()) as u64;
+    assert_eq!(super::external_papx((0, &inline), &data, &super::Work::new(bytes)), (7, row.as_slice()));
+    assert!(super::external_papx((0, &inline), &data, &super::Work::new(bytes - 1)).1.is_empty());
+
+    let mut spec = one_section("a\u{7}tail\r", vec![], vec![(0, 0, inline), (2, 0, vec![])]);
+    spec.data_stream = data;
+    let doc = read(&struct_doc(&spec)).expect("read DOC");
+    let table = doc.body[0].as_table().expect("terminal row definition");
+    assert_eq!(table.grid, [20.0]);
+}
+
+#[test]
+fn chained_papx_bounds_references_and_rejects_incomplete_records() {
+    let terminal = grpprl(&[(0x4600, &7u16.to_le_bytes()), (0x2416, &[1]), (0x2417, &[1])]);
+    let mut data = Vec::new();
+    let mut reference = store_papx(&mut data, &terminal);
+    for _ in 1..super::MAX_PAPX_REFERENCES {
+        reference.extend_from_slice(&[0, 0x46, 0, 0]);
+        reference = store_papx(&mut data, &reference);
+    }
+    let work = super::Work::new(u64::MAX);
+    assert_eq!(super::external_papx((0, &reference), &data, &work), (7, &terminal[4..]));
+    reference.extend_from_slice(&[0, 0x46, 0, 0]);
+    let too_deep = store_papx(&mut data, &reference);
+    assert_eq!(super::external_papx((0, &too_deep), &data, &work), (0, &[][..]));
+
+    let mut cycle = Vec::new();
+    let start = store_papx(&mut cycle, &[0x46, 0x66, 0, 0, 0, 0, 0, 0x46, 7, 0]);
+    assert_eq!(super::external_papx((0, &start), &cycle, &work), (0, &[][..]));
+    cycle[4] = 11; // The nested reference now points to an incomplete length field.
+    assert_eq!(super::external_papx((0, &start), &cycle, &work), (0, &[][..]));
 }

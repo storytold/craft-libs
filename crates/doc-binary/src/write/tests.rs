@@ -705,3 +705,32 @@ fn compound_border_lines_round_trip() {
     let got: Vec<_> = r.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.borders.as_ref()?.bottom.map(|b| b.style)).collect();
     assert_eq!(got, styles);
 }
+
+#[test]
+fn oversized_row_properties_survive_save() {
+    let mut d = Document::new();
+    let cells = (0..6)
+        .map(|i| {
+            let mut c = cell("text");
+            let line = Border { color: Some(craft_wordmodel::Rgb(12, 34, 56 + i)), ..Border::single(2.0) };
+            c.props.borders = Some(Borders { top: Some(line), bottom: Some(line), left: Some(line), right: Some(line), ..Default::default() });
+            c.props.width_pct = Some(12.0);
+            c.props.valign = Some(VAlign::Bottom);
+            c.props.vmerge = VMerge::Restart;
+            c
+        })
+        .collect();
+    d.body = vec![Arc::new(Block::Table(table_of(vec![30.0; 6], vec![cells])))];
+    let imported = round(&d);
+    let row = &imported.body[0].as_table().expect("table").rows[0];
+    assert_eq!(row.cells.len(), 6);
+    for (i, c) in row.cells.iter().enumerate() {
+        let borders = c.props.borders.expect("borders");
+        for side in [borders.top, borders.bottom, borders.left, borders.right] {
+            assert_eq!(side.expect("border").color, Some(craft_wordmodel::Rgb(12, 34, 56 + i as u8)));
+        }
+        assert_eq!(c.props.width_pct, Some(12.0));
+        assert_eq!(c.props.valign, Some(VAlign::Bottom));
+        assert_eq!(c.props.vmerge, VMerge::Restart);
+    }
+}

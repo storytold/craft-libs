@@ -403,7 +403,6 @@ impl<'d> Text<'d> {
         let istd = props.style.as_deref().and_then(|s| self.look.styles.get(s).copied()).unwrap_or(self.look.normal);
         let mut g = grpprl::papx(props, &self.look);
         g.extend(extra);
-        g.truncate_to(super::fkp::MAX_PAPX_GRPPRL);
         (istd, Arc::new(g.0))
     }
 
