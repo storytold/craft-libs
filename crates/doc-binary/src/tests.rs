@@ -1697,6 +1697,86 @@ fn bookmarks_become_objects() {
     assert_eq!(p0.text, "\u{FFFC}Hello\u{FFFC} world");
 }
 
+/// The bookmark boundaries in `blocks`: `+name` for a start, `-name` for an end.
+fn bookmark_marks(blocks: &[std::sync::Arc<craft_wordmodel::Block>]) -> std::collections::BTreeSet<String> {
+    use craft_wordmodel::para::InlineObject;
+    blocks
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| &p.objects)
+        .filter_map(|o| match o {
+            InlineObject::BookmarkStart { name } => Some(format!("+{name}")),
+            InlineObject::BookmarkEnd { name } => Some(format!("-{name}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Bookmarks in a header and a footnote land in those parts (#1818): their CPs are in the whole
+/// document's CP space, past the main text. One ending at the footnote's last CP, which is also
+/// the header's first, does not put its end into the header: the footnote closes it at its end.
+#[test]
+fn bookmarks_in_headers_and_notes_land_in_their_parts() {
+    // CPs: main text 0..10, footnote subdocument 10..20, header subdocument 20..33.
+    let text = "See\u{2} here\r";
+    let ccp = text.chars().count() as u32;
+    let names = ["body", "note", "tail", "head"];
+    let (starts, ends) = ([5, 10, 14, 20], [9, 14, 20, 26]);
+    let limit = 34;
+    let spec = StructSpec {
+        text,
+        note_stories: vec!["Note body\r"],
+        header_stories: vec!["Header text\r\r"],
+        extra_pairs: vec![
+            (2, plc(&[3, ccp], &1u16.to_le_bytes())),
+            (3, plc(&[0, 10], &[])),
+            (21, sttbf_bkmk(&names)),
+            (22, plc(&[starts.as_slice(), &[limit]].concat(), &[0; 16])),
+            (23, plc(&[ends.as_slice(), &[limit]].concat(), &[0; 8])),
+        ],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let body = bookmark_marks(&doc.body);
+    let header = bookmark_marks(&doc.parts.get(&doc.last_section.headers.default.expect("odd header part")).expect("header part").blocks);
+    let note = doc.parts.values().find(|p| p.kind == craft_wordmodel::PartKind::Footnote).expect("footnote part");
+    let note = bookmark_marks(&note.blocks);
+    let set = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(body, set(&["+body", "-body"]), "the main text keeps its own bookmark only");
+    assert_eq!(note, set(&["+note", "-note", "+tail", "-tail"]), "the footnote's bookmarks are read, and one ending at its last CP is closed there");
+    assert_eq!(header, set(&["+head", "-head"]), "the header's bookmark is read, and no end of the footnote's");
+}
+
+/// #3600 review: a header is walked once per section, so its bookmarks are copied again each
+/// time. The copies are paid from the work budget: once it is spent, later bookmarks are left
+/// out whole (no start without its end) and noted, and the walk goes on.
+#[test]
+fn bookmarks_past_the_work_budget_are_left_out_whole() {
+    use super::notes::Mark;
+    let marks: Vec<(u32, Mark)> = ["a", "b", "c"]
+        .iter()
+        .enumerate()
+        .flat_map(|(i, n)| [(2 * i as u32, Mark::Start(n.to_string())), (2 * i as u32 + 1, Mark::End(n.to_string()))])
+        .collect();
+    let pair = 2 * (std::mem::size_of::<super::InlineObject>() + 1) as u64;
+    let work = super::Work::new(pair);
+    let mut walk = super::MarkWalk::new(&marks, 0, &work);
+    let mut pb = super::ParaBuild::default();
+    walk.emit_through(u32::MAX, &mut pb);
+    let (mut starts, mut ends) = (Vec::new(), Vec::new());
+    for o in &pb.objects {
+        match o {
+            super::InlineObject::BookmarkStart { name } => starts.push(name.clone()),
+            super::InlineObject::BookmarkEnd { name } => ends.push(name.clone()),
+            _ => {}
+        }
+    }
+    assert!(!starts.is_empty(), "the budget paid for a bookmark");
+    assert!(starts.len() < marks.len() / 2, "bookmarks past the budget are left out: {starts:?}");
+    assert_eq!(starts, ends, "every bookmark kept has its end");
+    assert_eq!(work.dropped(), [super::Cost::Bookmark], "the left-out bookmarks are noted, to be logged");
+}
+
 #[test]
 fn inline_png_picture() {
     let text = "Pic\u{1}!\r";

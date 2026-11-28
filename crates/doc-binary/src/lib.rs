@@ -75,9 +75,10 @@ const MAX_TOTAL_CHARS: u64 = 64 << 20;
 const MAX_PARAGRAPHS: usize = 2_000_000;
 /// Bytes of repeated work per document beyond the text itself: piece Prm grpprls (Prcs, up
 /// to 64 KB each) interpreted (#3692), hyperlink targets (#3708), picture alt text (#3709)
-/// and floating objects (#3710) copied into every run or anchor. Past it Prms are skipped,
-/// copied strings left empty and floating objects dropped, each kind logged once a document
-/// ([`Work::log`]).
+/// and floating objects (#3710) copied into every run or anchor, and bookmarks copied into
+/// every walk of their story (#1818; a header is walked once per section). Past it Prms are
+/// skipped, copied strings left empty and floating objects and bookmarks dropped, each kind
+/// logged once a document ([`Work::log`]).
 const MAX_WORK: u64 = 64 << 20;
 
 /// What the [`MAX_WORK`] budget pays for, and leaves out once it is spent.
@@ -91,10 +92,13 @@ enum Cost {
     AltText,
     /// A floating object copied into its anchor: past it the object is left out.
     FloatingObject,
+    /// A bookmark's start and end copied into a story walk: past it the bookmark is left out
+    /// and its text kept.
+    Bookmark,
 }
 
 impl Cost {
-    const ALL: [Cost; 4] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject];
+    const ALL: [Cost; 5] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject, Cost::Bookmark];
 
     /// What is left out, for the log.
     fn left_out(self) -> &'static str {
@@ -103,6 +107,7 @@ impl Cost {
             Cost::LinkTarget => "some hyperlinks' text is kept without its link",
             Cost::AltText => "some pictures are left without their alt text",
             Cost::FloatingObject => "some floating shapes and pictures are left out",
+            Cost::Bookmark => "some bookmarks are left out",
         }
     }
 }
@@ -111,12 +116,12 @@ impl Cost {
 /// the document has been read, [`Work::log`]).
 struct Work {
     left: std::cell::Cell<u64>,
-    dropped: std::cell::Cell<[bool; 4]>,
+    dropped: std::cell::Cell<[bool; Cost::ALL.len()]>,
 }
 
 impl Work {
     fn new(budget: u64) -> Self {
-        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; 4]) }
+        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; Cost::ALL.len()]) }
     }
 
     /// Spends `cost` bytes on `what`: false (and `what` noted as left out) when they aren't left.
@@ -310,6 +315,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let work = Work::new(MAX_WORK);
     let revs = rmark::Revisions::new(&table, &fib);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
+    // Bookmark CPs are in the whole document's CP space, so every story walk gets them and
+    // emits those in its own range: a header's bookmarks lie in the header subdocument.
+    let marks = notes::parse_bookmarks(&table, &fib);
 
     let ctx = WalkCtx {
         word: &word,
@@ -321,7 +329,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         raw_styles: &raw_styles,
         sheet: &sheet,
         notes: &[],
-        marks: &[],
+        marks: &marks,
         drawn: &[],
         sect_ends: &[],
         budget: &budget,
@@ -400,10 +408,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     }
     // Sorted so the main walk finds each reference by binary search.
     note_links.sort_by_key(|(cp, _, _)| *cp);
-    let marks = notes::parse_bookmarks(&table, &fib);
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
-    let ctx = WalkCtx { notes: &note_links, marks: &marks, sect_ends: &sect_ends, ..ctx };
+    let ctx = WalkCtx { notes: &note_links, sect_ends: &sect_ends, ..ctx };
 
     // Sections: each section's properties attach to the paragraph that ends it (its story of
     // header/footer parts included); the section reaching the end of the text is the final one.
@@ -569,7 +576,7 @@ struct WalkCtx<'a> {
     sheet: &'a StyleSheet,
     /// (reference CP in the main document, kind, part id) for notes.
     notes: &'a [(u32, NoteKind, u32)],
-    /// Bookmark boundaries (main-document CPs), sorted for a sequential walk.
+    /// Bookmark boundaries (CPs in the whole document, every story), sorted for a sequential walk.
     marks: &'a [(u32, notes::Mark)],
     /// Floating shapes and pictures by anchor CP (absolute), sorted.
     drawn: &'a [(u32, InlineObject)],
@@ -658,6 +665,75 @@ impl ParaBuild {
     }
 }
 
+/// One story walk's bookmark boundaries: only those in its own range, since the CPs are in the
+/// whole document's CP space and those before the range belong to earlier stories.
+struct MarkWalk<'a> {
+    marks: std::iter::Peekable<std::slice::Iter<'a, (u32, notes::Mark)>>,
+    /// Bookmarks this walk started and has not ended, by name. A story's last CP is the next
+    /// one's first, so an end found there closes a bookmark of the story before and is left out;
+    /// what is still open when the walk stops is closed at its end ([`MarkWalk::close_open`]).
+    open: std::collections::BTreeMap<&'a str, usize>,
+    /// Pays for each bookmark copied ([`Cost::Bookmark`]).
+    work: &'a Work,
+}
+
+impl<'a> MarkWalk<'a> {
+    fn new(marks: &'a [(u32, notes::Mark)], cp_start: u32, work: &'a Work) -> Self {
+        let first = marks.partition_point(|(mcp, _)| *mcp < cp_start);
+        MarkWalk { marks: marks[first..].iter().peekable(), open: std::collections::BTreeMap::new(), work }
+    }
+
+    /// Emit the boundaries up to `cp` as inline objects. `<=` so a boundary inside a skipped
+    /// stretch is still emitted (late) rather than blocking every later one.
+    ///
+    /// A start is charged for itself and its end together, so a start emitted always has its
+    /// end paid for; a start the budget refuses is not opened, and its end is then left out too.
+    fn emit_through(&mut self, cp: u32, pb: &mut ParaBuild) {
+        while let Some((_, m)) = self.marks.next_if(|(mcp, _)| *mcp <= cp) {
+            let obj = match m {
+                notes::Mark::Start(name) => {
+                    let pair = 2 * (std::mem::size_of::<InlineObject>() + name.len()) as u64;
+                    if !self.work.charge(pair, Cost::Bookmark) {
+                        continue;
+                    }
+                    *self.open.entry(name.as_str()).or_default() += 1;
+                    InlineObject::BookmarkStart { name: name.clone() }
+                }
+                notes::Mark::End(name) => match self.open.get_mut(name.as_str()) {
+                    Some(n) if *n > 0 => {
+                        *n -= 1;
+                        InlineObject::BookmarkEnd { name: name.clone() }
+                    }
+                    _ => continue,
+                },
+            };
+            pb.push('\u{FFFC}', CharProps::default());
+            pb.objects.push(obj);
+        }
+    }
+
+    /// Ends every bookmark this walk started and did not end, at the end of the walk's text:
+    /// in `pb` when it holds text, else in the last paragraph. A walk can stop before an end:
+    /// at the story's last CP (an end there is the next story's first), or early when the
+    /// character budget is spent. The ends were paid for with their starts.
+    fn close_open(self, pb: &mut ParaBuild, out: &mut [ParaOut]) {
+        let ends = self.open.into_iter().flat_map(|(name, n)| std::iter::repeat_n(name, n));
+        let last = out.last_mut().filter(|_| pb.text.is_empty());
+        let (text, runs, objects) = match last {
+            Some(p) => (&mut p.para.text, &mut p.para.runs, &mut p.para.objects),
+            None => (&mut pb.text, &mut pb.runs, &mut pb.objects),
+        };
+        for name in ends {
+            match runs.last_mut() {
+                Some(r) if r.props == CharProps::default() => r.len += '\u{FFFC}'.len_utf8(),
+                _ => runs.push(Run { len: '\u{FFFC}'.len_utf8(), props: CharProps::default() }),
+            }
+            text.push('\u{FFFC}');
+            objects.push(InlineObject::BookmarkEnd { name: name.to_string() });
+        }
+    }
+}
+
 /// Walk a CP range, splitting paragraphs at 0x0D/0x07 marks, applying the direct character
 /// formatting of each CP and the paragraph formatting of each mark. Works for the main
 /// document and for any subdocument range (headers, footers, notes…). Field characters,
@@ -672,26 +748,13 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     let mut out = Vec::new();
     let mut pb = ParaBuild::default();
     let mut cp = cp_start;
-    let mut marks = ctx.marks.iter().peekable();
+    let mut marks = MarkWalk::new(ctx.marks, cp_start, ctx.work);
     // Field assembly state: instruction characters are swallowed, the result is kept until
     // the end character, then emitted as one object (hyperlinks keep their result text).
     let mut field: Option<FieldBuild> = None;
     let mut fmt = FmtState::default();
     while cp < cp_end {
-        // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
-        // an empty table and `cp` never matches the main-document CPs).
-        // `<=` so a boundary inside a skipped stretch is still emitted (late) rather than
-        // blocking every later one.
-        while marks.peek().is_some_and(|&(mcp, _)| *mcp <= cp) {
-            if let Some((_, m)) = marks.next() {
-                let obj = match m {
-                    notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
-                    notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
-                };
-                pb.push('\u{FFFC}', CharProps::default());
-                pb.objects.push(obj);
-            }
-        }
+        marks.emit_through(cp, &mut pb);
         let (c, units) = match ctx.pieces.char_at(ctx.word, cp) {
             Ok(found) => found,
             Err(next) => {
@@ -872,6 +935,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         }
         cp = cp.saturating_add(units);
     }
+    marks.close_open(&mut pb, &mut out);
     if !pb.text.is_empty() {
         let done = pb;
         out.push(ParaOut {
