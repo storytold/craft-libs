@@ -85,7 +85,8 @@ pub struct PreferencesState {
 ///   applying again. Closing the window does not cancel changes. A failed apply shows its message until another edit.
 /// - **Page steps.** [`page_steps`](PreferencesWindow::page_steps) adds Previous and Next to the footer. They pick the
 ///   page before and after the shown one among the pages the search lists, and each is disabled at its end of the
-///   list. A window of cards, which scrolls from page to page, does not show them.
+///   list. A window of cards, which scrolls from page to page, does not show them, and [`PreferencesLayout::Classic`]
+///   shows its own Prev and Next instead.
 /// - **Nested dialogs.** While [`PreferencesModel::nested_open`] is true the window takes no input and refuses to
 ///   close; [`PreferencesModel::nested`] draws the nested dialogs with the body's `Ui`, inside the window's own
 ///   viewport.
