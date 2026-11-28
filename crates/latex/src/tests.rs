@@ -652,7 +652,7 @@ fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
     // document keeps MAX_COLS cells a row, so the rest are left out while parsing.
     let wide = vec!["\\multicolumn{63}{c}{x}"; 5000].join("&");
     let toks = tokenize(&format!("{wide}\\\\ a & b \\\\"));
-    let t = table::table(&toks, "", 0);
+    let t = table::table(&toks, "", 0, None);
     assert_eq!(t.rows.first().map(Vec::len), Some(craft_wordmodel::table::MAX_COLS));
     assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }
@@ -691,4 +691,158 @@ fn a_starred_line_break_shows_no_star() {
     let Some(FBlock::Table(t)) = flow.blocks.first() else { panic!("{:?}", flow.blocks) };
     assert_eq!(t.rows.len(), 2, "{t:?}");
     assert_eq!(t.rows[1].iter().map(|c| c.text().trim().to_string()).collect::<Vec<_>>(), ["c", "d"]);
+}
+
+// =============================================================================================
+// Pictures through a loader
+
+/// A 1 × 1 PNG.
+const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+fn pictures(flow: &Flow) -> Vec<craft_flow::Img> {
+    fn walk(blocks: &[FBlock], out: &mut Vec<craft_flow::Img>) {
+        for b in blocks {
+            match b {
+                FBlock::Para(p) => out.extend(p.inlines.iter().filter_map(|i| if let Inline::Image(img) = i { Some(img.clone()) } else { None })),
+                FBlock::Table(t) => t.rows.iter().flatten().for_each(|c| walk(&c.blocks, out)),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&flow.blocks, &mut out);
+    out
+}
+
+fn flow_text(flow: &Flow) -> String {
+    flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect::<Vec<_>>().join("\n")
+}
+
+#[test]
+fn includegraphics_loads_through_the_loader_with_graphicspath_and_extensions() {
+    let png = std::sync::Arc::new(craft_flow::base64_decode(PNG_B64).unwrap_or_default());
+    let asked = std::cell::RefCell::new(Vec::<String>::new());
+    let load = |p: &str| {
+        asked.borrow_mut().push(p.to_string());
+        (p == "figs/plot.png").then(|| png.clone())
+    };
+    let src =
+        "\\graphicspath{{figs/}}\\begin{document}\\begin{figure}\\includegraphics[width=4cm]{plot}\\caption{A plot}\\end{figure}\\end{document}";
+    let flow = parse_with(src, Some(&load));
+    let pics = pictures(&flow);
+    assert_eq!(pics.len(), 1);
+    assert!(!flow_text(&flow).contains("[Picture"));
+    // The name as written comes first, then with an extension, then under the graphics path.
+    let asked = asked.borrow();
+    assert_eq!(asked.first().map(String::as_str), Some("plot"));
+    let pos = |n: &str| asked.iter().position(|a| a == n);
+    assert!(pos("plot.png") < pos("figs/plot") && pos("figs/plot").is_some());
+    assert_eq!(asked.last().map(String::as_str), Some("figs/plot.png"));
+    // Without a loader the same source keeps its placeholder text.
+    let plain = parse(src);
+    assert!(pictures(&plain).is_empty());
+    assert!(flow_text(&plain).contains("[Picture: plot]"));
+}
+
+#[test]
+fn includegraphics_sizes_follow_the_options() {
+    let png = std::sync::Arc::new(craft_flow::base64_decode(PNG_B64).unwrap_or_default());
+    let load = |_: &str| Some(png.clone());
+    let pic = |opts: &str| {
+        let src = format!("\\begin{{document}}\\includegraphics[{opts}]{{a.png}}\\end{{document}}");
+        pictures(&parse_with(&src, Some(&load))).into_iter().next()
+    };
+    let (Some(small), Some(big), Some(half), Some(full)) =
+        (pic("width=2cm"), pic("width=4cm"), pic("width=0.5\\textwidth"), pic("width=\\textwidth"))
+    else {
+        panic!("every picture loads");
+    };
+    assert!(big.w > small.w * 1.9 && big.w < small.w * 2.1);
+    assert!(full.w > half.w * 1.9 && full.w < half.w * 2.1);
+    // A square stays square when only the width is given.
+    assert!((big.h - big.w).abs() < 0.5);
+    let (Some(x4), Some(x8)) = (pic("scale=4"), pic("scale=8")) else { panic!("every picture loads") };
+    // A unitless length is in big points.
+    let (Some(bare), Some(bp)) = (pic("width=100"), pic("width=100bp")) else { panic!("every picture loads") };
+    assert!((bare.w - bp.w).abs() < 0.01);
+    // A box with `keepaspectratio` fits a picture smaller than a point as it fits any other.
+    let (Some(boxed), Some(wide)) = (pic("width=100pt,height=100pt,keepaspectratio"), pic("width=100pt")) else { panic!("every picture loads") };
+    assert!((boxed.w - wide.w).abs() < 0.5 && (boxed.h - wide.h).abs() < 0.5);
+    assert!(x8.w > x4.w * 1.9 && x8.w < x4.w * 2.1);
+}
+
+#[test]
+fn includegraphics_falls_back_to_placeholder_text() {
+    let junk = std::sync::Arc::new(b"not a picture".to_vec());
+    let load_junk = |_: &str| Some(junk.clone());
+    let none = |_: &str| None;
+    // A PNG signature on bytes that aren't a PNG: not a picture, so the next candidate is tried.
+    let fake = std::sync::Arc::new(b"\x89PNG\r\n\x1a\n not really".to_vec());
+    let png = std::sync::Arc::new(craft_flow::base64_decode(PNG_B64).unwrap_or_default());
+    let load_fake = |p: &str| if p == "a.png" { Some(fake.clone()) } else { None };
+    let next = |p: &str| if p == "a.png" { Some(fake.clone()) } else { Some(png.clone()) };
+    assert_eq!(pictures(&parse_with("\\graphicspath{{f/}}\\begin{document}\\includegraphics{a.png}\\end{document}", Some(&next))).len(), 1);
+    for flow in [
+        parse_with("\\begin{document}\\includegraphics{a.png}\\end{document}", Some(&load_fake)),
+        parse_with("\\begin{document}\\includegraphics{fig.pdf}\\end{document}", Some(&load_junk)),
+        parse_with("\\begin{document}\\includegraphics{missing}\\end{document}", Some(&none)),
+    ] {
+        assert!(pictures(&flow).is_empty());
+        assert!(flow_text(&flow).contains("[Picture: "));
+    }
+}
+
+#[test]
+fn includegraphics_in_a_table_cell_loads() {
+    let png = std::sync::Arc::new(craft_flow::base64_decode(PNG_B64).unwrap_or_default());
+    let load = |_: &str| Some(png.clone());
+    let flow = parse_with("\\begin{document}\\begin{tabular}{ll}\\includegraphics{a.png} & b\\\\\\end{tabular}\\end{document}", Some(&load));
+    assert_eq!(pictures(&flow).len(), 1);
+}
+
+#[test]
+fn includegraphics_loader_calls_are_bounded() {
+    let calls = std::cell::Cell::new(0usize);
+    let load = |_: &str| {
+        calls.set(calls.get() + 1);
+        None
+    };
+    let src = format!("\\begin{{document}}{}\\end{{document}}", "\\includegraphics{x} ".repeat(5000));
+    let _ = parse_with(&src, Some(&load));
+    assert!(calls.get() <= crate::limits::MAX_IMAGE_PROBES);
+}
+
+#[test]
+fn includegraphics_follows_latex_scoping_and_braced_values() {
+    let png = std::sync::Arc::new(craft_flow::base64_decode(PNG_B64).unwrap_or_default());
+    let load = |_: &str| Some(png.clone());
+    // `width={4cm}` sizes the picture as `width=4cm` does.
+    let w = |opts: &str| {
+        let src = format!("\\begin{{document}}\\includegraphics[{opts}]{{a.png}}\\end{{document}}");
+        pictures(&parse_with(&src, Some(&load))).first().map(|p| p.w)
+    };
+    assert!(w("width={4cm}").is_some_and(|b| w("width=4cm").is_some_and(|p| (b - p).abs() < 0.01)));
+    // A `\graphicspath` inside a group or an environment ends with it, and one in a macro's
+    // definition never applies. This loader has nothing, so every folder in effect is asked.
+    let folders = |src: &str| {
+        let asked = std::cell::RefCell::new(Vec::<String>::new());
+        let record = |p: &str| {
+            asked.borrow_mut().push(p.to_string());
+            None
+        };
+        let _ = parse_with(src, Some(&record));
+        asked.into_inner().into_iter().filter(|a| a.ends_with("b.png")).collect::<Vec<_>>()
+    };
+    let scoped = folders(
+        "\\graphicspath{{out/}}\\begin{document}{\\graphicspath{{in/}}\\includegraphics{a.png}}\\begin{center}\\graphicspath{{env/}}\\end{center}\\includegraphics{b.png}\\end{document}",
+    );
+    assert_eq!(scoped, vec!["b.png".to_string(), "out/b.png".to_string()]);
+    let preamble = folders("\\graphicspath{{outer/}}{\\graphicspath{{inner/}}}\\begin{document}\\includegraphics{b.png}\\end{document}");
+    assert_eq!(preamble, vec!["b.png".to_string(), "outer/b.png".to_string()]);
+    let cells = folders(
+        "\\graphicspath{{outer/}}\\begin{document}\\begin{tabular}{ll}\\graphicspath{{inner/}}\\includegraphics{a.png} & \\includegraphics{b.png}\\end{tabular}\\end{document}",
+    );
+    assert_eq!(cells, vec!["b.png".to_string(), "outer/b.png".to_string()]);
+    let defined =
+        folders("\\graphicspath{{real/}}\\newcommand{\\unused}{\\graphicspath{{other/}}}\\begin{document}\\includegraphics{b.png}\\end{document}");
+    assert_eq!(defined, vec!["b.png".to_string(), "real/b.png".to_string()]);
 }

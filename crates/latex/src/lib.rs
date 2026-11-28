@@ -23,10 +23,11 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
-use craft_flow::{self as model, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Para};
+use craft_flow::{self as model, Cell, FBlock, FTable, Flow, Fmt, Img, Inline, Kind, ListInfo, Para};
 use craft_wordmodel::{Align, Document, Rgb};
 
 mod export;
+mod images;
 mod lex;
 mod limits;
 mod parser;
@@ -37,12 +38,13 @@ pub use craft_math::latex_text::{latex_to_linear, linear_to_latex};
 #[cfg(test)]
 use export::Writer;
 pub use export::{escape_text, export};
+pub use images::ImageLoader;
 #[cfg(test)]
 use lex::{Tok, tokenize};
 #[cfg(test)]
 use limits::MAX_NEST;
 pub use limits::MAX_SOURCE;
-pub use parser::{import, parse};
+pub use parser::{import, import_with, parse, parse_with};
 #[cfg(test)]
 use units::{length_pt, spec_widths};
 
