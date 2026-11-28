@@ -27,8 +27,6 @@ use crate::ui::wide_angle::PreviewDone;
 const NOTE: Duration = Duration::from_millis(120);
 /// How far the loading render has come, as a fraction.
 const PROGRESS: f32 = 0.4;
-/// How often the loading render looks for its cancellation.
-const POLL: Duration = Duration::from_millis(20);
 
 // --- the fake app ---
 
@@ -136,9 +134,7 @@ impl FilterGallerySource for MockSource {
         if self.rendering {
             Job::new(|progress, cancel| {
                 progress.report(PROGRESS);
-                while !cancel.is_cancelled() {
-                    std::thread::sleep(POLL);
-                }
+                cancel.wait();
                 Err(String::new())
             })
         } else {

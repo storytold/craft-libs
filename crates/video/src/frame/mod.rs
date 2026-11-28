@@ -1,4 +1,4 @@
-//! A codec-agnostic decoded video frame.
+//! A codec-agnostic video frame, with decoder output and encoder input conversions.
 //!
 //! Each decoder in this crate returns its own picture type. [`VideoFrame`] holds what they have in
 //! common: planar samples at their stored width (`u8` or `u16`), per-plane bit depth, chroma
@@ -16,6 +16,7 @@
 //! never goes out of bounds. They do not check that sample values fit the bit depth.
 
 mod convert;
+pub mod encode;
 
 /// Why a frame or plane was rejected.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -225,7 +226,7 @@ pub enum FieldOrder {
     BottomFieldFirst,
 }
 
-/// A decoded frame in planar form, independent of the codec.
+/// A frame in planar form, independent of the codec. See [`encode`] for encoder input adapters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VideoFrame {
     width: u32,

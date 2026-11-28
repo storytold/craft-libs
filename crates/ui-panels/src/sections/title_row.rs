@@ -14,7 +14,7 @@ use crate::menu::Menu;
 use crate::primitives::{IconSpec, Span, TextRun};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvValue, Label};
-use crate::style::{ComponentStyle, IconLook, Ink, StyleCx, TextLook, TypeRole};
+use crate::style::{ComponentStyle, FocusLook, IconLook, Ink, StyleCx, TextLook, TypeRole};
 use craft_behavior::{CursorIcon, Flow, IconId, Metrics, Mixed, NavShape, PartKey, Roving, Sense};
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Stateful, States};
@@ -186,6 +186,9 @@ pub struct TitleRowStyle {
     icon: IconLook,
     /// The kind at the band's end: caption text in the faint text colour.
     subtitle: TextLook,
+    /// The ring around the lead, command or action part that has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     /// The side of an action part: the control height, which is below a tall header's height.
     action: f32,
     /// Whether the row is a quiet title's text row (`QuietTitleRow::Text`), as tall as it must be to hold its title
@@ -397,6 +400,7 @@ impl Component for TitleRow<'_> {
                 let faint = cx.color(text.faint);
                 TextLook::new(TypeRole::Caption, Stateful::new(faint).off(States::new(faint, faint, faint, disabled)))
             },
+            focus: cx.focus_look(),
             action: cx.control().height,
             text_row,
         }

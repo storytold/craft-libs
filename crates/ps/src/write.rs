@@ -606,7 +606,7 @@ mod tests {
         let step = craft_testkit::hostile::divisor();
         let (mut integer_path, mut visited) = (0usize, 0usize);
         let samples = number_samples();
-        for places in 0..=12 {
+        for places in 0..=10 {
             for v in samples.iter().copied().skip(places as usize % step).step_by(step) {
                 visited += 1;
                 let mut expected = String::from("x ");

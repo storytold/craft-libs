@@ -4,7 +4,7 @@
 
 use kurbo::{Rect, Shape};
 
-use craft_metafile::{Item, bez_path, parse_pict};
+use craft_metafile::{Item, TruncationReason, bez_path, parse_pict};
 
 /// Big-endian words.
 fn be(v: &[i16]) -> Vec<u8> {
@@ -355,13 +355,17 @@ fn pictures_cut_short_keep_what_came_before() {
     let p = parse_pict(cut).unwrap();
     assert_eq!(p.items.len(), 1);
     assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(TruncationReason::PrematureEof));
 
     let p = parse_pict(&v2([0, 0, 50, 50], &[(0x31, rect(0, 0, 10, 10)), (0xA1, be(&[100, 5000]))])).unwrap();
     assert_eq!(p.items.len(), 1);
     assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(TruncationReason::PrematureEof));
 
     let p = parse_pict(&v2([0, 0, 50, 50], &[(0xA0, be(&[100]))])).unwrap();
     assert!(p.items.is_empty());
+    assert!(!p.truncated);
+    assert_eq!(p.truncation_reason, None);
 }
 
 #[test]
@@ -389,6 +393,7 @@ fn a_picture_that_never_ends_stops_at_the_opcode_limit() {
     let p = parse_pict(&b).unwrap();
     assert_eq!(p.items.len(), 1);
     assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(TruncationReason::OpcodeLimitExceeded));
 }
 
 #[test]

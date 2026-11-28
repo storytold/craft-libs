@@ -279,16 +279,27 @@ impl<'c> Builder<'c> {
     /// Place `item` on the first track at or after `preferred` where it does not overlap anything,
     /// creating tracks as needed. Returns the track index.
     pub fn place(&mut self, seq: &mut Sequence, kind: TrackKind, preferred: usize, item: TrackItem) -> Option<usize> {
+        self.place_retaining(seq, kind, preferred, item).0
+    }
+
+    /// The same placement policy, returning ownership when the track limit refuses an item.
+    pub(crate) fn place_retaining(
+        &mut self,
+        seq: &mut Sequence,
+        kind: TrackKind,
+        preferred: usize,
+        item: TrackItem,
+    ) -> (Option<usize>, Option<TrackItem>) {
         let mut i = preferred;
         loop {
             if i >= MAX_IMPORTED_TRACKS || !self.ensure_tracks(seq, kind, i + 1) {
-                return None;
+                return (None, Some(item));
             }
             let t = &mut seq.tracks_mut(kind)[i];
             if !t.items.iter().any(|o| o.start < item.end() && item.start < o.end()) {
                 t.items.push(item);
                 t.sort();
-                return Some(i);
+                return (Some(i), None);
             }
             i += 1;
         }

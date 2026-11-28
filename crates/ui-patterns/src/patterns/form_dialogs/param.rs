@@ -99,11 +99,16 @@ pub enum ParamKind {
         /// The digits after the decimal point the field keeps; 0 takes whole degrees.
         decimals: u32,
     },
-    /// A colour the host's picker chooses; `None`: unset until picked.
+    /// A color the host's picker chooses; `None`: unset until picked. Without `alpha` the field holds a
+    /// [`FieldValue::Color`]. With it the row adds an opacity field in percent beside the swatch and the field holds a
+    /// [`FieldValue::Rgba`]; the picker and the eyedropper set the color and keep the opacity.
     #[non_exhaustive]
     Color {
         /// The colour as RGB in 0 to 1; `None` leaves it unset.
         default: Option<[f32; 3]>,
+        /// The opacity in 0 to 1 that the default opens with and that a color picked into an unset row takes; `None`
+        /// for a row without opacity.
+        alpha: Option<f32>,
     },
     /// A grid of `cells` integer fields, [`grid_side`](ParamKind::grid_side) per row (`int[25]` is 5×5). A `cells`
     /// that is not square wraps every `round(sqrt(cells))` fields and the last row is short.
@@ -236,7 +241,14 @@ impl ParamKind {
 
     /// A colour the host's picker chooses.
     pub fn color(default: Option<[f32; 3]>) -> Self {
-        ParamKind::Color { default }
+        ParamKind::Color { default, alpha: None }
+    }
+
+    /// A color the host's picker chooses, with an opacity field beside it: a `#rrggbbaa` value. `default` is RGBA in
+    /// 0 to 1; `None` leaves the color unset, and a color picked into it starts opaque.
+    pub fn color_with_alpha(default: Option<[f32; 4]>) -> Self {
+        let alpha = default.map_or(1.0, |[_, _, _, a]| a.clamp(0.0, 1.0));
+        ParamKind::Color { default: default.map(|[r, g, b, _]| [r, g, b]), alpha: Some(alpha) }
     }
 
     /// A grid of `cells` integer fields.
@@ -290,7 +302,11 @@ impl ParamKind {
                 let initial = default.as_deref().or_else(|| options.first().map(|(id, _)| id.as_str()));
                 FieldValue::Text(initial.unwrap_or_default().to_owned())
             }
-            ParamKind::Color { default } => FieldValue::Color((*default)?),
+            ParamKind::Color { default, alpha: None } => FieldValue::Color((*default)?),
+            ParamKind::Color { default, alpha: Some(alpha) } => {
+                let [r, g, b] = (*default)?;
+                FieldValue::Rgba([r, g, b, *alpha])
+            }
             ParamKind::Grid { cells: count, default } => {
                 let mut cells = vec![*default; *count];
                 // A grid that starts at 0 is a kernel: the identity, 1 in the centre.
@@ -334,7 +350,10 @@ impl ParamKind {
             (ParamKind::Choice { options, .. } | ParamKind::Radio { options, .. }, FieldValue::Text(id)) => {
                 options.iter().any(|(option, _)| option == id)
             }
-            (ParamKind::Color { .. }, FieldValue::Color(c)) => c.iter().all(|v| v.is_finite()),
+            (ParamKind::Color { alpha: None, .. }, FieldValue::Color(c)) => c.iter().all(|v| v.is_finite()),
+            (ParamKind::Color { alpha: Some(_), .. }, FieldValue::Rgba([r, g, b, a])) => {
+                [r, g, b].iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(a)
+            }
             (ParamKind::Grid { cells: count, .. }, FieldValue::Grid(cells)) => cells.len() == *count,
             (ParamKind::Point { .. }, FieldValue::Point(p)) => p.iter().all(|v| v.is_finite()),
             (ParamKind::Channel { names, .. }, FieldValue::Int(i)) => usize::try_from(*i).is_ok_and(|i| i < names.len()),
@@ -557,11 +576,14 @@ impl NumberUnit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
+    /// The step of a range row's slider and field ([`Param::step`]).
+    range_step: Option<f64>,
     pub(crate) popup_slider: bool,
     randomize: bool,
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    hide_caption: bool,
     /// The row or section stands beside the one before it ([`Param::beside`]).
     beside: bool,
     /// The field pairs with the next one in its section ([`Param::beside_next`]).
@@ -600,6 +622,8 @@ pub(crate) struct RowOptions {
     resets: Vec<String>,
     /// The row takes input only while the number under the key is above the bound ([`Param::enabled_above`]).
     enabled_above: Option<(String, f64)>,
+    /// Additional field conditions that must all hold ([`Param::and_enabled_when_in`]).
+    enabled_when_also: Vec<(String, Vec<FieldValue>)>,
     /// The row takes input only while the values under the two keys differ ([`Param::enabled_when_differs`]).
     enabled_when_differs: Option<(String, String)>,
     /// The value the row shows while it is disabled ([`Param::disabled_value`]).
@@ -638,6 +662,11 @@ pub(crate) enum Head {
 }
 
 impl RowOptions {
+    /// Whether the field's label names it without drawing a caption.
+    pub(crate) fn hides_caption(&self) -> bool {
+        self.hide_caption
+    }
+
     /// Whether the row or section stands beside the one before it.
     pub(crate) fn beside(&self) -> bool {
         self.beside
@@ -709,6 +738,8 @@ fn is_path_list(value: &FieldValue) -> bool {
 struct RowTexts {
     hint: Option<Label>,
     tooltip: Option<Tooltip>,
+    /// The text after the number ([`Param::unit_label`]).
+    unit: Option<Label>,
 }
 
 /// When a row takes input.
@@ -890,6 +921,14 @@ impl Param {
     #[must_use]
     pub fn enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
         self.enable = Enable::When(key.into(), values.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Adds a condition: the row takes input only while `fields[key]` equals one of `values` and every other
+    /// enable condition holds. A missing field does not satisfy it.
+    #[must_use]
+    pub fn and_enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
+        self.options.get_or_insert_default().enabled_when_also.push((key.into(), values.into_iter().map(Into::into).collect()));
         self
     }
 
@@ -1230,6 +1269,18 @@ impl Param {
         self
     }
 
+    /// The step of a [`ParamKind::Range`] row, as `SliderField::step`: the slider and the field move by `step` on arrow
+    /// keys, the wheel and a scrub, and drags, clicks on the track and typed values snap to it. It takes the place of
+    /// the step [`decimals`](Param::decimals) implies; the stored value is still rounded to those decimals. A step that
+    /// is not finite and positive leaves the row's step as it was; other kinds are unchanged.
+    #[must_use]
+    pub fn step(mut self, step: f64) -> Self {
+        if matches!(self.kind, ParamKind::Range { .. }) && step.is_finite() && step > 0.0 {
+            self.options.get_or_insert_default().range_step = Some(step);
+        }
+        self
+    }
+
     /// Shows a Range row's slider in a linear popup opened from the number field.
     #[must_use]
     pub fn popup_slider(mut self) -> Self {
@@ -1268,6 +1319,15 @@ impl Param {
     #[must_use]
     pub fn full_width(mut self) -> Self {
         self.options.get_or_insert_default().full_width = true;
+        self
+    }
+
+    /// For a field with a side caption, hides the caption while keeping the row label as its accessible name.
+    /// Resettable fields keep their caption and reset dot. Separate headings, radio groups and stacked sliders
+    /// keep their own captions.
+    #[must_use]
+    pub fn hide_caption(mut self) -> Self {
+        self.options.get_or_insert_default().hide_caption = true;
         self
     }
 
@@ -1356,6 +1416,15 @@ impl Param {
         self
     }
 
+    /// Text shown after the number of a number, int, optional-number or range row in place of the symbol of its
+    /// [`unit`](Self::unit), for a quantity no [`UnitKind`] names (`kbps`, `MB`). The host passes it in the user's
+    /// language. Typed text is still read by the row's `unit`, or as a plain number without one.
+    #[must_use]
+    pub fn unit_label(mut self, text: impl Into<Label>) -> Self {
+        self.texts.get_or_insert_default().unit = Some(text.into());
+        self
+    }
+
     /// Parses the registry notation into a list, labels from the keys in Title Case with two fixed names (`cellSize`
     /// is `Cell Size`, `bpc` is `Black Point Compensation`;
     /// `{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0}`). Apps with their own command
@@ -1391,6 +1460,11 @@ impl Param {
     /// The row's tooltip text.
     pub(crate) fn tooltip_text(&self) -> Option<&Tooltip> {
         self.texts.as_deref()?.tooltip.as_ref()
+    }
+
+    /// The text after the row's number ([`Param::unit_label`]).
+    pub(crate) fn unit_label_text(&self) -> Option<&Label> {
+        self.texts.as_deref()?.unit.as_ref()
     }
 
     /// The label a [`Param::in_footer`] row shows while on; `None` for a row in the body.
@@ -1467,8 +1541,7 @@ impl Param {
         self.shown && self.visible_when.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
     }
 
-    /// Whether the row takes input with `fields`: every condition its `enabled_when`,
-    /// [`enabled_above`](Param::enabled_above) and [`enabled_when_differs`](Param::enabled_when_differs) set holds.
+    /// Whether the row takes input with `fields`: every enable condition must hold.
     pub fn enabled(&self, fields: &DialogFields) -> bool {
         let options = self.options.as_deref();
         let enabled = match &self.enable {
@@ -1477,6 +1550,8 @@ impl Param {
             Enable::Off => false,
         };
         enabled
+            && options
+                .is_none_or(|options| options.enabled_when_also.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held))))
             && options.and_then(|options| options.enabled_above.as_ref()).is_none_or(|(key, bound)| fields.number(key).is_some_and(|n| n > *bound))
             && options.and_then(|options| options.enabled_when_differs.as_ref()).is_none_or(|(a, b)| fields.get(a) != fields.get(b))
     }
@@ -1486,6 +1561,12 @@ impl RowOptions {
     /// The decimals a range row stores, or `None` for as typed.
     pub(crate) fn range_places(&self) -> Option<u32> {
         self.range_decimals
+    }
+
+    /// The step a range row's slider and field use: the one [`Param::step`] set, else the one its decimals imply, or
+    /// `None` for the controls' own.
+    pub(crate) fn range_step(&self) -> Option<f64> {
+        self.range_step.or_else(|| self.range_decimals.map(|places| 10f64.powi(-(places as i32))))
     }
 
     /// Whether an int row has a Random button.
@@ -1604,10 +1685,18 @@ pub fn encode(component: f32) -> u8 {
 }
 
 /// Writes `color` into the colour parameter `key` of `params`, or into a key no parameter has when a
-/// [`Param::custom`] row can have asked for it; other keys are ignored.
+/// [`Param::custom`] row can have asked for it; other keys are ignored. A row with opacity takes the color's RGB and
+/// keeps its opacity, or takes the row's starting opacity when it had no color; `color`'s alpha is not read.
 pub fn set_color_field(params: &[Param], fields: &mut DialogFields, key: &str, color: Srgba) {
-    let colour_row = params.iter().any(|param| param.key == key && matches!(param.kind, ParamKind::Color { .. }));
-    let custom_request = params.iter().any(|param| matches!(param.kind, ParamKind::Custom(_))) && params.iter().all(|param| param.key != key);
+    let row = params.iter().find(|param| param.key == key);
+    if let Some(ParamKind::Color { alpha: Some(start), .. }) = row.map(|param| &param.kind) {
+        let alpha = fields.rgba(key).map_or(*start, |[_, _, _, a]| a);
+        let [r, g, b] = color.to_rgb_array();
+        fields.set(key, FieldValue::Rgba([r, g, b, alpha]));
+        return;
+    }
+    let colour_row = row.is_some_and(|param| matches!(param.kind, ParamKind::Color { .. }));
+    let custom_request = params.iter().any(|param| matches!(param.kind, ParamKind::Custom(_))) && row.is_none();
     if colour_row || custom_request {
         fields.set(key, FieldValue::Color(color.to_rgb_array()));
     }
@@ -1621,7 +1710,7 @@ pub(crate) fn edited_rows(params: &[Param], before: &DialogFields, after: &Dialo
         .iter()
         .filter(|param| {
             differs(&param.key)
-                || param.unit_key().is_some_and(&differs)
+                || param.unit_key().is_some_and(differs)
                 || matches!(&param.kind, ParamKind::Custom(row) if row.companions.iter().any(|key| differs(key)))
                 || (matches!(param.kind, ParamKind::Files { .. }) && (differs(&param.folder_key()) || differs(&param.use_folder_key())))
         })

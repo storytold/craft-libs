@@ -36,6 +36,9 @@ mod mp2_encoder_oracle;
 #[cfg(feature = "qoa")]
 #[path = "qoa_oracle.rs"]
 mod qoa_oracle;
+#[cfg(feature = "s302m")]
+#[path = "s302m_oracle.rs"]
+mod s302m_oracle;
 #[cfg(feature = "sbc")]
 #[path = "sbc_oracle.rs"]
 mod sbc_oracle;

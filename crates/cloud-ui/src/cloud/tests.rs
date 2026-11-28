@@ -435,6 +435,49 @@ fn signing_out_forgets_everything_this_window_knew() {
     assert!(jobs.lock().unwrap().iter().any(|j| matches!(j, Job::SignOut)), "the service is told, so the saved token goes too");
 }
 
+/// A sharing service that says it can share and answers nothing else.
+struct Shares;
+
+impl crate::share::ShareBackend for Shares {
+    fn submit(&self, request: crate::share::Request, reply: crate::share::Replier) {
+        if request == crate::share::Request::Capabilities {
+            reply.answer(crate::share::Answer::Capabilities { capabilities: vec![Capability::Sharing], linked: true });
+        }
+    }
+}
+
+#[test]
+fn signing_out_takes_sharing_with_it() {
+    let (mut app, _jobs, ctx) = wired();
+    app.share.connect(Shares);
+    // Enough frames for an account answer to land, the provider to be asked,
+    // and its answer to be read.
+    let frames = |app: &mut Notebook| {
+        for _ in 0..3 {
+            ctx.begin_pass(Default::default());
+            app.share.show(&ctx);
+            pump(app, &ctx);
+            ctx.end_pass().textures_delta.clear();
+        }
+    };
+    frames(&mut app);
+    assert!(app.share.available());
+    app.share.open("/Minutes.note", "Minutes");
+    assert!(app.share.is_open());
+
+    sign_out(&mut app);
+    assert!(!app.share.is_open(), "a sheet open on the old account's document closes");
+    assert!(!app.share.available(), "Share is not offered on the old account's answer");
+    // The provider is not asked again while the sign-out may still be on its
+    // way, so a service that still has the old account cannot offer it back.
+    frames(&mut app);
+    assert!(!app.share.available(), "nobody is signed in");
+
+    sign_in(&mut app);
+    frames(&mut app);
+    assert!(app.share.available(), "the next sign-in asks again");
+}
+
 #[test]
 fn an_answer_queued_before_the_session_changed_is_dropped() {
     let (mut app, _jobs, ctx) = wired();
