@@ -3155,6 +3155,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ink"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ipc"
 version = "0.1.0"
 dependencies = [

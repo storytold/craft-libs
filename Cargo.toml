@@ -152,6 +152,7 @@ craft-i18n = { path = "crates/i18n" }
 craft-i18n-build = { path = "crates/i18n-build" }
 craft-ipc = { path = "crates/ipc" }
 craft-idml = { path = "crates/idml" }
+craft-ink = { path = "crates/ink" }
 craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
