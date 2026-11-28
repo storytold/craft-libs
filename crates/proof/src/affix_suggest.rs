@@ -300,6 +300,7 @@ impl<'a> MapLookup<'a> {
 
     /// Lowercase the query only; the first group's representative keeps its authored case.
     pub(crate) fn fold(&self, c: char) -> char {
+        count_map_steps(1);
         let l = c.to_lowercase().next().unwrap_or(c);
         self.first.get(&l).copied().unwrap_or(l)
     }
@@ -308,8 +309,32 @@ impl<'a> MapLookup<'a> {
     fn alternatives(&self, c: char) -> Vec<char> {
         let mut seen = HashSet::new();
         seen.insert(c);
-        self.groups_of.get(&c).into_iter().flatten().filter_map(|&i| self.groups.get(i)).flatten().copied().filter(|&x| seen.insert(x)).collect()
+        self.groups_of
+            .get(&c)
+            .into_iter()
+            .flatten()
+            .filter_map(|&i| self.groups.get(i))
+            .inspect(|group| count_map_steps(1 + group.len()))
+            .flatten()
+            .copied()
+            .filter(|&x| seen.insert(x))
+            .collect()
     }
+}
+
+// The MAP lookups on this thread: one per letter folded, and one per group a letter's
+// alternatives come from and per member read from it.
+#[cfg(test)]
+std::thread_local! {
+    static MAP_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn count_map_steps(count: usize) {
+    #[cfg(test)]
+    MAP_STEPS.with(|steps| steps.set(steps.get().saturating_add(count)));
+    #[cfg(not(test))]
+    let _ = count;
 }
 
 /// Every way of changing up to `t.max_map_changes` letters of `chars` to a MAP relative (`alts`,
@@ -738,36 +763,27 @@ mod tests {
             let dic = format!("{}\n{}\n", words.len(), words.join("\n"));
             AffixDict::from_hunspell(&aff, &dic, &[]).unwrap()
         }
-        fn cpu_cost(f: &mut impl FnMut()) -> f64 {
-            let ran = || {
-                let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
-                s.split_whitespace().next()?.parse::<u64>().ok()
-            };
-            let (start, before) = (std::time::Instant::now(), ran());
-            f();
-            match (before, ran()) {
-                (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
-                _ => start.elapsed().as_secs_f64(),
-            }
-        }
         let small = dictionary(1);
         let big = dictionary(8);
         let run = |d: &AffixDict| {
+            MAP_STEPS.with(|steps| steps.set(0));
             let out = suggest_in(d, "abcdef", 8, &Tuning::DEFAULT);
             let expected: Vec<String> = (0..8).map(|i| format!("abcde{}", char::from_u32(0xe000 + i).unwrap())).collect();
             assert_eq!(out, expected);
-            std::hint::black_box(out);
+            MAP_STEPS.with(std::cell::Cell::get)
         };
-        run(&small);
-        run(&big);
-        let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
-        for _ in 0..5 {
-            t1 = t1.min(cpu_cost(&mut || (0..8).for_each(|_| run(&small))) / 8.0);
-            t8 = t8.min(cpu_cost(&mut || run(&big)));
+        let (s1, s8) = (run(&small), run(&big));
+        // 8x the groups and the stems: about 8x the lookups, where a scan of the groups for each
+        // letter of each stem is 64x.
+        assert!(s8 <= 10 * s1, "8x MAP and stems cost {s8} MAP lookups against {s1}");
+        // A letter folds through the index alone, one lookup: with the groups taken away, each
+        // letter still folds the same.
+        let groups: Vec<Vec<char>> = vec!["aąá".chars().collect(), "óu".chars().collect()];
+        let lookup = MapLookup::new(&groups);
+        let index_only = MapLookup { groups: &[], first: lookup.first.clone(), groups_of: lookup.groups_of.clone() };
+        for &c in groups.iter().flatten() {
+            assert_eq!(index_only.fold(c), lookup.fold(c), "{c}");
         }
-        let ratio = t8 / t1.max(1e-9);
-        eprintln!("MAP/stem scan: small={t1:.6}s big={t8:.6}s ratio={ratio:.2}");
-        assert!(ratio < 24.0, "8x MAP and stems cost {ratio:.2}x: {t1:.6}s / {t8:.6}s");
     }
 
     /// craft-libs#487 review: MAP variants are made by number of changes, so when a long word has
