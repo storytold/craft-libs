@@ -1482,39 +1482,73 @@ impl Chart {
 
     /// The box chart's groups (distinct category labels in order of appearance; one unnamed
     /// group without categories) and, per series, each group's summary (None when it has no
-    /// points).
-    ///
-    /// Each value is put in its group's bucket once (groups are found by name in a map), and the
-    /// series x groups result is held to [`MAX_BOX_CELLS`]: groups past it are left out.
+    /// points). The series x groups limit is [`MAX_BOX_CELLS`].
     pub fn box_groups(&self) -> (Vec<String>, Vec<Vec<Option<BoxStats>>>) {
         let max_groups = (MAX_BOX_CELLS / self.series.len().max(1)).max(1);
+        self.box_groups_up_to(max_groups)
+    }
+
+    fn box_groups_up_to(&self, max_groups: usize) -> (Vec<String>, Vec<Vec<Option<BoxStats>>>) {
         let mut groups: Vec<String> = Vec::new();
         let mut index: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for c in &self.categories {
-            if !index.contains_key(c.as_str()) && groups.len() < max_groups {
-                index.insert(c, groups.len());
-                groups.push(c.clone());
+        // Capped charts can skip discarded positions across all series. Repeated labels can make
+        // this list dense, so abandon it if it would hold more positions than there are group slots.
+        let mut retained = (self.series.len() > 1 && self.categories.len() > max_groups)
+            .then(|| (self.series.iter().map(|s| s.values.len()).max().unwrap_or_default(), Vec::new()));
+        for (position, category) in self.categories.iter().enumerate() {
+            let bucket = match index.get(category.as_str()).copied() {
+                Some(bucket) => bucket,
+                None if groups.len() < max_groups => {
+                    let bucket = groups.len();
+                    index.insert(category.as_str(), bucket);
+                    groups.push(category.clone());
+                    bucket
+                }
+                None => continue,
+            };
+            if let Some((value_count, positions)) = retained.as_mut()
+                && position < *value_count
+            {
+                if positions.len() == max_groups {
+                    retained = None;
+                } else {
+                    positions.push((position, bucket));
+                }
             }
         }
-        if groups.is_empty() {
-            groups.push(String::new());
-            index.insert("", 0);
-        }
         // A value past the categories belongs to the unnamed group, when there is one.
-        let past_end = index.get("").copied();
+        let past_end = if groups.is_empty() {
+            groups.push(String::new());
+            Some(0)
+        } else {
+            index.get("").copied()
+        };
+        let finite = |value: &Option<f64>| value.filter(|v| v.is_finite());
         let stats = self
             .series
             .iter()
             .map(|s| {
                 let mut buckets: Vec<Vec<f64>> = vec![Vec::new(); groups.len()];
-                for (i, v) in s.values.iter().enumerate() {
-                    let Some(v) = v.filter(|v| v.is_finite()) else { continue };
-                    let g = match self.categories.get(i) {
-                        Some(c) => index.get(c.as_str()).copied(),
-                        None => past_end,
-                    };
-                    if let Some(b) = g.and_then(|g| buckets.get_mut(g)) {
-                        b.push(v);
+                if let Some((_, positions)) = &retained {
+                    for &(position, bucket) in positions {
+                        let Some(value) = s.values.get(position) else { break };
+                        if let Some(value) = finite(value) {
+                            buckets[bucket].push(value);
+                        }
+                    }
+                    if let Some(bucket) = past_end {
+                        buckets[bucket].extend(s.values.iter().skip(self.categories.len()).filter_map(finite));
+                    }
+                } else {
+                    for (i, v) in s.values.iter().enumerate() {
+                        let Some(v) = finite(v) else { continue };
+                        let g = match self.categories.get(i) {
+                            Some(c) => index.get(c.as_str()).copied(),
+                            None => past_end,
+                        };
+                        if let Some(b) = g.and_then(|g| buckets.get_mut(g)) {
+                            b.push(v);
+                        }
                     }
                 }
                 buckets.into_iter().map(|pts| box_stats_by(pts, self.inclusive_quartiles)).collect()
@@ -1804,6 +1838,33 @@ mod chartex_tests {
         assert_eq!(groups, vec!["Group A".to_string(), "Group B".to_string()]);
         assert_eq!(stats.len(), 2);
         assert!(stats.iter().all(|s| s.len() == 2 && s.iter().all(Option::is_some)));
+    }
+
+    #[test]
+    fn box_groups_keep_repeated_labels_and_unnamed_tails() {
+        let mut chart = Chart::sample(ChartType::BoxWhisker);
+        chart.series = vec![
+            Series { values: vec![Some(2.0), Some(4.0), Some(f64::NAN), Some(8.0), Some(6.0), Some(8.0), Some(f64::INFINITY)], ..Default::default() },
+            Series { values: vec![None, Some(f64::NEG_INFINITY)], ..Default::default() },
+        ];
+        let groups_and_means = |chart: &Chart| {
+            let (groups, stats) = chart.box_groups_up_to(2);
+            assert!(stats[1].iter().all(Option::is_none));
+            let means = stats[0].iter().map(|stats| stats.as_ref().map(|stats| stats.mean)).collect::<Vec<_>>();
+            (groups, means)
+        };
+
+        // The cap leaves just two positions. The retained unnamed group also takes the finite tail.
+        chart.categories = ["a", "", "cut", "cut2"].map(str::to_owned).to_vec();
+        assert_eq!(groups_and_means(&chart), (vec!["a".to_owned(), String::new()], vec![Some(2.0), Some(6.0)]));
+
+        // The repeated a exceeds the position limit but must still contribute. An excluded empty label takes no tail.
+        chart.categories = ["a", "b", "cut", "a", ""].map(str::to_owned).to_vec();
+        assert_eq!(groups_and_means(&chart), (vec!["a".to_owned(), "b".to_owned()], vec![Some(5.0), Some(4.0)]));
+
+        // With no categories the chart supplies the unnamed group for every finite value.
+        chart.categories.clear();
+        assert_eq!(groups_and_means(&chart), (vec![String::new()], vec![Some(5.6)]));
     }
 }
 
