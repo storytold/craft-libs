@@ -118,6 +118,33 @@ fn a_grid_in_a_measured_stack_keeps_its_rows_and_what_follows_them() {
     assert!(clicked.get(), "the button under the grid takes a click");
 }
 
+/// `max_rows` counts a grid's rows, not its tiles: a wide grid capped at two rows is as tall as its first two rows of
+/// tiles, so what follows it starts below its second row and above its third (#4026).
+#[craft_ui::testing::trial]
+fn a_grid_s_max_rows_counts_rows_of_tiles() {
+    const BOARDS: u64 = 60;
+    let mut fixture = Fixture::new(|ui| {
+        let keys: Vec<u64> = (0..BOARDS).collect();
+        let source = keyed(&keys, |key: &u64| *key);
+        Stack::new().fill_width().show(ui, |ui, _| {
+            let _ = TileGrid::new("Boards")
+                .max_rows(2)
+                .show_items(ui, &source, &mut |key, _| Tile::new(format!("Board {key}")).thumb(ThumbAspect::SQUARE, |_, _| {}));
+            let _ = Button::new("After").show(ui);
+        });
+    });
+    fixture.room(Vec2::new(800.0, 600.0));
+    fixture.settle();
+    let first = fixture.by_label("Board 0").expect("the first tile").rect;
+    let below =
+        (1..BOARDS).find_map(|key| fixture.by_label(&format!("Board {key}")).map(|node| node.rect).filter(|rect| rect.top() >= first.bottom()));
+    let second = below.expect("the grid shows a second row of tiles");
+    let after = fixture.by_label("After").expect("the button").rect;
+    let pitch = second.top() - first.top();
+    assert!(after.top() >= second.bottom(), "the button follows the grid's second row: {second:?} {after:?}");
+    assert!(after.top() < first.top() + 2.0 * pitch + first.height() / 2.0, "the grid stops before its third row: {first:?} {after:?}");
+}
+
 /// Tiles of the shown grids: enough rows to scroll several views.
 const TILES: usize = 120;
 

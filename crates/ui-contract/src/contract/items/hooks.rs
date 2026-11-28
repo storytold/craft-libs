@@ -24,8 +24,8 @@ use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
 use crate::style::auto_scroll_mark_look;
 use crate::style::{ComponentStyle as _, FocusLook, StyleCx, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{
-    Axis, Buttons, CancelReason, EditEvent, Intent, ItemLayout, MiddleButton, MiddleScroll, Mixed, MoveMods, NavMove, PointerButton, PressPhase,
-    Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
+    Axis, Buttons, CancelReason, EditEvent, Intent, ItemLayout, MiddleButton, MiddleScroll, Mixed, MoveMods, NavMove, NavShape, PointerButton,
+    PressPhase, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
 };
 use craft_keymap::Chord;
 use egui::{Context, Id, Pos2, Rect, Ui, UiBuilder, Vec2};
@@ -1214,13 +1214,32 @@ fn rename_input(
 }
 
 /// The height of the first `rows` rows of `layout` over `len` items: the rows it lays out, and the row height `row` for
-/// each one it does not have.
+/// each one it does not have. A row of a grid holds several items (its `nav` shape says how many).
 pub(super) fn rows_height(layout: &impl ItemLayout, len: usize, rows: u16, row: f32) -> f32 {
     let rows = usize::from(rows);
-    let laid = rows.min(len);
+    let (laid, items) = rows_items(layout, len, rows);
     let top = if len == 0 { 0.0 } else { layout.rect(0, ScrollPos::default()).min.y };
-    let built = if laid == 0 { 0.0 } else { layout.rect(laid - 1, ScrollPos::default()).max.y - top };
+    let built = if items == 0 { 0.0 } else { layout.rect(items - 1, ScrollPos::default()).max.y - top };
     built + (rows - laid) as f32 * row
+}
+
+/// How many of the first `rows` rows of `layout` over `len` items it lays out, and how many items those rows hold.
+fn rows_items(layout: &impl ItemLayout, len: usize, rows: usize) -> (usize, usize) {
+    match layout.nav() {
+        NavShape::WrappedGrid { columns, .. } | NavShape::BoundedGrid { columns, .. } if columns > 1 => {
+            let items = rows.saturating_mul(columns).min(len);
+            (items.div_ceil(columns), items)
+        }
+        NavShape::RaggedGrid => {
+            let (mut laid, mut items) = (0, 0);
+            while laid < rows && items < len {
+                let Some(count) = layout.row_len(laid) else { break };
+                (laid, items) = (laid + 1, (items + count).min(len));
+            }
+            (laid, items)
+        }
+        _ => (rows.min(len), rows.min(len)),
+    }
 }
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
