@@ -76,6 +76,134 @@ fn shadow_drag_uses_whole_degrees_and_pixels_and_moves_the_global_angle() {
     assert!(!draft.drag_shadow(&defaults, true, [10.0, 10.0]));
 }
 
+/// A Satin at `angle` / `distance` on its selected page, with a Drop Shadow beside it.
+fn satin_draft(angle: f64, distance: f64) -> LayerStyleDraft {
+    let mut draft = LayerStyleDraft::new(style_with(&[(1, EffectKind::Satin), (2, EffectKind::DropShadow)]));
+    draft.page = LayerStylePage::Effect(EffectId(1));
+    draft.set_param(EffectId(1), "angle", StyleValue::Number(angle));
+    draft.set_param(EffectId(1), "distance", StyleValue::Number(distance));
+    draft
+}
+
+fn satin_shown(draft: &LayerStyleDraft) -> (Option<f64>, Option<f64>) {
+    let params = &draft.style.effect(EffectId(1)).expect("the Satin").params;
+    (params.number("angle"), params.number("distance"))
+}
+
+// From Angle 90 / Distance 20, each drag gives the angle and distance measured in the reference
+// application: both truncated (not rounded), negative angles toward zero.
+#[trial]
+fn satin_drag_truncates_the_angle_and_distance() {
+    let defaults = EffectSpec::photoshop(EffectKind::Satin).defaults;
+    for (total, want) in [
+        ([30.0, 0.0], (146.0, 36.0)),
+        ([0.0, -30.0], (-90.0, 10.0)),
+        ([0.0, 30.0], (90.0, 50.0)),
+        ([-30.0, 0.0], (33.0, 36.0)),
+        ([20.0, -20.0], (180.0, 20.0)),
+        ([5.0, 0.0], (104.0, 20.0)),
+        ([5.0, -30.0], (-116.0, 11.0)),
+        ([-5.0, -30.0], (-63.0, 11.0)),
+        ([30.0, 10.0], (135.0, 42.0)),
+    ] {
+        let mut draft = satin_draft(90.0, 20.0);
+        assert!(draft.drags_satin() && draft.drags_on_canvas());
+        draft.drag_satin(&defaults, true, [0.0, 0.0]);
+        draft.drag_satin(&defaults, false, total);
+        assert_eq!(satin_shown(&draft), (Some(want.0), Some(want.1)), "drag {total:?}");
+    }
+}
+
+// The zero offset gives Distance 1 and keeps the angle shown, also when one drag passes through it;
+// a quarter pixel still has a direction; Distance stays within 1..=250; a non-finite drag and a
+// press change nothing, fractions included; a drag back to the press restores the start values.
+#[trial]
+fn satin_drag_keeps_the_angle_at_zero_and_the_values_without_travel() {
+    let defaults = EffectSpec::photoshop(EffectKind::Satin).defaults;
+    let mut draft = satin_draft(90.0, 20.0);
+    draft.drag_satin(&defaults, true, [0.0, 0.0]);
+    draft.drag_satin(&defaults, false, [0.0, -20.0]);
+    assert_eq!(satin_shown(&draft), (Some(90.0), Some(1.0)));
+
+    let mut draft = satin_draft(90.0, 20.0);
+    draft.drag_satin(&defaults, true, [0.0, 0.0]);
+    draft.drag_satin(&defaults, false, [30.0, 0.0]);
+    draft.drag_satin(&defaults, false, [0.0, -20.0]);
+    assert_eq!(satin_shown(&draft), (Some(146.0), Some(1.0)), "the angle shown, not the press's");
+
+    let mut draft = satin_draft(90.0, 20.0);
+    draft.drag_satin(&defaults, true, [0.0, 0.0]);
+    draft.drag_satin(&defaults, false, [0.25, -20.0]);
+    assert_eq!(satin_shown(&draft), (Some(180.0), Some(1.0)));
+
+    let mut draft = satin_draft(90.0, 20.0);
+    draft.drag_satin(&defaults, true, [0.0, 0.0]);
+    draft.drag_satin(&defaults, false, [0.0, 380.0]);
+    assert_eq!(satin_shown(&draft).1, Some(250.0));
+    assert!(!draft.drag_satin(&defaults, true, [f64::NAN, 0.0]));
+
+    let mut draft = satin_draft(90.5, 20.75);
+    assert!(!draft.drag_satin(&defaults, true, [0.0, 0.0]), "a press writes nothing");
+    assert!(draft.shadow_drag.is_some());
+    draft.drag_satin(&defaults, false, [30.0, 0.0]);
+    assert_eq!(satin_shown(&draft), (Some(145.0), Some(36.0)));
+    draft.drag_satin(&defaults, false, [0.0, 0.0]);
+    assert_eq!(satin_shown(&draft), (Some(90.5), Some(20.75)));
+    draft.end_drag();
+    assert!(draft.shadow_drag.is_none());
+}
+
+// A press and release on a Satin whose angle and distance are not stored (they come from the spec
+// defaults) leaves its parameters empty; a drag that leaves and comes back does store them.
+#[trial]
+fn satin_press_without_travel_keeps_a_sparse_instance_sparse() {
+    let defaults = EffectSpec::photoshop(EffectKind::Satin).defaults;
+    let mut draft = LayerStyleDraft::new(style_with(&[(1, EffectKind::Satin)]));
+    draft.page = LayerStylePage::Effect(EffectId(1));
+    draft.style.effect_mut(EffectId(1)).expect("the Satin").params = StyleParams::default();
+    let before = draft.style.clone();
+    assert!(!draft.drag_satin(&defaults, true, [0.0, 0.0]));
+    assert!(!draft.drag_satin(&defaults, false, [0.0, 0.0]));
+    draft.end_drag();
+    assert_eq!(draft.style, before, "the parameter map is unchanged");
+    assert_eq!(satin_shown(&draft), (None, None));
+
+    draft.drag_satin(&defaults, true, [0.0, 0.0]);
+    assert!(draft.drag_satin(&defaults, false, [30.0, 0.0]));
+    assert!(draft.drag_satin(&defaults, false, [0.0, 0.0]), "back to the start values");
+}
+
+// Only the Satin page takes the Satin drag; it leaves Global Light and the shadow alone, and the
+// shadow drag does not take a Satin page. Shadow, Satin and Gradient Overlay pages take canvas drags.
+#[trial]
+fn satin_drag_is_the_satin_pages_alone() {
+    let satin = EffectSpec::photoshop(EffectKind::Satin).defaults;
+    let shadow = EffectSpec::photoshop(EffectKind::DropShadow).defaults;
+    let mut draft = satin_draft(90.0, 20.0);
+    let light = draft.style.global_light;
+    let before = draft.style.effect(EffectId(2)).cloned();
+    assert!(!draft.drags_shadow());
+    assert!(!draft.drag_shadow(&shadow, true, [30.0, 0.0]));
+    assert_eq!(satin_shown(&draft), (Some(90.0), Some(20.0)));
+    draft.drag_satin(&satin, true, [0.0, 0.0]);
+    assert!(draft.drag_satin(&satin, false, [30.0, 0.0]));
+    assert_eq!(draft.style.global_light, light);
+    assert_eq!(draft.style.effect(EffectId(2)).cloned(), before);
+
+    draft.end_drag();
+    draft.page = LayerStylePage::Effect(EffectId(2));
+    assert!(!draft.drags_satin() && draft.drags_on_canvas());
+    assert!(!draft.drag_satin(&satin, true, [30.0, 0.0]));
+    assert_eq!(draft.style.effect(EffectId(2)).cloned(), before);
+    draft.page = LayerStylePage::Blending;
+    assert!(!draft.drags_on_canvas());
+    let mut gradient = LayerStyleDraft::new(style_with(&[(1, EffectKind::GradientOverlay), (2, EffectKind::ColorOverlay)]));
+    gradient.page = LayerStylePage::Effect(EffectId(1));
+    assert!(gradient.drags_on_canvas());
+    gradient.page = LayerStylePage::Effect(EffectId(2));
+    assert!(!gradient.drags_on_canvas());
+}
+
 // An instance without angle and distance starts the drag from the spec's defaults, not from 120°
 // and 0.
 

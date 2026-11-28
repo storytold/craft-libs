@@ -76,6 +76,8 @@ pub(crate) struct Reader<'p> {
     revs: HashMap<(u8, String, String, Option<String>, Option<String>), u32>,
     /// Move ranges (`w:moveFromRangeStart` …) seen so far.
     pub moves: MoveCtx,
+    /// Bytes of drawing hyperlink targets copied into this document.
+    drawing_link_bytes: usize,
     media_by_path: HashMap<String, String>,
     hf_by_path: HashMap<String, u32>,
     /// Header/footer parts being read right now (see [`MAX_HF_DEPTH`]).
@@ -178,6 +180,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         pc: PropCtx::default(),
         revs: HashMap::new(),
         moves: MoveCtx::default(),
+        drawing_link_bytes: 0,
         media_by_path: HashMap::new(),
         hf_by_path: HashMap::new(),
         hf_depth: 0,

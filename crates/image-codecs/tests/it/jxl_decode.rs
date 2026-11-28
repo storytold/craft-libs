@@ -9,7 +9,7 @@ fn rgba_8bit() -> Image {
 }
 
 #[test]
-fn an_eight_bit_export_decodes_back_to_the_same_pixels() {
+fn feature_config_an_eight_bit_export_decodes_back_to_the_same_pixels() {
     let input = rgba_8bit();
     let bytes = encode(&input, Format::Jxl, &EncodeOptions::default()).unwrap();
     let out = decode(&bytes).unwrap();
@@ -18,7 +18,7 @@ fn an_eight_bit_export_decodes_back_to_the_same_pixels() {
 }
 
 #[test]
-fn a_sixteen_bit_gray_export_decodes_back_to_the_same_samples() {
+fn feature_config_a_sixteen_bit_gray_export_decodes_back_to_the_same_samples() {
     let samples: Vec<u16> = (0..12).map(|i| i * 5461).collect();
     let input = Image::from_u16(4, 3, ChannelLayout::Gray, &samples).unwrap();
     let bytes = encode(&input, Format::Jxl, &EncodeOptions::default()).unwrap();
@@ -28,7 +28,7 @@ fn a_sixteen_bit_gray_export_decodes_back_to_the_same_samples() {
 }
 
 #[test]
-fn the_pixel_limit_is_an_error_not_an_allocation() {
+fn feature_config_the_pixel_limit_is_an_error_not_an_allocation() {
     let bytes = encode(&rgba_8bit(), Format::Jxl, &EncodeOptions::default()).unwrap();
     let opts = DecodeOptions { limits: Limits { max_pixels: 4, ..Limits::default() }, ..DecodeOptions::default() };
     let err = decode_with(&bytes, &opts);
@@ -36,7 +36,7 @@ fn the_pixel_limit_is_an_error_not_an_allocation() {
 }
 
 #[test]
-fn every_prefix_of_a_file_is_an_error_or_an_image_never_a_panic() {
+fn feature_config_every_prefix_of_a_file_is_an_error_or_an_image_never_a_panic() {
     let bytes = encode(&rgba_8bit(), Format::Jxl, &EncodeOptions::default()).unwrap();
     for end in 0..bytes.len() {
         let _ = decode(&bytes[..end]);

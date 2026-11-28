@@ -32,6 +32,9 @@ const PLUS: [Chord; 3] = [Chord::plain(Key::Plus), Chord::plain(Key::Equals), Ch
 const MINUS: Chord = Chord::plain(Key::Minus);
 const INSERT: [Chord; 3] = [Chord::plain(Key::Insert), Chord::new(Mods::CMD, Key::Enter), Chord::new(Mods::CTRL, Key::Enter)];
 const DELETE: [Chord; 2] = [Chord::plain(Key::Delete), Chord::plain(Key::Backspace)];
+/// The next and the previous point with [`CurveGraph::tab_steps`].
+const NEXT_POINT: Chord = Chord::new(Mods::CTRL, Key::Tab);
+const PREVIOUS_POINT: Chord = Chord::new(Mods { ctrl: true, shift: true, ..Mods::NONE }, Key::Tab);
 
 /// Levels one arrow key moves a point, and with Shift.
 const NUDGE: f32 = 1.0;
@@ -367,6 +370,12 @@ pub struct CurveGraph<'a> {
     /// The selected point.
     #[prop]
     selection: Option<usize>,
+    /// Ctrl+Tab and Ctrl+Shift+Tab select the next and the previous point, wrapping round, while a point is selected.
+    #[prop(flag)]
+    tab_steps: bool,
+    /// Delete and Backspace on an end point, which stays, deselect it.
+    #[prop(flag)]
+    end_delete_deselects: bool,
     /// The selection after `update`, for the output.
     chosen: Option<usize>,
 }
@@ -389,6 +398,8 @@ impl<'a> CurveGraph<'a> {
             histogram: None,
             overlays: &[],
             selection: None,
+            tab_steps: false,
+            end_delete_deselects: false,
             chosen: None,
         }
         .label(label)
@@ -540,7 +551,7 @@ impl Component for CurveGraph<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let frame = self.frame(rect, cx.style);
         cx.part(PLOT, frame.plot)
-            .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
+            .sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
             .value_part()
             .pointer_only("the point keys and the arrow keys edit the points");
         let shown = cx.value().cloned();
@@ -548,7 +559,7 @@ impl Component for CurveGraph<'_> {
             for (i, p) in points.iter().enumerate() {
                 let reach = Rect::from_center_size(frame.map.screen(*p), Vec2::splat(2.0 * cx.style.hit));
                 cx.part(POINT.at(i as u64), reach)
-                    .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
+                    .sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
                     .priority(HitPriority::new(HitLevel::Body, 0))
                     .pointer_only("the plot's point keys select and move the points");
             }
@@ -669,6 +680,11 @@ impl Component for CurveGraph<'_> {
         for chord in PLUS.into_iter().chain([MINUS]).chain(INSERT).chain(DELETE) {
             cx.claim(chord);
         }
+        // Only with a point selected, after this pass's keys: otherwise Ctrl+Tab stays the app's.
+        if self.tab_steps && selected.is_some() {
+            cx.claim(NEXT_POINT);
+            cx.claim(PREVIOUS_POINT);
+        }
         self.chosen = selected;
     }
 
@@ -765,37 +781,38 @@ impl CurveGraph<'_> {
         if n == 0 {
             return selected;
         }
-        let mut plus = 0;
-        for chord in PLUS {
-            while cx.take_claimed(chord) {
-                plus += 1;
-            }
-        }
-        for _ in 0..plus {
-            selected = Some(selected.map_or(0, |i| (i + 1).min(n - 1)));
-        }
-        while cx.take_claimed(MINUS) {
-            selected = Some(selected.map_or(n - 1, |i| i.saturating_sub(1)));
-        }
-        let mut insert = false;
-        for chord in INSERT {
-            while cx.take_claimed(chord) {
-                insert = true;
-            }
-        }
-        if insert {
-            // A gap too narrow for a point adds nothing and keeps the selection.
-            let drawn = curve.points().map(|points| self.samples(points, &curve.corner_flags())).unwrap_or_default();
-            if let Some((next, i)) = rules.inserted(curve, selected, &drawn) {
-                cx.set(next.clone());
-                *curve = next;
-                selected = Some(i);
-            }
-        }
-        let mut delete = false;
-        for chord in DELETE {
-            while cx.take_claimed(chord) {
-                delete = true;
+        // The claimed keys in the order they were pressed, each as if it came alone: a Delete and then a Ctrl+Tab in
+        // one frame delete the point that was selected, not the next one.
+        let chords: Vec<Chord> = PLUS.into_iter().chain([MINUS, NEXT_POINT, PREVIOUS_POINT]).chain(INSERT).chain(DELETE).collect();
+        while let Some(chord) = cx.take_first_claimed(&chords) {
+            let n = curve.points().map_or(0, <[_]>::len);
+            if PLUS.contains(&chord) {
+                selected = Some(selected.map_or(0, |i| (i + 1).min(n - 1)));
+            } else if chord == MINUS {
+                selected = Some(selected.map_or(n - 1, |i| i.saturating_sub(1)));
+            } else if chord == NEXT_POINT {
+                selected = selected.map(|i| (i + 1) % n);
+            } else if chord == PREVIOUS_POINT {
+                selected = selected.map(|i| (i + n - 1) % n);
+            } else if INSERT.contains(&chord) {
+                // A gap too narrow for a point adds nothing and keeps the selection.
+                let drawn = curve.points().map(|points| self.samples(points, &curve.corner_flags())).unwrap_or_default();
+                if let Some((next, i)) = rules.inserted(curve, selected, &drawn) {
+                    cx.set(next.clone());
+                    *curve = next;
+                    selected = Some(i);
+                }
+            } else if let Some(at) = selected {
+                match CurveRules::deleted(curve, at) {
+                    Some(next) => {
+                        cx.set(next.clone());
+                        *curve = next;
+                        selected = None;
+                    }
+                    // An end point stays, and so does the selection on it unless `end_delete_deselects`.
+                    None if self.end_delete_deselects => selected = None,
+                    None => {}
+                }
             }
         }
         let rtl = cx.flow.is_rtl();
@@ -816,13 +833,6 @@ impl CurveGraph<'_> {
             by = [by[0] + dx * steps, by[1] + dy * steps];
         }
         let Some(at) = selected else { return selected };
-        if delete {
-            // An end point stays, and so does the selection on it.
-            let Some(next) = CurveRules::deleted(curve, at) else { return selected };
-            cx.set(next.clone());
-            *curve = next;
-            return None;
-        }
         if by != [0.0, 0.0]
             && let Some(next) = rules.nudged(curve, at, by)
         {

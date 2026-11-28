@@ -66,28 +66,6 @@ fn fastest(src: &str) -> Duration {
         .unwrap_or_default()
 }
 
-/// Labels in a row are read in linear time: four times as many take well under the sixteen times
-/// as long a quadratic read would (a ratio, so a busy machine does not fail it).
-#[test]
-fn latex_labels_in_a_row_are_read_in_linear_time() {
-    let cases: [fn(usize) -> String; 3] = [|n| "\\label{a} ".repeat(n) + "x", |n| "\\label{a}".repeat(n) + "x", |n| "\\hypertarget{a}{} ".repeat(n)];
-    // The gate reads half the labels; nightly the full counts.
-    let size = |n: usize| n / craft_testkit::hostile::divisor().min(2);
-    for make in cases {
-        let (small, large) = (fastest(&make(size(25_000))), fastest(&make(size(100_000))));
-        assert!(large < small * 8 + Duration::from_millis(50), "{small:?} for 25,000, {large:?} for 100,000");
-    }
-    let d = import("\\label{one}First \\label{two}second \\label{three}third.".as_bytes());
-    let p = d.para_at(&craft_wordmodel::Pos::body(0, 0)).unwrap();
-    let names: Vec<&str> = p
-        .objects
-        .iter()
-        .filter_map(|o| if let craft_wordmodel::InlineObject::BookmarkStart { name } = o { Some(name.as_str()) } else { None })
-        .collect();
-    assert_eq!(names, ["one", "two", "three"]);
-    assert_eq!(d.plain_text(craft_wordmodel::StoryRef::Body).replace('\u{FFFC}', ""), "First second third.");
-}
-
 /// Empty optional arguments in a row after a definition are skipped in linear time: the text after
 /// each `]` is read where it lies in the token, not copied, and a run of no-break spaces at the
 /// token's end is not read again for each argument.

@@ -2502,6 +2502,7 @@ dependencies = [
  "chrono",
  "craft-cfb",
  "craft-drawingml",
+ "craft-flow",
  "craft-math",
  "craft-offcrypto",
  "craft-opc",

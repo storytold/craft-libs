@@ -8,8 +8,10 @@ use egui::{EventFilter, Id, Rect, Ui};
 /// Tab nor egui's arrows reach the editor of a disabled component.
 pub(crate) fn show(ui: &mut Ui, id: Id, rect: Rect, filter: EventFilter, focusable: bool) -> bool {
     let sense = if focusable { egui::Sense::focusable_noninteractive() } else { egui::Sense::hover() };
-    let response = ui.interact(rect, id, sense);
-    let focused = response.has_focus();
+    ui.interact(rect, id, sense);
+    // The widget's key focus, whether or not the window has the system's: switching to another app is no focus move
+    // (egui's `Response::has_focus` is false while the window is in the background).
+    let focused = ui.memory(|memory| memory.has_focus(id));
     if focused {
         ui.memory_mut(|memory| memory.set_focus_lock_filter(id, filter));
     }

@@ -39,7 +39,7 @@ fn read_bounded_reads_one_byte_past_its_cap() {
 }
 
 #[test]
-fn max_pixels_enforced_for_every_format() {
+fn feature_config_max_pixels_enforced_for_every_format() {
     for f in rw_formats() {
         let b = encoded(f);
         let l = Limits { max_pixels: 1000, ..Limits::default() };
@@ -50,7 +50,7 @@ fn max_pixels_enforced_for_every_format() {
 }
 
 #[test]
-fn max_width_enforced_for_every_format() {
+fn feature_config_max_width_enforced_for_every_format() {
     for f in rw_formats() {
         let l = Limits { max_width: 63, ..Limits::default() };
         assert!(is_limit(decode_with(&encoded(f), &opts(l))), "{f:?}");
@@ -58,7 +58,7 @@ fn max_width_enforced_for_every_format() {
 }
 
 #[test]
-fn max_height_enforced_for_every_format() {
+fn feature_config_max_height_enforced_for_every_format() {
     for f in rw_formats() {
         let l = Limits { max_height: 47, ..Limits::default() };
         assert!(is_limit(decode_with(&encoded(f), &opts(l))), "{f:?}");
@@ -66,7 +66,7 @@ fn max_height_enforced_for_every_format() {
 }
 
 #[test]
-fn max_alloc_enforced_for_every_format() {
+fn feature_config_max_alloc_enforced_for_every_format() {
     for f in rw_formats() {
         let l = Limits { max_alloc: 64 * 48, ..Limits::default() };
         assert!(decode_with(&encoded(f), &opts(l)).is_err(), "{f:?}");
@@ -74,7 +74,7 @@ fn max_alloc_enforced_for_every_format() {
 }
 
 #[test]
-fn limits_none_accepts() {
+fn feature_config_limits_none_accepts() {
     for f in rw_formats() {
         assert!(decode_with(&encoded(f), &opts(Limits::none())).is_ok(), "{f:?}");
     }

@@ -237,6 +237,10 @@ pub struct LayersOutput<Id> {
     pub hovered: Option<Id>,
     /// Key focus is in the rows this pass.
     pub focused: bool,
+    /// The pass's real run applied its one-time requests ([`start_rename`](LayersPanel::start_rename),
+    /// [`reveal`](LayersPanel::reveal), [`focus_filter_name`](LayersPanel::focus_filter_name)). A measuring run or a
+    /// replay applies none, so the host keeps them and passes them again until this is set.
+    pub requests_taken: bool,
     /// The panel.
     pub response: Response,
 }
@@ -457,7 +461,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         let current = RefCell::new(LayerFilter::default());
         let unlock_label = words.unlock_layer.clone();
 
-        let shown = Stack::new()
+        let mut shown = Stack::new()
             .fill()
             .command_scope(LayersPanelKeys::SCOPE)
             .header(|ui, stack| {
@@ -536,11 +540,12 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                 }
                 (reported, body.drop_preview, body.hovered, focused)
             });
+        let requests_taken = shown.settle(|_, _| ()).is_some();
         // Only the real run's result comes back, so the reveal's opens and the list's events are reported once.
         let mut events = events.into_inner();
         let (body, drop_preview, hovered, focused) = shown.inner.unwrap_or_default();
         events.extend(body);
-        LayersOutput { events, drop_preview, hovered, focused, response: shown.output }
+        LayersOutput { events, drop_preview, hovered, focused, requests_taken, response: shown.output }
     }
 }
 

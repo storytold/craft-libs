@@ -85,6 +85,8 @@ craft_ui::words! {
         /// `{name}` is the working profile's name.
         working_profile: template "newDocument.workingProfile" = "Working: {name}";
         working: "newDocument.working" = "Working";
+        /// The Color Profile entry of [`NewDocumentDialog::unmanaged_profile`]: no profile is embedded.
+        dont_color_manage: "newDocument.dontColorManage" = "Don't Color Manage";
         background: "newDocument.background" = "Background Contents";
         white: "newDocument.white" = "White";
         black: "newDocument.black" = "Black";
@@ -122,6 +124,8 @@ craft_ui::words! {
         dvcpro_hd_1080: "newDocument.pixelAspectDvcproHd1080" = "DVCPRO HD 1080 (1.5)";
         /// `{n}` is how many cards the open tab lists.
         presets_heading: template "newDocument.presetsHeading" = "Blank Document Presets ({n})";
+        /// Recent's heading with [`NewDocumentDialog::recent_items`]: `{n}` is how many cards it lists.
+        recent_heading: template "newDocument.recentHeading" = "Your Recent Items ({n})";
         preset_details: "newDocument.presetDetails" = "Preset Details";
         default_size: "newDocument.defaultSizePlain" = "Default Size";
         /// `{app}` is the application's name.
@@ -142,6 +146,7 @@ struct Read<'a, S: DocumentSettings> {
     categories: &'a [PresetCategory<S::Preset>],
     recents: &'a [S],
     library: &'a PresetLibrary<S>,
+    recent_items: bool,
     words: &'a NewDocumentWords,
     preset_words: &'a NewDocumentPresetWords,
     library_words: &'a LibraryWords,
@@ -171,6 +176,7 @@ struct Shared<'a, S: DocumentSettings> {
     grey_create_on_empty_saved: bool,
     categories: &'a [PresetCategory<S::Preset>],
     recents: &'a [S],
+    recent_items: bool,
     words: &'a NewDocumentWords,
     preset_words: &'a NewDocumentPresetWords,
     library_words: &'a LibraryWords,
@@ -367,6 +373,7 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
         categories: shared.categories,
         recents: &recents,
         library: &library,
+        recent_items: shared.recent_items,
         words,
         preset_words: shared.preset_words,
         library_words: shared.library_words,
@@ -458,11 +465,13 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
 
 /// File > New: category tabs over a grid of preset cards, a details column and Create and Close.
 ///
-/// - Tabs: Recent, the categories and Saved. [`saved_after_recent`](NewDocumentDialog::saved_after_recent) lists
-///   Saved second. Recent lists the clipboard's image size first when the app gives one, then the recent documents
-///   kept under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not
-///   yet among them. Delete removes the picked saved presets. When none are shown, Saved says "No saved presets yet."
-///   and [`grey_create_on_empty_saved`](NewDocumentDialog::grey_create_on_empty_saved) disables Create.
+/// - Tabs: Recent, the categories and Saved. [`saved_after_recent`](NewDocumentDialog::saved_after_recent) lists Saved
+///   second. Recent lists the clipboard's image size first when the app gives one, then the recent documents kept
+///   under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not yet
+///   among them. With [`recent_items`](NewDocumentDialog::recent_items), defaults only appear when there are no
+///   recent documents, and "Your Recent Items (n)" shows four cards to a row. Delete removes the picked saved presets.
+///   When none are shown, Saved says "No saved presets yet." and
+///   [`grey_create_on_empty_saved`](NewDocumentDialog::grey_create_on_empty_saved) disables Create.
 /// - Cards: a click or an arrow fills the details; Enter on a card or a double click creates. A built-in card turns with
 ///   the orientation control. Saved and recent cards restore every setting but the name. A Web or Mobile card turns
 ///   Artboards on; a card of another category turns it off again only when such a card turned it on.
@@ -512,6 +521,10 @@ pub struct NewDocumentDialog<'a, S: DocumentSettings = DocumentOptions> {
     /// Binds the shown tab's id (`recent`, `saved` or a category's id) to `tab`.
     #[prop]
     tab: Option<Bind<'a, String>>,
+    /// Recent is headed "Your Recent Items (n)" over four cards to a row, and lists the app's default sizes only while
+    /// there are no recent documents.
+    #[prop]
+    recent_items: bool,
     /// Keeps what the details rows keep (`DocumentSettings::Memory`) in `memory`, in place of the dialog's session, so
     /// a host that sets the settings from outside the dialog (`DocumentSettings::note_set`) keeps it with them.
     #[prop]
@@ -555,6 +568,7 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             saved: None,
             recent: None,
             tab: None,
+            recent_items: false,
             memory: None,
             saved_after_recent: false,
             grey_create_on_empty_saved: false,
@@ -602,6 +616,13 @@ impl<'a> NewDocumentDialog<'a, DocumentOptions> {
         self
     }
 
+    /// Lists "Don't Color Manage" second under Color Profile, right after the working space, in every mode: picking it
+    /// sets the profile to this id (the app's name for an untagged document). A mode change keeps it.
+    pub fn unmanaged_profile(mut self, id: impl Into<String>) -> Self {
+        self.setup.unmanaged_profile = Some(id.into());
+        self
+    }
+
     /// The app's own pixel aspect ratios as `(id, name)`, listed after the built-in ones ([`PIXEL_ASPECTS`]); the
     /// names are the user's and are not translated.
     pub fn custom_pixel_aspects(mut self, aspects: Vec<(String, String)>) -> Self {
@@ -627,6 +648,7 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             mut saved,
             recent: mut recent_bound,
             mut tab,
+            recent_items,
             memory,
             saved_after_recent,
             grey_create_on_empty_saved,
@@ -661,6 +683,7 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             grey_create_on_empty_saved,
             categories: &categories,
             recents: &recent,
+            recent_items,
             words: &words,
             preset_words: &preset_words,
             library_words: &library_words,

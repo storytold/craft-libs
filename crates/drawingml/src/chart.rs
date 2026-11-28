@@ -1773,6 +1773,8 @@ mod chartex_tests {
         assert!(stats[0].iter().all(Option::is_some));
         // Enough series to cap the groups so the result stays within MAX_BOX_CELLS.
         let series = MAX_BOX_CELLS / n * 2;
+        // Keep 100 values beyond the group cap without cloning the unused tail.
+        c.series[0].values.truncate(MAX_BOX_CELLS / series + 100);
         c.series = vec![c.series[0].clone(); series];
         let (groups, stats) = c.box_groups();
         assert_eq!(groups.len(), MAX_BOX_CELLS / series);

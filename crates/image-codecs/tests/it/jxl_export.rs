@@ -5,7 +5,7 @@ use craft_image_codecs::{
 };
 
 #[test]
-fn jpeg_xl_is_export_only_without_the_jxl_feature_and_detects_both_signatures() {
+fn feature_config_jpeg_xl_is_export_only_without_the_jxl_feature_and_detects_both_signatures() {
     let c = caps(Format::Jxl);
     assert!(c.write);
     assert_eq!(c.read, cfg!(feature = "jxl"));

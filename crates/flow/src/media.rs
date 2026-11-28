@@ -46,6 +46,7 @@ pub fn sized_img(data: Arc<Vec<u8>>, ext: &str, natural: Option<(f32, f32)>, w: 
         w = 468.0;
     }
     Img {
+        link: None,
         data,
         ext: ext.to_string(),
         w: w.clamp(1.0, 1584.0),

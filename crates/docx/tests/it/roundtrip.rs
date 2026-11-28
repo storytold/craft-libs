@@ -1412,9 +1412,9 @@ fn groups_round_trip() {
         ch_w: 200.0,
         ch_h: 100.0,
         children: vec![
-            GroupChild { x: 0.0, y: 0.0, obj: pic },
-            GroupChild { x: 150.0, y: 10.0, obj: oval.clone() },
-            GroupChild { x: 50.0, y: 60.0, obj: tb },
+            GroupChild { link: None, x: 0.0, y: 0.0, obj: pic },
+            GroupChild { link: None, x: 150.0, y: 10.0, obj: oval.clone() },
+            GroupChild { link: None, x: 50.0, y: 60.0, obj: tb },
         ],
         canvas: None,
     };
@@ -1486,7 +1486,7 @@ fn drawing_canvas_round_trips() {
         float: Float::default(),
         ch_w: 432.0,
         ch_h: 216.0,
-        children: vec![GroupChild { x: 12.0, y: 18.0, obj: pic }, GroupChild { x: 300.0, y: 100.0, obj: star.clone() }],
+        children: vec![GroupChild { link: None, x: 12.0, y: 18.0, obj: pic }, GroupChild { link: None, x: 300.0, y: 100.0, obj: star.clone() }],
         canvas: Some(style.clone()),
     };
     let mut p = Paragraph::with_text("drawn ", CharProps::default());
@@ -1533,7 +1533,7 @@ fn rotated_drawing_canvas_round_trips() {
         float,
         ch_w: 200.0,
         ch_h: 100.0,
-        children: vec![GroupChild { x: 10.0, y: 20.0, obj: member.clone() }],
+        children: vec![GroupChild { link: None, x: 10.0, y: 20.0, obj: member.clone() }],
         canvas: Some(CanvasStyle { fill: Some(Fill::solid(Rgb(0xF0, 0xF4, 0xFF))), stroke: None, stroke_width: 0.0 }),
     };
     let square = Float { wrap: Wrap::Square, ..Default::default() };
@@ -2484,6 +2484,7 @@ fn rotation_and_flips_round_trip() {
         ch_w: 120.0,
         ch_h: 60.0,
         children: vec![craft_wordmodel::para::GroupChild {
+            link: None,
             x: 0.0,
             y: 0.0,
             obj: shape(ShapeKind::Ellipse, Float { rot: 10.0, ..Default::default() }),
@@ -2542,8 +2543,8 @@ fn rotated_group_and_shadow_rotation_round_trip() {
         ch_w: 120.0,
         ch_h: 40.0,
         children: vec![
-            craft_wordmodel::para::GroupChild { x: 0.0, y: 0.0, obj: member(true) },
-            craft_wordmodel::para::GroupChild { x: 60.0, y: 0.0, obj: member(false) },
+            craft_wordmodel::para::GroupChild { link: None, x: 0.0, y: 0.0, obj: member(true) },
+            craft_wordmodel::para::GroupChild { link: None, x: 60.0, y: 0.0, obj: member(false) },
         ],
         canvas: None,
     };
@@ -2996,6 +2997,7 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         ch_w: 120.0,
         ch_h: 60.0,
         children: vec![craft_wordmodel::para::GroupChild {
+            link: None,
             x: 0.0,
             y: 0.0,
             obj: shape(AltText { text: "Left circle".into(), ..Default::default() }),
