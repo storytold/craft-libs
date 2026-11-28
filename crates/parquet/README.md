@@ -47,6 +47,7 @@ and page headers:
 | one page | 64 MiB |
 | decoded page data | 512 MiB |
 | decimal bytes read, counted per row | 512 MiB |
+| text bytes read, counted per row | 512 MiB |
 | one text value or field name | 1 MiB |
 | text a `Table` keeps | 512 MiB |
 | text written | 512 MiB |

@@ -559,3 +559,38 @@ fn invalid_utf8_text_fails_with_a_short_error() {
     let bytes = text_value_file("é".repeat(MAX_TEXT_BYTES / 2).into_bytes());
     assert_eq!(read(&bytes).unwrap().rows[0][0], Value::Text("é".repeat(MAX_TEXT_BYTES / 2)));
 }
+
+#[test]
+fn a_repeated_dictionary_entry_cannot_pass_the_row_text_budget() {
+    // One 1 MiB dictionary entry read 100,000 times was copied and checked for 16.91 s through `read_rows`.
+    let schema = Arc::new(parse_message_type("message test { REQUIRED BYTE_ARRAY s (UTF8); }").unwrap());
+    let properties = Arc::new(
+        WriterProperties::builder().set_dictionary_enabled(true).set_statistics_enabled(parquet::file::properties::EnabledStatistics::None).build(),
+    );
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, properties).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    let entry = "x".repeat(64 << 10);
+    let values = vec![ByteArray::from(entry.as_str()); 64];
+    col.typed::<ByteArrayType>().write_batch(&values, None, None).unwrap();
+    col.close().unwrap();
+    group.close().unwrap();
+    let bytes = writer.into_inner().unwrap();
+    assert!(bytes.len() < 256 << 10, "{} bytes", bytes.len());
+    let footer_start = limits::footer(&bytes, &LIMITS).unwrap();
+    let rows = |budget| {
+        let mut calls = 0;
+        let result = read_buffer(Bytes::from(bytes.clone()), footer_start, &LIMITS, budget, |row| {
+            assert_eq!(row[0], Value::Text(entry.clone()));
+            calls += 1;
+            Ok(())
+        });
+        (result, calls)
+    };
+    let (result, calls) = rows(1 << 20);
+    assert!(result.unwrap_err().to_string().contains("text exceeds"));
+    assert_eq!(calls, 16);
+    let (result, calls) = rows(4 << 20);
+    assert_eq!((result.unwrap().rows, calls), (64, 64));
+    assert_eq!(read_rows(&bytes, &LIMITS, |_| Ok(())).unwrap().rows, 64);
+}

@@ -112,8 +112,8 @@ pub struct Table {
 /// metadata has passed. An error from `on_row` stops the read at once and comes back unchanged,
 /// so a caller can cancel or refuse a row. Call [`read_owned_rows`] when the input is already
 /// owned to avoid a copy. The stored bytes of byte-backed decimal values, sign padding included,
-/// share the 512 MiB decoded-data budget, so a dictionary entry repeated across many rows cannot
-/// make the read check and format more than that.
+/// and the bytes of text values each have a 512 MiB decoded-data budget, so a dictionary entry
+/// repeated across many rows cannot make the read check, copy and format more than that.
 pub fn read_rows(bytes: &[u8], limits: &TableLimits, on_row: impl FnMut(&[Value]) -> Result<()>) -> Result<ReadSummary> {
     let footer_start = limits::footer(bytes, limits)?;
     read_buffer(Bytes::copy_from_slice(bytes), footer_start, limits, limits::MAX_DECODED, on_row)
@@ -162,13 +162,13 @@ fn collect(bytes: Bytes, footer_start: usize, limits: &TableLimits, text_budget:
     Ok(Table { columns: summary.columns, rows })
 }
 
-/// Reads every row, stopping with an error once the stored bytes of byte-backed decimal values pass
-/// `decimal_budget`.
+/// Reads every row, stopping with an error once the stored bytes of byte-backed decimal values, or
+/// the bytes of text values, pass `byte_budget`. Each kind has its own count.
 fn read_buffer(
     bytes: Bytes,
     footer_start: usize,
     limits: &TableLimits,
-    decimal_budget: usize,
+    byte_budget: usize,
     mut on_row: impl FnMut(&[Value]) -> Result<()>,
 ) -> Result<ReadSummary> {
     let reader = SerializedFileReader::new(bytes.clone())?;
@@ -258,6 +258,7 @@ fn read_buffer(
     // The page budget counts a dictionary entry once, but every row that refers to it hands the
     // length check and the formatter the whole entry again.
     let mut decimal_bytes_read = 0usize;
+    let mut text_bytes_read = 0usize;
     // The record reader's UTF-8 error lists every byte of an invalid value, about ten bytes of
     // message per byte of input, so text columns are read as unannotated bytes and checked here.
     let mut text = Vec::with_capacity(cols);
@@ -287,12 +288,12 @@ fn read_buffer(
             values.clear();
             for ((name, field), is_text) in row.into_columns().into_iter().zip(&text) {
                 if *is_text {
-                    values.push(text_value(&name, field)?);
+                    values.push(text_value(&name, field, &mut text_bytes_read, byte_budget)?);
                     continue;
                 }
                 if let Field::Decimal(decimal @ Decimal::Bytes { .. }) = &field {
                     decimal_bytes_read = decimal_bytes_read.saturating_add(decimal.data().len());
-                    if decimal_bytes_read > decimal_budget {
+                    if decimal_bytes_read > byte_budget {
                         return Err(invalid("Parquet decimal data exceeds the 512 MiB decoded-data budget; select a smaller table first"));
                     }
                     decimal_length(&name, decimal)?;
@@ -422,8 +423,9 @@ fn finite(number: f64) -> Result<Value> {
     }
     Ok(Value::Float(number))
 }
-/// Converts one value of a text column read as raw bytes, checking its length before copying it.
-fn text_value(name: &str, field: Field) -> Result<Value> {
+/// Converts one value of a text column read as raw bytes, checking its length and adding it to
+/// `read` against `budget` before copying it.
+fn text_value(name: &str, field: Field, read: &mut usize, budget: usize) -> Result<Value> {
     let bytes = match field {
         Field::Null => return Ok(Value::Null),
         Field::Bytes(bytes) => bytes,
@@ -431,6 +433,10 @@ fn text_value(name: &str, field: Field) -> Result<Value> {
     };
     if bytes.len() > MAX_TEXT_BYTES {
         return Err(invalid("A Parquet text cell exceeds the 1 MiB text-cell budget"));
+    }
+    *read = read.saturating_add(bytes.len());
+    if *read > budget {
+        return Err(invalid("Parquet text exceeds the 512 MiB decoded-data budget; select a smaller table first"));
     }
     String::from_utf8(bytes.data().to_vec())
         .map(Value::Text)
