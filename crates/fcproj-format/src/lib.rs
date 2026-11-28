@@ -15,7 +15,7 @@ pub type Migration = fn(Value) -> Result<Value, String>;
 /// edit a shipped one.
 pub const MIGRATIONS: &[Migration] = &[
     v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8, v8_to_v9, v9_to_v10, v10_to_v11, v11_to_v12, v12_to_v13, v13_to_v14,
-    v14_to_v15, v15_to_v16, v16_to_v17, v17_to_v18,
+    v14_to_v15, v15_to_v16, v16_to_v17, v17_to_v18, v18_to_v19,
 ];
 
 /// The schema version this build writes (and the newest it reads).
@@ -262,6 +262,13 @@ fn v17_to_v18(doc: Value) -> Result<Value, String> {
     Ok(doc)
 }
 
+/// v18 → v19: Script Project items (`ItemKind::Script`: script lines, slates with linked takes,
+/// marks and independently positioned thumbnails). Existing data needs no change; older builds
+/// must refuse such projects instead of failing on or dropping the Script items when saving.
+fn v18_to_v19(doc: Value) -> Result<Value, String> {
+    Ok(doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,10 +279,10 @@ mod tests {
         let bare = json!({"version": 2, "items": {}, "root": {}, "extra": [1, 2]});
         assert_eq!(detect_version(&bare).unwrap(), 1);
         let migrated = migrate_with(MIGRATIONS, bare, 1).unwrap();
-        assert_eq!(migrated["schema_version"], 18);
+        assert_eq!(migrated["schema_version"], SCHEMA_VERSION);
         assert_eq!(migrated["project"]["extra"], json!([1, 2]));
         assert_eq!(migrated["generator"], "FilmCraft (schema v1)");
-        assert_eq!(detect_bytes(serde_json::to_string(&migrated).unwrap().as_bytes()).unwrap(), 18);
+        assert_eq!(detect_bytes(serde_json::to_string(&migrated).unwrap().as_bytes()).unwrap(), SCHEMA_VERSION);
         let parsed: EnvelopeIn<Value> = serde_json::from_value(migrated).unwrap();
         assert!(parsed.view.is_none());
         assert_eq!(parsed.project["extra"], json!([1, 2]));
@@ -303,20 +310,40 @@ mod tests {
         let item = json!({"Media": {"interpret": {"par": [1, 1]}}});
         let v17 = json!({"format": FORMAT_ID, "schema_version": 17, "project": {"items": {"1": {"kind": item}}, "root": {}}});
         let up = migrate_with(MIGRATIONS, v17.clone(), 17).unwrap();
-        assert_eq!(up["schema_version"], 18);
+        assert_eq!(up["schema_version"], SCHEMA_VERSION);
         assert_eq!(up["project"], v17["project"]);
         let raw = json!({"white_balance": {"Custom": {"temperature": 3200.0, "tint": 12.5}}, "exposure": -0.75});
         let mut v18 = up;
+        v18["schema_version"] = json!(18);
         v18["project"]["items"]["1"]["kind"]["Media"]["interpret"]["raw"] = raw.clone();
         let bytes = serde_json::to_vec(&v18).unwrap();
         let (file, version): (EnvelopeIn<Value>, _) = decode(&bytes).unwrap();
         assert_eq!(version, 18);
         assert_eq!(file.project["items"]["1"]["kind"]["Media"]["interpret"]["raw"], raw);
     }
+    /// Schema 19 (Script items): a v18 project upgrades with its data untouched, and a v19 project
+    /// with a Script item is read rather than refused as too new.
+    #[test]
+    fn v18_upgrades_and_v19_script_items_are_read() {
+        let media = json!({"Media": {"interpret": {"par": [1, 1]}}});
+        let v18 = json!({"format": FORMAT_ID, "schema_version": 18, "project": {"items": {"1": {"kind": media}}, "root": {}}});
+        let up = migrate_with(MIGRATIONS, v18.clone(), 18).unwrap();
+        assert!(up["schema_version"].as_u64().unwrap() > 18);
+        assert_eq!(up["project"], v18["project"]);
+        let script = json!({"Script": {"lines": [{"id": 1, "text": "one"}], "slates": [{"id": 2, "takes": [{"id": 3, "source": 1}]}], "next_id": 4}});
+        let mut v19 = up;
+        v19["schema_version"] = json!(19);
+        v19["project"]["items"]["2"] = json!({"kind": script.clone()});
+        let bytes = serde_json::to_vec(&v19).unwrap();
+        let (file, version): (EnvelopeIn<Value>, _) = decode(&bytes).unwrap();
+        assert_eq!(version, 19);
+        assert_eq!(file.project["items"]["2"]["kind"], script);
+        assert_eq!(file.project["items"]["1"]["kind"], media);
+    }
     #[test]
     fn rejects_wrong_future_and_damaged_envelopes() {
         assert!(matches!(detect_bytes(br#"{"format":"other","schema_version":1}"#), Err(FormatError::NotAProject(_))));
-        assert!(matches!(detect_bytes(br#"{"schema_version":19}"#), Err(FormatError::TooNew { found: 19, supported: 18 })));
+        assert!(matches!(detect_bytes(br#"{"schema_version":20}"#), Err(FormatError::TooNew { found: 20, supported: 19 })));
         assert!(matches!(detect_bytes(br#"{"schema_version":0}"#), Err(FormatError::TooOld { found: 0, oldest: 1 })));
         assert!(matches!(detect_bytes(b"{"), Err(FormatError::Corrupt(_))));
         assert!(matches!(migrate_with(MIGRATIONS, json!([]), 1), Err(FormatError::Migration { from: 1, .. })));

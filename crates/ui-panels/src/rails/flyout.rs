@@ -14,7 +14,7 @@ use crate::menu::{self, Menu, MenuItem};
 use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
 use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, GlyphRole, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, GlyphRole, StyleColor, StyleCx};
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -30,12 +30,16 @@ const MARK: PartKey = PartKey::new("mark");
 const BAR: PartKey = PartKey::new("bar");
 
 /// The style of a flyout button: it paints through its face, so it holds no look of its own besides its side, the rail
-/// button's, and the size of the corner mark's press area, which is the size and the inset of the mark the face paints.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+/// button's, its focus ring, and the size of the corner mark's press area, which is the size and the inset of the mark
+/// the face paints.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct FlyoutButtonStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring the button shows while it has keyboard focus: a face paints none.
+    #[style(focus)]
+    focus: FocusLook,
     /// The side of the corner mark, which is also its inset from the face's corner.
     mark: f32,
     /// The button's glyph role, which its face shows the icon in.
@@ -107,9 +111,9 @@ struct Laid {
 /// One rail button that may stand for a group of tools. The face shows the tool `shown` with a mark at the corner
 /// when there is a flyout. A click, Enter or Space selects the shown tool and runs its command; holding the press,
 /// dragging it away from the button, a right click or the Menu key opens the flyout; a press on the corner mark opens it
-/// at once; after a press that opened it, releasing over a row picks it. Rows are the tools' commands, the shown tool with the radio mark. A hold selects the shown tool
-/// unless `hold_selects` is off, as for a command button. An Alt-click selects the next enabled tool of the slot,
-/// wrapping, and opens no flyout. With a `click` command, a click fires that command and selects nothing, and the
+/// at once; after a press that opened it, releasing over a row picks it. Rows are the tools' commands, the shown tool
+/// with a check mark and the others with none. A hold selects the shown tool unless `hold_selects` is off, as for a
+/// command button. An Alt-click selects the next enabled tool of the slot, wrapping, and opens no flyout. With a `click` command, a click fires that command and selects nothing, and the
 /// release that ends a hold fires nothing. A modified press is never a double click.
 ///
 /// With `tear_off` a bar runs down the flyout's end edge, named by `RailWords::tear_off`: a press on it dragged past
@@ -239,7 +243,12 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
 
     fn style(cx: &StyleCx<'_>, _: FlyoutButtonStyleKey<T>) -> FlyoutButtonStyle {
         let side = cx.env::<RailDensity>().button(cx.tokens);
-        FlyoutButtonStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), mark: cx.tokens.space.gap.tight, glyphs: cx.glyph_role() }
+        FlyoutButtonStyle {
+            metrics: Metrics::new().min_size(Vec2::splat(side)),
+            focus: cx.focus_look(),
+            mark: cx.tokens.space.gap.tight,
+            glyphs: cx.glyph_role(),
+        }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -363,9 +372,9 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         }
     }
 
-    /// The flyout: one row per tool, each the tool's command, the shown tool with the radio mark, and with `tear_off`
-    /// the bar beside the rows. Running a row reports its tool and closes the flyout; tearing it off by the bar
-    /// reports the pointer and closes it.
+    /// The flyout: one row per tool, each the tool's command, the shown tool with a check mark and the others with
+    /// none, and with `tear_off` the bar beside the rows. Running a row reports its tool and closes the flyout; tearing
+    /// it off by the bar reports the pointer and closes it.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         if !self.has_flyout() {
             return;
@@ -385,7 +394,9 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
                     let rows = Menu::inline(name.clone()).show(ui, |ui, _| {
                         let mut ran = None;
                         for (at, tool) in tools.iter().enumerate() {
-                            let mut item = MenuItem::command(tool.command.clone()).radio_mark(tool.id == *shown);
+                            // A check before the shown tool and nothing before the others, as the reference application's
+                            // flyouts do: an unchosen radio row would draw an empty ring before every other tool.
+                            let mut item = MenuItem::command(tool.command.clone()).check(tool.id == *shown);
                             if let Some(icon) = &tool.icon {
                                 item = item.icon(icon.clone());
                             }
@@ -435,11 +446,11 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         if let Some(hint) = resolved.and_then(|resolved| resolved.hint.as_ref()) {
             access.description(hint.as_ref().to_owned());
         }
-        // The face covers the whole button, so the button's own node is the face's node.
+        // The face covers the whole button, so the button's own node is the face's node. The corner mark is the
+        // pointer's and has no node: the button's node reports the flyout open or closed and serves Expand and Collapse.
         access.node(FACE, Role::None);
         if self.has_flyout() {
             access.has_popup(PopupKind::Menu);
-            access.node(MARK, Role::BUTTON).name = Name::Text(name.unwrap_or_default());
         }
     }
 

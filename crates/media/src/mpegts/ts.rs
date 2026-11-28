@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use super::es::Splitter;
 use super::pes::{self, PesHeader};
-use super::{ByteSource, ClockRange, Codec, Error, File, Format, Result, Stream, StreamId, Unit, Unwrap, read_some};
+use super::{ByteSource, ClockRange, Codec, Error, File, Format, OpusConfig, Result, Stream, StreamId, Unit, Unwrap, read_some};
 
 /// Byte-wise table for the MSB-first CRC-32 (polynomial 0x04C11DB7): entry `i` is the CRC register
 /// after shifting the byte `i` through eight bit steps.
@@ -40,6 +40,8 @@ struct Packet<'a> {
     cc: u8,
     has_payload: bool,
     discontinuity: bool,
+    /// random_access_indicator of the adaptation field.
+    random_access: bool,
     pcr: Option<i64>,
     payload: &'a [u8],
 }
@@ -65,6 +67,7 @@ fn packet(p: &[u8]) -> std::result::Result<Packet<'_>, Bad> {
     let mut start = 4;
     let mut pcr = None;
     let mut discontinuity = false;
+    let mut random_access = false;
     if afc & 2 != 0 {
         let al = p[4] as usize;
         start = 5 + al;
@@ -74,6 +77,7 @@ fn packet(p: &[u8]) -> std::result::Result<Packet<'_>, Bad> {
         if al > 0 {
             let flags = p[5];
             discontinuity = flags & 0x80 != 0;
+            random_access = flags & 0x40 != 0;
             if flags & 0x10 != 0 && al >= 7 {
                 let base = ((p[6] as i64) << 25) | ((p[7] as i64) << 17) | ((p[8] as i64) << 9) | ((p[9] as i64) << 1) | (p[10] as i64 >> 7);
                 let ext = (((p[10] & 1) as i64) << 8) | p[11] as i64;
@@ -82,7 +86,7 @@ fn packet(p: &[u8]) -> std::result::Result<Packet<'_>, Bad> {
         }
     }
     let has_payload = afc & 1 != 0;
-    Ok(Packet { pusi, pid, cc, has_payload, discontinuity, pcr, payload: if has_payload { &p[start..188] } else { &[] } })
+    Ok(Packet { pusi, pid, cc, has_payload, discontinuity, random_access, pcr, payload: if has_payload { &p[start..188] } else { &[] } })
 }
 
 /// `(transport_error_indicator, scrambled)` of a packet whose first byte is the sync byte (H.222.0
@@ -230,6 +234,31 @@ struct EsState {
     asm: PesAsm,
     cc: Option<u8>,
     dup: DupGuard,
+    /// The packet that started the PES packet being assembled set random_access_indicator.
+    random_access: bool,
+}
+
+impl EsState {
+    /// Reassemble PES packets from packet `pk` (at file offset `pos`) and pass their payload to
+    /// the splitter.
+    fn feed(&mut self, pk: &Packet<'_>, pos: u64, unwrap: &mut Unwrap) {
+        // `PesAsm` passes over an adaptation-field-only unit start, so its indicator does not
+        // belong to the PES packet being assembled
+        if pk.pusi && !pk.payload.is_empty() {
+            self.random_access = pk.random_access;
+        }
+        let (hdr, bytes) = self.asm.packet(pk.pusi, pk.payload);
+        if let Some(h) = hdr {
+            self.stream.pes_packets += 1;
+            let pts = h.pts.map(|t| unwrap.unwrap(t));
+            let dts = h.dts.map(|t| unwrap.unwrap(t));
+            self.split.pes_start(pts, dts);
+            if std::mem::take(&mut self.random_access) {
+                self.split.random_access();
+            }
+        }
+        self.split.feed(pos, bytes);
+    }
 }
 
 /// Map a PMT stream_type (and the ES descriptors) to a codec. `hdmv`: a Blu-ray / AVCHD stream
@@ -253,6 +282,7 @@ pub(crate) fn codec_of(stream_type: u8, desc: &[u8], hdmv: bool) -> Codec {
         0x03 | 0x04 => Codec::MpegAudio,
         0x0F => Codec::AacAdts,
         0x11 => Codec::AacLatm,
+        0x10 => Codec::Mpeg4Part2,
         0x1B => Codec::H264,
         0x24 => Codec::Hevc,
         0x80 if hdmv => Codec::LpcmBluray,
@@ -264,6 +294,10 @@ pub(crate) fn codec_of(stream_type: u8, desc: &[u8], hdmv: bool) -> Codec {
         0x87 => Codec::Eac3,
         0x90 if hdmv => Codec::Subtitle("PGS subtitles"),
         0x92 if hdmv => Codec::Subtitle("Text subtitles"),
+        // the registration descriptors of the Opus transport draft (§4.3) and of Carriage of
+        // AV1 in MPEG-2 TS (§2.1)
+        0x06 if reg == Some(*b"Opus") => Codec::Opus,
+        0x06 if reg == Some(*b"AV01") => Codec::Av1,
         0x06 => {
             if tags.contains(&0x6A) || reg == Some(*b"AC-3") {
                 Codec::Ac3
@@ -280,6 +314,131 @@ pub(crate) fn codec_of(stream_type: u8, desc: &[u8], hdmv: bool) -> Codec {
             }
         }
         t => Codec::Unknown(t),
+    }
+}
+
+/// The body of the first descriptor with this tag (and, for tag 0x7F, this extension tag, which
+/// the returned body leaves out).
+fn descriptor(desc: &[u8], tag: u8, extension: Option<u8>) -> Option<&[u8]> {
+    let mut i = 0;
+    while i + 2 <= desc.len() {
+        let (t, len) = (desc[i], desc[i + 1] as usize);
+        let body = desc.get(i + 2..i + 2 + len)?;
+        match extension {
+            None if t == tag => return Some(body),
+            Some(e) if t == tag && body.first() == Some(&e) => return Some(&body[1..]),
+            _ => {}
+        }
+        i += 2 + len;
+    }
+    None
+}
+
+/// Bits needed for the values 0 to `n - 1`: ceil(log2(n)).
+fn bits_for(n: u32) -> u32 {
+    if n <= 1 { 0 } else { 32 - (n - 1).leading_zeros() }
+}
+
+/// The channel configuration of the Opus audio descriptor (Opus transport draft §5.3: tag 0x7F,
+/// extension tag 0x80, the value the writer uses): a fixed configuration of table 4-3, or one
+/// coded in full (channel_config_code 0x81). `None` for a reserved code or fields out of range.
+pub(crate) fn opus_config(desc: &[u8]) -> Option<OpusConfig> {
+    let body = descriptor(desc, 0x7F, Some(super::mux::OPUS_DESCRIPTOR_EXTENSION))?;
+    let code = *body.first()?;
+    let fixed = |channels: u8, family: u8, streams: u8, coupled: u8, mapping: &[u8]| OpusConfig {
+        channels,
+        family,
+        streams,
+        coupled,
+        mapping: mapping.to_vec(),
+        trims: Vec::new(),
+    };
+    let c = match code {
+        // two channels as one coupled stream, or as two mono streams, in no speaker order
+        0x00 => fixed(2, 255, 1, 1, &[0, 1]),
+        0x80 => fixed(2, 255, 2, 0, &[0, 1]),
+        0x01 => fixed(1, 0, 1, 0, &[0]),
+        0x02 => fixed(2, 0, 1, 1, &[0, 1]),
+        // the RFC 7845 §5.1.1.2 surround orders, with as many coupled streams as fit
+        0x03 => fixed(3, 1, 2, 1, &[0, 2, 1]),
+        0x04 => fixed(4, 1, 2, 2, &[0, 1, 2, 3]),
+        0x05 => fixed(5, 1, 3, 2, &[0, 4, 1, 2, 3]),
+        0x06 => fixed(6, 1, 4, 2, &[0, 4, 1, 2, 3, 5]),
+        0x07 => fixed(7, 1, 4, 3, &[0, 4, 1, 2, 3, 5, 6]),
+        0x08 => fixed(8, 1, 5, 3, &[0, 6, 1, 2, 3, 4, 5, 7]),
+        // the same orders with every channel in a mono stream
+        0x82..=0x88 => {
+            let ch = code - 0x80;
+            fixed(ch, 1, ch, 0, &(0..ch).collect::<Vec<u8>>())
+        }
+        0x81 => opus_explicit(body.get(1..)?)?,
+        _ => return None,
+    };
+    Some(c)
+}
+
+/// An explicit Opus channel configuration: channel_count, mapping_family and, for a family above
+/// 0, stream_count_minus_one, coupled_stream_count and the channel mapping in as few bits as the
+/// draft gives each.
+fn opus_explicit(b: &[u8]) -> Option<OpusConfig> {
+    let (&channels, &family) = (b.first()?, b.get(1)?);
+    if channels == 0 {
+        return None;
+    }
+    if family == 0 {
+        // one mono or stereo stream in coded order
+        return (channels <= 2).then(|| OpusConfig {
+            channels,
+            family,
+            streams: 1,
+            coupled: channels - 1,
+            mapping: (0..channels).collect(),
+            trims: Vec::new(),
+        });
+    }
+    // family 1 is defined for 1 to 8 channels (RFC 7845 §5.1.1.2)
+    if !(family == 255 || family == 1 && channels <= 8) {
+        return None;
+    }
+    let bits = &b[2..];
+    let mut at = 0u32;
+    let mut take = |n: u32| -> Option<u32> {
+        let mut v = 0u32;
+        for _ in 0..n {
+            let byte = *bits.get((at / 8) as usize)?;
+            v = v << 1 | u32::from(byte >> (7 - at % 8) & 1);
+            at += 1;
+        }
+        Some(v)
+    };
+    let ch = u32::from(channels);
+    let streams = take(bits_for(ch))? + 1;
+    let coupled = take(bits_for(streams + 1))?;
+    // a mapping entry is one byte, 255 meaning silence (RFC 7845 §5.1.1)
+    if streams > ch || coupled > streams || streams + coupled > 255 {
+        return None;
+    }
+    let width = bits_for(streams + coupled + 1);
+    let silence = (1u32 << width) - 1;
+    let mut mapping = Vec::with_capacity(usize::from(channels));
+    for _ in 0..channels {
+        let m = take(width)?;
+        match m {
+            m if m == silence => mapping.push(255),
+            m if m < streams + coupled => mapping.push(m as u8),
+            _ => return None,
+        }
+    }
+    Some(OpusConfig { channels, family, streams: streams as u8, coupled: coupled as u8, mapping, trims: Vec::new() })
+}
+
+/// The AV1 video descriptor (Carriage of AV1 in MPEG-2 TS §2.2: tag 0x80, marker and version 1)
+/// as the first four bytes of an `av1C` record: the descriptor's fourth byte holds hdr_wcg_idc
+/// and a reserved bit where `av1C` has reserved zeros.
+pub(crate) fn av1c(desc: &[u8]) -> Option<[u8; 4]> {
+    match descriptor(desc, 0x80, None)? {
+        &[0x81, b1, b2, b3, ..] => Some([0x81, b1, b2, b3 & 0x1F]),
+        _ => None,
     }
 }
 
@@ -369,10 +528,15 @@ fn add_pmt_streams(sec: &[u8], packet_size: usize, later: bool, es: &mut HashMap
             language: language(desc),
             units: Vec::new(),
             lpcm: None,
+            opus: if codec == Codec::Opus { opus_config(desc) } else { None },
+            av1c: if codec == Codec::Av1 { av1c(desc) } else { None },
             pes_packets: 0,
             skipped_bytes: 0,
         };
-        es.insert(pid, EsState { stream, split: Splitter::new(&codec), asm: PesAsm::default(), cc: None, dup: DupGuard::default() });
+        es.insert(
+            pid,
+            EsState { stream, split: Splitter::new(&codec), asm: PesAsm::default(), cc: None, dup: DupGuard::default(), random_access: false },
+        );
         order.push(pid);
     }
     changed || (later && es.keys().any(|p| !listed.contains(p)))
@@ -595,14 +759,7 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
                 }
                 e.cc = Some(pk.cc);
             }
-            let (hdr, bytes) = e.asm.packet(pk.pusi, pk.payload);
-            if let Some(h) = hdr {
-                e.stream.pes_packets += 1;
-                let pts = h.pts.map(|t| unwrap.unwrap(t));
-                let dts = h.dts.map(|t| unwrap.unwrap(t));
-                e.split.pes_start(pts, dts);
-            }
-            e.split.feed(pos, bytes);
+            e.feed(&pk, pos, &mut unwrap);
         }
         // `p >= 1` here (the loop ran at least once or `resync` moved past the failed packet)
         off += p.max(1) as u64;
@@ -640,6 +797,9 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
         e.split.finish();
         e.stream.units = std::mem::take(&mut e.split.units);
         e.stream.skipped_bytes = e.split.skipped;
+        if let Some(o) = e.stream.opus.as_mut() {
+            o.trims = std::mem::take(&mut e.split.trims);
+        }
         if e.split.truncated {
             warnings.push(format!("PID {pid}: more than {} access units, the rest are not indexed", super::es::MAX_UNITS));
         }
@@ -729,7 +889,16 @@ mod dup_tests {
     #[test]
     fn a_discontinuity_packet_is_never_a_duplicate() {
         let payload = [7u8; 20];
-        let pk = |discontinuity| Packet { pusi: true, pid: 0x100, cc: 3, has_payload: true, discontinuity, pcr: None, payload: &payload };
+        let pk = |discontinuity| Packet {
+            pusi: true,
+            pid: 0x100,
+            cc: 3,
+            has_payload: true,
+            discontinuity,
+            random_access: false,
+            pcr: None,
+            payload: &payload,
+        };
         let mut g = DupGuard::default();
         assert!(!g.is_dup(&pk(false)));
         assert!(!g.is_dup(&pk(true)), "same counter and payload, but the stream restarts here");
@@ -745,6 +914,7 @@ mod dup_tests {
             cc: 3,
             has_payload,
             discontinuity,
+            random_access: false,
             pcr: None,
             payload: if has_payload { &payload } else { &[] },
         };

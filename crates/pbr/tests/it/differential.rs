@@ -1,10 +1,10 @@
-//! This crate against the apps' previous code (`crate::reference`), on the same generated
-//! environments. With the apps' settings (a firefly cap of 64, 128 samples, a level bias of 1),
-//! every level matches within `TOLERANCE` for sources with even sides. The intended differences:
-//! halving an odd side keeps the last column or row, which the previous code dropped, so levels
-//! read from the pyramid of an odd-sized source differ; and the SH projection integrates the
-//! basis over each pixel of the full source and sums in `f64`, so the irradiance differs within
-//! `SH_TOLERANCE`.
+//! These tests compare this crate with `crate::reference` on generated environments.
+//! With a firefly cap of 64, 128 samples and a level bias of 1,
+//! every level matches within `TOLERANCE` for the 64 × 32, 128 × 64 and 256 × 128 procedural
+//! sources and the 128 × 64 synthetic sources tested here. Halving an odd side keeps its last
+//! column or row, so its source pyramid can differ from the reference. The SH projection
+//! integrates the basis over each pixel of the full source and sums in `f64`.
+//! The irradiance comparison uses `SH_TOLERANCE`.
 
 use craft_pbr::{ColorEncoding, ENVIRONMENTS, EnvImage, Environment, Limits, PrefilterOptions, irradiance, try_prefilter, try_sh9};
 

@@ -229,7 +229,7 @@ impl Component for CaptureView<'_> {
             .get_or_put(ctx, self.key, Revision::default(), || ColorImage::from_rgba_unmultiplied(image.size.map(|n| n as usize), &image.rgba));
         let whole = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
         ui.draw().texture(cx.rect, texture.id, whole);
-        let Some(pointer) = cx.response.hover_pos().filter(|at| cx.rect.contains(*at)) else { return };
+        let Some(pointer) = craft_ui::runtime::pointer::hover_point_in(ctx, cx.rect) else { return };
         let Some((x, y)) = self.pixel(cx.rect, pointer) else { return };
         self.loupe(ui, cx, pointer, (x, y));
     }

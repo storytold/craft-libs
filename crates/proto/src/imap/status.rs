@@ -8,7 +8,7 @@
 use std::io::{Read, Write};
 
 use super::parse::{Status, Value};
-use super::{Command, Imap, MAX_COMMAND_TEXT, MAX_QUOTED, Part, Response};
+use super::{Command, Imap, MAX_QUOTED, Part, Response};
 use crate::i18n::said;
 use crate::{ProtoError, for_trace};
 
@@ -144,7 +144,7 @@ impl<S: Read + Write> Imap<S> {
                     self.note_status(&line);
                 }
                 Response::Data(values) => {
-                    if self.text_seen > MAX_COMMAND_TEXT {
+                    if self.text_seen > self.limits.command_text {
                         return Err(ProtoError::Protocol(said!("the server sent too much in answer to one command")));
                     }
                     self.note_data(&values);
