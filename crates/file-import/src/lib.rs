@@ -23,6 +23,8 @@ pub enum ImportFormat {
     Pdf,
     Eps,
     Raster,
+    /// Embroidery stitch files (DST, EXP, JEF, PES), read as stitch runs per thread.
+    Embroidery,
 }
 
 /// Reader and writer capabilities for one family in the shared registry.
@@ -100,6 +102,15 @@ pub const CAPABILITIES: &[Capability] = &[
         mime_types: &["image/png", "image/jpeg", "image/jls", "image/bmp", "image/gif", "image/tiff", "image/webp"],
         raster: true,
         vector: false,
+    },
+    Capability {
+        format: ImportFormat::Embroidery,
+        detected_formats: &[],
+        extensions: &["dst", "exp", "jef", "pes"],
+        write_extensions: &[],
+        mime_types: &[],
+        raster: false,
+        vector: true,
     },
 ];
 
@@ -191,6 +202,10 @@ impl From<craft_pdf::write::WriteError> for Error {
 /// the PDF path reader; PostScript-family files use the EPS/PostScript interpreter.
 pub fn format_for(name: &str, bytes: &[u8]) -> Option<ImportFormat> {
     use craft_file_formats::Format as F;
+    // Stitch files have no entry in the shared detector; their signature or extension names them.
+    if craft_embroidery::Format::detect(name, bytes).is_some() {
+        return Some(ImportFormat::Embroidery);
+    }
     match craft_file_formats::detect(name, bytes)? {
         F::Svg => Some(ImportFormat::Svg),
         F::Svgz => Some(ImportFormat::Svgz),
@@ -236,6 +251,7 @@ pub fn import(name: &str, bytes: &[u8], limits: Limits) -> Result<Imported, Erro
         ImportFormat::Pdf => import_pdf(bytes, format, limits),
         ImportFormat::Eps => import_eps(bytes, format, limits),
         ImportFormat::Raster => import_raster(bytes, format, limits),
+        ImportFormat::Embroidery => import_embroidery(name, bytes, format, limits),
     }?;
     if let Imported::Vector(scene) = &imported
         && (!(scene.width_mm.is_finite() && scene.height_mm.is_finite() && scene.width_mm > 0.0 && scene.height_mm > 0.0)
@@ -287,6 +303,62 @@ fn import_svg(name: &str, bytes: &[u8], format: ImportFormat, limits: Limits) ->
         shapes,
         warnings: imported.warnings,
         dropped_warnings: imported.dropped_warnings,
+    }))
+}
+
+/// A distinct colour for thread block `index` (hues a golden angle apart), since stitch files
+/// name their threads by vendor palette entries this reader does not carry.
+fn thread_colour(index: usize) -> [u8; 3] {
+    let hue = (index as f64 * 137.508).rem_euclid(360.0) / 60.0;
+    let (s, v) = (0.75, 0.85);
+    let c = v * s;
+    let x = c * (1.0 - (hue.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match hue as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let channel = |value: f64| ((value + v - c) * 255.0).round().clamp(0.0, 255.0) as u8;
+    [channel(r), channel(g), channel(b)]
+}
+
+fn import_embroidery(name: &str, bytes: &[u8], format: ImportFormat, limits: Limits) -> Result<Imported, Error> {
+    let kind = craft_embroidery::Format::detect(name, bytes).ok_or(Error::Unsupported)?;
+    let design = craft_embroidery::read(kind, bytes).map_err(|error| Error::Decode(error.to_string()))?;
+    if design.runs.len() > limits.max_shapes {
+        return Err(Error::ShapeLimit);
+    }
+    let bounds = design
+        .runs
+        .iter()
+        .flat_map(|run| run.points.iter())
+        .fold(None::<kurbo::Rect>, |acc, p| Some(acc.map_or(kurbo::Rect::from_points(*p, *p), |r| r.union_pt(*p))));
+    let Some(bounds) = bounds else {
+        return Err(Error::Decode("the stitch file has no stitches".into()));
+    };
+    let to_origin = Affine::translate((-bounds.x0, -bounds.y0));
+    let shapes = design
+        .runs
+        .iter()
+        .map(|run| SceneShape {
+            path: to_origin * run.path(),
+            tag: None,
+            class: None,
+            stroke: None,
+            stroke_rgb: Some(thread_colour(run.colour)),
+            layer: Some(format!("Thread {}", run.colour + 1)),
+        })
+        .collect();
+    Ok(Imported::Vector(VectorScene {
+        format,
+        width_mm: bounds.width().max(1.0),
+        height_mm: bounds.height().max(1.0),
+        shapes,
+        warnings: Vec::new(),
+        dropped_warnings: 0,
     }))
 }
 
@@ -396,6 +468,25 @@ fn path_is_finite(path: &BezPath) -> bool {
 
 #[cfg(test)]
 mod format_tests {
+
+    #[test]
+    fn embroidery_files_import_as_stitch_runs_per_thread() {
+        // An EXP file: two stitches, a colour change, two more.
+        let exp = [100u8, 0, 0, 100, 0x80, 0x01, 0, 0, 50, 0, 50, 0];
+        let Imported::Vector(scene) = import("rose.exp", &exp, Limits::default()).unwrap() else { panic!("a vector scene") };
+        assert_eq!(scene.format, ImportFormat::Embroidery);
+        assert_eq!(scene.shapes.len(), 2);
+        assert_eq!(scene.shapes[0].layer.as_deref(), Some("Thread 1"));
+        assert_eq!(scene.shapes[1].layer.as_deref(), Some("Thread 2"));
+        assert_ne!(scene.shapes[0].stroke_rgb, scene.shapes[1].stroke_rgb);
+        assert!((scene.width_mm - 20.0).abs() < 1e-9, "{}", scene.width_mm);
+        assert!(supported_extensions().contains(&"pes"));
+        // A DST whose first record ends the design has nothing to import.
+        let mut empty = vec![b' '; 512];
+        empty.extend_from_slice(&[0, 0, 0xF3]);
+        assert!(matches!(import("empty.dst", &empty, Limits::default()), Err(Error::Decode(_))));
+    }
+
     use super::*;
 
     #[test]

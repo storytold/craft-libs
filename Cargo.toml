@@ -104,6 +104,7 @@ craft-sbs = { path = "crates/sbs" }
 craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
+craft-embroidery = { path = "crates/embroidery" }
 craft-drawingml = { path = "crates/drawingml" }
 craft-ease = { path = "crates/ease" }
 craft-eps = { path = "crates/eps" }

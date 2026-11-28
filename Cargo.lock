@@ -1793,6 +1793,7 @@ dependencies = [
  "craft-ease",
  "craft-ecproj-format",
  "craft-elf",
+ "craft-embroidery",
  "craft-eps",
  "craft-epub",
  "craft-esign",
@@ -2606,6 +2607,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-embroidery"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-eps"
 version = "0.1.0"
 dependencies = [
@@ -2732,6 +2741,7 @@ name = "craft-file-import"
 version = "0.1.0"
 dependencies = [
  "craft-dxf",
+ "craft-embroidery",
  "craft-eps",
  "craft-file-formats",
  "craft-image-codecs",

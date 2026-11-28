@@ -75,7 +75,7 @@ pub fn writer_format_for_extension(extension: &str) -> Option<WriteFormat> {
         ImportFormat::Pdf => WriteFormat::Pdf,
         ImportFormat::Raster if extension.eq_ignore_ascii_case("png") => WriteFormat::Png,
         ImportFormat::Raster => WriteFormat::Jpeg,
-        ImportFormat::Eps => return None,
+        ImportFormat::Eps | ImportFormat::Embroidery => return None,
     })
 }
 
