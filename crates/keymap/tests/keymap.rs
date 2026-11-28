@@ -1,8 +1,8 @@
 //! Integration tests of craft-keymap: keymap.
 
 use craft_keymap::{
-    Active, Binding, Chord, CommandDef, CommandRef, DeleteKeys, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods,
-    Overrides, Platform, Policy, Press, Problem, Scope, Scopes, Trigger,
+    Active, Binding, Chord, CommandDef, CommandRef, DeleteKeys, Dispatch, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher,
+    Mods, Overrides, Platform, Policy, Press, Problem, Scope, Scopes, Trigger,
 };
 use serde_json::json;
 
@@ -150,6 +150,35 @@ fn a_command_shows_only_the_chords_the_lookup_runs_it_for() {
 
     let alone = Keymap::new(vec![app("layer.hide", &["Cmd+,"]), app("edit.settings", &["Cmd+,"])], Scopes::new(), Platform::Mac);
     assert_eq!(alone.shown_chord(&cmd("edit.settings")), None, "every key shadowed");
+}
+
+/// A command the app runs itself keeps its bindings and the chord they show, and matching passes over it: the lookup
+/// finds nothing for its chords, the command holds none, another command on a chord it binds still shows it, and an
+/// assignment takes nothing from it.
+#[test]
+fn a_command_the_app_runs_itself_shows_its_chords_and_matches_none() {
+    let own = |id: &str, keys: &[&str]| app(id, keys).with_dispatch(Dispatch::App);
+    let km = Keymap::new(vec![own("tool.brush", &["J", "B"])], Scopes::new(), Platform::Mac);
+    assert_eq!(km.shown_chord(&cmd("tool.brush")), Some(chord("J")), "its first binding shows");
+    assert_eq!(km.bindings(&cmd("tool.brush")), [b("J"), b("B")], "and the shortcut editor lists them");
+    assert_eq!(press(&km, "J", &Active::NONE), Lookup::None, "the lookup passes over its chords");
+    assert_eq!(press(&km, "B", &Active::NONE), Lookup::None);
+    assert_eq!(km.holder(&chord("J")), None, "it holds no chord");
+    assert!(km.holders(&chord("J")).is_empty());
+
+    // Another command on a chord it binds runs, and it still shows its own chord: nothing here shadows it.
+    let shared = Keymap::new(vec![own("tool.brush", &["J"]), app("view.grid", &["J"])], Scopes::new(), Platform::Mac);
+    assert_eq!(press(&shared, "J", &Active::NONE), run("view.grid"), "the chord is the other command's");
+    assert_eq!(shared.shown_chord(&cmd("tool.brush")), Some(chord("J")));
+    assert_eq!(shared.shown_chord(&cmd("view.grid")), Some(chord("J")));
+    assert!(shared.conflicts().is_empty(), "a chord the app runs clashes with nothing here");
+
+    // Assigning a chord it binds to another command takes nothing from it.
+    let mut stealer = Keymap::new(vec![own("tool.brush", &["B"]), app("view.grid", &["J"])], Scopes::new(), Platform::Mac);
+    let done = stealer.assign(&cmd("view.grid"), b("B"), Policy::Steal).expect("the assignment is taken");
+    assert!(done.taken_from.is_empty(), "the command the app runs keeps its binding");
+    assert_eq!(stealer.bindings(&cmd("tool.brush")), [b("B")]);
+    assert_eq!(press(&stealer, "B", &Active::NONE), run("view.grid"));
 }
 
 /// The shown chords are worked out when the bindings change, not per call, and follow every change: a key freed by one

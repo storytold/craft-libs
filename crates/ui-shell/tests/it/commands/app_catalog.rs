@@ -1,11 +1,12 @@
 //! Commands an app defines at run time (`AppCatalog`): their chords fire them into the frame's output under the key
-//! rules every app command follows, and a frame builds a keymap only for a catalog generation it has not built.
+//! rules every app command follows, a def for a linked set's id adds to the set's, and a frame builds a keymap only for
+//! a catalog generation it has not built.
 // The catalog is given through `Frames::commands`, which keeps it for every later frame.
 
 use craft_ui::contract::{Bind, Props as _, Show as _, Tracked};
 use craft_ui::runtime::commands::{
-    AppCatalog, Binding, CommandDef, CommandInput, CommandKind, CommandRef, CommandState, CommandStates, EditCommands, FirePhase, Scope,
-    keymap_builds,
+    AppCatalog, Binding, CommandDef, CommandDefError, CommandInput, CommandKind, CommandRef, CommandState, CommandStates, Dispatch, EditCommands,
+    FirePhase, Scope, SetEntry, keymap_builds, resolve,
 };
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::frame::take_output;
@@ -13,7 +14,7 @@ use craft_ui::shell::AppShell;
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::{key_press, text};
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Frames, Registry, trial};
 use craft_ui::text::TextField;
 use egui::{Id, Key, Modifiers, Rect, Ui};
 use std::cell::{Cell, RefCell};
@@ -325,4 +326,72 @@ fn a_story_command_set_loads_only_in_an_install_that_shows_stories() {
     assert!(craft_ui::runtime::commands::bindings(&app.ctx, &eraser).is_empty(), "an app's install has no story's set");
     let save = CommandRef::new("trial.save");
     assert!(!craft_ui::runtime::commands::bindings(&app.ctx, &save).is_empty(), "the app's install keeps the other sets");
+}
+
+/// What a press of F8 fires, and the chord Play resolves, under an app catalog whose def for the linked set's Play says
+/// the app runs its keys itself with `own`.
+fn play_pressed(own: bool) -> (Vec<String>, Option<String>) {
+    let play = CommandRef::new("trial.play");
+    let marker = CommandDef::new(play.clone(), "Play", Scope::app());
+    let marker = if own { marker.with_dispatch(Dispatch::App) } else { marker };
+    let catalog = AppCatalog::new(vec![marker], 1).expect("the trial's catalog is valid");
+    let chord = RefCell::new(None);
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main()).show(ui, &mut ());
+        chord.replace(resolve(ui.ctx(), play.clone()).chord_text.as_deref().map(str::to_owned));
+    };
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(catalog));
+    frames.idle(3, &mut show);
+    frames.frame(vec![key_press(Key::F8, Modifiers::NONE)], &mut show);
+    frames.frame(vec![key_release(Key::F8, Modifiers::NONE)], &mut show);
+    (fired(&frames).into_iter().map(|(id, _, _)| id).collect(), chord.into_inner())
+}
+
+/// An app that runs a linked set's command from its own key handling says so on its def for the id: the set's def
+/// follows, so the chord still resolves for the surfaces and the key stage leaves the key alone, where the same catalog
+/// without it fires the command.
+#[trial]
+fn an_apps_own_dispatch_on_a_linked_sets_command_shows_its_chord_and_leaves_the_key() {
+    assert_eq!(play_pressed(false), (vec!["trial.play".to_owned()], Some("F8".to_owned())), "the set's command fires by its chord");
+    assert_eq!(play_pressed(true), (Vec::new(), Some("F8".to_owned())), "marked as the app's, the chord still shows and the board runs nothing");
+}
+
+const OWN: &str = "trialCatalog.own";
+
+/// The linked set of the own-dispatch trial, as a library writes one by hand: `trialCatalog.own` on F9, whose keys the
+/// set runs itself. A story set, so only the frame this trial installs it in loads it.
+fn own_set(registry: &mut Registry) {
+    fn defs() -> Result<Vec<CommandDef>, CommandDefError> {
+        Ok(vec![
+            CommandDef::new(CommandRef::new(OWN), "Own", Scope::app())
+                .with_default(Binding::parse("F9").expect("the trial's chord parses"))
+                .with_dispatch(Dispatch::App),
+        ])
+    }
+    registry.add_story_set(SetEntry::new(|| "TrialOwnSet", defs, Vec::new, Vec::new, Vec::new, None, || Ok(Vec::new())));
+}
+
+/// An app's def for a linked set's command adds its keys without taking the set's dispatch away: a set that runs its
+/// command itself keeps that, so neither the set's chord nor the app's alternate key fires on the board.
+#[trial]
+fn an_apps_key_for_a_linked_sets_command_leaves_the_sets_own_dispatch_alone() {
+    let registry = Registry::of(&[own_set]);
+    assert!(registry.install_story_sets(), "the trial's linked set loads");
+    let own = CommandRef::new(OWN);
+    let alternate = CommandDef::new(own.clone(), "Own", Scope::app()).with_default(Binding::parse("Cmd+Alt+9").expect("the trial's chord parses"));
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main()).show(ui, &mut ());
+    };
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(AppCatalog::new(vec![alternate], 1).expect("the trial's catalog is valid")));
+    frames.idle(3, &mut show);
+    assert_eq!(craft_ui::runtime::commands::bindings(&frames.ctx, &own).len(), 2, "the app's alternate key joins the set's");
+    assert_eq!(resolve(&frames.ctx, own).chord_text.as_deref(), Some("F9"), "the set's chord still shows");
+    let chord = Modifiers::COMMAND | Modifiers::ALT;
+    for (key, mods) in [(Key::F9, Modifiers::NONE), (Key::Num9, chord)] {
+        frames.frame(vec![key_press(key, mods)], &mut show);
+        frames.frame(vec![key_release(key, mods)], &mut show);
+    }
+    assert!(fired(&frames).is_empty(), "the set runs its own keys: neither chord fires on the board");
 }

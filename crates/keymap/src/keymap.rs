@@ -27,7 +27,7 @@ mod binding;
 mod command;
 
 pub use binding::{Binding, BindingError};
-pub use command::{CommandDef, CommandKind, DeleteKeys, ModalRule, TypingRule};
+pub use command::{CommandDef, CommandKind, DeleteKeys, Dispatch, ModalRule, TypingRule};
 
 mod editing;
 pub use editing::text_editing_chords;
@@ -400,7 +400,9 @@ impl Keymap {
         self.find(command).map(|i| &self.catalog[i])
     }
 
-    /// The effective bindings of a command; empty for an unknown one.
+    /// The effective bindings of a command; empty for an unknown one. A command the app runs itself
+    /// ([`Dispatch::App`]) lists its bindings too, as the shortcut editor shows and edits them, though nothing here
+    /// matches them.
     pub fn bindings(&self, command: &CommandRef) -> Vec<Binding> {
         self.find(command).map(|i| self.current[i].iter().filter(|b| self.counts(b)).map(|b| self.public(i, b)).collect()).unwrap_or_default()
     }
@@ -455,7 +457,8 @@ impl Keymap {
         }
     }
 
-    /// The command `chord` (pressed twice when `double`) runs with `active` focus.
+    /// The command `chord` (pressed twice when `double`) runs with `active` focus. A command the app runs itself
+    /// ([`Dispatch::App`]) is none of them: its chords belong to the app's own key handling.
     pub fn lookup(&self, chord: &Chord, double: bool, active: &Active) -> Lookup {
         self.lookup_nested(chord, double, active, &[])
     }
@@ -522,6 +525,9 @@ impl Keymap {
     /// applies (an application binding with no panel focused, a panel binding with its panel focused, a context
     /// binding with its context active), gives the command or a cycle that holds it. `None` when every binding is
     /// shadowed or the command has none. Read from a table the keymap builds when its bindings change.
+    ///
+    /// A command the app runs itself ([`Dispatch::App`]) shows its first single-press binding wherever it is, home
+    /// scope first: nothing here matches its chords, so nothing here can shadow them.
     pub fn shown_chord(&self, command: &CommandRef) -> Option<Chord> {
         self.find(command).and_then(|i| self.shown[i])
     }
@@ -537,6 +543,15 @@ impl Keymap {
     fn shown_of(&self, i: usize) -> Option<Chord> {
         let home = &self.catalog[i].scope;
         let single = || self.current[i].iter().filter(|(trigger, _)| trigger.press == PressKind::Single);
+        // The app runs a command marked `Dispatch::App` on its own, so the keymap cannot tell whether a chord it also
+        // binds takes the key first: it shows the command's first binding rather than dropping it as shadowed.
+        if self.catalog[i].dispatch == Dispatch::App {
+            return single()
+                .filter(|(_, scope)| scope == home)
+                .chain(single().filter(|(_, scope)| scope != home))
+                .map(|(trigger, _)| trigger.chord)
+                .next();
+        }
         let runs = |(trigger, scope): &&Bound| {
             let name = [scope.as_str()];
             let active = match self.scopes.kind(scope) {
@@ -1061,6 +1076,11 @@ impl Keymap {
 
     fn index_command(&mut self, i: usize) {
         let Some(list) = self.current.get(i) else { return };
+        // A command the app runs itself matches nothing here: its chords stay in the app's hands, as the raw input
+        // holds them.
+        if self.catalog[i].dispatch == Dispatch::App {
+            return;
+        }
         let holds = self.holds;
         for (k, (t, _)) in list.iter().enumerate().filter(|(_, (t, _))| holds || !t.is_hold()) {
             self.by_trigger.entry(t.effective(self.platform)).or_default().insert((i, k));
