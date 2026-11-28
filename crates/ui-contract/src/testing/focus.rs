@@ -77,7 +77,13 @@ pub fn push_scope(ctx: &Context, id: Id, policy: FocusPolicy, label: Option<Arc<
 
 /// Marks the stops registered from here on in the innermost open scope as its body's.
 pub fn begin_body(ctx: &Context) {
-    focus::begin_body(ctx);
+    focus::begin_body(ctx, Id::NULL);
+}
+
+/// Ends the body [`begin_body`] marked: the stops registered from here on in the innermost open scope are its end
+/// region's and footer's.
+pub fn end_body(ctx: &Context) {
+    focus::end_body(ctx, Id::NULL);
 }
 
 /// Closes the innermost open scope.

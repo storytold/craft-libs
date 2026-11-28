@@ -115,37 +115,62 @@ impl Reader<'_> {
     /// Part 1 §20.4.2.5, §21.1.2.3.5) naming an external hyperlink relationship. Word stores a
     /// picture's link there rather than in a `w:hyperlink` around its run (#5267). Its `#name`
     /// part, when the address has one, stays part of the address.
-    pub(super) fn drawing_link(d: &El, rels: &Rels) -> Option<String> {
+    pub(super) fn drawing_link(&mut self, d: &El, rels: &Rels) -> Option<String> {
         let frame = d.child("wp:inline").or_else(|| d.child("wp:anchor"))?;
-        let id = frame.child("wp:docPr")?.child("a:hlinkClick")?.attr("r:id")?;
+        self.drawing_property_link(frame.child("wp:docPr"), rels)
+    }
+
+    fn drawing_property_link(&mut self, nv: Option<&El>, rels: &Rels) -> Option<String> {
+        let id = nv?.child("a:hlinkClick")?.attr("r:id")?;
         let rel = rels.by_id(id).filter(|r| r.external && crate::package::rel_is(&r.kind, rt::HYPERLINK))?;
-        Some(rel.target.trim().to_string()).filter(|u| !u.is_empty())
+        self.keep_drawing_link(&rel.target)
+    }
+
+    /// A template or relationship can be referenced many times. Charge each retained copy
+    /// before allocating, using the same target and string ceilings as Flow.
+    pub(super) fn keep_drawing_link(&mut self, target: &str) -> Option<String> {
+        let target = target.trim();
+        if target.is_empty() || target.len() > 8 << 10 || target.len() > (64 << 20) - self.drawing_link_bytes {
+            return None;
+        }
+        self.drawing_link_bytes += target.len();
+        Some(target.to_string())
     }
 
     /// Native ink or an Office 2016 chart kept with its fallback (`mc:AlternateContent`), and the
     /// [`Self::drawing_link`] of the choice it was read from, else of its fallback: another
     /// choice's link is not this object's.
     pub(super) fn read_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<(InlineObject, Option<String>)> {
-        let (object, choice) = match self.read_ink_alternate(sc, ac, rels) {
-            Some(o) => (o, children_of_choice(ac).filter(|e| e.name == "mc:Choice")),
-            None => (self.read_chartex_alternate(sc, ac, rels)?, chartex_choice(ac)),
-        };
+        if let Some(linked) = self.read_ink_alternate(sc, ac, rels) {
+            return Some(linked);
+        }
+        let (object, choice) = (self.read_chartex_alternate(sc, ac, rels)?, chartex_choice(ac));
         let link =
-            [choice, ac.child("mc:Fallback")].into_iter().flatten().filter_map(|e| e.child("w:drawing")).find_map(|d| Self::drawing_link(d, rels));
+            [choice, ac.child("mc:Fallback")].into_iter().flatten().filter_map(|e| e.child("w:drawing")).find_map(|d| self.drawing_link(d, rels));
         Some((object, link))
     }
 
     /// Keep the selected native-ink branch and its picture fallback as one object. Reading only
     /// the fallback flattens the ink; reading only the choice loses its preview on the next save.
-    fn read_ink_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
+    fn read_ink_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<(InlineObject, Option<String>)> {
         let choice = children_of_choice(ac).filter(|e| e.name == "mc:Choice")?;
         let drawing = choice.child("w:drawing")?;
         if drawing.find("a:graphicData")?.attr("uri") != Some(INK_URI) {
             return None;
         }
         let fallback = ac.child("mc:Fallback");
-        let preview = fallback.and_then(|f| f.child("w:pict")).and_then(|p| self.read_vml(sc, p, rels));
-        let Some(mut object) = self.read_drawing(sc, drawing, rels) else { return preview };
+        let native = self.read_drawing(sc, drawing, rels);
+        // A lower-priority preview must not spend the native target's budget.
+        let native_link = native.as_ref().and_then(|_| {
+            self.drawing_link(drawing, rels).or_else(|| fallback.and_then(|f| f.child("w:drawing")).and_then(|d| self.drawing_link(d, rels)))
+        });
+        let preview = fallback
+            .and_then(|f| f.child("w:pict"))
+            .and_then(|p| if native.is_some() { self.read_vml_preview(sc, p, rels) } else { self.read_vml(sc, p, rels) });
+        let Some(mut object) = native else {
+            return preview.map(|(object, target)| (object, target.and_then(|target| self.keep_drawing_link(target))));
+        };
+        let (preview, preview_link) = preview.map(|(object, link)| (Some(object), link)).unwrap_or_default();
         if let InlineObject::Graphic { w, h, graphic, .. } = &mut object {
             let graphic = Arc::make_mut(graphic);
             if let Some(InlineObject::Image { media, .. }) = preview {
@@ -160,7 +185,8 @@ impl Reader<'_> {
                 // A malformed or over-budget fallback must not discard a valid native part.
             }
         }
-        Some(object)
+        let link = native_link.or_else(|| preview_link.and_then(|target| self.keep_drawing_link(target)));
+        Some((object, link))
     }
 
     /// An Office 2016 chart (`cx:chart`: waterfall, sunburst, box & whisker…) drawn from its
@@ -323,7 +349,7 @@ impl Reader<'_> {
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
-    /// flattened into it. `None` when it has no member we can show.
+    /// flattened into it unless they carry their own hyperlink. `None` when it has no member we can show.
     fn read_group(&mut self, sc: &mut StoryCtx, g: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> Option<InlineObject> {
         let x = group_xfrm(g.child("wpg:grpSpPr"));
         float.set_spin(xfrm_spin(g.child("wpg:grpSpPr")));
@@ -336,7 +362,8 @@ impl Reader<'_> {
         let mut children = Vec::new();
         let outer = self.group_fill.take();
         self.group_fill = own_fill(g.child("wpg:grpSpPr"), &self.doc.settings.theme_colors, None).flatten();
-        self.group_members(sc, g, rels, (-cx, -cy, 1.0, 1.0), 0, &mut children);
+        let mut remaining = craft_wordmodel::para::MAX_GROUP_CHILDREN;
+        self.group_members(sc, g, rels, (-cx, -cy, 1.0, 1.0), 0, (&mut children, &mut remaining));
         self.group_fill = outer;
         if children.is_empty() {
             return None;
@@ -362,7 +389,8 @@ impl Reader<'_> {
             stroke_width: ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0),
         };
         let mut children = Vec::new();
-        self.group_members(sc, c, rels, (0.0, 0.0, 1.0, 1.0), 0, &mut children);
+        let mut remaining = craft_wordmodel::para::MAX_GROUP_CHILDREN;
+        self.group_members(sc, c, rels, (0.0, 0.0, 1.0, 1.0), 0, (&mut children, &mut remaining));
         InlineObject::Group { w, h, float, ch_w: w.max(1.0), ch_h: h.max(1.0), children, canvas: Some(style) }
     }
 
@@ -375,11 +403,12 @@ impl Reader<'_> {
         rels: &Rels,
         t: (f32, f32, f32, f32),
         depth: usize,
-        out: &mut Vec<craft_wordmodel::para::GroupChild>,
+        output: (&mut Vec<craft_wordmodel::para::GroupChild>, &mut usize),
     ) {
+        let (out, remaining) = output;
         let (x0, y0, sx, sy) = t;
         for e in g.els() {
-            if out.len() >= craft_wordmodel::para::MAX_GROUP_CHILDREN {
+            if *remaining == 0 {
                 return;
             }
             // Native ink (`w14:contentPart`), alone or with a picture fallback: kept whole, in its
@@ -412,33 +441,21 @@ impl Reader<'_> {
                 "wpg:grpSp" | "wpg:wgp" => e.child("wpg:grpSpPr"),
                 _ => continue,
             };
-            let x = group_xfrm(sppr);
-            let ((ox, oy), (ew, eh)) = (x.off, x.ext);
             if e.name == "wpg:grpSp" || e.name == "wpg:wgp" {
-                if depth >= 8 {
-                    continue;
-                }
-                // Its members' space maps onto its own box.
-                let (cox, coy) = x.ch_off.unwrap_or((0.0, 0.0));
-                let (cw, ch) = x.ch_ext.filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((ew.max(1.0), eh.max(1.0)));
-                let (kx, ky) = (ew / cw, eh / ch);
-                let nt = (x0 + (ox - cox * kx) * sx, y0 + (oy - coy * ky) * sy, sx * kx, sy * ky);
-                // Its own fill, for its members' `a:grpFill` (#1500).
-                // One without a fill of its own passes its group's on.
-                let own = own_fill(sppr, &self.doc.settings.theme_colors, self.group_fill.as_ref()).unwrap_or_else(|| self.group_fill.clone());
-                let outer = std::mem::replace(&mut self.group_fill, own);
-                self.group_members(sc, e, rels, nt, depth + 1, out);
-                self.group_fill = outer;
+                self.group_member_group(sc, e, rels, t, depth, (&mut *out, &mut *remaining));
                 continue;
             }
-            let max = crate::units::MAX_LEN_PT;
-            let fit = |v: f32, lo: f32| craft_wordmodel::geom::finite(v).clamp(lo, max);
-            let (w, h) = (fit(ew * sx, 0.0), fit(eh * sy, 0.0));
+            let x = group_xfrm(sppr);
+            let ((ox, oy), (ew, eh)) = (x.off, x.ext);
             let nv = match e.name.as_str() {
-                "pic:pic" => e.find("pic:cNvPr"),
+                "pic:pic" => e.child("pic:nvPicPr").and_then(|p| p.child("pic:cNvPr")),
                 "w14:contentPart" => e.child("w14:nvContentPartPr").and_then(|p| p.child("w14:cNvPr")),
                 _ => e.child("wps:cNvPr"),
             };
+            let link = self.drawing_property_link(nv, rels);
+            let max = crate::units::MAX_LEN_PT;
+            let fit = |v: f32, lo: f32| craft_wordmodel::geom::finite(v).clamp(lo, max);
+            let (w, h) = (fit(ew * sx, 0.0), fit(eh * sy, 0.0));
             let (alt, meta) = nv_alt(nv);
             let float = Float { alt: meta, hidden: nv.is_some_and(|p| on_off_attr(p, "hidden")), ..Float::default() };
             let obj = if let Some((source, preview)) = ink {
@@ -460,9 +477,63 @@ impl Reader<'_> {
                 o
             });
             if let Some(obj) = obj {
-                out.push(craft_wordmodel::para::GroupChild { x: fit(x0 + ox * sx, -max), y: fit(y0 + oy * sy, -max), obj });
+                *remaining -= 1;
+                out.push(craft_wordmodel::para::GroupChild { x: fit(x0 + ox * sx, -max), y: fit(y0 + oy * sy, -max), obj, link });
             }
         }
+    }
+
+    /// Retain a linked nested group without turning the per-root limit into a per-level limit.
+    fn group_member_group(
+        &mut self,
+        sc: &mut StoryCtx,
+        e: &El,
+        rels: &Rels,
+        t: (f32, f32, f32, f32),
+        depth: usize,
+        output: (&mut Vec<craft_wordmodel::para::GroupChild>, &mut usize),
+    ) {
+        if depth >= 8 {
+            return;
+        }
+        let (out, remaining) = output;
+        let (x0, y0, sx, sy) = t;
+        let sppr = e.child("wpg:grpSpPr");
+        let x = group_xfrm(sppr);
+        let ((ox, oy), (ew, eh)) = (x.off, x.ext);
+        let (cox, coy) = x.ch_off.unwrap_or((0.0, 0.0));
+        let (cw, ch) = x.ch_ext.filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((ew.max(1.0), eh.max(1.0)));
+        let nv = e.child("wpg:cNvPr");
+        let link = self.drawing_property_link(nv, rels);
+        // A group's own fill supplies its members' grpFill, otherwise its parent's does.
+        let own = own_fill(sppr, &self.doc.settings.theme_colors, self.group_fill.as_ref()).unwrap_or_else(|| self.group_fill.clone());
+        let outer = std::mem::replace(&mut self.group_fill, own);
+        if link.is_none() {
+            let (kx, ky) = (ew / cw, eh / ch);
+            let nt = (x0 + (ox - cox * kx) * sx, y0 + (oy - coy * ky) * sy, sx * kx, sy * ky);
+            self.group_members(sc, e, rels, nt, depth + 1, (out, remaining));
+        } else {
+            *remaining -= 1;
+            let mut children = Vec::new();
+            let max = crate::units::MAX_LEN_PT;
+            let fit = |v: f32, lo: f32| craft_wordmodel::geom::finite(v).clamp(lo, max);
+            let (w, h) = (fit(ew * sx, 0.0), fit(eh * sy, 0.0));
+            // Store members in the group's displayed space. Clipping raw child coordinates
+            // before scaling would move a valid member with a large rebased offset.
+            let (kx, ky) = (w / cw, h / ch);
+            self.group_members(sc, e, rels, (-cox * kx, -coy * ky, kx, ky), depth + 1, (&mut children, &mut *remaining));
+            if children.is_empty() {
+                *remaining += 1;
+            } else {
+                let (alt, meta) = nv_alt(nv);
+                let mut float = Float { alt: meta, hidden: nv.is_some_and(|p| on_off_attr(p, "hidden")), ..Float::default() };
+                float.set_spin(xfrm_spin(sppr));
+                let mut obj = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, canvas: None };
+                obj.set_alt_text(&alt);
+                out.push(craft_wordmodel::para::GroupChild { x: fit(x0 + ox * sx, -max), y: fit(y0 + oy * sy, -max), obj, link });
+            }
+        }
+        self.group_fill = outer;
     }
 
     /// Build a shape from `wps:wsp`, using frame dimensions `w` and `h` in points and the caller's

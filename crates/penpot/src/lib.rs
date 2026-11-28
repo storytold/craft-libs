@@ -175,6 +175,9 @@ impl<'b> Archive<'b> {
         if zip.has_duplicate_names() {
             return Err(corrupt("duplicate ZIP member names"));
         }
+        if zip.has_traversal_component() {
+            return Err(corrupt("unsafe ZIP member path"));
+        }
         // Reject oversized logical archives before decoding any JSON. This guards against ZIP bombs
         // whose compressed size is innocuous but whose advertised uncompressed size is enormous.
         let names: Vec<String> = zip.names().map(|n| n.into_owned()).collect();

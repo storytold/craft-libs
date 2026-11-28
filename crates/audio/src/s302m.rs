@@ -53,6 +53,9 @@ pub struct Header {
 impl Header {
     /// Bytes of one frame (one sample of every channel), or 0 if `channels` or `bits` are unsupported or overflow.
     pub fn frame_bytes(&self) -> usize {
+        if !matches!(self.channels, 2 | 4 | 6 | 8) {
+            return 0;
+        }
         let pair_bytes = match self.bits {
             16 => 5,
             20 => 6,
@@ -241,6 +244,17 @@ mod tests {
     fn header_frame_bytes_overflow_does_not_panic() {
         let h = Header { channels: usize::MAX, channel_id: 0, bits: 24, alignment: 0, audio_bytes: 0 };
         assert_eq!(h.frame_bytes(), 0);
+    }
+
+    #[test]
+    fn header_frame_bytes_rejects_unsupported_channels() {
+        for bits in [16, 20, 24] {
+            for channels in [0, 1, 3, 5, 7, 9, 10, usize::MAX] {
+                let header = Header { channels, channel_id: 0, bits, alignment: 0, audio_bytes: 0 };
+                assert!(Encoder::new(channels, bits).is_err());
+                assert_eq!(header.frame_bytes(), 0, "{channels} channels, {bits} bits");
+            }
+        }
     }
 
     #[test]

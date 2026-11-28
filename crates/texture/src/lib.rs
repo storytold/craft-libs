@@ -57,6 +57,7 @@ pub mod decode;
 pub mod normal;
 pub mod packing;
 mod source;
+pub mod texture_set;
 #[cfg(test)]
 mod tiled_tests;
 

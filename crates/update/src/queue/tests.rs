@@ -81,38 +81,72 @@ fn behind_a_running_install(
     })
 }
 
+/// What a job of `installers_never_run_at_the_same_time` tells the test first.
+enum Heard {
+    /// The queue made it wait.
+    Waiting,
+    /// Its installer is running, and stays running until the test sends on this channel.
+    Running(mpsc::Sender<()>),
+}
+
+/// Each kind of job in turn holds the installer while jobs of every kind are started, and each of
+/// those must wait. Each later call also stays running until the test has checked that it runs alone.
 #[trial]
 fn installers_never_run_at_the_same_time() {
     let queue = Queue::new();
     let (inside, most, handled) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0));
-    let enter = || {
-        most.fetch_max(inside.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(3));
-        inside.fetch_sub(1, Ordering::SeqCst);
-    };
-    std::thread::scope(|scope| {
-        for i in 0..24 {
-            let (queue, enter, handled) = (&queue, &enter, &handled);
-            scope.spawn(move || {
-                std::thread::sleep(Duration::from_millis(i % 5));
-                let exec = |_: &[OsString], targets: &[OsString]| {
-                    enter();
-                    handled.fetch_add(targets.len(), Ordering::SeqCst);
-                    Ok(())
+    // The kinds of job: 0 an install, 1 a removal, 2 a lone installer.
+    for first in 0..3 {
+        std::thread::scope(|scope| {
+            let (said, hears) = mpsc::channel();
+            let job = |i: usize| {
+                let said = said.clone();
+                let (queue, inside, most, handled) = (&queue, &inside, &most, &handled);
+                scope.spawn(move || {
+                    let run = |targets: usize| {
+                        most.fetch_max(inside.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                        let (go, held) = mpsc::channel();
+                        said.send(Heard::Running(go)).unwrap();
+                        held.recv().unwrap();
+                        inside.fetch_sub(1, Ordering::SeqCst);
+                        handled.fetch_add(targets, Ordering::SeqCst);
+                    };
+                    let mut turn = |waiting: bool| {
+                        if waiting {
+                            said.send(Heard::Waiting).unwrap();
+                        }
+                    };
+                    let exec = |_: &[OsString], targets: &[OsString]| {
+                        run(targets.len());
+                        Ok(())
+                    };
+                    match (first + i) % 3 {
+                        0 => queue.batched(install(), os(&format!("{first}-{i}.deb")), &|| false, &mut turn, &exec).unwrap(),
+                        1 => queue.batched(remove(), os(&format!("app{first}-{i}")), &|| false, &mut turn, &exec).unwrap(),
+                        _ => queue.alone(&|| false, &mut turn, || run(1)).unwrap(),
+                    }
+                });
+            };
+            job(0);
+            let Heard::Running(holder) = hears.recv().unwrap() else {
+                panic!("the first job waited with no other installer running");
+            };
+            for i in 1..8 {
+                job(i);
+                assert!(matches!(hears.recv().unwrap(), Heard::Waiting), "job {i} started while job 0 of round {first} was running");
+            }
+            drop(said);
+            holder.send(()).unwrap();
+            // Every job has said it waits; from here on each call says it is running.
+            for heard in hears.iter() {
+                let Heard::Running(go) = heard else {
+                    panic!("a job said twice that it waits");
                 };
-                match i % 3 {
-                    0 => queue.batched(install(), os(&format!("{i}.deb")), &|| false, &mut |_| {}, &exec).unwrap(),
-                    1 => queue.batched(remove(), os(&format!("app{i}")), &|| false, &mut |_| {}, &exec).unwrap(),
-                    _ => queue
-                        .alone(&|| false, &mut |_| {}, || {
-                            enter();
-                            handled.fetch_add(1, Ordering::SeqCst);
-                        })
-                        .unwrap(),
-                }
-            });
-        }
-    });
+                assert_eq!(inside.load(Ordering::SeqCst), 1);
+                go.send(()).unwrap();
+            }
+        });
+    }
     assert_eq!(most.load(Ordering::SeqCst), 1);
     assert_eq!(handled.load(Ordering::SeqCst), 24);
 }
