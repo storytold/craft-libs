@@ -492,8 +492,14 @@ impl ZoomTool {
     }
 }
 
-/// The view after a Zoom tool click at `screen`: one rung of `scheme` in (or `out`) about the point, or centred on it
-/// with Zoom Clicked Point to Center. `None` at a zoom limit.
+/// The result of a valid click, kept separate from an invalid or unavailable click.
+enum ZoomClick {
+    Changed(CanvasView),
+    AtLimit,
+}
+
+/// A click steps once using the current scheme. A real directional bound is an eligible click;
+/// malformed input or a scheme with no applicable step is not a bound and reports nothing.
 fn click_step(
     view: &CanvasView,
     screen: Pos2,
@@ -502,15 +508,54 @@ fn click_step(
     options: &NavigationOptions,
     pixels_per_point: f32,
     scheme: &ZoomScheme,
-) -> Option<CanvasView> {
+) -> Option<ZoomClick> {
     let current = zoom::device(view, pixels_per_point);
+    let (minimum, maximum) = (scheme.min(size), scheme.max_device());
+    let valid_floor = match scheme.floor {
+        craft_behavior::ZoomFloor::ShorterSide(value) | craft_behavior::ZoomFloor::Fixed(value) => value.is_finite() && value > 0.0,
+        _ => false,
+    };
+    if !pixels_per_point.is_finite()
+        || pixels_per_point <= 0.0
+        || !current.is_finite()
+        || current <= 0.0
+        || !view.rect.is_finite()
+        || !view.rect.size().is_finite()
+        || !view.rect.is_positive()
+        || !view.center.x.is_finite()
+        || !view.center.y.is_finite()
+        || !screen.is_finite()
+        || !size.width.is_finite()
+        || size.width <= 0.0
+        || !size.height.is_finite()
+        || size.height <= 0.0
+        || !scheme.hundred.is_finite()
+        || scheme.hundred <= 0.0
+        || !valid_floor
+        || !minimum.is_finite()
+        || minimum <= 0.0
+        || !maximum.is_finite()
+        || maximum < minimum
+        || !scheme.rungs.iter().all(|rung| rung.is_finite() && *rung > 0.0)
+    {
+        return None;
+    }
+    let limit = if out { minimum } else { maximum };
+    let at_limit = (if out { current <= limit } else { current >= limit }) || (current / limit - 1.0).abs() <= 1e-9;
+    if at_limit {
+        return Some(ZoomClick::AtLimit);
+    }
     let next = scheme.step(current, if out { -1 } else { 1 }, size);
-    if !next.is_finite() || (next / current - 1.0).abs() <= 1e-9 {
+    if !next.is_finite() || next <= 0.0 {
+        return None;
+    }
+    if (next / current - 1.0).abs() <= 1e-9 {
         return None;
     }
     let mut stepped = *view;
     zoom::about(&mut stepped, screen, next, options.zoom_clicked_point_to_center, pixels_per_point);
-    Some(stepped)
+    (stepped.zoom.is_finite() && stepped.zoom > 0.0 && stepped.center.x.is_finite() && stepped.center.y.is_finite())
+        .then_some(ZoomClick::Changed(stepped))
 }
 
 impl CanvasTool for ZoomTool {
@@ -571,13 +616,18 @@ impl CanvasTool for ZoomTool {
         }
         if !self.dragged {
             // A click steps from the view the press found.
-            match click_step(&start, anchor, out, size, &self.options, ppp, &scheme) {
-                Some(next) if self.options.animated_zoom => {
+            let step = click_step(&start, anchor, out, size, &self.options, ppp, &scheme);
+            let report = step.is_some();
+            match step {
+                Some(ZoomClick::Changed(next)) if self.options.animated_zoom => {
                     let anchored = (!self.options.zoom_clicked_point_to_center).then(|| (start.to_doc(anchor), anchor));
                     cx.ease_view(next, anchored);
                 }
-                Some(next) => cx.set_view(next),
-                None => cx.set_view(start),
+                Some(ZoomClick::Changed(next)) => cx.set_view(next),
+                Some(ZoomClick::AtLimit) | None => cx.set_view(start),
+            }
+            if report && !self.lent {
+                cx.zoom_step(out);
             }
             return;
         }

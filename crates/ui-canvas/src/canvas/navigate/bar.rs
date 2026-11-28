@@ -37,9 +37,19 @@ impl Outcome for NavigateBarOutput {
 /// The members of one tool's bar.
 #[allow(clippy::large_enum_variant, reason = "built once per frame and matched at once; boxing the Zoom variant would allocate every frame")]
 enum Members<'a> {
-    Zoom { view: Bind<'a, CanvasView>, target: ViewTarget, options: &'a mut NavigationOptions, out: Bind<'a, bool> },
-    RotateView { view: Bind<'a, CanvasView> },
-    Hand { options: &'a mut NavigationOptions },
+    Zoom {
+        view: Bind<'a, CanvasView>,
+        target: ViewTarget,
+        options: &'a mut NavigationOptions,
+        out: Bind<'a, bool>,
+        all_windows: Option<Bind<'a, bool>>,
+    },
+    RotateView {
+        view: Bind<'a, CanvasView>,
+    },
+    Hand {
+        options: &'a mut NavigationOptions,
+    },
 }
 
 /// The options of a navigation tool (Zoom, Rotate View, Hand), shown as children of the app's options bar, as in
@@ -48,7 +58,7 @@ enum Members<'a> {
 /// The members:
 ///
 /// - **Zoom:** Zoom In and Zoom Out as icon segments over the tool's direction, the Zoom field, then Resize Windows to
-///   Fit and Scrubby Zoom, then 100%, Fit Screen and Fill Screen.
+///   Fit, an optional app-bound Zoom All Windows, and Scrubby Zoom, then 100%, Fit Screen and Fill Screen.
 /// - **Rotate View:** the Angle field, then Reset View.
 /// - **Hand:** Scroll All Windows, then 100%, Fit Screen and Fill Screen.
 ///
@@ -56,7 +66,7 @@ enum Members<'a> {
 /// current zoom, ladder steps, the centre kept); Angle is in degrees from -180 to 180. The buttons are the
 /// [`ViewCommands`]: they act on the canvas that holds the key focus (else the one that held it last), which applies
 /// them with its document and eases them under Animated Zoom; their enabled state comes from that canvas. The check
-/// boxes write into the [`NavigationOptions`].
+/// boxes write into the [`NavigationOptions`], except the optional app-owned Zoom All Windows binding.
 #[must_use = "show the bar's children with `show`"]
 #[derive(crate::contract::Pattern)]
 pub struct NavigateBar<'a> {
@@ -67,7 +77,17 @@ impl<'a> NavigateBar<'a> {
     /// The Zoom tool's options over `view`, the user's `options` and the tool's direction `out` (Zoom Out picked).
     /// `target` is the document the view shows, the one the canvas is given ([`Canvas::document`](crate::canvas::Canvas::document)).
     pub fn zoom(view: Bind<'a, CanvasView>, target: impl Into<ViewTarget>, options: &'a mut NavigationOptions, out: Bind<'a, bool>) -> Self {
-        NavigateBar { members: Members::Zoom { view, target: target.into(), options, out } }
+        NavigateBar { members: Members::Zoom { view, target: target.into(), options, out, all_windows: None } }
+    }
+
+    /// Adds the app-owned Zoom All Windows option after Resize Windows to Fit. Absent by default,
+    /// so apps that do not synchronize document views keep their existing bar. The app owns the
+    /// option's default and persistence; this control changes no view or document.
+    pub fn zoom_all_windows(mut self, value: Bind<'a, bool>) -> Self {
+        if let Members::Zoom { all_windows, .. } = &mut self.members {
+            *all_windows = Some(value);
+        }
+        self
     }
 
     /// The Rotate View tool's options over `view`.
@@ -89,7 +109,7 @@ impl<'a> NavigateBar<'a> {
         let mut invalid_zoom = None;
         let row = Row::new().gap(Gap::Item);
         let shown = match members {
-            Members::Zoom { mut view, target, options, mut out } => row.show(ui, |ui, cx| {
+            Members::Zoom { mut view, target, options, mut out, mut all_windows } => row.show(ui, |ui, cx| {
                 let directions = [
                     Entry::new(false, words.navigate_zoom_in.clone()).icon(IconId::new("zoom_in")),
                     Entry::new(true, words.navigate_zoom_out.clone()).icon(IconId::new("zoom_out")),
@@ -102,6 +122,9 @@ impl<'a> NavigateBar<'a> {
                 }
                 Divider::vertical().show(ui);
                 Checkbox::new(Bind::bound(&mut options.zoom_resizes_windows)).label(words.navigate_resize_windows.clone()).show(ui);
+                if let Some(value) = all_windows.as_mut() {
+                    Checkbox::new(value.reborrowed()).label(words.navigate_zoom_all.clone()).tooltip(words.navigate_zoom_all_tip.clone()).show(ui);
+                }
                 Checkbox::new(Bind::bound(&mut options.scrubby_zoom)).label(words.navigate_scrubby_zoom.clone()).show(ui);
                 Divider::vertical().show(ui);
                 view_buttons(ui, &words);

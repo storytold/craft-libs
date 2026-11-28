@@ -37,6 +37,8 @@ craft_ui::words! {
         navigate_zoom_in: "navigateBar.zoomIn" = "Zoom In";
         navigate_zoom_out: "navigateBar.zoomOut" = "Zoom Out";
         navigate_resize_windows: "navigateBar.resizeWindows" = "Resize Windows to Fit";
+        navigate_zoom_all: "navigateBar.zoomAllWindows" = "Zoom All Windows";
+        navigate_zoom_all_tip: "navigateBar.zoomAllWindowsTip" = "Zoom all open document windows when using the Zoom Tool";
         navigate_scrubby_zoom: "navigateBar.scrubbyZoom" = "Scrubby Zoom";
         navigate_scroll_all: "navigateBar.scrollAllWindows" = "Scroll All Windows";
         navigate_angle: "navigateBar.angle" = "Angle";

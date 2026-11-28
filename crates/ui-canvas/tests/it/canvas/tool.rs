@@ -2215,3 +2215,292 @@ fn the_picture_of_a_pass_shows_that_passes_press_and_moves() {
         assert_eq!(drawn.get(), points, "the picture of the frame holds every point the tool took in it");
     }
 }
+
+/// The real Zoom tool behind a host: keep its returned view and every discrete step receipt across frames.
+struct ZoomReceiptRig {
+    fixture: Fixture,
+    view: Rc<Cell<Option<CanvasView>>>,
+    steps: Rc<RefCell<Vec<bool>>>,
+    temporary: Rc<Cell<bool>>,
+}
+
+impl ZoomReceiptRig {
+    fn new(out: bool, options: NavigationOptions, zoom: f64, stand_in: bool) -> Self {
+        Self::with_document(out, options, zoom, stand_in, Some(DOCUMENT))
+    }
+
+    fn with_document(out: bool, options: NavigationOptions, zoom: f64, stand_in: bool, document: Option<Size>) -> Self {
+        let mut zoom_tool = craft_ui::canvas::ZoomTool::new(options);
+        zoom_tool.out = out;
+        let mut selected: Box<dyn CanvasTool> = if stand_in {
+            let mut probe = Probe::new("main", &Log::default());
+            probe.refuses = Some(StandInKey::Command);
+            Box::new(probe)
+        } else {
+            Box::new(zoom_tool)
+        };
+        let mut substitute = craft_ui::canvas::ZoomTool::new(options);
+        substitute.out = out;
+        let mut momentary = Momentary::new(options);
+        let (view, steps, temporary) = (Rc::new(Cell::new(None::<CanvasView>)), Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(false)));
+        let (shown_view, shown_steps, shown_temporary) = (Rc::clone(&view), Rc::clone(&steps), Rc::clone(&temporary));
+        let mut fixture = Fixture::new(move |ui| {
+            let room = ui.available_rect_before_wrap();
+            let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), zoom));
+            let mut reply = None;
+            let mut canvas = Canvas::new("Document").navigation(options).view(current);
+            if let Some(document) = document {
+                canvas = canvas.document(document);
+            }
+            let shown = canvas.show(ui, |ui, body| {
+                if let Some(pass) = tool_pass(&body.env) {
+                    let mut host = ToolHost::new().temporary_tool(shown_temporary.get()).momentary(&mut momentary);
+                    if stand_in {
+                        host = host.stand_in(StandInKey::Command, &mut substitute);
+                    }
+                    reply = Some(host.run(ui, &pass, &mut *selected));
+                }
+            });
+            let reply = reply.unwrap_or_default();
+            if let Some(step) = reply.zoom_step {
+                shown_steps.borrow_mut().push(step.out);
+            }
+            shown_view.set(Some(reply.view.or(shown.output.view).unwrap_or(current)));
+        });
+        fixture.settle();
+        fixture.ctx().options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
+        Self { fixture, view, steps, temporary }
+    }
+
+    fn zoom(&self) -> f64 {
+        self.view.get().expect("the canvas ran").zoom
+    }
+
+    fn centre(&self) -> Pos2 {
+        self.view.get().expect("the canvas ran").rect.center()
+    }
+
+    fn press(&mut self) -> Pos2 {
+        let at = self.centre();
+        self.fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]);
+        at
+    }
+}
+
+fn zoom_receipt_options(set: impl FnOnce(&mut NavigationOptions)) -> NavigationOptions {
+    let mut options = NavigationOptions::default();
+    set(&mut options);
+    options
+}
+
+fn zoom_receipt_scheme(set: impl FnOnce(&mut craft_behavior::ZoomScheme)) -> craft_behavior::ZoomScheme {
+    let mut scheme = craft_behavior::ZoomScheme::PHOTOSHOP;
+    set(&mut scheme);
+    scheme
+}
+
+#[trial]
+fn a_selected_zoom_click_reports_its_resolved_direction_once() {
+    for animated in [false, true] {
+        for out in [false, true] {
+            for (alt, shift) in [(false, false), (true, false), (false, true)] {
+                let options = zoom_receipt_options(|options| options.animated_zoom = animated);
+                let mut rig = ZoomReceiptRig::new(out, options, 4.0, false);
+                let before = rig.zoom();
+                rig.fixture.hold(Modifiers { alt, shift, ..Modifiers::NONE });
+                let at = rig.press();
+                assert!(rig.steps.borrow().is_empty(), "a press alone is no discrete step");
+                rig.fixture.frame(vec![pointer::release(at)]).idle(30);
+                let resolved_out = out != alt;
+                assert_eq!(
+                    &*rig.steps.borrow(),
+                    &[resolved_out],
+                    "one receipt, with the tool's actual Alt-resolved direction; Shift leaves it unchanged"
+                );
+                assert_ne!(rig.zoom(), before, "the source really zoomed");
+                assert_eq!(rig.zoom() < before, resolved_out, "the receipt agrees with the changed source view");
+            }
+        }
+    }
+}
+
+/// The bound case is not measured; the accepted contract lets each peer step independently.
+#[trial]
+fn a_selected_zoom_click_at_either_limit_reports_one_step_for_independent_peers() {
+    for scheme in [craft_behavior::ZoomScheme::PHOTOSHOP, craft_behavior::ZoomScheme::ILLUSTRATOR.with_hundred(2.0)] {
+        for animated in [false, true] {
+            for (out, alt) in [(false, false), (false, true), (true, false), (true, true)] {
+                let resolved_out = out != alt;
+                let bound = if resolved_out { scheme.min(DOCUMENT) } else { scheme.max_device() };
+                // A retained view may outlive a scheme's range. The blocked direction stays put;
+                // a click back toward the range must still zoom in its actual direction.
+                let beyond = if resolved_out { bound * 0.5 } else { bound * 2.0 };
+                let recovering = if resolved_out { scheme.max_device() * 2.0 } else { scheme.min(DOCUMENT) * 0.5 };
+                for (device_zoom, stays) in [(bound, true), (beyond, true), (recovering, false)] {
+                    let options = zoom_receipt_options(|options| options.animated_zoom = animated);
+                    let mut rig = ZoomReceiptRig::new(out, options, 1.0, false);
+                    rig.fixture.root_value(scheme);
+                    let mut view = rig.view.get().expect("the canvas ran");
+                    view.zoom = CanvasView::points_per_unit(device_zoom, rig.fixture.ctx().pixels_per_point());
+                    rig.view.set(Some(view));
+                    rig.fixture.hold(Modifiers { alt, ..Modifiers::NONE }).settle();
+                    let before = rig.view.get();
+                    let before_zoom = rig.zoom();
+                    let at = rig.press();
+                    rig.fixture.frame(vec![pointer::release(at)]).idle(if stays { 3 } else { 30 });
+                    if stays {
+                        assert_eq!(rig.view.get(), before, "the bounded clicked view stays exactly where it was");
+                    } else {
+                        assert_ne!(rig.view.get(), before, "the opposite direction can return a retained view toward its range");
+                        assert_eq!(rig.zoom() < before_zoom, resolved_out, "recovery never reverses the resolved click direction");
+                    }
+                    assert_eq!(&*rig.steps.borrow(), &[resolved_out], "the selected click still supplies exactly one resolved peer-step intent");
+                    let peer_zoom = scheme.device(50.0);
+                    let peer_step = scheme.step(peer_zoom, if rig.steps.borrow()[0] { -1 } else { 1 }, DOCUMENT);
+                    assert_ne!(peer_step, peer_zoom, "an unbounded peer can take its own rung independently of the source bound");
+                }
+            }
+        }
+    }
+}
+
+#[trial]
+fn a_zoom_steps_temporary_origin_is_latched_at_the_press() {
+    for out in [false, true] {
+        for (pressed_temporary, released_temporary) in [(false, true), (true, false)] {
+            let options = zoom_receipt_options(|options| options.animated_zoom = false);
+            let mut rig = ZoomReceiptRig::new(out, options, 4.0, false);
+            let before = rig.zoom();
+            rig.temporary.set(pressed_temporary);
+            let at = rig.press();
+            rig.temporary.set(released_temporary);
+            rig.fixture.frame(vec![pointer::release(at)]).idle(3);
+            assert_ne!(rig.zoom(), before, "temporary provenance never prevents the source's own zoom");
+            let expected = if pressed_temporary { vec![] } else { vec![out] };
+            assert_eq!(*rig.steps.borrow(), expected, "the press owns provenance even if the app's semantic state changes before release");
+        }
+    }
+}
+
+#[trial]
+fn momentary_and_stand_in_zoom_clicks_change_the_source_without_reporting_a_selected_step() {
+    let options = zoom_receipt_options(|options| options.animated_zoom = false);
+    for (mods, out) in [(Modifiers::ALT, true), (Modifiers::COMMAND, false)] {
+        let mut momentary = ZoomReceiptRig::new(false, options, 4.0, false);
+        let before = momentary.zoom();
+        let at = momentary.centre();
+        momentary.fixture.hold(mods).frame(vec![pointer::moved(at), key_press(Key::Space, mods)]);
+        momentary.fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::release(at)]).idle(3);
+        assert_ne!(momentary.zoom(), before, "the actual Space chord zooms the source");
+        assert_eq!(momentary.zoom() < before, out, "Alt+Space zooms out; Command+Space zooms in");
+        assert!(momentary.steps.borrow().is_empty(), "the momentary tool is not the selected Zoom");
+    }
+
+    let mut stand_in = ZoomReceiptRig::new(false, options, 4.0, true);
+    let before = stand_in.zoom();
+    stand_in.fixture.hold(Modifiers::COMMAND);
+    let at = stand_in.press();
+    stand_in.fixture.hold(Modifiers::NONE).frame(vec![pointer::release(at)]).idle(3);
+    assert!(stand_in.zoom() > before, "the Command stand-in retains its gesture after the modifier is released");
+    assert!(stand_in.steps.borrow().is_empty(), "a Zoom stand-in is not the selected tool");
+}
+
+#[trial]
+fn held_scrubby_and_rectangle_zoom_change_the_view_without_discrete_step_receipts() {
+    let mut options = NavigationOptions::default();
+    let mut held = ZoomReceiptRig::new(false, options, 4.0, false);
+    let before = held.zoom();
+    let at = held.press();
+    held.fixture.advance(0.8).frame(vec![]);
+    assert!(held.zoom() > before, "the real animated hold has started zooming before release");
+    held.fixture.frame(vec![pointer::release(at)]).idle(3);
+    assert!(held.steps.borrow().is_empty(), "the release of an active hold is no click step");
+
+    options.animated_zoom = false;
+    for scrubby in [false, true] {
+        options.scrubby_zoom = scrubby;
+        let mut rig = ZoomReceiptRig::new(false, options, 1.0, false);
+        let before = rig.zoom();
+        let at = rig.press();
+        let to = at + Vec2::new(100.0, 70.0);
+        rig.fixture.frame(vec![pointer::moved(at + Vec2::new(50.0, 35.0))]).frame(vec![pointer::moved(to)]);
+        rig.fixture.frame(vec![pointer::release(to)]).idle(3);
+        assert_ne!(rig.zoom(), before, "the real scrub or rectangle changed zoom (Scrubby Zoom: {scrubby})");
+        assert!(rig.steps.borrow().is_empty(), "neither kind of drag is a click step");
+    }
+}
+
+#[trial]
+fn wheel_and_fit_commands_change_the_view_without_selected_zoom_step_receipts() {
+    let options = zoom_receipt_options(|options| {
+        options.animated_zoom = false;
+        options.wheel = craft_ui::canvas::WheelScheme::Zoom;
+    });
+    let mut rig = ZoomReceiptRig::new(false, options, 4.0, false);
+    let at = rig.press();
+    rig.fixture.frame(vec![pointer::release(at)]);
+    assert_eq!(&*rig.steps.borrow(), &[false], "the focus click is a real selected-tool step");
+    rig.steps.borrow_mut().clear();
+    let before = rig.zoom();
+    rig.fixture.frame(vec![pointer::wheel(-120.0)]).idle(3);
+    assert_ne!(rig.zoom(), before, "the real canvas wheel route zoomed");
+    assert!(rig.steps.borrow().is_empty(), "wheel zoom is no selected-tool click");
+    let before = rig.zoom();
+    assert!(craft_ui::runtime::commands::fire(
+        rig.fixture.ctx(),
+        craft_ui::canvas::ViewCommands::FitOnScreen,
+        craft_ui::runtime::commands::FireSource::Menu
+    ));
+    rig.fixture.frame(vec![]).idle(3);
+    assert_ne!(rig.zoom(), before, "the real canvas Fit on Screen command ran");
+    assert!(rig.steps.borrow().is_empty(), "a canvas command is no selected-tool click");
+}
+
+#[trial]
+fn a_zoom_release_without_a_valid_press_or_document_reports_no_step() {
+    let options = zoom_receipt_options(|options| options.animated_zoom = false);
+    let mut no_press = ZoomReceiptRig::new(false, options, 4.0, false);
+    let at = no_press.centre();
+    no_press.fixture.frame(vec![pointer::moved(at), pointer::release(at)]).idle(3);
+    assert!(no_press.steps.borrow().is_empty(), "an unmatched release is not a bounded click");
+
+    let mut no_document = ZoomReceiptRig::with_document(false, options, 4.0, false, None);
+    let at = no_document.press();
+    no_document.fixture.frame(vec![pointer::release(at)]).idle(3);
+    assert!(no_document.steps.borrow().is_empty(), "a press with no document cannot request peer steps");
+}
+
+#[trial]
+fn a_selected_zoom_click_without_an_applicable_scheme_rung_is_not_a_bound() {
+    let options = zoom_receipt_options(|options| options.animated_zoom = false);
+    let mut rig = ZoomReceiptRig::new(true, options, 4.0, false);
+    let scheme = zoom_receipt_scheme(|scheme| {
+        scheme.rungs = &[];
+        scheme.floor = craft_behavior::ZoomFloor::Fixed(0.25);
+    });
+    rig.fixture.root_value(scheme).settle();
+    let before = rig.view.get();
+    let at = rig.press();
+    rig.fixture.frame(vec![pointer::release(at)]).idle(3);
+    assert_eq!(rig.view.get(), before, "there is no lower rung, although the source is above the floor");
+    assert!(rig.steps.borrow().is_empty(), "not every no-step result is a valid directional bound");
+}
+
+#[trial]
+fn invalid_or_nonfinite_zoom_schemes_do_not_report_selected_clicks() {
+    let options = zoom_receipt_options(|options| options.animated_zoom = false);
+    for scheme in [
+        zoom_receipt_scheme(|scheme| scheme.rungs = &[f64::NAN]),
+        zoom_receipt_scheme(|scheme| scheme.rungs = &[0.0]),
+        zoom_receipt_scheme(|scheme| scheme.max = f64::NAN),
+        zoom_receipt_scheme(|scheme| scheme.max = f64::INFINITY),
+        zoom_receipt_scheme(|scheme| scheme.floor = craft_behavior::ZoomFloor::Fixed(f64::NAN)),
+        zoom_receipt_scheme(|scheme| scheme.floor = craft_behavior::ZoomFloor::ShorterSide(f64::NAN)),
+    ] {
+        let mut rig = ZoomReceiptRig::new(false, options, 4.0, false);
+        rig.fixture.root_value(scheme).settle();
+        let at = rig.press();
+        rig.fixture.frame(vec![pointer::release(at)]).idle(3);
+        assert!(rig.steps.borrow().is_empty(), "malformed scheme data cannot masquerade as a bounded selected click");
+    }
+}
