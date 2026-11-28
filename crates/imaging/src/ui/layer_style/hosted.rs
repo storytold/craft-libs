@@ -6,7 +6,6 @@ use std::sync::{Arc, LazyLock};
 use craft_behavior::{Metrics, Sense};
 use craft_color_ui::gradient::GradientStops;
 use craft_theme::Srgba;
-use craft_ui::choice::SwatchMetrics;
 use craft_ui::contract::{
     Bind, CanvasGesture, Common, Component, Cx, DisabledLook, Entry, MeasureCx, PaintUi, Props as _, Role, Sampler as _, Show as _,
 };
@@ -69,7 +68,7 @@ impl LayerStyleOutput {
 /// Paints the preview swatch beside the footer buttons from the draft.
 type PreviewPaint = dyn Fn(&ContentPainterCx, Rect, &LayerStyleDraft) + Send + Sync;
 
-/// The style of the preview swatch: a square as tall as a colour swatch.
+/// The style of the preview swatch in the dialog's button column.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct PreviewSwatchStyle {
@@ -115,7 +114,8 @@ impl Component for PreviewSwatch<'_> {
     type Output = Response;
 
     fn style(cx: &StyleCx<'_>, _: PreviewSwatchStyleKey) -> PreviewSwatchStyle {
-        PreviewSwatchStyle { metrics: Metrics::new(), side: SwatchMetrics::of(cx).side }
+        let button_width = cx.tokens.size.dialog.side_button;
+        PreviewSwatchStyle { metrics: Metrics::new(), side: button_width * (5.0 / 6.0) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -127,7 +127,9 @@ impl Component for PreviewSwatch<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        (self.paint)(&ui.content_painter(cx), cx.rect, self.draft);
+        let painter = ui.content_painter(cx);
+        let inside = painter.plot_frame(cx.rect);
+        (self.paint)(&painter, inside, self.draft);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
