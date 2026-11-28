@@ -109,6 +109,16 @@ records, through jsDelivr (raw GitHub as the fallback), and each is checked agai
 size and sha256 before use. Previews stay in memory and are never installed. A source the user
 adds is an index at an https URL; its families are never curated.
 
+## Font picker filters
+
+The font picker reads outline properties and script coverage through the host's jobs. While those
+reads are pending, the list shows "Font information is loading." Matching families appear as their
+reads finish. The headless `family_rows` function reads these properties synchronously.
+The default native job service runs these reads on background threads. On WebAssembly each picker
+runs at most one queued family read per frame on the UI thread.
+Closed-field arrow and wheel inputs wait for the complete filtered order before changing the family.
+Moving focus away cancels pending steps.
+
 ## Strings
 
 Every interface string is a word of the Host's `I18n` (`craft_ui::words!`), so the panel is in the Host's

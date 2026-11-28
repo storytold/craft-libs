@@ -1060,20 +1060,27 @@ const SAMPLE_TEXTS: [(&str, &str, &str); 2] = [("selection", "Selected Text", "H
 /// An open library list in the `Chips` layout over Inter, keeping `settings`, with the host's sample texts when
 /// `offered` and "Hello" as the preview text.
 fn sample_texts_rig(settings: Rc<RefCell<FontPickerSettings>>, offered: bool) -> Fixture {
+    sample_texts_rig_with(settings, offered, Some(FontFilters::default()))
+}
+
+/// [`sample_texts_rig`] with the filters bound only when `filters` is given.
+fn sample_texts_rig_with(settings: Rc<RefCell<FontPickerSettings>>, offered: bool, filters: Option<FontFilters>) -> Fixture {
     let catalog = catalog_of(&[INTER_REGULAR]);
     let mut family = "Inter".to_owned();
-    let mut filters = FontFilters::default();
+    let mut filters = filters;
     let mut fx = Fixture::new(move |ui| {
         let texts: Vec<SampleText<'_>> =
             if offered { SAMPLE_TEXTS.iter().map(|(key, label, text)| SampleText::new(key, *label, text)).collect() } else { Vec::new() };
         let mut settings = settings.borrow_mut();
-        FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
             .settings(Bind::bound(&mut settings))
-            .filters(Bind::bound(&mut filters))
             .filter_layout(FilterLayout::Chips)
             .preview_text("Hello")
-            .sample_texts(&texts)
-            .show(ui);
+            .sample_texts(&texts);
+        if let Some(filters) = filters.as_mut() {
+            picker = picker.filters(Bind::bound(filters));
+        }
+        picker.show(ui);
     });
     fx.in_room(Room::Window);
     fx.settle();
@@ -1112,6 +1119,23 @@ fn the_sample_text_dropdown_picks_what_every_sample_shows() {
     let fx = sample_texts_rig(stored("word"), false);
     assert!(fx.by_label("Sample Text").is_none(), "without the host's sample texts there is no dropdown");
     assert!(fx.by_label("Inter: Hello").is_some(), "without sample texts the rows show the preview text");
+}
+
+/// A library list in the `Chips` layout without bound filters still offers the Sample Text dropdown, and a choice
+/// from it changes every row.
+#[trial]
+fn the_sample_text_dropdown_shows_without_bound_filters() {
+    let settings = Rc::new(RefCell::new(FontPickerSettings::default()));
+    let mut fx = sample_texts_rig_with(Rc::clone(&settings), true, None);
+    assert!(fx.by_label("Inter: Hello").is_some(), "the rows show the first sample text");
+    let dropdown = fx.by_label("Sample Text").expect("the sample text dropdown without bound filters");
+    fx.click(&dropdown);
+    fx.settle();
+    let word = fx.by_label("Word").expect("the dropdown lists the host's sample texts");
+    fx.click(&word);
+    fx.settle();
+    assert_eq!(settings.borrow().sample_text.as_deref(), Some("word"), "the choice is kept in the settings");
+    assert!(fx.by_label("Inter: Abc").is_some(), "the row follows the chosen sample text");
 }
 
 /// The repository's Noto Sans CJK SC subset (CFF): its line (hhea 1160/-288) is taller than Inter's.

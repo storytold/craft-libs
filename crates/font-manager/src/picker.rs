@@ -67,6 +67,7 @@ craft_ui::words! {
         no_similar: "fontPicker.noSimilar" = "No similar fonts: the current font doesn't say what it looks like.";
         no_favorites: "fontPicker.noFavorites" = "No favorite fonts yet: click the star beside a font to add it.";
         no_match_filters: "fontPicker.noMatchFilters" = "No fonts match these filters.";
+        information_loading: "fontPicker.informationLoading" = "Font information is loading.";
         serif: "fontPicker.classSerif" = "Serif";
         slab_serif: "fontPicker.classSlabSerif" = "Slab Serif";
         sans_serif: "fontPicker.classSansSerif" = "Sans Serif";
@@ -93,6 +94,30 @@ craft_ui::words! {
         preview_large: "fontPicker.previewLarge" = "Large";
         /// The dropdown of the host's sample texts, beside the preview size.
         sample_text: "fontPicker.sampleText" = "Sample Text";
+        /// The heading of the property rows.
+        font_properties: "fontPicker.fontProperties" = "Font Properties";
+        /// The choice of a property row that filters nothing.
+        any_property: "fontPicker.anyProperty" = "Any";
+        weight: "fontPicker.weight" = "Weight";
+        weight_light: "fontPicker.weightLight" = "Light";
+        weight_regular: "fontPicker.weightRegular" = "Regular";
+        weight_heavy: "fontPicker.weightHeavy" = "Heavy";
+        width: "fontPicker.width" = "Width";
+        width_narrow: "fontPicker.widthNarrow" = "Narrow";
+        width_normal: "fontPicker.widthNormal" = "Normal";
+        width_wide: "fontPicker.widthWide" = "Wide";
+        /// The x-height row.
+        height: "fontPicker.height" = "Height";
+        contrast: "fontPicker.contrast" = "Contrast";
+        grade_low: "fontPicker.gradeLow" = "Low";
+        grade_medium: "fontPicker.gradeMedium" = "Medium";
+        grade_high: "fontPicker.gradeHigh" = "High";
+        case: "fontPicker.case" = "Case";
+        case_standard: "fontPicker.caseStandard" = "Standard";
+        case_caps_only: "fontPicker.caseCapsOnly" = "Caps Only";
+        figures: "fontPicker.figures" = "Figures";
+        figures_lining: "fontPicker.figuresLining" = "Lining";
+        figures_oldstyle: "fontPicker.figuresOldstyle" = "Oldstyle";
         /// The similar-fonts chip, with `{family}` for the reference family.
         similar_to: template "fontPicker.similarTo" = "≈ {family}";
         clear_similar: "fontPicker.clearSimilar" = "Clear Similar Fonts";
@@ -221,6 +246,85 @@ impl FontScript {
     pub const ALL: [FontScript; 3] = [FontScript::Latin, FontScript::Japanese, FontScript::Thai];
 }
 
+/// A grade of a font property, from least to most: for weight light, regular and heavy; for width narrow, normal and
+/// wide; for height and contrast low, medium and high.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Grade {
+    /// The least: light, narrow or low.
+    Low,
+    /// The middle: regular, normal or medium.
+    Medium,
+    /// The most: heavy, wide or high.
+    High,
+}
+
+/// Whether a face has small letters of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FontCase {
+    /// Capitals and small letters.
+    Standard,
+    /// Capitals only: each small letter is missing or draws as its capital.
+    CapsOnly,
+}
+
+/// The style of a face's default figures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FontFigures {
+    /// Figures as tall as the capitals.
+    Lining,
+    /// Figures near the x-height, some rising or falling past it.
+    Oldstyle,
+}
+
+/// The Font Properties filter: each property chosen keeps only the families that have it, and the chosen properties
+/// combine. Nothing chosen keeps every family. The grades are the picker's own thresholds:
+///
+/// - weight: a family has a grade when any of its faces does; light below 350, regular 350 to 549, heavy 550 and up;
+/// - width: a family has a grade when any of its faces does; narrow below 97.5% of normal, normal up to 102.5%, wide
+///   above;
+/// - height: the regular face's x-height (`OS/2` `sxHeight`, else the top of `x`) per em; low below 0.45, medium below
+///   0.52, high from 0.52;
+/// - contrast: the regular face's thickest stroke of `o` over its thinnest, from the boxes of its outer and inner
+///   contours; low below 1.5, medium below 3, high from 3; without a measurable `o`, the PANOSE contrast digit of a
+///   Latin text face (2 to 4 low, 5 to 7 medium, 8 and 9 high);
+/// - case: caps only when every capital A to Z is mapped and every small letter is missing, maps to its capital's
+///   glyph or draws its capital's box; standard otherwise;
+/// - figures: oldstyle when the top of `0` is below halfway between the x-height and the cap height (`sCapHeight`,
+///   else the top of `H`), lining otherwise.
+///
+/// A family the property cannot be read for is left out while the property is chosen.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct FontProperties {
+    /// Only families with a face of this weight.
+    pub weight: Option<Grade>,
+    /// Only families with a face of this width.
+    pub width: Option<Grade>,
+    /// Only families of this x-height.
+    pub height: Option<Grade>,
+    /// Only families of this stroke contrast.
+    pub contrast: Option<Grade>,
+    /// Only families of this case.
+    pub case: Option<FontCase>,
+    /// Only families with these default figures.
+    pub figures: Option<FontFigures>,
+}
+
+impl FontProperties {
+    /// Whether any property is chosen.
+    pub fn any(&self) -> bool {
+        self.weight.is_some()
+            || self.width.is_some()
+            || self.height.is_some()
+            || self.contrast.is_some()
+            || self.case.is_some()
+            || self.figures.is_some()
+    }
+}
+
 /// A family set the host gives (VectorCraft: Document, Recently Added), one filter toggle each. An `ordered` set that
 /// is on lists in its own order. A disabled set's toggle is off and dimmed, with its hint as the reason.
 pub struct FamilySet<'a> {
@@ -291,12 +395,20 @@ pub struct FontFilters {
     pub script: Option<FontScript>,
     /// Keys of the host family sets that are on; each keeps only its families.
     pub sets: Vec<String>,
+    /// The Font Properties filter.
+    pub properties: FontProperties,
 }
 
 impl FontFilters {
     /// Whether any filter narrows the list (Clear All is enabled).
     pub fn any(&self) -> bool {
-        self.class.is_some() || self.favorites || self.variable || self.similar.is_some() || self.script.is_some() || !self.sets.is_empty()
+        self.class.is_some()
+            || self.favorites
+            || self.variable
+            || self.similar.is_some()
+            || self.script.is_some()
+            || !self.sets.is_empty()
+            || self.properties.any()
     }
 
     /// Clear All: every filter off.
@@ -647,9 +759,19 @@ struct Typing {
     /// The pointer was over the open list's rows in the last pass.
     over_rows: bool,
     hide_classes: bool,
+    /// The `Chips` layout's Font Properties chip is on, so the property dropdowns show.
+    properties_open: bool,
     expanded: Vec<String>,
     rested: Vec<String>,
     focused: bool,
+    steps: Vec<ClosedInput>,
+}
+
+#[derive(Clone)]
+struct ClosedInput {
+    moves: Vec<bool>,
+    wheel_along: Option<(WheelPhase, f64)>,
+    wheel_ended: bool,
 }
 
 /// The interface language code of the host, English without one.
@@ -741,6 +863,15 @@ pub struct FontPicker<'a> {
     /// The scripts the script row offers (with All Scripts first); empty: no script row.
     #[prop]
     scripts: &'a [FontScript],
+    /// Offers the Font Properties dropdowns (weight, width, height, contrast, case and figures): under the toggle row in
+    /// the `Toolbar` layout, and in the `Chips` layout behind a Font Properties chip after Font Technology, which
+    /// clears them when turned off. Off: no dropdowns, and only properties already in the bound filters narrow the list.
+    /// Outline properties load through the host's jobs. The list shows a loading message until those reads finish.
+    /// On WebAssembly each picker runs at most one queued family read per frame on the UI thread.
+    /// Closed-field arrows and wheel steps wait until the filtered family order is ready.
+    /// Moving focus away cancels pending steps.
+    #[prop]
+    properties: bool,
     /// Picks the layout of the filter area.
     #[prop]
     filter_layout: FilterLayout,
@@ -806,6 +937,7 @@ impl<'a> FontPicker<'a> {
             served: &[],
             sets: &[],
             scripts: &[],
+            properties: false,
             filter_layout: FilterLayout::default(),
             kind: FontPickerKind::default(),
             actions: &[],
@@ -865,7 +997,7 @@ impl<'a> FontPicker<'a> {
 
     /// What the closed field's arrows and wheel step through: the host face and action rows in group order, then the
     /// families in the list's narrowed order. A notice takes no step.
-    fn stops(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Vec<Stop> {
+    fn stops(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Option<Vec<Stop>> {
         #[cfg(feature = "screen-testing")]
         craft_ui::runtime::memory::with_session::<StopBuilds, _>(&cx.response.ctx, stop_builds_id(), |builds| builds.0 += 1);
         let folder = cx.env.folder();
@@ -874,19 +1006,45 @@ impl<'a> FontPicker<'a> {
             .filter_map(|(group, at)| self.host.get(group)?.rows.get(at))
             .filter(|row| !matches!(row.kind, HostFontKind::Notice))
             .map(|row| Stop::Host(row.key.clone()));
-        host.chain(self.ordered(cx, settings, filters).into_iter().map(|row| Stop::Family(row.family))).collect()
+        Some(host.chain(self.ordered(cx, settings, filters)?.into_iter().map(|row| Stop::Family(row.family))).collect())
+    }
+
+    /// Applies the closed field's step onto `all[at]`: a host row is reported as `host_picked`; a family clears it and
+    /// is written, by the wheel's run when `phase` is given, otherwise as the pick. Arrows that end where they started
+    /// (`start`) apply nothing.
+    fn apply_stop(&mut self, cx: &mut Cx<'_, Self>, all: &[Stop], start: Option<usize>, last: Option<(usize, Option<WheelPhase>)>) {
+        let Some((at, phase)) = last else { return };
+        if phase.is_none() && start == Some(at) {
+            return;
+        }
+        match (all.get(at), phase) {
+            (Some(Stop::Host(key)), _) => self.host_picked = Some(key.clone()),
+            (Some(Stop::Family(family)), Some(phase)) => {
+                self.host_picked = None;
+                cx.wheel_run(phase, Some(family.clone()));
+            }
+            (Some(Stop::Family(family)), None) => {
+                self.host_picked = None;
+                self.picked = Some(family.clone());
+                cx.set(family.clone());
+            }
+            (None, _) => {}
+        }
     }
 
     /// The families in the list's narrowed order (the bound filters and the host's sets apply) without the Recent
     /// group, which the arrows and the wheel step through.
-    fn ordered(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Vec<FamilyRow> {
+    fn ordered(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Option<Vec<FamilyRow>> {
         let infos = infos_of(&cx.response.ctx, cx.id, self.catalog);
         let (folder, collator) = (cx.env.folder(), cx.env.collator());
         let language = ui_language(&cx.env);
         let listing = rank::Listing { query: "", settings, filters, language: &language, served: &[], sets: self.sets };
-        let mut rows = rank::list(self.catalog, &infos, &listing, &rank::Language { folder: &folder, collator: &collator }, true).0;
+        let (mut rows, _, pending) = rank::ui_list(self.catalog, &infos, &listing, &rank::Language { folder: &folder, collator: &collator }, cx);
+        if pending {
+            return None;
+        }
         rows.retain(|row| !row.recent);
-        rows
+        Some(rows)
     }
 }
 
@@ -1024,6 +1182,9 @@ impl Component for FontPicker<'_> {
         }
         let focused = cx.is_focused();
         let was_focused = std::mem::replace(&mut cx.memory::<Typing>().focused, focused);
+        if was_focused && !focused {
+            cx.memory::<Typing>().steps.clear();
+        }
         let list = cx.popup(POPUP);
         let draft = cx.text(&text_key()).and_then(|outcome| outcome.draft.clone());
         let before = std::mem::replace(&mut cx.memory::<Typing>().draft, draft.clone());
@@ -1053,6 +1214,7 @@ impl Component for FontPicker<'_> {
             }
         }
         if list.is_open(cx) {
+            cx.memory::<Typing>().steps.clear();
             return;
         }
         // The one place the picker forgets what belongs to an open list.
@@ -1084,53 +1246,62 @@ impl Component for FontPicker<'_> {
             }
         });
         let wheel_ended = wheel.is_some_and(|wheel| wheel.phase == WheelPhase::End);
-        if moves.is_empty() && wheel_along.is_none() {
+        let mut inputs = std::mem::take(&mut cx.memory::<Typing>().steps);
+        if moves.is_empty() && wheel_along.is_none() && inputs.is_empty() {
             if wheel_ended {
                 cx.wheel_run(WheelPhase::End, None);
             }
             return;
         }
+        if !moves.is_empty() || wheel_along.is_some() || wheel_ended {
+            inputs.push(ClosedInput { moves, wheel_along, wheel_ended });
+        }
         let settings = read(&mut self.settings, cx);
         let filters = read(&mut self.filters, cx).unwrap_or_default();
-        let all = self.stops(cx, settings.as_ref(), &filters);
+        let Some(all) = self.stops(cx, settings.as_ref(), &filters) else {
+            cx.memory::<Typing>().steps = inputs;
+            return;
+        };
         let stops: Vec<usize> = (0..all.len()).collect();
-        if !moves.is_empty() {
-            let here = match self.current_host.as_deref() {
-                Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
-                None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
-            };
-            let mut to = here;
-            for forward in moves {
-                to = step_stop(&stops, to, forward);
+        let mut current = match self.current_host.as_deref() {
+            Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
+            None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
+        };
+        // Queued inputs replay as one move: only the stop the last of them reaches is applied, so a family stepped
+        // past on the way to a host row (or the other way round) is neither written nor reported. `last` holds that
+        // stop, with the wheel phase when the wheel reached it (a run's start is kept).
+        let mut last: Option<(usize, Option<WheelPhase>)> = None;
+        let mut start = current;
+        for ClosedInput { moves, wheel_along, wheel_ended } in inputs {
+            if !moves.is_empty() {
+                let here = current;
+                let mut to = here;
+                for forward in moves {
+                    to = step_stop(&stops, to, forward);
+                }
+                current = to;
+                if to != here {
+                    last = to.map(|at| (at, None));
+                }
             }
-            if to != here {
-                match to.and_then(|at| all.get(at)) {
-                    Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
-                    Some(Stop::Family(family)) => {
-                        self.picked = Some(family.clone());
-                        cx.set(family.clone());
-                    }
-                    None => {}
+            // The wheel steps one stop a line down for a step forward, as one run the wheel's end commits.
+            if wheel_ended {
+                self.apply_stop(cx, &all, start, last.take());
+                start = current;
+                cx.wheel_run(WheelPhase::End, None);
+            } else if let Some((phase, along)) = wheel_along {
+                let mut stop = current;
+                for _ in 0..along.abs().round() as usize {
+                    stop = step_stop(&stops, stop, along < 0.0);
+                }
+                current = stop;
+                if let Some(at) = stop {
+                    let started = matches!(last, Some((_, Some(WheelPhase::Start))));
+                    last = Some((at, Some(if started { WheelPhase::Start } else { phase })));
                 }
             }
         }
-        // The wheel steps one stop a line down for a step forward, as one run the wheel's end commits.
-        if wheel_ended {
-            cx.wheel_run(WheelPhase::End, None);
-        } else if let Some((phase, along)) = wheel_along {
-            let mut stop = match self.current_host.as_deref() {
-                Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
-                None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
-            };
-            for _ in 0..along.abs().round() as usize {
-                stop = step_stop(&stops, stop, along < 0.0);
-            }
-            match stop.and_then(|at| all.get(at)) {
-                Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
-                Some(Stop::Family(family)) => cx.wheel_run(phase, Some(family.clone())),
-                None => {}
-            }
-        }
+        self.apply_stop(cx, &all, start, last);
     }
 
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {

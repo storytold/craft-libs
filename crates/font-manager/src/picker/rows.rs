@@ -15,7 +15,7 @@ use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::overlay::Dismiss;
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnSpec, Cx, Edit as _, Entry, LeadSource, Overlay, OverlayUi, Overlays as _, Props as _, Remember as _, Show as _,
-    ShowCollection as _, ShowContainer as _, ToggleColumn, WordSetCx as _, clicked,
+    ShowCollection as _, ShowContainer as _, Sizing, ToggleColumn, WordSetCx as _, clicked,
 };
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -26,11 +26,11 @@ use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::StageAccess;
 
 use super::banner::FontPreviewBanner;
-use super::rank::{FamilyInfos, Language, Listing, host_rows, list, shown_name};
+use super::rank::{FamilyInfos, Language, Listing, host_rows, shown_name, ui_list};
 use super::{
-    FamilyRow, FamilySet, FilterLayout, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords,
-    FontPreviewSize, FontScript, HostFontGroup, HostFontKind, HostFontRow, POPUP, SAMPLE_EM, SIMILAR, Sample, SampleText, Typing, chosen_sample,
-    infos_of, read, ui_language, write,
+    FamilyRow, FamilySet, FilterLayout, FontCase, FontClass, FontFigures, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings,
+    FontPickerWords, FontPreviewSize, FontProperties, FontScript, Grade, HostFontGroup, HostFontKind, HostFontRow, POPUP, SAMPLE_EM, SIMILAR, Sample,
+    SampleText, Typing, chosen_sample, infos_of, read, ui_language, write,
 };
 use crate::panel::faces::{self, Owner, Shown};
 use crate::panel::specimen::{FontSample, SampleFace};
@@ -392,6 +392,42 @@ fn sample_text_select(
     }
 }
 
+/// One Font Properties choice: its name, then a dropdown of Any and each of `choices` named by it. Any clears `slot`.
+fn property_select<T: Copy + PartialEq>(ui: &mut egui::Ui, name: &Label, any: &Label, slot: &mut Option<T>, choices: &[(T, &Label)]) {
+    let before = slot.and_then(|value| choices.iter().position(|(choice, _)| *choice == value)).map_or(0u8, |at| at as u8 + 1);
+    let entries: Vec<Entry<u8>> = std::iter::once(Entry::new(0u8, any.clone()))
+        .chain(choices.iter().enumerate().map(|(at, (_, label))| Entry::new(at as u8 + 1, (*label).clone())))
+        .collect();
+    let mut chosen = before;
+    Text::new(name.clone()).show(ui);
+    Select::new(name.clone(), Bind::bound(&mut chosen), &entries).sizing(Sizing::Content).show(ui);
+    if chosen != before {
+        *slot = usize::from(chosen).checked_sub(1).and_then(|at| choices.get(at)).map(|(choice, _)| *choice);
+    }
+}
+
+/// The Font Properties row: its heading when `heading`, then a dropdown each for weight, width, height, contrast, case
+/// and figures.
+fn property_rows(ui: &mut egui::Ui, properties: &mut FontProperties, heading: bool, words: &FontPickerWords) {
+    let weights = [(Grade::Low, &words.weight_light), (Grade::Medium, &words.weight_regular), (Grade::High, &words.weight_heavy)];
+    let widths = [(Grade::Low, &words.width_narrow), (Grade::Medium, &words.width_normal), (Grade::High, &words.width_wide)];
+    let levels = [(Grade::Low, &words.grade_low), (Grade::Medium, &words.grade_medium), (Grade::High, &words.grade_high)];
+    let any = &words.any_property;
+    let cases = [(FontCase::Standard, &words.case_standard), (FontCase::CapsOnly, &words.case_caps_only)];
+    let figures = [(FontFigures::Lining, &words.figures_lining), (FontFigures::Oldstyle, &words.figures_oldstyle)];
+    Row::new().wrap(true).show(ui, |ui, _| {
+        if heading {
+            Text::new(words.font_properties.clone()).show(ui);
+        }
+        property_select(ui, &words.weight, any, &mut properties.weight, &weights);
+        property_select(ui, &words.width, any, &mut properties.width, &widths);
+        property_select(ui, &words.height, any, &mut properties.height, &levels);
+        property_select(ui, &words.contrast, any, &mut properties.contrast, &levels);
+        property_select(ui, &words.case, any, &mut properties.case, &cases);
+        property_select(ui, &words.figures, any, &mut properties.figures, &figures);
+    });
+}
+
 /// What the preview area of the `Chips` filters offers and writes: the preview size, and the host's sample texts with
 /// the chosen one and the key a pick writes.
 struct PreviewChoices<'s, 'a> {
@@ -401,18 +437,17 @@ struct PreviewChoices<'s, 'a> {
     key: &'s mut Option<String>,
 }
 
-/// The `Chips` filter area: the script row; Favorites, the host sets, Any Kind and the classes; Font Technology and
-/// Variable; the similar chip while Show Similar Fonts is on; and, while samples show, the Font Preview Size row and the
-/// Sample Text dropdown when the host offers sample texts.
+/// The `Chips` filter area: the script row; Favorites, the host sets, Any Kind and the classes; Font Technology,
+/// Variable and, when `properties` is given, the Font Properties chip, which opens the property dropdowns under it and,
+/// turned off, clears them; and the similar chip while Show Similar Fonts is on.
 fn filter_chips(
     ui: &mut egui::Ui,
     filters: &mut FontFilters,
-    choices: PreviewChoices<'_, '_>,
     sets: &[FamilySet<'_>],
     scripts: &[FontScript],
+    mut properties: Option<&mut bool>,
     words: &FontPickerWords,
 ) {
-    let PreviewChoices { size: preview, texts, chosen: sample, key } = choices;
     Stack::new().show(ui, |ui, _| {
         if !scripts.is_empty() {
             Row::new().wrap(true).show(ui, |ui, _| {
@@ -435,10 +470,22 @@ fn filter_chips(
         for hint in sets.iter().filter(|set| !set.enabled).filter_map(|set| set.hint.as_ref()) {
             Text::new(hint.clone()).show(ui);
         }
+        let mut open = properties.as_deref_mut().map(|open| (*open || filters.properties.any(), open));
         Row::new().wrap(true).show(ui, |ui, _| {
             Text::new(words.font_technology.clone()).show(ui);
             ToggleButton::new(words.variable.clone(), Bind::bound(&mut filters.variable)).show(ui);
+            if let Some((shown, _)) = open.as_mut() {
+                ToggleButton::new(words.font_properties.clone(), Bind::bound(shown)).show(ui);
+            }
         });
+        if let Some((shown, kept)) = open {
+            if shown {
+                property_rows(ui, &mut filters.properties, false, words);
+            } else {
+                filters.properties = FontProperties::default();
+            }
+            *kept = shown;
+        }
         if let Some(reference) = filters.similar.clone() {
             Row::new().show(ui, |ui, _| {
                 Text::new(Label::from(words.similar_to.fill(&[("family", reference.as_str())]))).show(ui);
@@ -448,6 +495,19 @@ fn filter_chips(
                 }
             });
         }
+    });
+}
+
+/// Whether the `Chips` preview area shows: while samples show at a size.
+fn previews_shown(size: Option<FontPreviewSize>) -> bool {
+    size.is_some_and(|size| size != FontPreviewSize::None)
+}
+
+/// The `Chips` preview area, while samples show: the Font Preview Size row and the Sample Text dropdown when the host
+/// offers sample texts. It shows whether or not the filters are bound.
+fn preview_chips(ui: &mut egui::Ui, choices: PreviewChoices<'_, '_>, words: &FontPickerWords) {
+    let PreviewChoices { size: preview, texts, chosen: sample, key } = choices;
+    Stack::new().show(ui, |ui, _| {
         if let Some(size) = preview.as_mut().filter(|size| **size != FontPreviewSize::None) {
             let last = PREVIEW_SIZES.len() as u8 - 1;
             let before = PREVIEW_SIZES.iter().position(|s| s == size).map_or(last, |at| at as u8);
@@ -578,6 +638,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         (typing.draft.clone().unwrap_or_default(), typing.draft.is_some(), typing.lead.clone(), typing.expanded.clone())
     };
     let mut hide_classes = cx.memory::<Typing>().hide_classes;
+    let mut properties_open = cx.memory::<Typing>().properties_open;
     let family = cx.value().cloned().unwrap_or_default();
     let settings = read(&mut picker.settings, cx);
     let plain = picker.kind == FontPickerKind::Plain;
@@ -588,14 +649,14 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let chips = picker.filter_layout == FilterLayout::Chips;
     let on_white = settings.as_ref().is_some_and(|s| s.samples_on_white);
     let mut preview_size = settings.as_ref().map(|s| s.preview);
-    let (sets, scripts) = (picker.sets, picker.scripts);
+    let (sets, scripts, properties) = (picker.sets, picker.scripts, picker.properties);
     let narrowing = filters.clone().unwrap_or_default();
     let catalog = picker.catalog;
     let infos = infos_of(&cx.response.ctx, cx.id, catalog);
     let language_code = ui_language(&cx.env);
     let (folder, collator) = (cx.env.folder(), cx.env.collator());
     let listing = Listing { query: &query, settings: settings.as_ref(), filters: &narrowing, language: &language_code, served: picker.served, sets };
-    let (found, comparable) = list(catalog, &infos, &listing, &Language { folder: &folder, collator: &collator }, true);
+    let (found, comparable, information_loading) = ui_list(catalog, &infos, &listing, &Language { folder: &folder, collator: &collator }, cx);
     let layout = Layout { sections: plain && query.trim().is_empty(), actions: actions.len() };
     let shown_host = host_rows(picker.host, &query, &folder);
     let slots = slots(catalog, picker.host, &shown_host, found, &expanded, &layout);
@@ -616,8 +677,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let favorites_empty = settings.as_ref().is_none_or(|s| s.favorites.is_empty());
     // Rows are keyed, so the stamp names only what rebuilds the list: opening a family keeps the lead.
     let mut stamp = DefaultHasher::new();
-    (&query, narrowing.class, narrowing.favorites, narrowing.variable, &narrowing.similar, narrowing.script, &narrowing.sets, on_white, chips)
-        .hash(&mut stamp);
+    let narrowed_by = (narrowing.class, narrowing.favorites, narrowing.variable, &narrowing.similar, narrowing.script, &narrowing.sets);
+    (&query, narrowed_by, &narrowing.properties, on_white, chips).hash(&mut stamp);
     let banner_family = lead.unwrap_or_else(|| family.clone());
     let texts = picker.sample_texts;
     let chosen = chosen_sample(texts, settings.as_ref());
@@ -653,11 +714,20 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
             }
             if let Some(filters) = filters.as_mut() {
                 if chips {
-                    let choices = PreviewChoices { size: &mut preview_size, texts, chosen, key: &mut sample_key };
-                    filter_chips(ui, filters, choices, sets, scripts, &words);
+                    filter_chips(ui, filters, sets, scripts, properties.then_some(&mut properties_open), &words);
                 } else {
                     filter_bar(ui, filters, &mut hide_classes, &family, &words);
+                    if properties {
+                        property_rows(ui, &mut filters.properties, true, &words);
+                    }
                 }
+            }
+            let previews = chips && !plain && previews_shown(preview_size);
+            if previews {
+                let choices = PreviewChoices { size: &mut preview_size, texts, chosen, key: &mut sample_key };
+                preview_chips(ui, choices, &words);
+            }
+            if has_filters || previews {
                 Divider::horizontal().show(ui);
             }
             Row::new().show(ui, |ui, _| {
@@ -665,10 +735,16 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                     class_column(ui, filters, &words);
                 }
                 Stack::new().show(ui, |ui, _| {
+                    if information_loading {
+                        Text::new(words.information_loading.clone()).show(ui);
+                    }
                     if narrowing.similar.is_some() && !comparable {
                         Text::new(words.no_similar.clone()).show(ui);
                     }
                     if slots.is_empty() {
+                        if information_loading {
+                            return;
+                        }
                         let message = if narrowing.favorites && favorites_empty {
                             &words.no_favorites
                         } else if narrowing.any() {
@@ -787,6 +863,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     }
     let typing = cx.memory::<Typing>();
     typing.hide_classes = hide_classes;
+    typing.properties_open = properties_open;
     typing.over_rows = over_rows;
     // A preview the pointer proposed ends when the pointer leaves the rows (a keyed row keeps its preview). The
     // collection keeps its lead on the row, so the pointer coming back to that row reports no move: the row under it

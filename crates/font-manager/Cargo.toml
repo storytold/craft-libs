@@ -57,6 +57,8 @@ craft-fonts-build = { workspace = true }
 craft-font-manager = { path = ".", features = ["suite"] }
 # The shared preview test vectors.
 serde_json = { workspace = true }
+# The Font Properties trials' faces, built in memory.
+write-fonts = { version = "0.54", features = ["read"] }
 
 [[test]]
 name = "it"

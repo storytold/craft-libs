@@ -4,6 +4,7 @@ pub(crate) mod glyphs;
 pub(crate) mod missing;
 pub(crate) mod panel;
 pub(crate) mod picker;
+pub(crate) mod properties;
 
 craft_ui::registry!();
 
