@@ -513,8 +513,8 @@ fn take_message_announcements(fixture: &Fixture) -> Vec<String> {
 /// idle passes and another no-match query stay quiet, and a positive result resets it.
 #[trial]
 fn a_focused_empty_filter_announces_politely_once_and_resets_after_matches() {
-    use craft_ui::contract::Politeness;
     use craft_ui::runtime::access::Role;
+    use egui::accesskit::Live;
 
     let (mut rig, _, _) = message_rig(Some(NO_MATCHES), ONE_PANEL);
     let search = rig.fixture.by_label("Search layers").expect("the existing Name search");
@@ -530,9 +530,10 @@ fn a_focused_empty_filter_announces_politely_once_and_resets_after_matches() {
         .fixture
         .by_role(Role::STATUS)
         .into_iter()
-        .find(|target| rig.fixture.tree().name(target.node).is_some_and(|text| text.starts_with(NO_MATCHES)))
+        .find(|target| rig.fixture.tree().name_of(target.node).is_some_and(|text| text.starts_with(NO_MATCHES)))
         .expect("the existing announcement service exposes a live status node");
-    assert_eq!(rig.fixture.tree().live(status.node), Some(Politeness::Polite));
+    let live = rig.fixture.tree().update().nodes.iter().find(|(id, _)| *id == status.node.into()).and_then(|(_, node)| node.live());
+    assert_eq!(live, Some(Live::Polite));
     for _ in 0..3 {
         rig.fixture.frame(Vec::new());
         assert!(take_message_announcements(&rig.fixture).is_empty(), "idle/repaint does not repeat the announcement");
