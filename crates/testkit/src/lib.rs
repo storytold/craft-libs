@@ -35,6 +35,10 @@
 //! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
 //! different lock can run at the same time as one that takes this one.
 //!
+//! On targets other than `wasm32`, `temp::TempDir` is a new test folder, private to the user on
+//! Unix, that is removed with its contents when dropped, also when the test panics. Removal on drop
+//! is best effort; `temp::TempDir::close` returns the error.
+//!
 //! `skip` decides what a test does when something it needs is missing (a program, a corpus,
 //! the craft-fonts faces): it prints one `SKIPPED:` line and returns, or fails the test when the
 //! variable the caller names is `1`. A value other than unset, empty or `1` fails the test as a
@@ -80,6 +84,8 @@ pub mod sample_damage;
 pub mod serial;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod skip;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod temp;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, Signal, wait_until, with_deadline};
@@ -87,3 +93,5 @@ pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use guards::{SourceLimits, rust_sources, rust_sources_with_limits};
+#[cfg(not(target_arch = "wasm32"))]
+pub use temp::TempDir;
