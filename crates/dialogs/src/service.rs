@@ -276,6 +276,8 @@ pub struct FilePanels {
     extension_policy: ExtensionPolicy,
     replace_guard: ReplaceGuard,
     replace_words: ReplaceWords,
+    /// The label of the macOS Save panel's file type menu; `None` shows [`crate::FORMAT_LABEL`].
+    format_label: Option<String>,
     /// Why no file dialog can open on this system, when the probe knows.
     backend_problem: fn() -> Option<String>,
     /// The replace questions [`pump_with`](FilePanels::pump_with) put on the app's dialog host.
@@ -325,6 +327,7 @@ impl FileService {
             extension_policy: ExtensionPolicy::default(),
             replace_guard: ReplaceGuard::default(),
             replace_words: ReplaceWords::default(),
+            format_label: None,
             backend_problem: probe::known_problem,
             #[cfg(feature = "ui")]
             prompts: Vec::new(),
@@ -391,6 +394,12 @@ impl FilePanels {
     /// [`replace_words`](FilePanels::replace_words) on panels the app already keeps.
     pub fn set_replace_words(&mut self, words: ReplaceWords) {
         self.replace_words = words;
+    }
+
+    /// The label of the file type menu on a macOS Save panel that offers two or more types ("Format:" in English);
+    /// the app sets it again when the language changes.
+    pub fn set_format_label(&mut self, label: impl Into<String>) {
+        self.format_label = Some(label.into());
     }
 
     /// [`extension_policy`](FilePanels::extension_policy) on panels the app already keeps, for a
@@ -647,6 +656,7 @@ impl FilePanels {
         if request.kind == PickKind::Save {
             let adds_extension = cfg!(windows) && !request.filters.is_empty();
             dialog.file_name = request.file_name.as_deref().and_then(|name| dialog_file_name(name, adds_extension));
+            dialog.format_label = self.format_label.clone();
         }
         dialog
     }

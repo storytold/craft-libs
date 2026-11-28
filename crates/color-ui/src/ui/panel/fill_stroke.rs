@@ -6,10 +6,11 @@ use craft_behavior::{EditEvent, Mixed};
 use craft_theme::Srgba;
 use craft_ui::choice::{Swatch, SwatchSpacing};
 use craft_ui::contract::{Bind, Gap, LabelScheme, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
-use craft_ui::display::Text;
+use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::Label;
+use craft_ui::style::TypeRole;
 use craft_ui::text::{HexField, TextField};
 use egui::Ui;
 
@@ -131,8 +132,8 @@ impl Body<'_> {
         }
     }
 
-    /// The Spectrum ramp (grey in Grayscale) with a tooltip naming the shown mode. A Cmd or Ctrl click recolours and
-    /// picks nothing; a Shift click moves to the next mode.
+    /// The Spectrum ramp (gray in Grayscale) with a tooltip naming the shown mode, at least as tall as its square end
+    /// boxes. A Cmd or Ctrl click recolors and picks nothing; a Shift click moves to the next mode.
     fn spectrum(&mut self, ui: &mut Ui) {
         let mode = self.shown_mode();
         let kind = if mode == ColorPanelMode::GrayscaleSlider { RampKind::Grayscale } else { RampKind::Spectrum };
@@ -145,6 +146,7 @@ impl Body<'_> {
             .gamut(gamut)
             .gamut_revision(revision)
             .web_safe(self.now.web_safe_ramp)
+            .square_boxes(true)
             .sizing(Sizing::Fill)
             .show(ui);
         self.ramp_events(ramp.edit.events);
@@ -154,14 +156,19 @@ impl Body<'_> {
         }
     }
 
-    /// The Recent Colors as a spaced palette; a pick sets the colour.
+    /// The Recent Colors caption over a spaced palette; a pick sets the color. The caption shows while the host's list
+    /// is empty, where the first applied color will go.
     // PLAN: Alt on a recent colour or a warning chip should set the other colour; `SwatchPaletteOutput` and
     // `ColorWarningChipOutput` report no modifiers (color-w1 for the palette, the owner of warning.rs for the chip).
     fn recent(&mut self, ui: &mut Ui) {
-        if self.inputs.recent.is_empty() {
+        let Some(recent) = self.inputs.recent else {
+            return;
+        };
+        Text::new(self.words.recent_colors.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+        if recent.is_empty() {
             return;
         }
-        let swatches: Vec<(Label, Srgba)> = self.inputs.recent.iter().map(|color| (Label::from(color.to_hex()), *color)).collect();
+        let swatches: Vec<(Label, Srgba)> = recent.iter().map(|color| (Label::from(color.to_hex()), *color)).collect();
         let mut current = self.color();
         let mut palette = SwatchPalette::new(self.words.recent_colors.clone(), Bind::bound(&mut current), &swatches).spacing(SwatchSpacing::Spaced);
         if let Some(setup) = self.inputs.recent_setup {

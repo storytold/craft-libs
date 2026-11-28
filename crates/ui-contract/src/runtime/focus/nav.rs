@@ -192,6 +192,7 @@ impl State {
         self.last_docs = std::mem::take(&mut self.docs);
         self.open.clear();
         self.body_from.clear();
+        self.body_end.clear();
         self.entered = false;
         self.asked = false;
         self.candidates_seen = 0;
@@ -769,17 +770,22 @@ fn cycle(entries: &[Entry], current: Option<&StopRec>, top: Option<Id>, forward:
 }
 
 /// Puts the stops of the innermost open scope in Tab order: the body's, then the footer's, then the header's.
-/// Inner scopes closed already and lie within one region, so they move with it.
-pub(super) fn order_regions(state: &mut State) {
-    let Some((scope, first)) = state.open.last().copied() else { return };
-    let Some(body) = state.body_from.remove(&scope) else { return };
+/// Inner scopes closed already and lie within one region, so they move with it. Returns how many stops the body holds,
+/// now the scope's first ones; `None` when the scope marked no body.
+pub(super) fn order_regions(state: &mut State) -> Option<usize> {
+    let (scope, first) = state.open.last().copied()?;
+    let body_end = state.body_end.remove(&scope);
+    let (body, _) = state.body_from.remove(&scope)?;
     let end = state.stops.len();
     let first = first.min(end);
-    state.stops[first..end].rotate_left(body.clamp(first, end) - first);
+    let body = body.clamp(first, end);
+    state.stops[first..end].rotate_left(body - first);
+    Some(body_end.map_or(end, |body_end| body_end.clamp(body, end)) - body)
 }
 
-/// Closes the innermost open scope; a scope shown for the first time moves focus to its initial stop.
-pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
+/// Closes the innermost open scope; a scope shown for the first time moves focus to its initial stop. `body` is how
+/// many of the scope's first stops are its body's (`order_regions`), `None` for all of them.
+pub(super) fn initial_focus(state: &mut State, frame: u64, body: Option<usize>) -> Vec<Act> {
     let Some((scope, first)) = state.open.pop() else { return Vec::new() };
     let Some((policy, entering)) = state.scopes.get(&scope).map(|rec| (rec.policy, rec.entering)) else { return Vec::new() };
     let new = match entering {
@@ -804,10 +810,18 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
             .and_then(|group| lists.arrival(&group))
             .unwrap_or_else(|| rec.clone())
     });
+    // The body's first Tab entry, at its arrival member. The footer's and the header's buttons with no default take no
+    // focus, so Enter does not answer one that was never chosen.
+    let in_body = (policy.initial == Initial::FirstField)
+        .then(|| {
+            let body = Lists { stops: &stops[..body.unwrap_or(stops.len()).min(stops.len())], ..lists };
+            body.entries(|_| true, true).into_iter().next().map(|entry| entry.arrival().clone())
+        })
+        .flatten();
     let pick = match policy.initial {
         Initial::First => entry.as_ref(),
         Initial::Default => stops.iter().find(|rec| rec.stop.default).or(entry.as_ref()),
-        Initial::FirstField => stops.iter().find(|rec| rec.stop.text).or_else(|| stops.iter().find(|rec| rec.stop.default)),
+        Initial::FirstField => stops.iter().find(|rec| rec.stop.text).or_else(|| stops.iter().find(|rec| rec.stop.default)).or(in_body.as_ref()),
         Initial::Key(name) => stops.iter().find(|rec| rec.stop.name == Some(name)),
         _ => None,
     };
