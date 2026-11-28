@@ -13,4 +13,5 @@ workspace = true
 # acadrust is used unmodified and only on targets supported by its 0.6.6 platform APIs.
 [target.'cfg(not(any(target_arch = "wasm32", all(target_os = "freebsd", target_arch = "aarch64"))))'.dependencies]
 acadrust = { workspace = true }
+craft-dxf = { workspace = true }
 log = { workspace = true }

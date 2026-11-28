@@ -344,6 +344,38 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     parse_ascii_counted(&codepage::decode_ascii_file(bytes), max_tags, tags)
 }
 
+/// Visit a DXF file's tags in order without retaining the complete tag list.
+///
+/// Decoding and the explicit group-code limit are the same as [`parse_with_limit`]. ASCII
+/// input may still need a decoded text buffer. Binary input is inspected first to select its
+/// code page, so the callback receives only the final decoding, once per tag.
+///
+/// # Errors
+///
+/// As [`parse_with_limit`], except no memory is reserved for a tag list. On error, the callback
+/// may already have received a valid prefix; callers must discard any partial result.
+pub fn visit_with_limit(bytes: &[u8], max_tags: usize, mut visit: impl FnMut(Tag)) -> Result<()> {
+    if let Some(body) = bytes.strip_prefix(BINARY_SENTINEL) {
+        let mut text = codepage::BinaryText::default();
+        visit_binary_pass(body, max_tags, &mut text, |_| Ok(()))?;
+        let mut text = if text.needs_code_page_pass() { codepage::BinaryText::code_page_pass() } else { codepage::BinaryText::default() };
+        return visit_binary_pass(body, max_tags, &mut text, |tag| {
+            visit(tag);
+            Ok(())
+        });
+    }
+    let bytes = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
+    let tags = count_ascii_pairs(bytes);
+    if tags > max_tags {
+        return Err(DxfError::TooLarge { tags, limit: max_tags });
+    }
+    visit_ascii_tags(&codepage::decode_ascii_file(bytes), max_tags, false, |tag| {
+        visit(tag);
+        Ok(())
+    })
+    .map(|_| ())
+}
+
 /// The four hex digits of a `\U+XXXX` escape starting at `chars[i]`, if there is one.
 fn escape_at(chars: &[char], i: usize) -> Option<u32> {
     if chars.get(i) != Some(&'\\') || chars.get(i + 1) != Some(&'U') || chars.get(i + 2) != Some(&'+') {
@@ -512,10 +544,19 @@ fn unescape_invalid(code: i32, s: String) -> String {
 /// The tags of ASCII DXF text. With `recover`, a line that is no group code, or a group code
 /// with no value after it, ends the reading instead of failing it: the tags before it are
 /// returned with the 1-based number of that line.
-#[allow(clippy::while_let_loop)]
 fn ascii_tags(text: &str, max_tags: usize, expected: usize, recover: bool) -> Result<(Vec<Tag>, Option<usize>)> {
     let mut tags = Vec::new();
     tags.try_reserve_exact(expected.min(max_tags)).map_err(|_| DxfError::OutOfMemory { tags: expected })?;
+    let damaged = visit_ascii_tags(text, max_tags, recover, |tag| {
+        tags.push(tag);
+        Ok(())
+    })?;
+    Ok((tags, damaged))
+}
+
+#[allow(clippy::while_let_loop)]
+fn visit_ascii_tags(text: &str, max_tags: usize, recover: bool, mut visit: impl FnMut(Tag) -> Result<()>) -> Result<Option<usize>> {
+    let mut count = 0;
     let mut lines = ascii_lines(text.strip_prefix('\u{feff}').unwrap_or(text)).enumerate();
     let mut damaged = None;
     loop {
@@ -525,14 +566,14 @@ fn ascii_tags(text: &str, max_tags: usize, expected: usize, recover: bool) -> Re
             continue;
         }
         let Ok(code) = ct.parse::<i32>() else {
-            if recover && !tags.is_empty() {
+            if recover && count != 0 {
                 damaged = Some(ln + 1);
                 break;
             }
             return Err(DxfError::BadCode { line: ln + 1, text: ct.chars().take(40).collect() });
         };
         let Some((_, val)) = lines.next() else {
-            if recover && !tags.is_empty() {
+            if recover && count != 0 {
                 damaged = Some(ln + 1);
                 break;
             }
@@ -545,18 +586,19 @@ fn ascii_tags(text: &str, max_tags: usize, expected: usize, recover: bool) -> Re
             o => o,
         };
         let eof = code == 0 && matches!(&v, Value::Str(s) if s.trim_end() == "EOF");
-        tags.push(Tag { code, value: v });
-        if tags.len() > max_tags {
-            return Err(DxfError::TooLarge { tags: tags.len(), limit: max_tags });
+        visit(Tag { code, value: v })?;
+        count += 1;
+        if count > max_tags {
+            return Err(DxfError::TooLarge { tags: count, limit: max_tags });
         }
         if eof {
             break;
         }
     }
-    if tags.is_empty() {
+    if count == 0 {
         return Err(DxfError::NotDxf);
     }
-    Ok((tags, damaged))
+    Ok(damaged)
 }
 
 struct Cur<'a> {
@@ -647,8 +689,18 @@ fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
 }
 
 fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText) -> Result<Vec<Tag>> {
-    let mut c = Cur { b, p: 0 };
     let mut tags = Vec::new();
+    visit_binary_pass(b, max_tags, text, |tag| {
+        reserve_tags(&mut tags, 1)?;
+        tags.push(tag);
+        Ok(())
+    })?;
+    Ok(tags)
+}
+
+fn visit_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText, mut visit: impl FnMut(Tag) -> Result<()>) -> Result<()> {
+    let mut c = Cur { b, p: 0 };
+    let mut count = 0;
     let legacy = legacy_binary_layout(b);
     while c.p < b.len() {
         // 255 escapes a 2-byte code only in the 1-byte layout; in R13+ it is an ordinary code.
@@ -682,19 +734,19 @@ fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText)
             }
         };
         let eof = code == 0 && matches!(&v, Value::Str(s) if s.trim_end() == "EOF");
-        reserve_tags(&mut tags, 1)?;
-        tags.push(Tag { code, value: v });
-        if tags.len() > max_tags {
-            return Err(DxfError::TooLarge { tags: tags.len(), limit: max_tags });
+        visit(Tag { code, value: v })?;
+        count += 1;
+        if count > max_tags {
+            return Err(DxfError::TooLarge { tags: count, limit: max_tags });
         }
         if eof {
             break;
         }
     }
-    if tags.is_empty() {
+    if count == 0 {
         return Err(DxfError::NotDxf);
     }
-    Ok(tags)
+    Ok(())
 }
 
 /// Format a real the way DXF writers usually do (shortest round-trip, with a decimal point).
@@ -1249,6 +1301,65 @@ mod tests {
         assert_eq!(tags[5], Tag::i(62, 5));
         assert_eq!(tags[6], Tag::s(1001, "APP"));
         assert_eq!(tags.last(), Some(&Tag::s(0, "EOF")));
+    }
+
+    #[test]
+    fn visiting_tags_matches_ascii_and_both_binary_layouts() {
+        let ascii = b"\xEF\xBB\xBF\r\n0\rSECTION\r2\rOBJECTS\r0\rVISUALSTYLE\r5\rE\r100\rAcDbVisualStyle\r176\r0\r177\r0\r1\r\\U+0041\r0\rENDSEC\r0\rEOF\rnot a group\r";
+        let tags = parse(ascii).unwrap();
+        for bytes in [ascii.to_vec(), write_binary(&tags, true).unwrap(), r12_binary(), b"176\n0\n177\n0\n".to_vec()] {
+            let expected = parse(&bytes).unwrap();
+            let mut visited = Vec::new();
+            visit_with_limit(&bytes, expected.len(), |tag| visited.push(tag)).unwrap();
+            assert_eq!(visited, expected);
+        }
+    }
+
+    #[test]
+    fn visiting_legacy_code_pages_emits_only_the_final_decoding() {
+        // The first string looks like UTF-8 but is two Shift-JIS katakana. The second
+        // establishes the code page, so a binary visitor must not emit its provisional pass.
+        let groups: [(i16, &[u8]); 5] = [(9, b"$DWGCODEPAGE"), (3, b"ANSI_932"), (1, b"\xC3\xB1"), (1, b"\x90\x7D\x96\xCA"), (0, b"EOF")];
+        let mut ascii = Vec::new();
+        let mut binary = BINARY_SENTINEL.to_vec();
+        for (code, value) in groups {
+            ascii.extend_from_slice(code.to_string().as_bytes());
+            ascii.push(b'\n');
+            ascii.extend_from_slice(value);
+            ascii.push(b'\n');
+            binary.extend_from_slice(&code.to_le_bytes());
+            binary.extend_from_slice(value);
+            binary.push(0);
+        }
+        for bytes in [ascii, binary] {
+            let mut visited = Vec::new();
+            visit_with_limit(&bytes, bytes.len(), |tag| visited.push(tag)).unwrap();
+            assert_eq!(visited, parse(&bytes).unwrap(), "each tag is delivered exactly once");
+            assert_eq!(visited[2].str(), "\u{FF83}\u{FF71}");
+            assert_eq!(visited[3].str(), "\u{56F3}\u{9762}");
+        }
+    }
+
+    #[test]
+    fn visiting_tags_preserves_errors_and_limits() {
+        let mut truncated_binary = BINARY_SENTINEL.to_vec();
+        truncated_binary.extend_from_slice(&0i16.to_le_bytes());
+        truncated_binary.extend_from_slice(b"VISUALSTYLE\0");
+        truncated_binary.extend_from_slice(&40i16.to_le_bytes());
+        truncated_binary.extend_from_slice(&[1, 2, 3]);
+        for bytes in [b"".as_slice(), b"0\nVISUALSTYLE\nbad\nvalue\n", b"0\nVISUALSTYLE\n176\n", &truncated_binary] {
+            let expected = parse_with_limit(bytes, bytes.len()).unwrap_err();
+            let error = visit_with_limit(bytes, bytes.len(), |_| {}).unwrap_err();
+            assert_eq!(error.to_string(), expected.to_string());
+        }
+        let tags = [Tag::i(176, 0), Tag::i(177, 0)];
+        for bytes in [b"176\n0\n177\n0\n".to_vec(), write_binary(&tags, true).unwrap()] {
+            let error = visit_with_limit(&bytes, 1, |_| {}).unwrap_err();
+            assert!(matches!(error, DxfError::TooLarge { tags: 2, limit: 1 }), "{error}");
+        }
+        let mut visited = Vec::new();
+        visit_with_limit(b"0\nEOF\n\n\n", 1, |tag| visited.push(tag)).unwrap();
+        assert_eq!(visited, [Tag::s(0, "EOF")]);
     }
 
     #[test]
