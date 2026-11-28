@@ -141,6 +141,7 @@ pub mod editor;
 pub mod egui;
 pub mod import;
 pub mod keymap;
+pub mod keytips;
 pub mod layout;
 mod matcher;
 pub mod mnemonic;
