@@ -57,7 +57,8 @@ pub use read::{Limits, parse, parse_with_limits};
 pub use settings::{ProjectSettings, TimeDisplay, WorkingSpace};
 pub use shapes::{GradientType, PolystarType, ShapeDetail, ShapeGroup, ShapeItem, Stroke, StrokeCap, StrokeJoin};
 pub use textdoc::{
-    AutoKern, Caps, CueType, FontBaseline, Justification, KernRun, Marker, ParagraphRun, StyleRun, TextBox, TextDocument, TextValue, parse_text_dict,
+    AutoKern, Caps, CueType, FontBaseline, Justification, KernRun, MAX_TEXT_DOCUMENTS, Marker, ParagraphRun, StyleRun, TextBox, TextDocument,
+    TextValue, parse_text_dict,
 };
 pub use typed::{Comp, Item, ItemKind, KeyLayout, KeyList, Keyframe, Layer, ListHeader, Project, PropEntry, PropGroup, PropNode, Property, TimeBase};
 pub use values::{Orientation, OrientationKey, TimeRemap, TimeRemapKey, Tracked, Transform, ValueSource};

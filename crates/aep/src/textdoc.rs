@@ -6,7 +6,7 @@
 //! limited, never panics) and [`Layer::text_document`] pulls out the verified fields.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use crate::bytes::{be_u32, text};
 use crate::index::Node;
@@ -493,6 +493,9 @@ pub const NEUTRAL_STYLE_VALUES: &[(&str, &[i64])] = &[("68", &[0, 1])];
 /// the duplicate check quadratic nor the line unbounded.
 pub const MAX_UNDECODED_FIELDS: usize = 64;
 
+/// The most text documents [`TextDocument::parse_all`] reads from one body.
+pub const MAX_TEXT_DOCUMENTS: usize = 65_536;
+
 /// Adds to `out` the slots of `actual` that are not decoded and differ from `sampled`, each once
 /// and at most [`MAX_UNDECODED_FIELDS`] in all.
 fn undecoded_fields(actual: &V<'_>, sampled: Option<&V<'_>>, decoded: &[&str], neutral: &[(&str, &[i64])], out: &mut Vec<String>) {
@@ -534,8 +537,9 @@ pub struct TextDocument {
     pub font: Option<String>,
     /// The document's font list, in stored order (an entry whose name is unreadable is empty, so
     /// the indices of the style runs stay valid). It always holds entries no run uses
-    /// (`Myriad-Roman`, `MyriadPro-Regular`, `AdobeInvisFont` in every sample).
-    pub fonts: Vec<String>,
+    /// (`Myriad-Roman`, `MyriadPro-Regular`, `AdobeInvisFont` in every sample). The list is stored
+    /// once per `btdk`, so the documents of a keyed Source Text share it.
+    pub fonts: Arc<[String]>,
     /// The paragraph runs: one per paragraph, with its length in characters (including the
     /// terminating `\r`) and its justification.
     pub paragraphs: Vec<ParagraphRun>,
@@ -938,10 +942,17 @@ fn style_runs(run: &V<'_>, notes: &mut RunNotes) -> Vec<StyleRun> {
     out
 }
 
-/// The box of paragraph text from the frame dictionary `/0/8/0[0]/0`: key `/1/0` holds 16 x, y pairs
+/// The frame dictionary of text document `index`, `/0/8/0[index]/0`: a keyed Source Text stores one
+/// frame per document (lab sample, After Effects 2026); a body with fewer frames shares the first.
+fn frame_of<'v, 'b>(top: &'v V<'b>, index: usize) -> Option<&'v V<'b>> {
+    let frames = top.get("0")?.get("8")?.get("0")?;
+    frames.at(index).or_else(|| frames.at(0))?.get("0")
+}
+
+/// The box of paragraph text from the frame dictionary `/0/8/0[i]/0`: key `/1/0` holds 16 x, y pairs
 /// that trace the rectangle, and `/2/0` is 1; both keys are absent for point text.
-fn text_box(top: &V<'_>) -> Option<TextBox> {
-    let frame = top.get("0")?.get("8")?.get("0")?.at(0)?.get("0")?;
+fn text_box(top: &V<'_>, index: usize) -> Option<TextBox> {
+    let frame = frame_of(top, index)?;
     if frame.get("2")?.get("0")?.as_i64()? != 1 {
         return None;
     }
@@ -957,20 +968,51 @@ fn text_box(top: &V<'_>) -> Option<TextBox> {
     Some(TextBox { x, y, width: max(|p| p[0]) - x, height: max(|p| p[1]) - y })
 }
 
+/// The font table `/0/1/0` of a parsed `btdk` body, in stored order (an unreadable name is empty, so
+/// the style runs' indices stay valid).
+fn font_table(top: &V<'_>) -> Arc<[String]> {
+    match top.get("0").and_then(|v| v.get("1")).and_then(|v| v.get("0")) {
+        Some(V::Array(list)) => {
+            list.iter().map(|f| f.get("0").and_then(|v| v.get("0")).and_then(|v| v.get("0")).and_then(V::string).unwrap_or_default()).collect()
+        }
+        _ => Arc::from(Vec::new()),
+    }
+}
+
 impl TextDocument {
-    /// Decodes the body of a `btdk` list.
+    /// Decodes the body of a `btdk` list: its first text document.
     pub fn parse(body: &[u8]) -> Option<Self> {
         let top = parse_dict(body);
-        let run = top.get("1")?.get("1")?.at(0)?.get("0")?;
+        Self::from_top(&top, 0, &font_table(&top))
+    }
+
+    /// Decodes every text document of the body of a `btdk` list, in order: the entries of `/1/1`.
+    /// A keyed Source Text stores one document per keyframe there, key `i` showing document `i`
+    /// (lab sample, After Effects 2026: three keys, three entries; a layer with one key, one). An
+    /// entry that can't be decoded is `None`, so the places still match the keys. At most
+    /// [`MAX_TEXT_DOCUMENTS`] are read.
+    pub fn parse_all(body: &[u8]) -> Vec<Option<Self>> {
+        let top = parse_dict(body);
+        let count = match top.get("1").and_then(|v| v.get("1")) {
+            Some(V::Array(runs)) => runs.len().min(MAX_TEXT_DOCUMENTS),
+            _ => 0,
+        };
+        if count == 0 {
+            return Vec::new();
+        }
+        // The font table is stored once for all documents: decode it once and share it, so memory
+        // does not grow with documents x fonts.
+        let fonts = font_table(&top);
+        (0..count).map(|i| Self::from_top(&top, i, &fonts)).collect()
+    }
+
+    /// Text document `index` of a parsed `btdk` body, with the body's font table.
+    fn from_top(top: &V<'_>, index: usize, fonts: &Arc<[String]>) -> Option<Self> {
+        let run = top.get("1")?.get("1")?.at(index)?.get("0")?;
         let raw_text = run.get("0")?.string()?;
         let style = run.get("6")?.get("0")?.at(0)?.get("0")?.get("0")?.get("6")?;
         let fill_argb = colour_of(style, "53")?;
         let font_index = usize::try_from(style.get("0")?.as_i64()?).ok()?;
-        let mut fonts = Vec::new();
-        if let Some(V::Array(list)) = top.get("0").and_then(|v| v.get("1")).and_then(|v| v.get("0")) {
-            fonts =
-                list.iter().map(|f| f.get("0").and_then(|v| v.get("0")).and_then(|v| v.get("0")).and_then(V::string).unwrap_or_default()).collect();
-        }
         let mut notes = RunNotes::default();
         let paragraphs = paragraph_runs(run, &mut notes);
         let style_runs = style_runs(run, &mut notes);
@@ -981,23 +1023,15 @@ impl TextDocument {
             fill_argb,
             font_index,
             font: fonts.get(font_index).filter(|f| !f.is_empty()).cloned(),
-            fonts,
+            fonts: Arc::clone(fonts),
             paragraphs,
             style_runs,
-            text_box: text_box(&top),
+            text_box: text_box(top, index),
             incomplete_runs: notes.incomplete,
             undecoded_style_fields: notes.style_fields,
             undecoded_paragraph_fields: notes.paragraph_fields,
             kerning: kern_runs(run),
-            line_orientation: top
-                .get("0")
-                .and_then(|v| v.get("8"))
-                .and_then(|v| v.get("0"))
-                .and_then(|v| v.at(0))
-                .and_then(|v| v.get("0"))
-                .and_then(|v| v.get("2"))
-                .and_then(|v| v.get("1"))
-                .and_then(V::as_i64),
+            line_orientation: frame_of(top, index).and_then(|v| v.get("2")).and_then(|v| v.get("1")).and_then(V::as_i64),
         })
     }
 
@@ -1036,15 +1070,22 @@ impl<'f, 'a> Layer<'f, 'a> {
         TextDocument::parse(self.source_text_record()?.find_list(b"btdk")?.bytes()?)
     }
 
-    /// The Source Text property record: the `tdbs` in `btds[ADBE Text Document]` (a placeholder
-    /// in every sample: no keys, no expression). Source Text keyframes and expressions were not
-    /// sampled; a `list` (keys) or an expression in it marks them.
+    /// Every text document of a text layer, in order ([`TextDocument::parse_all`] of the first
+    /// `LIST btdk`): one per Source Text keyframe when the property is keyed, key `i` showing
+    /// document `i`; one for static text.
+    pub fn text_documents(&self) -> Vec<Option<TextDocument>> {
+        self.source_text_record().and_then(|r| r.find_list(b"btdk")).and_then(|b| b.bytes()).map_or_else(Vec::new, TextDocument::parse_all)
+    }
+
+    /// The Source Text property record: the `tdbs` in `btds[ADBE Text Document]`. When Source Text
+    /// is keyed, its key list holds the key times, and the documents are
+    /// [`Layer::text_documents`].
     pub fn source_text_property(&self) -> Option<Property<'f, 'a>> {
         Property::from_chunk(self.source_text_record()?.child_list(b"tdbs")?)
     }
 
-    /// The number of text documents (`LIST btdk`) in the Source Text record: 1 in every sample;
-    /// more would be one per Source Text keyframe (not sampled).
+    /// The number of `LIST btdk` in the Source Text record: 1 in every sample, keyed or not (the
+    /// documents of the keys are entries of that one list, see [`Layer::text_documents`]).
     pub fn text_document_count(&self) -> usize {
         self.source_text_record().map_or(0, |btds| btds.descendants().filter(|(_, c)| c.is_list(b"btdk")).count())
     }
@@ -1645,7 +1686,7 @@ mod tests {
     fn a_realistic_document_is_read_in_full() {
         let doc = TextDocument::parse(DOC).expect("a document");
         assert_eq!((doc.text.as_str(), doc.font_size, doc.fill_argb, doc.font.as_deref()), ("Hi", 36.5, [1.0, 0.5, 0.0, 1.0], Some("A)b")));
-        assert_eq!(doc.fonts, ["Myr", "A)b"]);
+        assert_eq!(*doc.fonts, ["Myr", "A)b"]);
         assert_eq!(doc.paragraphs.first().map(|p| (p.length, p.justification, p.auto_hyphenate)), Some((3, Justification::Center, false)));
         // `/68 1` and `/34 7` are neutral; `/90 /x`, `/91 (plain)` and `/92 word` differ from the
         // (missing, neutral) default; `/79` equals its default.
