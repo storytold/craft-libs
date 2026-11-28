@@ -927,3 +927,41 @@ fn rc4_cryptoapi_filepass_fields_are_checked() {
         assert!(damaged(read_pw(&with_filepass(&good[..cut]), "pw")), "cut at {cut}");
     }
 }
+
+/// Cached array results remain sparse and distinct from the blank cells used for recalculation.
+#[test]
+fn array_follower_results_are_retained_separately() {
+    let array = cat(&[&[0x65], &u16s(&[4, 5, 0xC000, 0xC000]), &ptg_int(2), &[0x05]]);
+    let definition = rec(0x0221, &cat(&[&u16s(&[4, 5]), &[2, 2], &[0; 6], &(array.len() as u16).to_le_bytes(), &array]));
+    let follower = formula(5, 2, num(4.0), &exp(4, 2));
+    for (cached, expected) in [
+        (Some(num(4.0)), Value::Number(4.0)),
+        (Some(num(0.0)), Value::Number(0.0)),
+        (Some(special(1, 0)), Value::Bool(false)),
+        (Some(special(2, 0x07)), Value::Error(CellError::Div0)),
+        (Some(special(3, 0)), text("")),
+        (None, Value::Empty),
+    ] {
+        let mut stream = sample(false);
+        let a = stream.windows(definition.len()).position(|w| w == definition).unwrap();
+        stream[a + 6..a + 8].copy_from_slice(&6u16.to_le_bytes());
+        let p = stream.windows(follower.len()).position(|w| w == follower).unwrap();
+        if let Some(value) = cached {
+            stream[p + 10..p + 18].copy_from_slice(&value);
+        } else {
+            stream[p..p + 2].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        }
+        let read = craft_xls::read(&compound("Workbook", &stream)).unwrap();
+        let sheet = &read.workbook.sheets[0];
+        let cached = sheet.array_results.get(&at("C6"));
+        if expected == Value::Empty {
+            assert!(cached.is_none());
+        } else {
+            assert_eq!(cached, Some(&(at("C5"), expected)));
+        }
+        assert!(!sheet.array_results.contains_key(&at("C5")));
+        assert!(!sheet.array_results.contains_key(&at("C7")));
+        assert_eq!(v(&read.workbook, 0, "C6"), Value::Empty);
+        assert_eq!(sheet.cells[&at("C5")].formula.as_ref().unwrap().array, Some(range("C5:C7")));
+    }
+}
