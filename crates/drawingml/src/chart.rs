@@ -498,7 +498,9 @@ pub struct Chart {
     /// 5 retains plot-group membership and selected axes' metadata, and 6 resolves group-owned
     /// duplicate value-axis elements, and 7 preserves resolved element identity through
     /// ownership, scatter direction and source-linked formats. Version 8 validates scatter
-    /// roles, shares ownership fallback and applies source-linked boolean defaults.
+    /// roles, shares ownership fallback and applies source-linked boolean defaults. Version 9
+    /// retains resolved secondary ownership without a primary pair, literal source formats
+    /// and source-linked General without substituting a stored axis format.
     /// Missing fields are version 0. Preserve when editing.
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub raw_metadata_version: u16,

@@ -130,7 +130,7 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
 fn chart_within(root: &El, budget: usize) -> Option<Chart> {
-    read_chart(root, budget, 8)
+    read_chart(root, budget, 9)
 }
 
 /// Exact former metadata projection for unchanged legacy native saves, using the same caps.
@@ -173,6 +173,11 @@ pub(super) fn metadata_v7_chart_from(root: &El) -> Option<Chart> {
     read_chart(root, MAX_CHART_POINTS, 7)
 }
 
+/// The published linked-default projection, before orphan ownership and source-format fixes.
+pub(super) fn metadata_v8_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, 8)
+}
+
 #[cfg(test)]
 std::thread_local! {
     static RAW_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -190,6 +195,7 @@ pub(super) fn chart_for_version(root: &El, version: u16) -> Option<Chart> {
         5 => metadata_v5_chart_from(root),
         6 => metadata_v6_chart_from(root),
         7 => metadata_v7_chart_from(root),
+        8 => metadata_v8_chart_from(root),
         _ => chart_from(root),
     }
 }
@@ -280,7 +286,7 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
         kinds.push(kind);
         let val_axis = group_value_axis(&val_map, g);
         let secondary = if version >= 8 {
-            group_secondary(g, resolved_primary, primary_val.as_deref(), &val_map, relations.as_ref())
+            group_secondary(g, resolved_primary, primary_val.as_deref(), &val_map, relations.as_ref(), version)
         } else {
             match (resolved_primary, relations.as_ref().and_then(|index| index.value_axis(g, &val_map))) {
                 (Some(primary), Some(axis)) => !std::ptr::eq(primary, axis),
@@ -378,9 +384,13 @@ fn group_secondary(
     primary_id: Option<&str>,
     val_map: &std::collections::HashMap<&str, bool>,
     relations: Option<&AxisRelations<'_>>,
+    version: u16,
 ) -> bool {
     match (primary, relations.and_then(|index| index.value_axis(group, val_map))) {
         (Some(primary), Some(axis)) => !std::ptr::eq(primary, axis),
+        // No populated group owns the selected primary element, so this resolved owner
+        // must be secondary, even when its numeric ID also occurs on the unused anchor.
+        (None, Some(_)) if version >= 9 => true,
         _ => group_value_axis(val_map, group).is_some_and(|id| Some(id.as_str()) != primary_id),
     }
 }
@@ -625,7 +635,7 @@ fn label_number_format(s: &El, g: &El, version: u16) -> Option<String> {
     let source = s
         .child(Local("val"))
         .or_else(|| s.child(Local("yVal")))
-        .and_then(|v| v.find(Local("numCache")))
+        .and_then(|v| v.find(Local("numCache")).or_else(|| if version >= 9 { v.find(Local("numLit")) } else { None }))
         .and_then(|c| c.child(Local("formatCode")))
         .map(|f| f.deep_text());
     label_fmt(s.child(Local("dLbls"))).or_else(|| label_fmt(g.child(Local("dLbls")))).or(source).filter(|f| !f.is_empty())
@@ -811,7 +821,7 @@ fn read_axes<'a>(
                 let secondary_group =
                     pa.elements().filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some()).find(|g| {
                         if version >= 8 {
-                            group_secondary(g, resolved_primary, primary_id, val_map, relations)
+                            group_secondary(g, resolved_primary, primary_id, val_map, relations, version)
                         } else {
                             group_value_axis(val_map, g).is_some_and(|id| Some(id.as_str()) != primary_id)
                         }
@@ -957,7 +967,7 @@ fn category_format(cat_ax: Option<&El>, series: &El, version: u16) -> Option<Str
         return None;
     }
     let cache = cat.find(Local("numCache")).or_else(|| cat.find(Local("numLit")))?;
-    let source = cache.child(Local("formatCode")).map(|f| f.deep_text()).filter(|f| !f.is_empty() && f != "General");
+    let source = cache.child(Local("formatCode")).map(|f| f.deep_text()).filter(|f| !f.is_empty() && (version >= 9 || f != "General"));
     let numfmt = cat_ax.and_then(|a| a.child(Local("numFmt")));
     let own = numfmt.and_then(|n| n.attr_local("formatCode")).filter(|f| !f.is_empty()).map(str::to_string);
     match numfmt {
@@ -965,7 +975,7 @@ fn category_format(cat_ax: Option<&El>, series: &El, version: u16) -> Option<Str
         Some(n) if if version >= 8 { !source_linked(n) } else { n.attr_local("sourceLinked").and_then(value::to_bool) != Some(true) } => {
             own.or(source)
         }
-        _ => source.or(own.filter(|f| f != "General")),
+        _ => source.or(own.filter(|f| f != "General")).filter(|f| version < 9 || f != "General"),
     }
 }
 
@@ -2625,7 +2635,7 @@ mod tests {
                 assert_eq!(read_chart_xml(&written).unwrap().series[0].secondary_axis, edit.series[0].secondary_axis);
             }
             let current = read_chart_xml(xml.as_bytes()).unwrap();
-            assert_eq!(current.raw_metadata_version, 8);
+            assert_eq!(current.raw_metadata_version, 9);
             if !category {
                 assert_eq!(current.y_max, Some(10.0));
             }
@@ -3138,5 +3148,157 @@ mod tests {
                 "old{version} keeps its literal-one-only label behavior"
             );
         }
+    }
+
+    #[test]
+    fn review_6096118299_resolved_secondary_survives_an_unowned_primary_anchor() {
+        let scatter = r#"<c:scatterChart><c:ser><c:tx><c:v>Overlay</c:v></c:tx><c:xVal><c:numLit><c:formatCode>General</c:formatCode><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:yVal></c:ser><c:axId val="10"/><c:axId val="20"/></c:scatterChart>"#;
+        let x = review_6095656137_axis("valAx", 10, 20, "b", 12, r#"<c:numFmt formatCode="0.0" sourceLinked="0"/>"#);
+        let y = review_6095656137_axis("valAx", 20, 10, "r", 90, r#"<c:numFmt formatCode="0.000" sourceLinked="0"/>"#);
+        // Both the reported duplicate-X anchor and an anchor sharing Y's ID are distinct
+        // elements from the resolved group. Numeric equality cannot establish ownership.
+        for anchor_id in [10, 20] {
+            let category = review_6095656137_axis("catAx", 999, anchor_id, "b", 1, "");
+            let anchor = review_6095656137_axis("valAx", anchor_id, 999, "l", 50, r#"<c:numFmt formatCode="0.00" sourceLinked="0"/>"#);
+            for axes in [format!("{x}{y}{category}{anchor}"), format!("{category}{y}{x}{anchor}")] {
+                let xml = metadata_chart(&format!("{scatter}{axes}"));
+                let chart = read_chart_xml(xml.as_bytes()).unwrap();
+                assert!(chart.series[0].secondary_axis, "resolved Y belongs to the secondary plot, not the unused primary anchor{anchor_id}");
+                assert_eq!((chart.y_min, chart.y_max, chart.y2_min, chart.y2_max), (Some(2.0), Some(50.0), Some(2.0), Some(90.0)));
+                assert_eq!((chart.y_format.as_deref(), chart.y2_format.as_deref()), (Some("0.00"), Some("0.000")));
+                assert_eq!(chart.axis_titles.1, Some(format!("Axis{anchor_id}-999")), "keep the valid unused primary pair's existing selection");
+                assert_eq!(chart.category_format.as_deref(), Some("0.0"));
+                assert_eq!(chart.category_label(0), "30.0");
+                let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+                for version in 0..=8 {
+                    let mut previous = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
+                    if version == 8 {
+                        assert!(!previous.series[0].secondary_axis, "saved8 retains its former ID fallback");
+                        assert_eq!(previous.y2_max, None);
+                    }
+                    previous.raw = Some(xml.clone());
+                    let previous: Chart = serde_json::from_str(&serde_json::to_string(&previous).unwrap()).unwrap();
+                    let (written, kept) = crate::chart::write::chart_xml(&previous);
+                    assert!(kept, "old{version} native projection must retain the original part");
+                    assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+                }
+                // Ambiguous Y has no resolved owner: keep the old ID-only classification.
+                let ambiguous = metadata_chart(&format!("{scatter}{y}{axes}"));
+                let ambiguous = read_chart_xml(ambiguous.as_bytes()).unwrap();
+                assert!(!ambiguous.series[0].secondary_axis);
+                assert_eq!((ambiguous.y_max, ambiguous.y2_max), (Some(50.0), None));
+                // When a populated group actually owns the anchor, exact element comparison
+                // already distinguishes it from the overlay, even with a shared numeric ID.
+                let primary = review_6095656137_group(999, anchor_id, "Primary", "0.00");
+                let owned = read_chart_xml(metadata_chart(&format!("{primary}{scatter}{axes}")).as_bytes()).unwrap();
+                assert_eq!(
+                    owned.series.iter().map(|s| (s.name.as_str(), s.secondary_axis)).collect::<Vec<_>>(),
+                    [("Primary", false), ("Overlay", true)]
+                );
+                assert_eq!((owned.y_max, owned.y2_max), (Some(50.0), Some(90.0)));
+            }
+        }
+    }
+
+    #[test]
+    fn review_6096118299_linked_labels_use_literal_and_cached_numeric_formats() {
+        let fixture = |literal: bool, series: Option<(&str, &str)>, group: Option<(&str, &str)>| {
+            let labels = |setting: Option<(&str, &str)>| {
+                setting.map(|(code, attr)| format!(r#"<c:dLbls><c:numFmt formatCode="{code}" {attr}/></c:dLbls>"#)).unwrap_or_default()
+            };
+            let data = r#"<c:formatCode>0%</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt>"#;
+            let values = if literal {
+                format!("<c:numLit>{data}</c:numLit>")
+            } else {
+                format!("<c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache>{data}</c:numCache></c:numRef>")
+            };
+            metadata_chart(&format!(
+                r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+                <c:ser><c:idx val="0"/><c:order val="0"/>{}<c:val>{values}</c:val></c:ser>{}</c:barChart>"#,
+                labels(series),
+                labels(group)
+            ))
+        };
+        for literal in [true, false] {
+            for attr in [r#"sourceLinked="true""#, r#"sourceLinked="1""#, ""] {
+                let xml = fixture(literal, Some(("0%", attr)), None);
+                let chart = read_chart_xml(xml.as_bytes()).unwrap();
+                assert_eq!(chart.series[0].number_format.as_deref(), Some("0%"), "literal={literal}, {attr}");
+                assert_eq!(chart.data_label(&chart.series[0], 0.5), "50%");
+                let group = fixture(literal, Some(("0%", attr)), Some(("0.0000", r#"sourceLinked="false""#)));
+                assert_eq!(read_chart_xml(group.as_bytes()).unwrap().series[0].number_format.as_deref(), Some("0.0000"));
+            }
+            for attr in [r#"sourceLinked="false""#, r#"sourceLinked="0""#] {
+                let xml = fixture(literal, Some(("0.0", attr)), Some(("0.0000", r#"sourceLinked="0""#)));
+                assert_eq!(read_chart_xml(xml.as_bytes()).unwrap().series[0].number_format.as_deref(), Some("0.0"));
+            }
+            assert_eq!(
+                read_chart_xml(fixture(literal, None, None).as_bytes()).unwrap().series[0].number_format.as_deref(),
+                Some("0%"),
+                "without a local label format the numeric source still supplies its format"
+            );
+        }
+        // Published interpretation8 did not read literal source formats for linked labels.
+        let xml = fixture(true, Some(("0%", r#"sourceLinked="true""#)), None);
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        let mut previous = read_chart(&root, MAX_CHART_POINTS, 8).unwrap();
+        assert_eq!(previous.series[0].number_format, None);
+        previous.raw = Some(xml);
+        let previous: Chart = serde_json::from_str(&serde_json::to_string(&previous).unwrap()).unwrap();
+        let (written, kept) = crate::chart::write::chart_xml(&previous);
+        assert!(kept, "unchanged interpretation8 native saves retain their raw chart");
+        assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+    }
+
+    #[test]
+    fn review_6096118299_linked_category_general_is_not_an_absent_source_format() {
+        let fixture = |literal: bool, source_format: Option<&str>, attribute: &str| {
+            let code = source_format.map(|f| format!("<c:formatCode>{f}</c:formatCode>")).unwrap_or_default();
+            let points = format!(r#"{code}<c:ptCount val="1"/><c:pt idx="0"><c:v>45292</c:v></c:pt>"#);
+            let categories = if literal {
+                format!("<c:numLit>{points}</c:numLit>")
+            } else {
+                format!("<c:numRef><c:f>Sheet1!$A$2</c:f><c:numCache>{points}</c:numCache></c:numRef>")
+            };
+            let axis_format = format!(r#"<c:numFmt formatCode="mmm-yy" {attribute}/>"#);
+            metadata_chart(&format!(
+                r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/>
+                <c:cat>{categories}</c:cat><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>
+                </c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>{}{}"#,
+                review_6095656137_axis("catAx", 10, 20, "b", 1, &axis_format),
+                review_6095656137_axis("valAx", 20, 10, "l", 2, "")
+            ))
+        };
+        for literal in [true, false] {
+            for attr in [r#"sourceLinked="true""#, r#"sourceLinked="1""#, ""] {
+                let chart = read_chart_xml(fixture(literal, Some("General"), attr).as_bytes()).unwrap();
+                assert_eq!(chart.category_format, None, "literal={literal}, {attr}: explicit source General wins before normalization");
+                assert_eq!(chart.category_label(0), "45292", "a linked numeric source must not become a date");
+                let absent = read_chart_xml(fixture(literal, None, attr).as_bytes()).unwrap();
+                assert_eq!(absent.category_format.as_deref(), Some("mmm-yy"), "only an absent source format falls back to the stored axis code");
+                assert_eq!(absent.category_label(0), "Jan-24");
+                let numeric = read_chart_xml(fixture(literal, Some("0.00"), attr).as_bytes()).unwrap();
+                assert_eq!(numeric.category_label(0), "45292.00");
+            }
+            for attr in [r#"sourceLinked="false""#, r#"sourceLinked="0""#] {
+                let chart = read_chart_xml(fixture(literal, Some("General"), attr).as_bytes()).unwrap();
+                assert_eq!(chart.category_format.as_deref(), Some("mmm-yy"), "explicit unlinked axis format still wins");
+                assert_eq!(chart.category_label(0), "Jan-24");
+                let xml = fixture(literal, Some("0.00"), attr).replace("formatCode=\"mmm-yy\"", "formatCode=\"General\"");
+                let general = read_chart_xml(xml.as_bytes()).unwrap();
+                assert_eq!(general.category_format.as_deref(), Some("General"), "explicit unlinked General retains its existing representation");
+                assert_eq!(general.category_label(0), "45292");
+            }
+        }
+        // Keep the published interpretation8 format choice and unchanged native raw XML.
+        let xml = fixture(true, Some("General"), r#"sourceLinked="true""#);
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        let mut previous = read_chart(&root, MAX_CHART_POINTS, 8).unwrap();
+        assert_eq!(previous.category_format.as_deref(), Some("mmm-yy"));
+        previous.raw = Some(xml);
+        let previous: Chart = serde_json::from_str(&serde_json::to_string(&previous).unwrap()).unwrap();
+        let (written, kept) = crate::chart::write::chart_xml(&previous);
+        assert!(kept, "unchanged interpretation8 source-General saves retain their raw chart");
+        assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
     }
 }
