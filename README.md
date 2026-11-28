@@ -369,6 +369,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-press-print`](crates/press-print/README.md): press-accurate printing: a PDF page separated
   into plates by `craft-prepress`, composited into the printer's RGB profile and printed through
   `craft-print`'s RGB transport, application-managed.
+- [`craft-pub`](crates/pub/README.md): reader for Microsoft Publisher 2002 and later files (`.pub`): the
+  `Contents` structure, the Quill text store, the Escher drawing records and table geometry, as neutral
+  data with bounded work and stable error codes. Import only. DesignCraft maps it to its document.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,

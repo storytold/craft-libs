@@ -1,0 +1,15 @@
+[package]
+name = "craft-pub"
+description = "Clean-room reader for Microsoft Publisher 2002+ files: the Contents structure, the Quill text store, the Escher drawing records and table geometry, as neutral data with bounded work."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cfb = { workspace = true }
+thiserror = { workspace = true }

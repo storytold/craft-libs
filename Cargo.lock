@@ -2714,6 +2714,7 @@ dependencies = [
 name = "craft-file-formats"
 version = "0.1.0"
 dependencies = [
+ "craft-cfb",
  "craft-eps",
  "craft-idml",
  "craft-image-codecs",
@@ -3956,6 +3957,14 @@ dependencies = [
  "craft-pst",
  "craft-testkit",
  "proptest",
+]
+
+[[package]]
+name = "craft-pub"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -207,6 +207,7 @@ craft-raster-codecs = { path = "crates/raster-codecs" }
 craft-image-codecs = { path = "crates/image-codecs" }
 craft-dds = { path = "crates/dds" }
 craft-psd = { path = "crates/psd" }
+craft-pub = { path = "crates/pub" }
 craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }

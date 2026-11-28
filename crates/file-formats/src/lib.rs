@@ -55,6 +55,8 @@ pub enum Format {
     /// Legacy DesignCraft documents serialized as one JSON object.
     DesignCraftJson,
     Indd,
+    /// Microsoft Publisher documents (`.pub`), a compound file holding a `Contents` stream. Read only.
+    Publisher,
     Docx,
     /// Legacy OLE Compound File Word document; identified by its extension only.
     LegacyDoc,
@@ -110,7 +112,7 @@ const fn availability(feature: bool, supported: bool) -> Availability {
 
 impl Format {
     /// Every known format, including formats whose reader or writer is not enabled in this build.
-    pub const ALL: [Format; 57] = [
+    pub const ALL: [Format; 58] = [
         Self::Pdf,
         Self::Eps,
         Self::PostScript,
@@ -155,6 +157,7 @@ impl Format {
         Self::DesignCraft,
         Self::DesignCraftJson,
         Self::Indd,
+        Self::Publisher,
         Self::Docx,
         Self::LegacyDoc,
         Self::Rtf,
@@ -221,6 +224,7 @@ impl Format {
             Self::DesignCraft => &["designcraft", "dcdoc"],
             Self::DesignCraftJson => &[],
             Self::Indd => &["indd", "indt"],
+            Self::Publisher => &["pub"],
             Self::Docx => &["docx"],
             Self::LegacyDoc => &["doc"],
             Self::Rtf => &["rtf"],
@@ -288,6 +292,7 @@ impl Format {
             Self::DesignCraft => "application/vnd.designcraft+zip",
             Self::DesignCraftJson => "application/json",
             Self::Indd => "application/x-indesign",
+            Self::Publisher => "application/x-mspublisher",
             Self::Docx => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             Self::LegacyDoc => "application/msword",
             Self::Rtf => "application/rtf",
@@ -404,6 +409,7 @@ impl Format {
             Self::Ase => capability(cfg!(feature = "ase"), true, true, false, false),
             Self::Studio => capability(cfg!(feature = "stencilcraft"), true, false, false, false),
             Self::Idml | Self::Indd => capability(cfg!(feature = "designcraft"), true, false, false, false),
+            Self::Publisher => capability(cfg!(feature = "publisher"), true, false, false, false),
             Self::DesignCraft | Self::DesignCraftJson => capability(cfg!(feature = "designcraft"), true, true, false, false),
             Self::StencilCraft => capability(cfg!(feature = "stencilcraft"), true, true, false, false),
             Self::Docx
@@ -445,6 +451,10 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     }
     if is_designcraft_json(bytes) {
         return Some(Format::DesignCraftJson);
+    }
+    #[cfg(feature = "publisher")]
+    if is_publisher(bytes) {
+        return Some(Format::Publisher);
     }
     if bytes.starts_with(&INDD_SIGNATURE) {
         return Some(Format::Indd);
@@ -678,4 +688,16 @@ fn jpeg_frame(bytes: &[u8]) -> JpegFrame {
             }
         }
     }
+}
+
+/// Publisher documents are compound files whose root `Contents` stream starts `E8 AC`. Opening the
+/// container reads the directory and the allocation tables and copies the root mini stream (bounded
+/// by the file length, not by `Limits::max_stream_size`); the `Contents` stream itself is never
+/// read beyond its first two bytes, whatever its size. Other compound files (Word, Excel, Outlook)
+/// have no such stream.
+#[cfg(feature = "publisher")]
+fn is_publisher(bytes: &[u8]) -> bool {
+    const SIGNATURE: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    bytes.starts_with(&SIGNATURE)
+        && craft_cfb::CompoundFile::open(bytes).is_ok_and(|file| file.read_path_prefix("Contents", 2).is_ok_and(|head| head == [0xE8, 0xAC]))
 }

@@ -133,3 +133,53 @@ fn registered_mime_and_preferred_extensions_remain_distinct() {
     assert_eq!(Format::TaggedText.preferred_extension(), None);
     assert_eq!(super::from_extension("not-a-format"), None);
 }
+
+#[cfg(feature = "publisher")]
+mod publisher {
+    use super::super::{Format, detect};
+    use craft_cfb::{Version, write_streams};
+
+    fn publisher_file(contents_len: usize) -> Vec<u8> {
+        let mut contents = vec![0u8; contents_len];
+        contents[..4].copy_from_slice(&[0xE8, 0xAC, 0x2C, 0x00]);
+        write_streams(Version::V3, &[("Contents", &contents), ("Quill/QuillSub/CONTENTS", b"q")]).unwrap()
+    }
+
+    #[test]
+    fn a_publisher_file_is_found_by_its_contents_whatever_its_name_and_size() {
+        // A small stream lives in the mini stream, a large one in regular sectors.
+        for len in [64, 20_000, 3_000_000] {
+            let bytes = publisher_file(len);
+            assert_eq!(detect("brochure.pub", &bytes), Some(Format::Publisher), "{len}");
+            assert_eq!(detect("brochure", &bytes), Some(Format::Publisher), "{len}");
+            assert_eq!(detect("brochure.doc", &bytes), Some(Format::Publisher), "{len}");
+        }
+    }
+
+    #[test]
+    fn other_compound_files_are_not_publisher_files() {
+        let word = write_streams(Version::V3, &[("WordDocument", &[0xEC, 0xA5, 0, 0]), ("Contents", &[0x01, 0x02, 0x03, 0x04])]).unwrap();
+        assert_eq!(detect("letter", &word), None);
+        assert_eq!(detect("letter.doc", &word), Some(Format::LegacyDoc));
+        let empty_contents = write_streams(Version::V3, &[("Contents", &[])]).unwrap();
+        assert_eq!(detect("x", &empty_contents), None);
+    }
+
+    #[test]
+    fn the_extension_alone_names_publisher_and_damaged_files_do_not_panic() {
+        assert_eq!(detect("old.PUB", b"not a compound file"), Some(Format::Publisher));
+        assert_eq!(detect("old", b"not a compound file"), None);
+        let bytes = publisher_file(20_000);
+        for cut in [0, 7, 8, 100, 511, 512, 700, bytes.len() / 2] {
+            let _ = detect("x", &bytes[..cut]);
+        }
+    }
+
+    #[test]
+    fn publisher_is_read_only() {
+        let c = Format::Publisher.capabilities();
+        assert_eq!(c.read, super::Availability::Available);
+        assert_eq!(c.write, super::Availability::Unsupported);
+        assert_eq!(Format::Publisher.preferred_extension(), Some("pub"));
+    }
+}

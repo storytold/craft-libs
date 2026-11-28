@@ -542,6 +542,41 @@ impl<'a> CompoundFile<'a> {
         self.read_capped(self.find(path)?, cap)
     }
 
+    /// The first `n` bytes of stream `id`, or the whole stream when it is shorter.
+    ///
+    /// For detection: a caller that only needs a stream's leading bytes does not have to copy a
+    /// large stream or refuse it for its size. It works for mini and regular streams. Only the
+    /// sectors that hold the prefix are followed, and the result is at most `n` bytes and never
+    /// more than the file holds. [`Limits::max_stream_size`] does not apply, because nothing
+    /// larger than `n` is allocated.
+    pub fn read_prefix(&self, id: usize, n: usize) -> Result<Vec<u8>> {
+        let e = self.entries.get(id).ok_or_else(|| Error::NotFound(format!("entry {id}")))?;
+        if e.kind != EntryKind::Stream {
+            return Err(invalid(format!("{:?} is not a stream", e.name)));
+        }
+        let size = usize::try_from(e.size)
+            .ok()
+            .filter(|&s| s <= self.data.len())
+            .ok_or_else(|| invalid(format!("stream {:?} is larger than the file", e.name)))?;
+        let want = size.min(n);
+        if want == 0 {
+            return Ok(Vec::new());
+        }
+        if e.size < self.mini_cutoff {
+            return self.read_mini_chain(e.start, want);
+        }
+        let out = self.read_chain(e.start, Some(want))?;
+        if out.len() < want {
+            return Err(invalid("stream is truncated"));
+        }
+        Ok(out)
+    }
+
+    /// The first `n` bytes of the stream at `path`; see [`Self::read_prefix`].
+    pub fn read_path_prefix(&self, path: &str, n: usize) -> Result<Vec<u8>> {
+        self.read_prefix(self.find(path)?, n)
+    }
+
     /// Sector size in bytes (512 or 4096).
     pub fn sector_size(&self) -> usize {
         self.sector_size

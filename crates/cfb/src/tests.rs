@@ -287,3 +287,42 @@ fn child_lookup_uses_a_sorted_index() {
     let cf = CompoundFile::open(&b).unwrap();
     assert_eq!(cf.read_path("cc").unwrap(), b"aa");
 }
+
+#[test]
+fn prefix_reads_mini_and_regular_streams_without_the_whole_stream() {
+    for version in [Version::V3, Version::V4] {
+        let mut w = Writer::new(version);
+        let small = pattern(100, 1);
+        let big = pattern(20_000, 2);
+        w.stream(Writer::ROOT, "Small", small.clone()).unwrap();
+        w.stream(Writer::ROOT, "Big", big.clone()).unwrap();
+        w.stream(Writer::ROOT, "Empty", Vec::new()).unwrap();
+        let bytes = w.finish();
+        let cf = CompoundFile::open(&bytes).unwrap();
+        assert_eq!(cf.read_path_prefix("Small", 10).unwrap(), small[..10]);
+        assert_eq!(cf.read_path_prefix("Small", 1000).unwrap(), small);
+        assert_eq!(cf.read_path_prefix("Big", 4).unwrap(), big[..4]);
+        assert_eq!(cf.read_path_prefix("Big", 5000).unwrap(), big[..5000]);
+        assert_eq!(cf.read_path_prefix("Big", usize::MAX).unwrap(), big);
+        assert!(cf.read_path_prefix("Empty", 8).unwrap().is_empty());
+        assert!(cf.read_path_prefix("Big", 0).unwrap().is_empty());
+        assert!(cf.read_path_prefix("Missing", 4).is_err());
+    }
+}
+
+#[test]
+fn prefix_ignores_the_whole_stream_size_limit_but_a_cut_file_still_fails() {
+    let mut w = Writer::new(Version::V3);
+    let big = pattern(20_000, 3);
+    w.stream(Writer::ROOT, "Big", big.clone()).unwrap();
+    let bytes = w.finish();
+    let limits = Limits { max_stream_size: 100, ..Limits::default() };
+    let cf = CompoundFile::open_with(&bytes, limits).unwrap();
+    assert!(matches!(cf.read_path("Big"), Err(Error::LimitExceeded(_))));
+    assert_eq!(cf.read_path_prefix("Big", 64).unwrap(), big[..64]);
+    // Cut the file inside the stream: the prefix before the cut reads, one beyond it fails.
+    let cut = &bytes[..bytes.len() - 6000];
+    if let Ok(cf) = CompoundFile::open_with(cut, limits) {
+        assert!(cf.read_path_prefix("Big", 20_000).is_err());
+    }
+}
