@@ -146,7 +146,8 @@ pub struct Metadata {
     /// HDR content light levels carried by formats such as PNG `cLLI`, in units of
     /// 0.0001 cd/m² per value. A zero value means that level is unknown.
     pub content_light_level: Option<crate::cicp::ContentLightLevel>,
-    /// Photoshop image resources (`8BIM` resource blocks): TIFF tag 34377. Kept opaque here;
+    /// Photoshop image resources (`8BIM` resource blocks): TIFF tag 34377, and the payload of
+    /// the JPEG APP13 `Photoshop 3.0` segment. Kept opaque here;
     /// `photocraft-io` reads and writes them through `photocraft-psd`.
     pub photoshop_resources: Option<Vec<u8>>,
     /// Photoshop layer data (TIFF tag 37724 `ImageSourceData`): a layered TIFF's layers. Kept

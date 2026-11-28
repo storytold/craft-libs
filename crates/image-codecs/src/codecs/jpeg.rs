@@ -28,6 +28,18 @@ const EXIF_HEADER: &[u8] = b"Exif\0\0";
 const XMP_HEADER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const ICC_HEADER: &[u8] = b"ICC_PROFILE\0";
 const PHOTOSHOP_HEADER: &[u8] = b"Photoshop 3.0\0";
+/// Resource bytes per APP13 segment when a block needs several, with the identifier again on
+/// every segment. That is the shape `scan_metadata` rejoins; it is NOT how Photoshop splits a
+/// large block, whose continuation segments repeat neither the identifier nor `8BIM` (exiv2
+/// bug #533). The size also keeps every segment inside `add_app_segment`'s 65533-byte cap even
+/// with the identifier in front.
+const PHOTOSHOP_APP13_CHUNK: usize = 2048;
+/// The largest resource block the encoder writes. [`scan_metadata`] stops appending APP13
+/// payloads at 16 MiB (its `photoshop.len() < 1 << 24` guard), so a larger block would be
+/// read back silently truncated. Like the "metadata too large for its one segment is left
+/// out" rule for EXIF/XMP, the writer leaves such a block out whole rather than writing
+/// something the reader cannot return intact.
+const PHOTOSHOP_APP13_MAX: usize = 1 << 24;
 
 #[derive(Default, Debug)]
 pub(crate) struct JpegMeta {
@@ -206,7 +218,8 @@ fn progressive_frame_coefficients(sof: &[u8]) -> Option<u64> {
 pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
     let mut m = JpegMeta::default();
     let mut icc_parts: Vec<(u8, u8, &[u8])> = Vec::new();
-    // Photoshop splits a large resource block over consecutive APP13 segments.
+    // One resource block can be spread over consecutive APP13 segments, each carrying the
+    // identifier; join them back.
     let mut photoshop: Vec<u8> = Vec::new();
     let mut jfif_dpi = None;
     // The first frame header and the number of components in the first scan.
@@ -731,6 +744,20 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         && let Some(icc) = &img.icc
     {
         enc.add_icc_profile(icc).map_err(e)?;
+    }
+    // Photoshop image resources, the exact shape `scan_metadata` rejoins: identifier, then the
+    // `8BIM` block, split over segments with the identifier on each one — not Photoshop's own
+    // continuation format, whose follow-up segments repeat neither identifier nor `8BIM`
+    // (exiv2 bug #533). Like the TIFF writer (`tiff/encode.rs`), the block is document content,
+    // not metadata: written whenever non-empty, never when empty, and never past the bound
+    // `scan_metadata` could not read back whole (see `PHOTOSHOP_APP13_MAX`).
+    if let Some(resources) = img.meta.photoshop_resources.as_deref().filter(|r| !r.is_empty() && r.len() <= PHOTOSHOP_APP13_MAX) {
+        for chunk in resources.chunks(PHOTOSHOP_APP13_CHUNK) {
+            let mut seg = Vec::with_capacity(PHOTOSHOP_HEADER.len() + chunk.len());
+            seg.extend_from_slice(PHOTOSHOP_HEADER);
+            seg.extend_from_slice(chunk);
+            enc.add_app_segment(13, &seg).map_err(e)?;
+        }
     }
     enc.encode(img.data(), w16, h16, ct).map_err(e)?;
     if img.layout() == ChannelLayout::Cmyk {
