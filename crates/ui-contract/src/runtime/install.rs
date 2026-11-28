@@ -5,6 +5,7 @@ use crate::runtime::env::{self, SystemReader, system};
 use crate::runtime::pen::PenSource;
 use crate::runtime::{commands, frame, pen, windows};
 use crate::style::{DuplicateStyle, StyleReplacements};
+use craft_behavior::placement::Placement;
 use craft_host::Jobs;
 use craft_host::target::ShellInfo;
 use craft_window::policy::Decision;
@@ -31,6 +32,12 @@ pub struct InstallSpec {
     /// The frame decided for the root window; `runtime::windows` takes its chrome and captions and keeps the
     /// caption layout current on focus gain.
     pub frame: Option<Decision>,
+    /// The saved placement the root window was opened at, as `place` gave it: `shell::app::run` sets the one
+    /// `native_options` opens the window at, and an app that builds its root window from the placement store itself
+    /// sets the one it used. Once the window shows, the runtime finishes the restore where the platform did not: on
+    /// X11, where the window manager ignores a maximize asked of the hidden window, it maximizes the window again.
+    /// `None`: the root window opened at the app's defaults.
+    pub restored: Option<Placement>,
     /// Where the root's `System` choices read the OS's appearance. `new` gives a reader with no desktop watcher,
     /// which answers only the colour scheme egui's integration reports; a host passes one it started.
     pub system: SystemReader,
@@ -84,6 +91,7 @@ impl InstallSpec {
             frame_layers: None,
             looks: StyleReplacements::new(),
             frame: None,
+            restored: None,
             system: SystemReader::unwatched(),
             wheel: WheelModifiers::default(),
             app_id: String::new(),
@@ -139,6 +147,12 @@ impl InstallSpec {
     /// Sets the root window's decided frame (`craft_window::policy::decide_for`).
     pub fn frame(mut self, decision: Decision) -> Self {
         self.frame = Some(decision);
+        self
+    }
+
+    /// Sets the saved placement the root window was opened at.
+    pub fn restored(mut self, placement: Placement) -> Self {
+        self.restored = Some(placement);
         self
     }
 
@@ -224,7 +238,7 @@ pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     pen::install(ctx, spec.pen);
     env::install_jobs(ctx, spec.jobs);
     clipboard::install(ctx, spec.clipboard);
-    windows::install(ctx, with_browser_caps(spec.shell_info), spec.window_system, spec.placement, spec.frame, spec.app_id);
+    windows::install(ctx, with_browser_caps(spec.shell_info), spec.window_system, spec.placement, spec.frame, spec.app_id, spec.restored);
     frame::set_frame_layers(ctx, spec.frame_layers);
     frame::seed_hooked_passes(ctx);
     plugin::register(ctx);

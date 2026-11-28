@@ -366,8 +366,9 @@ impl WindowHost {
     }
 
     /// `previous` (or a new record) updated to where `viewport`'s window is, recorded as an app window's saved
-    /// placement is: where it last reported itself, or where the app last sent it. A caller that places the window at
-    /// this placement sends it nothing. `None` before the window has reported its rect and scale.
+    /// placement is: where it last reported itself, or where the app last sent it. Its sizes and points are egui's, at
+    /// the interface zoom, where the placement store keeps an app window's at zoom 1. A caller that places the window
+    /// at this placement sends it nothing. `None` before the window has reported its rect and scale.
     #[doc(hidden)]
     pub fn placement(&self, viewport: ViewportId, previous: Option<Placement>) -> Option<Placement> {
         let facts = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts)?;

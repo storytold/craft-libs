@@ -217,8 +217,10 @@ fn saved_geometry(ctx: &Context, open: &ViewportOpen<'_>, opened: bool) -> Optio
         let defaults = Defaults::new(saved.normal.size, min).with_no_position(!positions);
         place(Some(&saved), &monitors(ctx), None, &defaults)
     };
-    let pos = placement.position().filter(|_| positions).map(Pos2::from);
-    Some((placement.normal.size.into(), pos))
+    // The store keeps points at zoom 1; the window is opened and placed in points at the interface zoom.
+    let zoom = ctx.zoom_factor();
+    let pos = placement.position().filter(|_| positions).map(|pos| Pos2::from(pos) / zoom);
+    Some((Vec2::from(placement.normal.size) / zoom, pos))
 }
 
 /// Whether the OS asked the viewport of container `id` to close in this root frame; once.
