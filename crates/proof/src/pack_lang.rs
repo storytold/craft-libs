@@ -352,8 +352,14 @@ pub(crate) fn dutch_elision(word: &str) -> bool {
 fn check_word(d: &AffixDict, original: &str, word: &str, language: &str) -> bool {
     let known = |w: &str| d.check(w) || crate::in_user_dictionary(&w.to_lowercase());
     let dutch = language == "nl" && dutch_elision(word);
-    if dutch && original.starts_with(['\'', '’']) {
-        return known(&format!("'{word}"));
+    if dutch {
+        let full = format!("'{word}");
+        if original.starts_with('’') {
+            return known(&full);
+        }
+        if original.starts_with('\'') && known(&full) {
+            return true;
+        }
     }
     if known(word) {
         return true;
@@ -361,7 +367,7 @@ fn check_word(d: &AffixDict, original: &str, word: &str, language: &str) -> bool
     if matches!(language, "ca" | "nl") && d.explicitly_forbidden(word) {
         return false;
     }
-    if dutch && known(&format!("'{word}")) {
+    if dutch && !original.starts_with('\'') && known(&format!("'{word}")) {
         return false;
     }
     word.contains('-') && word.split('-').all(|part| part.chars().count() <= 1 || known(part))
@@ -405,6 +411,16 @@ fn dutch_suggestions(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     } else {
         crate::affix_suggest::suggest_in(d, &full, max, &Tuning::DEFAULT)
     };
+    if apostrophe == Some('\'') && found.len() < max {
+        // The range includes the user's straight quote. Keep it when the word inside
+        // the quotation, rather than the elision, needs correcting.
+        for bare in crate::affix_suggest::suggest_in(d, body, max - found.len(), &Tuning::DEFAULT) {
+            let quoted = format!("'{bare}");
+            if !found.contains(&quoted) {
+                found.push(quoted);
+            }
+        }
+    }
     if apostrophe == Some('’') {
         for suggestion in &mut found {
             if let Some(rest) = suggestion.strip_prefix('\'') {
@@ -445,7 +461,11 @@ mod tests {
         assert!(check_word(&nl, "t-shirt", "t-shirt", "nl"));
         assert!(!check_word(&nl, "’t-shirt", "t-shirt", "nl"));
         assert!(check_word(&nl, "T-profiel", "T-profiel", "nl"));
+        assert!(check_word(&nl, "'T-profiel", "T-profiel", "nl"));
+        assert!(check_word(&nl, "'t-shirt", "t-shirt", "nl"));
+
         assert!(dutch_suggestions(&nl, "t-shrit", 5).contains(&"t-shirt".into()));
+        assert!(dutch_suggestions(&nl, "'t-shrit", 5).contains(&"'t-shirt".into()));
     }
 
     /// Review follow-up (craft-libs#485): a panic inside a check (caught by the app) doesn't leave

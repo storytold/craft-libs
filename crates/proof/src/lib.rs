@@ -520,9 +520,6 @@ fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, u
     if let Some(s) = start {
         out.push((s, text.len()));
     }
-    // Only Dutch elision candidates need to distinguish a straight opening quote from
-    // the apostrophe in the spelling; compute quote pairs at most once per paragraph.
-    let quotes = std::cell::OnceCell::new();
     out.into_iter()
         .filter_map(|(a, b)| {
             let w = text.get(a..b)?;
@@ -537,8 +534,7 @@ fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, u
                 language(from).pack_locale().is_some_and(|l| l.primary() == "nl") && text.get(from..end).is_some_and(pack_lang::dutch_elision);
             let start = if dutch_prefix {
                 match text.get(a..from).and_then(|prefix| prefix.chars().next_back()) {
-                    Some('’') => from - '’'.len_utf8(),
-                    Some('\'') if !quotes.get_or_init(|| paired_straight_quotes(text)).contains(&(from - 1)) => from - 1,
+                    Some(apostrophe @ ('\'' | '’')) => from - apostrophe.len_utf8(),
                     _ => from,
                 }
             } else {
@@ -547,40 +543,6 @@ fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, u
             Some((start, end))
         })
         .collect()
-}
-
-/// Opening straight single quotes with a closing quote in this paragraph. Apostrophes
-/// inside words have word characters on both sides and do not affect pairing.
-fn paired_straight_quotes(text: &str) -> std::collections::HashSet<usize> {
-    let mut starts = std::collections::HashSet::new();
-    let mut open = None;
-    let mut previous: Option<char> = None;
-    let mut chars = text.char_indices().peekable();
-    while let Some((offset, c)) = chars.next() {
-        let next = chars.peek().map(|(_, c)| *c);
-        if c == '\'' {
-            let next_word = next.is_some_and(char::is_alphanumeric);
-            let prev_word = previous.is_some_and(|c| c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c));
-            if !prev_word && next_word {
-                let elision = text.get(offset + 1..).is_some_and(pack_lang::dutch_elision);
-                // Prefer a clear quote opener to an apostrophe that could be part of a
-                // Dutch word, without swallowing an elision after a clear opener.
-                if open.is_none() || (open.is_some_and(|(_, maybe_elision)| maybe_elision) && !elision) {
-                    open = Some((offset, elision));
-                }
-            } else if !next_word
-                && previous.is_some_and(|c| !c.is_whitespace())
-                && let Some((start, _)) = open.take()
-            {
-                starts.insert(start);
-            }
-        } else if matches!(c, '.' | '?' | '!') && next.is_some_and(char::is_whitespace) && open.is_some_and(|(_, elision)| elision) {
-            // A tentative elision opener cannot reach across the next sentence.
-            open = None;
-        }
-        previous = Some(c);
-    }
-    starts
 }
 
 /// Spelling issues in a paragraph of English text (no suggestions; ask [`suggest`] on demand).
@@ -680,15 +642,6 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
     let w = text.get(a..b)?;
     // A word with a Vietnamese-only letter (a name like Nguyễn in English text) isn't English.
     if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || is_correct_in_with(w, lang, opts) {
-        return None;
-    }
-    // If quote pairing trimmed an actual elision, accept a dictionary-verified spelling
-    // that includes the real apostrophe immediately before the range.
-    if lang.pack_locale().is_some_and(|locale| locale.primary() == "nl")
-        && pack_lang::dutch_elision(w)
-        && let Some(apostrophe @ ('\'' | '’')) = text.get(..a).and_then(|prefix| prefix.chars().next_back())
-        && text.get(a - apostrophe.len_utf8()..b).is_some_and(|word| is_correct_in_with(word, lang, opts))
-    {
         return None;
     }
     let message = spelling_message(lang);
@@ -872,22 +825,12 @@ mod language_token_tests {
         assert_eq!(words, ["col·legi", "vol", "fort", "’s-Hertogenbosh", "een"]);
         let quoted_ca = "'col·legi'";
         assert_eq!(words_for(quoted_ca, |at| if at == 0 { ProofLang::En } else { catalan }), [(1, quoted_ca.len() - 1)]);
-        let quoted_nl = "'T-profiel'";
-        assert_eq!(words_for(quoted_nl, |_| dutch), [(1, quoted_nl.len() - 1)]);
-        assert_eq!(words_for("'T-profiel met letters'", |_| dutch)[0], (1, "T-profiel".len() + 1));
-        let name_in_quote = "'Welkom in 's-Hertogenbosch'";
-        let name_start = name_in_quote.find("'s-").unwrap();
-        assert_eq!(words_for(name_in_quote, |_| dutch).last().copied(), Some((name_start, name_in_quote.len() - 1)));
-        let quoted_after_name = "'s-Hertogenbosch is een 'stad'.";
-        assert_eq!(words_for(quoted_after_name, |_| dutch)[0], (0, "'s-Hertogenbosch".len()));
-        let later_sentence = "'s-Hertogenbosch. Daarna lazen we 'T-profiel'.";
-        let names = words_for(later_sentence, |_| dutch);
-        assert_eq!(names[0], (0, "'s-Hertogenbosch".len()));
-        assert_eq!(names.last().map(|(a, b)| &later_sentence[*a..*b]), Some("T-profiel"));
-        assert_eq!(words_for("'T-profiel?'", |_| dutch), [(1, "T-profiel".len() + 1)]);
+        // Leave the leading apostrophe in the spelling range. The dictionary check
+        // can recognise an elision or treat a straight apostrophe as an opening quote.
+        let quoted_nl = "'T-profiel?'";
+        assert_eq!(words_for(quoted_nl, |_| dutch), [(0, "T-profiel".len() + 1)]);
         let curved_nl = "‘’s-Hertogenbosch’";
         assert_eq!(words_for(curved_nl, |_| dutch), [('‘'.len_utf8(), curved_nl.len() - '’'.len_utf8())]);
-
         assert!(!super::words(text).into_iter().any(|(a, b)| &text[a..b] == "col·legi"));
     }
 }
