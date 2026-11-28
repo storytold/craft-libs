@@ -5,6 +5,25 @@ use super::{
     parse_color,
 };
 
+/// Keep text from distinct links separate, even when their targets and styling
+/// match. A link's cloned `Arc` is shared by all its nested formatting spans.
+fn push_html_text(para: &mut Para, text: &str, fmt: &Fmt) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(Inline::Text(previous, prior_fmt)) = para.inlines.last_mut()
+        && prior_fmt == fmt
+        && match (&prior_fmt.link, &fmt.link) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => true,
+        }
+    {
+        previous.push_str(text);
+    } else {
+        para.inlines.push(Inline::Text(text.to_string(), fmt.clone()));
+    }
+}
+
 /// Open elements kept at most (deeper start tags are ignored).
 const MAX_STACK: usize = 256;
 
@@ -171,8 +190,15 @@ pub(super) fn decls(css: &str) -> impl Iterator<Item = (String, &str)> {
 /// share one buffer.
 pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
 
+/// Builds a flow image from bytes the normal raster reader does not recognize. The arguments
+/// are source, bytes, width and height in points, and alt text. The caller is responsible for
+/// validating the data and deciding whether its format can be handled downstream.
+pub type ImageFallback<'a> = &'a dyn Fn(&str, Arc<Vec<u8>>, Option<f32>, Option<f32>, &str) -> Option<model::Img>;
+
 pub(super) struct Builder<'r> {
     images: ImageLoader<'r>,
+    source_whitespace: bool,
+    image_fallback: Option<ImageFallback<'r>>,
     containers: Vec<Vec<FBlock>>,
     cells: Vec<Cell>,
     tables: Vec<TableB>,
@@ -581,9 +607,11 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 impl<'r> Builder<'r> {
-    pub(super) fn new(images: ImageLoader<'r>, page: bool) -> Builder<'r> {
+    pub(super) fn new(images: ImageLoader<'r>, page: bool, source_whitespace: bool, image_fallback: Option<ImageFallback<'r>>) -> Builder<'r> {
         Builder {
             images,
+            source_whitespace,
+            image_fallback,
             containers: vec![Vec::new()],
             cells: Vec::new(),
             tables: Vec::new(),
@@ -726,7 +754,7 @@ impl<'r> Builder<'r> {
     fn flush(&mut self) {
         let Some(mut p) = self.para.take() else { return };
         let (pre_lead, pre_tail) = (self.pre_lead.take().unwrap_or(false), std::mem::take(&mut self.pre_tail));
-        if p.kind != Kind::Code {
+        if p.kind != Kind::Code && !self.source_whitespace {
             // Preserved white space keeps its spaces and tabs at the edges; line breaks there
             // (source formatting) still go.
             const ALL: &[char] = &[' ', '\t', '\r', '\n'];
@@ -816,6 +844,11 @@ impl<'r> Builder<'r> {
         }
         let code = self.stack.iter().any(|e| e.kind == ElKind::Pre);
         let f = self.fmt();
+        if self.source_whitespace {
+            self.note_edge(true);
+            push_html_text(self.start_para(), t, &f);
+            return;
+        }
         if code {
             let mut first = true;
             for line in t.split('\n') {
@@ -830,7 +863,7 @@ impl<'r> Builder<'r> {
                 first = false;
                 let line = line.trim_end_matches('\r');
                 if !line.is_empty() {
-                    self.start_para().push_text(line, &Fmt { code: false, ..f.clone() });
+                    push_html_text(self.start_para(), line, &Fmt { code: false, ..f.clone() });
                     self.mark_pre_used();
                 }
             }
@@ -838,7 +871,7 @@ impl<'r> Builder<'r> {
         }
         if self.preserve() {
             self.note_edge(true);
-            self.start_para().push_text(t, &f);
+            push_html_text(self.start_para(), t, &f);
             return;
         }
         // Collapse whitespace.
@@ -863,7 +896,7 @@ impl<'r> Builder<'r> {
             return;
         }
         self.note_edge(false);
-        self.start_para().push_text(&s, &f);
+        push_html_text(self.start_para(), &s, &f);
     }
 
     /// Record whether text about to be added keeps its white space (see `pre_lead`).
@@ -878,12 +911,12 @@ impl<'r> Builder<'r> {
     /// base, or no reading) is plain text instead: a guide that annotates nothing is no guide, and
     /// the text it held is never lost.
     pub(super) fn push_ruby(&mut self, base: &str, ruby: &str) {
-        let preserve = self.preserve();
+        let preserve = self.source_whitespace || self.preserve();
         let text = |s: &str| if preserve { s.to_string() } else { collapse_ws(s) };
         let (base, ruby) = (text(base), text(ruby));
         let f = self.fmt();
         if base.is_empty() || ruby.is_empty() {
-            self.start_para().push_text(if base.is_empty() { &ruby } else { &base }, &f);
+            push_html_text(self.start_para(), if base.is_empty() { &ruby } else { &base }, &f);
             return;
         }
         self.start_para().inlines.push(Inline::Ruby { base, ruby, fmt: f });
@@ -1111,7 +1144,7 @@ impl<'r> Builder<'r> {
                     self.flush();
                 } else {
                     let fmt = self.fmt();
-                    self.start_para().push_text("\n", &fmt);
+                    push_html_text(self.start_para(), "\n", &fmt);
                 }
             }
             "hr" => {
@@ -1120,7 +1153,7 @@ impl<'r> Builder<'r> {
             }
             "wbr" => {
                 let fmt = self.fmt();
-                self.start_para().push_text("\u{200B}", &fmt);
+                push_html_text(self.start_para(), "\u{200B}", &fmt);
             }
             "col" => {
                 let css = self.css_of(name, attrs);
@@ -1166,14 +1199,23 @@ impl<'r> Builder<'r> {
                         }
                     }
                 }
-                let image = attr(attrs, "src")
-                    .and_then(|src| if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) })
-                    .and_then(|data| make_img(data, width, height, &alt));
+                let image = attr(attrs, "src").and_then(|src| {
+                    let data = if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) }?;
+                    make_img(data.clone(), width, height, &alt)
+                        .or_else(|| self.image_fallback.and_then(|fallback| fallback(src, data, width, height, &alt)))
+                });
                 let fmt = self.fmt();
                 match image {
-                    Some(image) => self.start_para().inlines.push(Inline::Image(image)),
-                    None if !alt.is_empty() => self.start_para().push_text(&alt, &fmt),
-                    None => {}
+                    Some(mut image) => {
+                        image.link = fmt.link.clone();
+                        self.start_para().inlines.push(Inline::Image(image));
+                    }
+                    None => {
+                        model::dropped(model::Dropped::HtmlImage);
+                        if !alt.is_empty() {
+                            push_html_text(self.start_para(), &alt, &fmt);
+                        }
+                    }
                 }
             }
             _ => return false,

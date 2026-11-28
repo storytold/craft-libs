@@ -52,6 +52,7 @@ pub fn sized_img(data: Arc<Vec<u8>>, ext: &str, natural: Option<(f32, f32)>, w: 
         w: w.clamp(1.0, 1584.0),
         h: h.clamp(1.0, 1584.0),
         alt: alt.to_string(),
+        link: None,
         float: None,
         object: None,
         crop: [0.0; 4],

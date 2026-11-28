@@ -47,7 +47,7 @@ thread_local! {
     /// The kinds of [`Dropped`] already reported for the document being imported on this thread.
     /// Per thread because a document is parsed and built on one, and the parsers drop things
     /// from places that have no log of their own to hand.
-    static REPORTED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static REPORTED: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

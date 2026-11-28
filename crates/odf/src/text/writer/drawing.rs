@@ -679,6 +679,7 @@ mod tests {
             w: 10.0,
             h: 10.0,
             alt: String::new(),
+            link: None,
             float: None,
             object: None,
             crop: [0.0; 4],

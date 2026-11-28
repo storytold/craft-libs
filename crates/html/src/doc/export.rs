@@ -145,6 +145,9 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 }
             }
             Inline::Image(img) => {
+                if let Some(link) = img.link.as_deref().filter(|link| craft_wordmodel::link::is_safe_href(link)) {
+                    o.push_str(&format!("<a href=\"{}\">", esc(link)));
+                }
                 o.push_str(&format!(
                     "<img src=\"data:{};base64,{}\" alt=\"{}\" width=\"{}\" height=\"{}\">",
                     mime_of(&img.ext),
@@ -153,6 +156,9 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                     (img.w / 0.75).round(),
                     (img.h / 0.75).round()
                 ));
+                if img.link.as_deref().is_some_and(craft_wordmodel::link::is_safe_href) {
+                    o.push_str("</a>");
+                }
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
             Inline::Note { .. }
@@ -207,6 +213,9 @@ fn code_inlines_html(inlines: &[Inline]) -> String {
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
             Inline::Image(img) => {
+                if let Some(link) = img.link.as_deref().filter(|link| craft_wordmodel::link::is_safe_href(link)) {
+                    o.push_str(&format!("<a href=\"{}\">", esc(link)));
+                }
                 o.push_str(&format!(
                     "<img src=\"data:{};base64,{}\" alt=\"{}\" width=\"{}\" height=\"{}\">",
                     mime_of(&img.ext),
@@ -215,6 +224,9 @@ fn code_inlines_html(inlines: &[Inline]) -> String {
                     (img.w / 0.75).round(),
                     (img.h / 0.75).round()
                 ));
+                if img.link.as_deref().is_some_and(craft_wordmodel::link::is_safe_href) {
+                    o.push_str("</a>");
+                }
             }
             Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
                 let (open, close) = fmt_tags(fmt);
