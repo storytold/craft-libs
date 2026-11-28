@@ -916,13 +916,13 @@ impl<'a> LayerFilterBar<'a> {
                         field = field.select_on_focus();
                     }
                     let typed = field.show(ui);
-                    search_focused = focus::is_focused(ui.ctx(), typed.response.id);
                     if let Some(text) = typed.value() {
                         next.name.clone_from(text);
                     }
                     if focus_name {
                         focus::request(ui.ctx(), FocusTarget::Id(typed.response.id));
                     }
+                    search_focused = focus::is_focused(ui.ctx(), typed.response.id);
                 }
                 FilterBy::Effect => {
                     let effects: Vec<Entry<EffectKind>> =

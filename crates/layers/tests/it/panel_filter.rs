@@ -528,11 +528,12 @@ fn a_focused_empty_filter_announces_politely_once_and_resets_after_matches() {
     assert_eq!(rig.fixture.focused_stop(), focus, "the message does not move search focus");
     let status = rig
         .fixture
-        .by_role(Role::STATUS)
+        .tree()
+        .with_role(Role::STATUS)
         .into_iter()
-        .find(|target| rig.fixture.tree().name_of(target.node).is_some_and(|text| text.starts_with(NO_MATCHES)))
+        .find(|node| rig.fixture.tree().name_of(*node).is_some_and(|text| text.starts_with(NO_MATCHES)))
         .expect("the existing announcement service exposes a live status node");
-    let live = rig.fixture.tree().update().nodes.iter().find(|(id, _)| *id == status.node.into()).and_then(|(_, node)| node.live());
+    let live = rig.fixture.tree().update().nodes.iter().find(|(id, _)| *id == status.into()).and_then(|(_, node)| node.live());
     assert_eq!(live, Some(Live::Polite));
     for _ in 0..3 {
         rig.fixture.frame(Vec::new());
