@@ -220,5 +220,7 @@ fn cell_borders(table: &Borders, own: Option<&Borders>, ri: usize, rows: usize, 
         right: pick(own.right, ci + 1 == n, table.right, table.inside_v),
         between: None,
         inside_v: None,
+        tl2br: own.tl2br,
+        tr2bl: own.tr2bl,
     }
 }

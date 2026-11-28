@@ -1157,6 +1157,8 @@ fn styled_cell(t: &Table, style: Option<&craft_wordmodel::styles::TableStyleProp
         right: right.or(Some(none)),
         between: None,
         inside_v: None,
+        tl2br: cb.tl2br.or(rb.tl2br),
+        tr2bl: cb.tr2bl.or(rb.tr2bl),
     };
     Some(out)
 }

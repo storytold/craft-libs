@@ -257,6 +257,7 @@ fn rtf_border_style(s: craft_wordmodel::props::BorderStyle) -> &'static str {
         BorderStyle::Triple => "\\brdrtriple",
         BorderStyle::DotDash => "\\brdrdashd",
         BorderStyle::Wave => "\\brdrwavy",
+        BorderStyle::DoubleWave => "\\brdrwavydb",
         BorderStyle::ThinThickSmallGap => "\\brdrtnthsg",
         BorderStyle::ThickThinSmallGap => "\\brdrthtnsg",
         BorderStyle::ThinThickThinSmallGap => "\\brdrtnthtnsg",

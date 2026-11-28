@@ -74,3 +74,15 @@ fn compound_cell_and_page_borders_are_written_back_as_read() {
         assert_eq!(xml.matches(&format!(r#"w:val="{val}""#)).count(), 1, "{val}: {xml}");
     }
 }
+
+#[test]
+fn diagonal_cell_borders_survive_no_edit_save() {
+    let body = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:top w:val="single" w:sz="8" w:color="0055AA"/><w:tl2br w:val="doubleWave" w:sz="12" w:color="770088"/><w:tr2bl w:val="single" w:sz="12" w:color="009933"/></w:tcBorders></w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let xml = document_xml(&craft_docx::write(&craft_docx::read(&docx(body)).unwrap()).unwrap());
+    assert!(xml.contains(r#"<w:top w:val="single" w:sz="8" w:space="0" w:color="0055AA"/>"#), "top control: {xml}");
+    assert!(
+        xml.contains(r#"<w:tl2br w:val="doubleWave" w:sz="12" w:space="0" w:color="770088"/>"#),
+        "top-left to bottom-right keeps its source style: {xml}"
+    );
+    assert!(xml.contains(r#"<w:tr2bl w:val="single" w:sz="12" w:space="0" w:color="009933"/>"#), "top-right to bottom-left: {xml}");
+}
