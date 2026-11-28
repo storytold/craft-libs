@@ -391,6 +391,8 @@ impl Host for ViewportHost {
             // window its caller sizes takes no resize from the OS: the app runs its grips.
             resizable: full_window || (self.overlay.resize.edges != ResizeEdges::NONE && !self.overlay.resize.by_caller),
             moved_by_app: self.overlay.moved_by_app,
+            // A full-window container's opening size is the opener's: a maximized opener's would run off the screen.
+            fits_opener: full_window,
         };
         let dismissed = &mut self.dismissed;
         windows::show_viewport(&ctx, &open, |ui| {

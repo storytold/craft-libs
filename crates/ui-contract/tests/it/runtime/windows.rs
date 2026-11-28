@@ -1203,6 +1203,56 @@ fn a_window_on_the_second_of_two_monitors_reports_that_monitor_and_its_scale() {
     assert_eq!(host.facts(id).and_then(|facts| facts.scale), Some(second.scale), "the window takes the second monitor's scale");
 }
 
+/// #3580: a full-window container's first window, with nothing saved, opens at its opener's place with its size fitted
+/// to the opener's monitor. A maximized opener's content size, given to a window with a native frame of its own, would
+/// otherwise run off the work area; and the fitted place is no lasting rule: a window the user moves stays there.
+#[trial]
+fn a_full_window_viewports_first_window_fits_the_work_area_of_its_openers_monitor() {
+    use craft_behavior::{Monitor, MonitorKey};
+    let work = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 560.0));
+    let system = Arc::new(FakeSystem::new());
+    let monitor = Monitor::new(MonitorKey::new("only", [800, 600]), [0, 0], [800, 600], 1.0).with_work_px([0, 0], [800, 560]);
+    system.set_monitors(vec![monitor]);
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system));
+    // The opener is maximized: its frame hangs past the work area's edges, as the OS places a maximized window.
+    let outer = Rect::from_min_size(Pos2::new(-8.0, -8.0), Vec2::new(816.0, 576.0));
+    let inner = Rect::from_min_max(Pos2::new(0.0, 30.0), Pos2::new(800.0, 560.0));
+    windows.root_info(ViewportInfo {
+        inner_rect: Some(inner),
+        outer_rect: Some(outer),
+        native_pixels_per_point: Some(1.0),
+        maximized: Some(true),
+        ..ViewportInfo::default()
+    });
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::full_window("Workspace").show(ui, |_, _| {});
+        })
+    };
+    frame();
+    let out = frame();
+    let (dialog, builder) = builder_titled(&out, "Workspace");
+    let size = builder.inner_size.expect("the window opens at a size");
+    let corner = builder.position.expect("the window opens at a place on the opener's monitor");
+    let decoration = outer.size() - inner.size();
+    let opened = Rect::from_min_size(corner, size + decoration);
+    assert!(work.contains_rect(opened), "the window and its frame open inside the work area {work:?}: {opened:?}");
+
+    let moved = Rect::from_min_size(Pos2::new(300.0, 200.0), size);
+    windows.child_info(ViewportInfo {
+        inner_rect: Some(moved),
+        outer_rect: Some(moved.expand2(decoration / 2.0)),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    });
+    let placed: Vec<ViewportCommand> = (0..4)
+        .flat_map(|_| frame().commands)
+        .filter(|(id, command)| *id == dialog && matches!(command, ViewportCommand::OuterPosition(_)))
+        .map(|(_, command)| command)
+        .collect();
+    assert_eq!(placed, Vec::<ViewportCommand>::new(), "a window the user moved is not put back");
+}
+
 /// The OS windows the runtime opens carry the app id the app installed, as its main window does: docks and Wayland
 /// compositors find the app's icon and rules by it.
 #[trial]

@@ -1,6 +1,6 @@
 //! Viewport mounts: opening a mount's OS viewport and its close requests.
 
-use super::host::monitors;
+use super::host::{monitors, scale_of};
 use super::native::{WindowAction, act, route_hit_test};
 use super::placement::{record_placement, saved_placement};
 use super::shell::{app_id, base_shell, os_of, refresh};
@@ -8,7 +8,7 @@ use super::spec::{WindowLevel, WindowSpec, frame_of_spec};
 use super::{Record, refuse_close_under_modal, shared};
 use crate::runtime::egui::viewports;
 use crate::runtime::frame::PerViewport;
-use craft_behavior::placement::{Defaults, place};
+use craft_behavior::placement::{Defaults, Placement, monitor_of, place};
 use craft_host::target::{Os, WindowChrome, WindowKind};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2, ViewportId};
 
@@ -35,6 +35,9 @@ pub(crate) struct ViewportOpen<'a> {
     pub resizable: bool,
     /// Whether the app moves the window from its move band, from the container's overlay (`Overlay::moved_by_app`).
     pub moved_by_app: bool,
+    /// Whether a first open with nothing saved and no `position` is fitted on screen at the opener's place
+    /// ([`opening_geometry`]): a full-window container's window, which opens at the opener's content size.
+    pub fits_opener: bool,
 }
 
 /// Opens the OS viewport of a mount and runs `body` once for each pass it gets: with the saved placement, the OS
@@ -53,16 +56,18 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         }
     });
     let opened = PerViewport::<Record>::with(ctx, viewport, |record| record.seen.is_some());
-    let (size, pos) = saved_geometry(ctx, open, opened).map_or((open.size, None), |(size, pos)| (Some(size), pos));
+    let spec = open.spec;
+    let (chrome, captions) = frame_of_spec(ctx, spec);
+    let (size, pos) = saved_geometry(ctx, open, opened)
+        .or_else(|| (!opened).then(|| opening_geometry(ctx, open, chrome)).flatten())
+        .map_or((open.size, None), |(size, pos)| (Some(size), pos));
     let pos = pos.or(open.position);
     if opened {
         keep_placed(ctx, viewport, pos, size.filter(|_| open.follows_size));
     }
-    let spec = open.spec;
     let cancel_to = spec.hands_on_cancel.then(|| crate::runtime::egui::pass::current_viewport(ctx));
     let state = shared(ctx, |shared| shared.app);
     let os = os_of(ctx);
-    let (chrome, captions) = frame_of_spec(ctx, spec);
     let standing = PerViewport::<Record>::with(ctx, viewport, |record| {
         record.kind = Some(spec.kind);
         record.chrome = Some(chrome);
@@ -175,6 +180,7 @@ pub(crate) fn show_popup(ctx: &Context, open: &PopupOpen<'_>, body: impl FnMut(&
         position: open.rect.map(|rect| rect.min),
         resizable: false,
         moved_by_app: false,
+        fits_opener: false,
     };
     show_viewport(ctx, &mount, body);
 }
@@ -219,6 +225,37 @@ fn saved_geometry(ctx: &Context, open: &ViewportOpen<'_>, opened: bool) -> Optio
     };
     let pos = placement.position().filter(|_| positions).map(Pos2::from);
     Some((placement.normal.size.into(), pos))
+}
+
+/// The place a window that fits its opener ([`ViewportOpen::fits_opener`]) first opens at when nothing is saved and
+/// the caller gives no position: its opening size at the opener's outer position, fitted to the opener's monitor as a
+/// saved placement is (`place`), so a window as large as a maximized opener does not run off the screen. The fit is
+/// of the outer rect: a window with a native frame counts the opener's frame around its size, the one frame known
+/// before it opens. `None` (the system places the window) where the opener has not reported its place or the
+/// platform lists no monitor.
+fn opening_geometry(ctx: &Context, open: &ViewportOpen<'_>, chrome: WindowChrome) -> Option<(Vec2, Option<Pos2>)> {
+    if !open.fits_opener || open.position.is_some() {
+        return None;
+    }
+    let size = open.size?;
+    let opener = crate::runtime::egui::pass::current_viewport(ctx);
+    let facts = PerViewport::<Record>::with(ctx, opener, |record| record.facts)?;
+    let inner = facts.inner?;
+    let outer = facts.outer.unwrap_or(inner);
+    let scale = scale_of(ctx, &facts)?;
+    let monitors = monitors(ctx);
+    let outer_px = Rect::from_min_max(outer.min * scale, outer.max * scale);
+    let monitor = monitor_of(&monitors, outer_px)?;
+    let frame = if chrome == WindowChrome::Native { (outer.size() - inner.size()).max(Vec2::ZERO) } else { Vec2::ZERO };
+    let mut opening = Placement::new((size + frame).into(), scale);
+    opening.position_px = Some([(outer.min.x * scale).round() as i32, (outer.min.y * scale).round() as i32]);
+    opening.monitor = Some(monitor.key.clone());
+    let positions = base_shell(ctx).window_positions();
+    let min = open.limits.0.unwrap_or(Vec2::splat(1.0)) + frame;
+    let defaults = Defaults::new(opening.normal.size, min.into()).with_no_position(!positions);
+    let placed = place(Some(&opening), &monitors, None, &defaults);
+    let size = (Vec2::from(placed.normal.size) - frame).max(Vec2::splat(1.0));
+    Some((size, placed.position().filter(|_| positions).map(Pos2::from)))
 }
 
 /// Whether the OS asked the viewport of container `id` to close in this root frame; once.
