@@ -1,5 +1,6 @@
 //! [`Action`], [`ActionStep`], [`ActionColor`] and [`ActionInclude`].
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use craft_theme::LabelColor;
@@ -36,34 +37,44 @@ impl From<ActionStep> for (String, Value) {
     }
 }
 
-/// An action's Button Mode colour: none and Photoshop's seven, serialised as
-/// PhotoCraft's `BUTTON_COLORS` names (`""` for none, `"red"` … `"gray"`). An unknown name reads as
-/// `None`. The file keeps this type (lead call 40) because [`LabelColor`] has eleven colours and
-/// no "none"; [`label_color`](Self::label_color) maps it for words and tints.
+/// An action's Button Mode colour, serialised with PhotoCraft's legacy string names.
+/// The twelve known colours retain their measured ATN indices; other indices use
+/// `@atn-color:N`. Unrecognised names still read as `None`, as in older files.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum ActionColor {
     /// No colour.
     #[default]
     None,
-    #[allow(missing_docs)]
+    /// Red (ATN index 1).
     Red,
-    #[allow(missing_docs)]
+    /// Orange (ATN index 2).
     Orange,
-    #[allow(missing_docs)]
+    /// Yellow (ATN index 3).
     Yellow,
-    #[allow(missing_docs)]
+    /// Green (ATN index 4).
     Green,
-    #[allow(missing_docs)]
+    /// Classic blue, shown as light blue in the modern picker (ATN index 5).
     Blue,
-    #[allow(missing_docs)]
+    /// Classic violet, shown as lavender in the modern picker (ATN index 6).
     Violet,
-    #[allow(missing_docs)]
+    /// Gray (ATN index 7).
     Gray,
+    /// Teal (ATN index 8).
+    Teal,
+    /// Modern blue, distinct from classic light blue (ATN index 9).
+    Blue2,
+    /// Magenta (ATN index 10).
+    Magenta,
+    /// Purple (ATN index 11).
+    Purple,
+    /// An unrecognised ATN index, retained without inventing a palette colour.
+    /// Use [`Self::from_atn_index`] to normalise known indices to their named variants.
+    Unknown(u16),
 }
 
 impl ActionColor {
-    /// Every colour in Photoshop's order, `None` first (the Color submenu's order).
+    /// The classic Color submenu's eight choices, in ATN order.
     pub const ALL: [ActionColor; 8] = [
         ActionColor::None,
         ActionColor::Red,
@@ -75,11 +86,27 @@ impl ActionColor {
         ActionColor::Gray,
     ];
 
-    /// The file name: `""`, `"red"`, `"orange"`, `"yellow"`, `"green"`, `"blue"`, `"violet"`,
-    /// `"gray"`.
+    /// Every known colour in ATN index order, distinct from the modern picker's display order.
+    pub const KNOWN: [ActionColor; 12] = [
+        ActionColor::None,
+        ActionColor::Red,
+        ActionColor::Orange,
+        ActionColor::Yellow,
+        ActionColor::Green,
+        ActionColor::Blue,
+        ActionColor::Violet,
+        ActionColor::Gray,
+        ActionColor::Teal,
+        ActionColor::Blue2,
+        ActionColor::Magenta,
+        ActionColor::Purple,
+    ];
+
+    /// The legacy name of a known colour; empty for no colour or an unknown index.
+    /// Use [`Self::wire_name`] to retain an unknown index when writing a file or editing metadata.
     pub const fn name(self) -> &'static str {
         match self {
-            ActionColor::None => "",
+            ActionColor::None | ActionColor::Unknown(_) => "",
             ActionColor::Red => "red",
             ActionColor::Orange => "orange",
             ActionColor::Yellow => "yellow",
@@ -87,15 +114,49 @@ impl ActionColor {
             ActionColor::Blue => "blue",
             ActionColor::Violet => "violet",
             ActionColor::Gray => "gray",
+            ActionColor::Teal => "teal",
+            ActionColor::Blue2 => "blue2",
+            ActionColor::Magenta => "magenta",
+            ActionColor::Purple => "purple",
         }
     }
 
-    /// The [`LabelColor`] this colour is, for the shared colour words
-    /// (`LabelColorLabels::name`); `None` for no
-    /// colour.
+    /// The lossless file name, including canonical `@atn-color:N` for an unknown index.
+    pub fn wire_name(self) -> Cow<'static, str> {
+        match Self::from_atn_index(self.atn_index()) {
+            ActionColor::Unknown(index) => Cow::Owned(format!("@atn-color:{index}")),
+            known => Cow::Borrowed(known.name()),
+        }
+    }
+
+    /// The colour stored at an ATN header index; indices outside the known palette stay opaque.
+    pub const fn from_atn_index(index: u16) -> Self {
+        if (index as usize) < Self::KNOWN.len() { Self::KNOWN[index as usize] } else { Self::Unknown(index) }
+    }
+
+    /// The original ATN header index, including an opaque unknown value.
+    pub const fn atn_index(self) -> u16 {
+        match self {
+            ActionColor::None => 0,
+            ActionColor::Red => 1,
+            ActionColor::Orange => 2,
+            ActionColor::Yellow => 3,
+            ActionColor::Green => 4,
+            ActionColor::Blue => 5,
+            ActionColor::Violet => 6,
+            ActionColor::Gray => 7,
+            ActionColor::Teal => 8,
+            ActionColor::Blue2 => 9,
+            ActionColor::Magenta => 10,
+            ActionColor::Purple => 11,
+            ActionColor::Unknown(index) => index,
+        }
+    }
+
+    /// The shared theme colour for words and tints; opaque indices have no guessed tint.
     pub const fn label_color(self) -> Option<LabelColor> {
         match self {
-            ActionColor::None => None,
+            ActionColor::None | ActionColor::Unknown(_) => None,
             ActionColor::Red => Some(LabelColor::Red),
             ActionColor::Orange => Some(LabelColor::Orange),
             ActionColor::Yellow => Some(LabelColor::Yellow),
@@ -103,12 +164,27 @@ impl ActionColor {
             ActionColor::Blue => Some(LabelColor::Blue),
             ActionColor::Violet => Some(LabelColor::Violet),
             ActionColor::Gray => Some(LabelColor::Gray),
+            ActionColor::Teal => Some(LabelColor::Seafoam),
+            ActionColor::Blue2 => Some(LabelColor::Indigo),
+            ActionColor::Magenta => Some(LabelColor::Magenta),
+            ActionColor::Purple => Some(LabelColor::Fuchsia),
         }
     }
 
-    /// The colour a file name stands for; `None` for `""` and any unknown name.
+    /// Read a known name or canonical opaque index. Other names retain the legacy `None` fallback.
     pub fn from_name(name: &str) -> ActionColor {
-        ActionColor::ALL.into_iter().find(|color| color.name() == name).unwrap_or(ActionColor::None)
+        if let Some(color) = Self::KNOWN.into_iter().find(|color| color.name() == name) {
+            return color;
+        }
+        if let Some(number) = name.strip_prefix("@atn-color:")
+            && number.len() <= 5
+            && let Ok(index) = number.parse::<u16>()
+            && usize::from(index) >= Self::KNOWN.len()
+            && number == index.to_string()
+        {
+            return Self::Unknown(index);
+        }
+        Self::None
     }
 }
 
@@ -120,7 +196,7 @@ impl From<String> for ActionColor {
 
 impl From<ActionColor> for String {
     fn from(color: ActionColor) -> Self {
-        color.name().to_owned()
+        color.wire_name().into_owned()
     }
 }
 
@@ -142,6 +218,12 @@ pub enum ActionInclude {
 pub struct Action {
     /// The name, unique in its [`ActionList`](super::ActionList).
     pub name: String,
+    /// The action's description; multiline text is kept verbatim.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The action's icon identifier. Unknown identifiers are retained for the app's fallback.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
     /// The steps in order.
     #[serde(default)]
     pub steps: Vec<ActionStep>,

@@ -72,3 +72,71 @@ craft_ui::words! {
         replace_question: template "actions.replaceQuestion" = "Replace all actions with {count} actions from {file}?";
     }
 }
+
+craft_ui::words! {
+    /// The Modern Actions editor's words; command and settings labels come from its host.
+    pub struct ActionEditorWords {
+        name: "actionEditor.name" = "Name";
+        description: "actionEditor.description" = "Description";
+        shortcut: "actionEditor.shortcut" = "Keyboard shortcut";
+        icon: "actionEditor.icon" = "Icon";
+        default_icon: "actionEditor.defaultIcon" = "Default icon";
+        color: "actionEditor.color" = "Color";
+        steps: "actionEditor.steps" = "Steps";
+        include: "actionEditor.include" = "Include in playback: {row}";
+        dialog: "actionEditor.dialog" = "Show dialog during playback: {row}";
+        duplicate_step: "actionEditor.duplicateStep" = "Duplicate step";
+        delete_step: "actionEditor.deleteStep" = "Delete step";
+        preview: "actionEditor.preview" = "Play action";
+        preview_from: "actionEditor.previewFrom" = "Play from selected step";
+        capture: "actionEditor.capture" = "Record";
+        stop_capture: "actionEditor.stopCapture" = "Stop recording";
+        edit_step: "actionEditor.editStep" = "Edit step settings";
+        insert_stop: "actionEditor.insertStop" = "Insert Stop";
+        save: "actionEditor.save" = "Save";
+        discard: "actionEditor.discard" = "Discard";
+        leave: "actionEditor.leave" = "Back to Actions";
+        none: "actionEditor.none" = "None";
+        red: "actionEditor.red" = "Red";
+        orange: "actionEditor.orange" = "Orange";
+        yellow: "actionEditor.yellow" = "Yellow";
+        green: "actionEditor.green" = "Green";
+        teal: "actionEditor.teal" = "Teal";
+        light_blue: "actionEditor.lightBlue" = "Light blue";
+        blue: "actionEditor.blue" = "Blue";
+        magenta: "actionEditor.magenta" = "Magenta";
+        purple: "actionEditor.purple" = "Purple";
+        lavender: "actionEditor.lavender" = "Lavender";
+        gray: "actionEditor.gray" = "Gray";
+        icon_click: "actionEditor.iconClick" = "Click";
+        icon_crop: "actionEditor.iconCrop" = "Crop";
+        icon_merge: "actionEditor.iconMerge" = "Merge layers";
+        icon_adjustment: "actionEditor.iconAdjustment" = "Adjustment";
+        icon_hue: "actionEditor.iconHue" = "Hue and saturation";
+        icon_exposure: "actionEditor.iconExposure" = "Exposure";
+        icon_lookup: "actionEditor.iconLookup" = "Color lookup";
+        icon_monochrome: "actionEditor.iconMonochrome" = "Black and white";
+        icon_remove: "actionEditor.iconRemove" = "Remove";
+        icon_dodge: "actionEditor.iconDodge" = "Dodge";
+        icon_burn: "actionEditor.iconBurn" = "Burn";
+        icon_erase: "actionEditor.iconErase" = "Erase";
+        icon_effects: "actionEditor.iconEffects" = "Layer effects";
+        icon_generated_effects: "actionEditor.iconGeneratedEffects" = "Generated effects";
+        icon_sharpen: "actionEditor.iconSharpen" = "Sharpen";
+        icon_object_selection: "actionEditor.iconObjectSelection" = "Object selection";
+        icon_wand: "actionEditor.iconWand" = "Magic wand";
+        icon_generate: "actionEditor.iconGenerate" = "Generate";
+        icon_text_color: "actionEditor.iconTextColor" = "Text color";
+        icon_text: "actionEditor.iconText" = "Text";
+        icon_download: "actionEditor.iconDownload" = "Download";
+        icon_layers: "actionEditor.iconLayers" = "Layers";
+        icon_brush: "actionEditor.iconBrush" = "Brush";
+        icon_subject: "actionEditor.iconSubject" = "Select subject";
+        icon_background: "actionEditor.iconBackground" = "Remove background";
+        icon_blur: "actionEditor.iconBlur" = "Blur";
+        icon_harmonize: "actionEditor.iconHarmonize" = "Harmonize layers";
+        icon_clarity: "actionEditor.iconClarity" = "Clarity";
+        icon_styles: "actionEditor.iconStyles" = "Generated styles";
+        icon_grid: "actionEditor.iconGrid" = "Show grid";
+    }
+}

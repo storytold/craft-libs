@@ -255,6 +255,138 @@ fn actions_panel_menu_offers_the_library_commands() {
     assert_eq!(events, [ActionsEvent::ClearAll, ActionsEvent::Reset, ActionsEvent::Replace].map(|event| Some(ActionsMenuAction::Event(event))));
 }
 
+/// A host can caption imported occurrences without changing their opaque list keys.
+struct CaptionHost {
+    order: Option<Vec<String>>,
+}
+
+impl craft_automation::ui::actions::ActionsHost for CaptionHost {
+    fn set_order(&self) -> Option<&[String]> {
+        self.order.as_deref()
+    }
+
+    fn step_label(&self, step: &craft_automation::actions::ActionStep) -> String {
+        step.command.clone()
+    }
+
+    fn action_label<'a>(&'a self, action: &'a craft_automation::actions::Action) -> std::borrow::Cow<'a, str> {
+        std::borrow::Cow::Borrowed(match action.name.as_str() {
+            "row-0" => "First shown action",
+            "row-1" => "Second shown action",
+            _ => &action.name,
+        })
+    }
+
+    fn set_label<'a>(&'a self, set: &'a str) -> std::borrow::Cow<'a, str> {
+        std::borrow::Cow::Borrowed(match set {
+            "folder-0" | "folder-1" => "Shared folder caption",
+            "folder-empty" => "Empty shown folder",
+            _ => set,
+        })
+    }
+}
+
+struct CaptionApp {
+    host: CaptionHost,
+    state: ActionsPanelState,
+    list: ActionList,
+    events: Vec<ActionsEvent>,
+}
+
+fn caption_rig(button_mode: bool, order: Option<Vec<String>>) -> (Fixture, Rc<RefCell<CaptionApp>>) {
+    let mut list = list_of(vec![action("row-0", Some("folder-0"), &["first"]), action("row-1", Some("folder-1"), &["second"])]);
+    list.new_set("folder-empty").unwrap();
+    let mut state = ActionsPanelState::default();
+    state.settings.button_mode = button_mode;
+    let shared = Rc::new(RefCell::new(CaptionApp { host: CaptionHost { order }, state, list, events: Vec::new() }));
+    let shown = Rc::clone(&shared);
+    let mut fixture = Fixture::new(move |ui| {
+        let CaptionApp { host, state, list, events } = &mut *shown.borrow_mut();
+        events.extend(ActionsPanel::new(state, list).host(&*host).show(ui).events);
+    });
+    fixture.room(PANEL);
+    fixture.settle();
+    (fixture, shared)
+}
+
+#[trial]
+fn actions_panel_captions_keep_same_named_and_empty_occurrences_separate() {
+    let (mut fixture, shared) = caption_rig(false, None);
+    let names: Vec<_> = fixture.tree().keys().into_iter().filter_map(|key| fixture.tree().name_of(key).map(str::to_owned)).collect();
+    // A ListRow names both its tree item and its label cell; count physical rows, not all access nodes.
+    let rows = fixture.by_role(craft_ui::runtime::access::Role::TREE_ITEM);
+    let captions: Vec<_> = rows.iter().filter_map(|row| fixture.tree().name_of(row.node).map(str::to_owned)).collect();
+    assert_eq!(captions.iter().filter(|name| name.as_str() == "Shared folder caption").count(), 2);
+    assert_eq!(rows.len(), 5, "three physical folders and two actions");
+    assert_eq!(captions, ["Shared folder caption", "First shown action", "Shared folder caption", "Second shown action", "Empty shown folder"]);
+    assert_ne!(rows[0].node, rows[2].node, "same-caption folders retain distinct row identities");
+    let painted: Vec<_> = fixture.texts().iter().filter(|run| captions.contains(&run.text)).map(|run| run.text.clone()).collect();
+    assert_eq!(painted, captions, "the latest frame paints each physical caption once in row order");
+    assert!(fixture.by_label("Empty shown folder").is_some());
+    for key in ["row-0", "row-1", "folder-0", "folder-1", "folder-empty"] {
+        assert!(!names.iter().any(|name| name == key), "opaque keys are not captions: {key}");
+    }
+    let second = node(&fixture, "Second shown action").center();
+    click(&mut fixture, second);
+    let app = shared.borrow();
+    assert_eq!(app.state.selected, Some(ActionSelection::Action(1)));
+    assert_eq!(app.list.sets(), ["folder-0", "folder-1", "folder-empty"]);
+    assert_eq!(app.list.action(1).unwrap().name, "row-1");
+}
+
+#[trial]
+fn actions_panel_button_captions_play_the_original_index_once() {
+    let (mut fixture, shared) = caption_rig(true, None);
+    let second = node(&fixture, "Second shown action").center();
+    click(&mut fixture, second);
+    let app = shared.borrow();
+    let plays: Vec<_> = app
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            ActionsEvent::Play { action, from, .. } => Some((*action, *from)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(plays, [(1, 0)]);
+    assert_eq!(app.list.action(0).unwrap().name, "row-0");
+    assert_eq!(app.list.action(1).unwrap().name, "row-1");
+}
+
+#[trial]
+fn actions_panel_default_host_keeps_existing_raw_captions() {
+    let (fixture, shared) = rig(app(two_sets()));
+    for name in ["Loose", "Alpha", "First", "Beta", "Second"] {
+        assert!(fixture.by_label(name).is_some(), "default caption {name}");
+    }
+    assert_eq!(shared.borrow().list.sets(), ["Alpha", "Beta"]);
+    assert_eq!(shared.borrow().state.selected, None);
+}
+
+#[trial]
+fn actions_panel_host_order_keeps_an_empty_occurrence_before_populated_ones() {
+    let order = ["folder-empty", "folder-1", "folder-0"].map(str::to_owned).to_vec();
+    let (fixture, shared) = caption_rig(false, Some(order));
+    let empty = node(&fixture, "Empty shown folder").rect;
+    let second = node(&fixture, "Second shown action").rect;
+    let first = node(&fixture, "First shown action").rect;
+    assert!(empty.top() < second.top() && second.top() < first.top(), "empty, second, first: {empty:?}, {second:?}, {first:?}");
+    assert_eq!(shared.borrow().list.sets(), ["folder-0", "folder-1", "folder-empty"], "display ordering does not rewrite the list");
+}
+
+#[trial]
+fn actions_panel_invalid_host_order_cannot_hide_or_duplicate_a_set() {
+    for order in [vec!["folder-1", "folder-0"], vec!["folder-1", "folder-1", "folder-empty"], vec!["folder-1", "unknown", "folder-empty"]] {
+        let order = order.into_iter().map(str::to_owned).collect();
+        let (fixture, shared) = caption_rig(false, Some(order));
+        let first = node(&fixture, "First shown action").rect;
+        let second = node(&fixture, "Second shown action").rect;
+        let empty = node(&fixture, "Empty shown folder").rect;
+        assert!(first.top() < second.top() && second.top() < empty.top(), "invalid ordering uses all default rows");
+        assert_eq!(shared.borrow().list.sets(), ["folder-0", "folder-1", "folder-empty"]);
+    }
+}
+
 /// A step row has an include and a dialog cell, or with `StepCells::Include` the include cell only; a set row with steps
 /// has an include cell whose press reports a toggle of the set, and a set without steps has none.
 #[trial]

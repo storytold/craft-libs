@@ -11,7 +11,7 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
 
 use super::body::Body;
-use super::panel::{ActionSelection, ActionsHost, ActionsPanelState, StepCells};
+use super::panel::{ActionSelection, ActionsHost, ActionsPanelState, StepCells, action_label, display_sets, set_label};
 use crate::actions::{ActionInclude, ActionList};
 
 /// The include column: a toggle on action rows (every step) and step rows.
@@ -58,7 +58,7 @@ impl<'a> ActionRows<'a> {
         for &index in order.iter().filter(|&&index| list.set_of(index).is_none()) {
             out.push_action(state, index, 0);
         }
-        for set in list.sets() {
+        for set in display_sets(list, host) {
             let open = set_open(list, state, host, set);
             out.rows.push(Shown { key: ActionSelection::Set(set.to_owned()), depth: 0, group: true, open });
             if open {
@@ -131,8 +131,8 @@ impl DisplayOrder<ActionSelection> for ActionRows<'_> {
 
     fn text(&self, at: usize) -> Option<Cow<'_, str>> {
         match &self.rows.get(at)?.key {
-            ActionSelection::Set(name) => Some(Cow::Borrowed(name.as_str())),
-            ActionSelection::Action(index) => self.list.action(*index).map(|action| Cow::Borrowed(action.name.as_str())),
+            ActionSelection::Set(name) => Some(set_label(self.host, name)),
+            ActionSelection::Action(index) => self.list.action(*index).map(|action| action_label(self.host, action)),
             ActionSelection::Step(..) => None,
         }
     }
@@ -195,11 +195,12 @@ pub(super) fn build_row(body: &Body<'_>, state: &ActionsPanelState, key: &Action
             let count = list.actions().iter().filter(|action| action.set.as_deref() == Some(name.as_str())).count();
             let open = set_open(list, state, host, name);
             let icon = IconId::new(if open { "folder_open" } else { "folder" });
-            ListRow::new(name.clone()).icon(IconSpec::svg(icon)).optional(words.action_count.text(count as u64, &digits(count)))
+            ListRow::new(set_label(host, name).into_owned()).icon(IconSpec::svg(icon)).optional(words.action_count.text(count as u64, &digits(count)))
         }
         ActionSelection::Action(index) => {
             let Some(action) = list.action(*index) else { return ListRow::new(Label::Empty) };
-            let mut row = ListRow::new(action.name.clone()).icon(IconSpec::svg(IconId::new("play")));
+            let name = action_label(host, action);
+            let mut row = ListRow::new(name.to_string()).icon(IconSpec::svg(IconId::new("play")));
             let steps = list.step_count(*index);
             let mut text = words.steps.text(steps as u64, &digits(steps));
             if action.include() == ActionInclude::Partial {
@@ -210,7 +211,7 @@ pub(super) fn build_row(body: &Body<'_>, state: &ActionsPanelState, key: &Action
                 text = words.shortcut_steps.fill(&[("shortcut", &shortcut), ("steps", &text)]);
             }
             if host.and_then(|host| host.recording()) == Some(*index) {
-                let name = words.recording_suffix.fill(&[("name", &action.name)]);
+                let name = words.recording_suffix.fill(&[("name", &name)]);
                 row = row.accessible_name(name).trailing_icon(IconSpec::svg(IconId::new("circle")), words.recording.clone()).trailing_tone(Tone::Bad);
             }
             row.optional(text)

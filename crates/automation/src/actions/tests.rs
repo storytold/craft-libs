@@ -96,6 +96,78 @@ fn set_order_survives_the_file() {
     let old = r#"{"version":1,"actions":[{"name":"X","steps":[],"set":"F"}],"sets":["E"]}"#;
     assert_eq!(ActionList::from_file(ActionsFile::from_json(old).unwrap()).sets(), ["F", "E"]);
 }
+// Modern metadata and imported ATN colours must not be erased by ordinary list operations or
+// by the legacy string-based file format. The names and indices are the measured file contract.
+#[trial]
+fn action_metadata_and_atn_colors_survive_list_edits_and_files() {
+    let colors = [
+        (0, ""),
+        (1, "red"),
+        (2, "orange"),
+        (3, "yellow"),
+        (4, "green"),
+        (5, "blue"),
+        (6, "violet"),
+        (7, "gray"),
+        (8, "teal"),
+        (9, "blue2"),
+        (10, "magenta"),
+        (11, "purple"),
+        (12, "@atn-color:12"),
+        (u16::MAX, "@atn-color:65535"),
+    ];
+    for (index, name) in colors {
+        let text = json!({"version": 1, "actions": [{
+            "name": "Imported", "steps": [["paint", {"amount": 4}]], "dialogs": [0],
+            "description": "First line\nSecond line", "icon": "future-icon", "color": name,
+            "options": {"future": {"thumbnailType": 41, "precondition": -9}}
+        }]})
+        .to_string();
+        let mut list = ActionList::from_file(ActionsFile::from_json(&text).unwrap());
+        let imported = list.action(0).unwrap().clone();
+        assert_eq!((imported.description.as_str(), imported.icon.as_str()), ("First line\nSecond line", "future-icon"));
+        assert_eq!(imported.options.get("future"), Some(&json!({"thumbnailType": 41, "precondition": -9})));
+        assert_eq!(imported.color, ActionColor::from_atn_index(index));
+        assert_eq!(imported.color.atn_index(), index);
+        assert_eq!(String::from(imported.color), name);
+        let copy = list.duplicate_action(0, |_, _, _| {}).unwrap();
+        list.rename(copy, "Edited copy", |_, _, _| {}).unwrap();
+        list.toggle_step(copy, 0).unwrap();
+        list.move_action(copy, 0).unwrap();
+        let mut expected = imported.clone();
+        expected.name = "Edited copy".into();
+        expected.disabled.insert(0);
+        assert_eq!(list.action(0), Some(&expected), "editing the copy keeps all metadata for {name:?}");
+        assert_eq!(list.action(1), Some(&imported), "the source remains unchanged");
+        let saved = list.to_file().to_json().unwrap();
+        let loaded = ActionList::from_file(ActionsFile::from_json(&saved).unwrap());
+        assert_eq!(loaded.actions(), list.actions(), "file round trip keeps the full edited actions");
+        let saved: Value = serde_json::from_str(&saved).unwrap();
+        if index == 0 {
+            assert!(saved["actions"][0].get("color").is_none(), "no colour retains the legacy omission");
+        } else {
+            assert_eq!(saved["actions"][0]["color"], name, "wire names retain the original header index");
+        }
+    }
+}
+
+// Legacy files must not gain empty metadata, and accepting opaque indices must not turn malformed
+// or arbitrary old names into colours. A manually constructed known index normalises on write.
+#[trial]
+fn action_metadata_defaults_keep_legacy_json_and_color_fallbacks() {
+    let text = r#"{"version":1,"actions":[{"name":"Legacy","steps":[],"options":{"custom":true}}]}"#;
+    let list = ActionList::from_file(ActionsFile::from_json(text).unwrap());
+    let legacy = list.action(0).unwrap();
+    assert!(legacy.description.is_empty() && legacy.icon.is_empty());
+    assert_eq!(serde_json::from_str::<Value>(&list.to_file().to_json().unwrap()).unwrap(), serde_json::from_str::<Value>(text).unwrap());
+    for name in ["future-color", "Blue", "@atn-color:11", "@atn-color:012", "@atn-color:+12", "@atn-color:65536", "@atn-color:12 "] {
+        let color: ActionColor = serde_json::from_value(json!(name)).unwrap();
+        assert_eq!(color, ActionColor::None, "unrecognised name {name:?} retains the legacy fallback");
+    }
+    let color = ActionColor::Unknown(5);
+    assert_eq!(serde_json::to_value(color).unwrap(), "blue", "known header indices have one canonical spelling");
+}
+
 // A file that repeats a name keeps a later action's own name: `Foo, Foo, Foo 2` renames the repeat
 // (`Foo 3`), never the real `Foo 2`; a merge does the same against the names already in the list.
 #[trial]
@@ -364,4 +436,103 @@ fn an_actions_options_are_set_and_kept_through_a_duplicate_and_the_file() {
     let copy = list.duplicate_action(0, |_, _, _| {}).unwrap();
     assert_eq!(list.action(copy).unwrap().options, options, "a duplicate keeps them");
     assert_eq!(ActionList::from_file(list.to_file()).action(0).unwrap().options, options, "the file keeps them");
+}
+
+// A draft snapshot need not be inserted or renamed to satisfy the stored list's identity rules.
+#[trial]
+fn action_snapshot_keeps_unpublished_steps_flags_and_gate_checks() {
+    struct Gated {
+        ran: Vec<(String, bool)>,
+    }
+    impl ActionRunner for Gated {
+        fn authorize(&mut self, step: &ActionStep) -> Result<(), String> {
+            if step.command == "denied" { Err("permission refused".into()) } else { Ok(()) }
+        }
+        fn run_step(&mut self, _: &Action, _: usize, step: &ActionStep, dialog: bool, _: &mut PlaybackBudget) -> StepOutcome {
+            self.ran.push((step.command.clone(), dialog));
+            StepOutcome::Done(Value::Null)
+        }
+    }
+    let mut draft = action("", &["disabled", "first", "denied", "tail"]);
+    draft.disabled.insert(0);
+    draft.dialogs.insert(1);
+    let opening = draft.clone();
+    let mut runner = Gated { ran: Vec::new() };
+    let mut budget = PlaybackBudget::new();
+    let report = ActionPlayer::play_snapshot(&draft, "draft:1", 0, &mut runner, &mut budget);
+    assert_eq!(runner.ran, [("first".into(), true)], "disabled and denied steps never reach the runner");
+    assert_eq!(report.ran, 1);
+    assert_eq!(report.failed.as_ref().map(|failure| (failure.step, failure.command.as_str())), Some((2, "denied")));
+    assert_eq!(budget.steps(), report.ran + 1, "the denied step is charged before its gate refuses it");
+    assert_eq!(draft, opening, "preview leaves the unpublished definition intact");
+}
+
+// A draft and a stored occurrence may share a caption, while the same occurrence remains recursive.
+#[trial]
+fn action_snapshot_identity_distinguishes_namesakes_and_refuses_the_same_occurrence() {
+    struct Nested {
+        child: Action,
+        identity: &'static str,
+        trace: Script,
+        report: Option<PlaybackReport>,
+    }
+    impl ActionRunner for Nested {
+        fn run_step(&mut self, _: &Action, _: usize, _: &ActionStep, _: bool, budget: &mut PlaybackBudget) -> StepOutcome {
+            let report = ActionPlayer::play_snapshot(&self.child, self.identity, 0, &mut self.trace, budget);
+            let refused = report.refused.is_some() || report.failed.is_some();
+            self.report = Some(report);
+            if refused { StepOutcome::Failed("nested snapshot refused".into()) } else { StepOutcome::Done(Value::Null) }
+        }
+    }
+    let outer = action("Same caption", &["call child"]);
+    for (identity, allowed) in [("library:2", true), ("draft:1", false)] {
+        let mut runner = Nested { child: action("Same caption", &["child"]), identity, trace: Script::default(), report: None };
+        let mut budget = PlaybackBudget::new();
+        let report = ActionPlayer::play_snapshot(&outer, "draft:1", 0, &mut runner, &mut budget);
+        let child = runner.report.as_ref().unwrap();
+        if allowed {
+            assert!(report.failed.is_none() && child.refused.is_none());
+            assert_eq!(runner.trace.ran, ["child"]);
+        } else {
+            assert!(runner.trace.ran.is_empty());
+            assert_eq!(child.refused, Some(PlaybackRefusal::Recursive("Same caption".into())), "reports never expose the host's private identity");
+            assert!(report.failed.is_some());
+        }
+        let mut after = Script::default();
+        let next = ActionPlayer::play_snapshot(&runner.child, "draft:1", 0, &mut after, &mut budget);
+        assert!(next.refused.is_none() && next.failed.is_none(), "both paths release their call-stack entry");
+        assert_eq!(after.ran, ["child"]);
+    }
+}
+
+// A host can yield after a step and resume the same immutable snapshot and charged budget.
+#[trial]
+fn action_snapshot_resumes_after_wait_in_the_same_budget() {
+    #[derive(Default)]
+    struct Paced {
+        ran: Vec<String>,
+    }
+    impl ActionRunner for Paced {
+        fn run_step(&mut self, _: &Action, _: usize, step: &ActionStep, _: bool, _: &mut PlaybackBudget) -> StepOutcome {
+            self.ran.push(step.command.clone());
+            StepOutcome::Wait(Value::Null)
+        }
+    }
+    let mut draft = action("Unsaved", &["first", "disabled", "last"]);
+    draft.disabled.insert(1);
+    let mut budget = PlaybackBudget::new();
+    budget.limit = 2;
+    let mut runner = Paced::default();
+    let first = ActionPlayer::play_snapshot(&draft, "draft:7", 0, &mut runner, &mut budget);
+    assert!(first.waiting && first.refused.is_none());
+    let next = first.paused_at.unwrap() + 1;
+    let last = ActionPlayer::play_snapshot(&draft, "draft:7", next, &mut runner, &mut budget);
+    assert!(last.waiting && last.refused.is_none());
+    let done = ActionPlayer::play_snapshot(&draft, "draft:7", last.paused_at.unwrap() + 1, &mut runner, &mut budget);
+    assert!(!done.waiting && done.paused_at.is_none() && done.failed.is_none());
+    assert_eq!(runner.ran, ["first", "last"]);
+    assert_eq!(budget.steps(), first.ran + last.ran);
+    let refused = ActionPlayer::play_snapshot(&draft, "draft:7", 0, &mut runner, &mut budget);
+    assert_eq!(refused.refused, Some(PlaybackRefusal::StepLimit));
+    assert_eq!(runner.ran, ["first", "last"], "resuming cannot reset the shared step budget");
 }

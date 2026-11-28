@@ -10,6 +10,9 @@
 //! | Columns and words | [`INCLUDE_COLUMN`], [`DIALOG_COLUMN`], [`ActionsWords`] |
 
 mod body;
+pub(crate) mod editor;
+mod editor_picker;
+mod editor_steps;
 mod footer;
 mod menu;
 #[cfg(feature = "screen-testing")]
@@ -29,3 +32,8 @@ pub use panel::{
 pub use prompt::LibraryPrompt;
 pub use rows::{DIALOG_COLUMN, INCLUDE_COLUMN};
 pub use words::ActionsWords;
+
+pub use editor::{
+    ActionEditor, ActionEditorActivity, ActionEditorEvent, ActionEditorHost, ActionEditorOutput, ActionEditorState, ActionEditorValue, ActionStepMove,
+};
+pub use words::ActionEditorWords;

@@ -18,6 +18,7 @@ use egui::{Id, Response, Ui};
 
 use super::menu::OpenMenu;
 use super::panel::{ActionSelection, ActionsEvent, ActionsHost, ActionsPanelState, Session, StepCells};
+use super::panel::{action_label, display_sets, set_label};
 use super::rows::{ActionRows, DIALOG_COLUMN, INCLUDE_COLUMN, NAME_COLUMN, build_row, cells};
 use super::words::ActionsWords;
 use crate::actions::{ActionList, moved_index};
@@ -110,19 +111,19 @@ fn show_buttons(ui: &mut Ui, body: &Body<'_>) -> BodyOutput {
     let mut events = Vec::new();
     let order = list.display_order();
     let mut shown: Vec<(Option<&str>, Vec<usize>)> = vec![(None, order.iter().copied().filter(|&index| list.set_of(index).is_none()).collect())];
-    for set in list.sets() {
+    for set in display_sets(list, body.host) {
         shown.push((Some(set), order.iter().copied().filter(|&index| list.set_of(index) == Some(set)).collect()));
     }
     let shown_buttons = Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
         for (set, actions) in &shown {
             if let Some(name) = set {
                 Row::new().pad(Pad::Control).show(ui, |ui, _| {
-                    Text::new((*name).to_owned()).show(ui);
+                    Text::new(set_label(body.host, name).into_owned()).show(ui);
                 });
             }
             for &index in actions {
                 let Some(action) = list.action(index) else { continue };
-                let mut button = Button::new(action.name.clone()).sizing(Sizing::FillWidth).align(HAlign::Start);
+                let mut button = Button::new(action_label(body.host, action).into_owned()).sizing(Sizing::FillWidth).align(HAlign::Start);
                 if let Some(color) = action.color.label_color() {
                     button = button.tint(color.fill());
                 }
