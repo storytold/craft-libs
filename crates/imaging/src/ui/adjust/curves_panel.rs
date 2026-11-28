@@ -190,6 +190,12 @@ pub struct CurvesPanel<'a> {
     /// Whether the whole panel takes input.
     #[prop]
     enabled: bool,
+    /// The graph's Ctrl+Tab and Ctrl+Shift+Tab step through the points ([`CurveEditor::tab_steps`]).
+    #[prop(flag)]
+    tab_steps: bool,
+    /// Delete on an end point deselects it ([`CurveEditor::end_delete_deselects`]).
+    #[prop(flag)]
+    end_delete_deselects: bool,
 }
 
 impl<'a> CurvesPanel<'a> {
@@ -209,6 +215,8 @@ impl<'a> CurvesPanel<'a> {
             context: AdjustContext::dialog(true),
             select: None,
             enabled: true,
+            tab_steps: false,
+            end_delete_deselects: false,
         }
     }
 
@@ -299,6 +307,8 @@ impl<'a> CurvesPanel<'a> {
             context,
             select,
             enabled,
+            tab_steps,
+            end_delete_deselects,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<AdjustWords>();
@@ -396,6 +406,12 @@ impl<'a> CurvesPanel<'a> {
                 .selection(selection);
             if pencil {
                 editor = editor.pencil();
+            }
+            if tab_steps {
+                editor = editor.tab_steps();
+            }
+            if end_delete_deselects {
+                editor = editor.end_delete_deselects();
             }
             if let Some(data) = &data {
                 editor = editor.histogram(data);
