@@ -397,6 +397,12 @@ impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
 
     fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
 
+    /// Craft patch (rendering intent): the pattern's paint converts with the intent its cell's
+    /// graphics state holds.
+    fn set_rendering_intent(&mut self, intent: crate::color::RenderIntent) {
+        self.inner.set_rendering_intent(intent);
+    }
+
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         self.inner.push_clip_path(clip_path);
     }

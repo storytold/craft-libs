@@ -1,5 +1,5 @@
 use crate::{BlendMode, FillRule};
-use crate::color::{ColorSpace, DefaultColorSpaces, DeviceFamily};
+use crate::color::{ColorSpace, DefaultColorSpaces, DeviceFamily, RenderIntent};
 use crate::context::Context;
 use crate::convert::{convert_dash_array, convert_line_cap, convert_line_join, convert_line_width};
 use crate::device::Device;
@@ -845,8 +845,9 @@ fn interpret_window<'a>(
                 context.get_mut().graphics_state.stroke_props.dash_array =
                     convert_dash_array(p.0.iter::<f32>());
             }
-            TypedInstruction::RenderingIntent(_) => {
-                // Ignore for now.
+            // Craft patch (rendering intent).
+            TypedInstruction::RenderingIntent(ri) => {
+                context.get_mut().graphics_state.rendering_intent = RenderIntent::from_name(ri.0);
             }
             TypedInstruction::NonStrokeColorNamed(n) => {
                 context.get_mut().graphics_state.non_stroke_color =
