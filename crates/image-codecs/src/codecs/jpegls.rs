@@ -11,12 +11,11 @@
 
 use crate::error::CodecError;
 use crate::fidelity::Plan;
-use crate::format::Format;
+use crate::format::{Format, SOF55, looks_like_jpegls};
 use crate::image::{ChannelLayout, Image, SampleType};
 use crate::options::Limits;
 
 const F: Format = Format::JpegLs;
-const SOF55: u8 = 0xF7;
 const LSE: u8 = 0xF8;
 const RESET_DEFAULT: i32 = 64;
 const MIN_C: i32 = -128;
@@ -30,67 +29,6 @@ const CONTEXTS: usize = RI_BASE + 2;
 
 fn bad(reason: impl std::fmt::Display) -> CodecError {
     CodecError::malformed(F, reason)
-}
-
-/// What the marker segments after a JPEG SOI lead to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum JpegFrame {
-    /// An SOF55 frame header: JPEG-LS.
-    Ls,
-    /// Another frame header, a scan header, an EOI, or a byte that is not a marker where one
-    /// should be.
-    Other,
-    /// The bytes end before a frame or scan header. The next step reads the bytes up to this
-    /// length.
-    Short(usize),
-}
-
-/// Walks the marker segments of `b` from its SOI up to the first frame or scan header. `None`
-/// when `b` does not start with an SOI. Each step moves forward at least one byte, so the walk
-/// takes at most `b.len()` steps and reaches the frame header after any number of segments.
-pub(crate) fn jpeg_frame(b: &[u8]) -> Option<JpegFrame> {
-    jpeg_frame_from(b, &mut 0)
-}
-
-/// [`jpeg_frame`], started at `*pos`. A `*pos` of 0 starts at the SOI. Any other value is the
-/// offset of the marker where an earlier walk of a shorter prefix of the same file stopped, and the
-/// walk does not read the bytes before it. The walk leaves `*pos` at the marker it stopped at, so
-/// walking longer and longer prefixes of one file this way reads each marker segment once.
-pub(crate) fn jpeg_frame_from(b: &[u8], pos: &mut usize) -> Option<JpegFrame> {
-    if *pos == 0 {
-        if !b.starts_with(&[0xFF, 0xD8]) {
-            return None;
-        }
-        *pos = 2;
-    }
-    loop {
-        let (Some(&prefix), Some(&marker)) = (b.get(*pos), b.get(*pos + 1)) else {
-            return Some(if b.get(*pos).is_none_or(|&p| p == 0xFF) { JpegFrame::Short(*pos + 2) } else { JpegFrame::Other });
-        };
-        if prefix != 0xFF {
-            return Some(JpegFrame::Other);
-        }
-        match marker {
-            SOF55 => return Some(JpegFrame::Ls),
-            // `FF 00` is a stuffed zero, not a marker.
-            0x00 | 0xDA | 0xD9 => return Some(JpegFrame::Other),
-            // A DRI segment (`0xDD`) may precede an SOF55 frame header, so it takes the
-            // length-prefixed path below.
-            0xC0..=0xCF | 0xDB | 0xDC | 0xDE | 0xDF => return Some(JpegFrame::Other),
-            0x01 | 0xD0..=0xD7 | 0xFF => *pos += if marker == 0xFF { 1 } else { 2 },
-            _ => {
-                let Some(len) = b.get(*pos + 2..*pos + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else {
-                    return Some(JpegFrame::Short(*pos + 4));
-                };
-                *pos += 2 + len;
-            }
-        }
-    }
-}
-
-/// Whether `b` is a JPEG-LS file: an SOI followed by marker segments up to an SOF55 frame header.
-pub(crate) fn looks_like_jpegls(b: &[u8]) -> bool {
-    jpeg_frame(b) == Some(JpegFrame::Ls)
 }
 
 /// The coding parameters of one scan, derived as T.87 section C.2 specifies.
@@ -814,6 +752,7 @@ fn finish(frame: Option<Frame>, planes: Vec<Vec<u16>>, scans: usize) -> Result<I
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::{JpegFrame, jpeg_frame, jpeg_frame_from};
 
     fn noise_u16(n: usize, seed: &mut u32, mask: u32) -> Vec<u16> {
         (0..n)

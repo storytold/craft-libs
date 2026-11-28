@@ -27,6 +27,7 @@
 use crate::Format;
 use crate::error::CodecError;
 use crate::fidelity::Plan;
+use crate::format::is_cineon;
 use crate::image::{ChannelLayout, DecodeWarning, Image, SampleType};
 use crate::options::{DpxBits, EncodeOptions, Limits};
 
@@ -356,11 +357,6 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
 // (the first carries the bits per pixel and the line/image dimensions). Image data is three
 // 10-bit samples packed into each 32-bit word, lines on a word boundary — the same layout as
 // DPX's 10-bit packing method A, so the unpacking and packing are shared.
-
-/// The Cineon magic number (`802A5FD7` hex), big-endian.
-pub(crate) fn is_cineon(b: &[u8]) -> bool {
-    b.get(..4) == Some(&[0x80, 0x2A, 0x5F, 0xD7])
-}
 
 /// The EXIF orientation (1–8) for a Cineon header's orientation code (the same 0–7 order as DPX).
 pub(crate) fn cineon_orientation(b: &[u8]) -> u16 {

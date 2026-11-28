@@ -13,7 +13,7 @@
 
 use crate::error::CodecError;
 use crate::fidelity::Plan;
-use crate::format::Format;
+use crate::format::{Format, looks_like_iff};
 use crate::image::{ChannelLayout, Image, SampleType};
 use crate::options::Limits;
 
@@ -35,11 +35,6 @@ fn be32(b: &[u8], at: usize) -> Option<u32> {
 fn be16(b: &[u8], at: usize) -> Option<u16> {
     let s = b.get(at..at.checked_add(2)?)?.try_into().ok()?;
     Some(u16::from_be_bytes(s))
-}
-
-/// `FORM` + a bitmap type (`ILBM` interleaved, `PBM ` chunky) at offset 8.
-pub(crate) fn looks_like_iff(b: &[u8]) -> bool {
-    b.get(0..4) == Some(b"FORM") && matches!(b.get(8..12), Some(b"ILBM" | b"PBM "))
 }
 
 /// Bitplanes of a "deep" ILBM: red, green and blue, 8 each, least significant bit first.
