@@ -299,12 +299,38 @@ impl ListRow<'_> {
         Rect::from_x_y_ranges(label.x_range(), (label.bottom() - self.progress_line(sizes))..=label.bottom())
     }
 
+    /// Whether the label wraps (`wrap_label`): a label of UI text, not one laid out as document text, edited in place,
+    /// shown by a cell field or underlined with dashes, which stay on one line.
+    pub(super) fn wraps_label(&self) -> bool {
+        self.wrap_label && self.document.is_none() && !self.renaming && !self.label_has_field() && self.underline != super::LabelUnderline::Dashed
+    }
+
+    /// The height of `label` in a label band `width` wide: its line, or under `wrap_label` its wrapped lines in `role`,
+    /// beside a heading's detail at the end of the first line in `detail_role`. `size_at` lays a run out at a width.
+    pub(super) fn label_height(
+        &self,
+        label: &str,
+        sizes: &Sizes,
+        (role, detail_role): (TypeRole, TypeRole),
+        width: f32,
+        size_at: impl Fn(&TextRun<'_>, f32) -> Vec2,
+    ) -> f32 {
+        if !self.wraps_label() || !width.is_finite() {
+            return sizes.label_line;
+        }
+        let beside = match (&self.detail, self.heading) {
+            (Some(detail), true) => size_at(&TextRun::new(detail.as_str()).role(detail_role).elide(), width).x + sizes.gap,
+            _ => 0.0,
+        };
+        size_at(&self.label_run(label).role(role).wrap(Wrap::Wrap), (width - beside).max(0.0)).y.max(sizes.label_line)
+    }
+
     /// The label band above the progress line, and the top of the label, detail and wrapped lines centred in it
-    /// together, for wrapped lines `lines` high with the gap above them.
-    pub(super) fn text_block(&self, label: Rect, sizes: &Sizes, lines: f32) -> (Rect, f32) {
+    /// together, for a label `label_height` high and wrapped lines `lines` high with the gap above them.
+    pub(super) fn text_block(&self, label: Rect, sizes: &Sizes, label_height: f32, lines: f32) -> (Rect, f32) {
         let band = Rect::from_x_y_ranges(label.x_range(), label.top()..=label.bottom() - self.progress_line(sizes));
         let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
-        let block = sizes.label_line + detail + lines;
+        let block = label_height + detail + lines;
         (band, band.top() + ((band.height() - block) / 2.0).max(0.0))
     }
 

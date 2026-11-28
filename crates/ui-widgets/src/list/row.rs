@@ -368,6 +368,11 @@ pub struct ListRow<'a> {
     /// the row is no taller than with exactly that many lines. A screen reader reads all of the text.
     #[prop(quantity = "count")]
     pub(super) line_limit: Option<u8>,
+    /// The label wraps onto as many lines as the label band's width needs instead of being cut with an ellipsis, and
+    /// the row is as tall as its lines. A label laid out as document text, edited in place or shown by a cell field
+    /// stays on one line.
+    #[prop]
+    pub(super) wrap_label: bool,
     /// The colour from data that inks a part of the row. It is no style key (`DataColor` has no `Eq` or `Hash`): the
     /// part's ink is resolved where the row paints it.
     pub(super) hue: Option<(DataColor, HueTarget)>,
@@ -532,6 +537,7 @@ impl<'a> ListRow<'a> {
             detail: None,
             lines: None,
             line_limit: None,
+            wrap_label: false,
             hue: None,
             document: None,
             progress: None,

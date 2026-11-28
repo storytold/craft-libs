@@ -2237,3 +2237,38 @@ fn tight_thumbnail_rows_stand_lower_and_indent_less() {
     assert!(tight_height < roomy_height, "the tight row ({tight_height}) is lower than the roomy one ({roomy_height})");
     assert!(0.0 < tight_indent && tight_indent < roomy_indent, "a level indents less ({tight_indent}) than an icon slot ({roomy_indent})");
 }
+
+/// The painted run of `text` in a narrow list of a long row over a short one, with the long row's label wrapping or
+/// not, and the two rows' bounds.
+fn long_row(wrap: bool) -> ((bool, egui::Rect), egui::Rect, egui::Rect) {
+    const LONG: &str = "A heading long enough to need three lines in a narrow pane";
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Headings").natural_height(true).show_items(ui, &source, &mut |key, _| match key {
+            0 => ListRow::new(LONG).wrap_label(wrap),
+            _ => ListRow::new("Short"),
+        });
+    });
+    fixture.room(Vec2::new(160.0, 300.0));
+    fixture.settle();
+    let run = fixture.texts().iter().find(|run| run.text == LONG).map(|run| (run.elided, run.rect)).expect("the long label is painted");
+    let long = fixture.by_label(LONG).expect("the long row").rect;
+    let short = fixture.by_label("Short").expect("the short row").rect;
+    (run, long, short)
+}
+
+/// A row that wraps its label shows all of it on several lines and grows to hold them, and the next row starts under
+/// it (wordcraft#7827: long headings in the Navigation pane were cut with an ellipsis); without it, the label is cut
+/// on one line.
+#[trial]
+fn a_wrapping_row_label_shows_whole_on_several_lines_and_the_row_grows() {
+    let ((cut, cut_text), cut_row, _) = long_row(false);
+    assert!(cut, "a label that does not wrap is cut");
+    let ((elided, text), row, next) = long_row(true);
+    assert!(!elided, "a wrapping label is not cut");
+    assert!(text.height() > cut_text.height() * 1.5, "the label takes several lines: {text:?} against {cut_text:?}");
+    assert!(row.height() > cut_row.height(), "the row grows for its lines: {row:?} against {cut_row:?}");
+    assert!(row.contains_rect(text.shrink(0.5)), "the lines stay inside the row: {text:?} in {row:?}");
+    assert!(next.top() >= row.bottom() - 0.5, "the next row starts under the wrapped one: {next:?} after {row:?}");
+}

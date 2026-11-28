@@ -162,9 +162,13 @@ impl Component for ListRow<'_> {
             let runs = [run];
             DocText::new(&runs).layout(cx.ui.ctx(), cx.tokens, cx.env.text_direction()).size()
         });
+        // A wrapping label is as tall as its lines at the band's width, less a heading's detail at the end of its first
+        // line, as `paint_text` lays it out.
+        let roles = (cx.style.text.role, cx.style.detail.role);
+        let label_height = self.label_height(cx.resolved.label, sizes, roles, band, |run, width| cx.layout_at(run, width).size());
         let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
-        let text = sizes.label_line + detail + self.progress_line(sizes) + wrapped + self.below_height(sizes);
-        let height = if self.lines.is_some() || self.progress.is_some() || !self.below.is_empty() {
+        let text = label_height + detail + self.progress_line(sizes) + wrapped + self.below_height(sizes);
+        let height = if self.lines.is_some() || self.progress.is_some() || !self.below.is_empty() || label_height > sizes.label_line {
             height.max(text + sizes.gap)
         } else {
             height.max(sizes.label_line)
@@ -232,11 +236,14 @@ impl Component for ListRow<'_> {
         if let Some(text) = self.lines.as_ref().filter(|_| self.line_limit.is_some()) {
             let sizes = &cx.style.sizes;
             let run = text.run().role(cx.style.detail.role).wrap(self.lines_wrap());
-            let layout = cx.layout_at(&run, self.text_block(placed.label, sizes, 0.0).0.width());
+            let layout = cx.layout_at(&run, placed.label.width());
             if layout.elided {
-                let (band, top) = self.text_block(placed.label, sizes, sizes.gap + layout.size().y);
+                let roles = (cx.style.text.role, cx.style.detail.role);
+                let label_height =
+                    self.label_height(cx.resolved.label, sizes, roles, placed.label.width(), |run, width| cx.layout_at(run, width).size());
+                let (band, top) = self.text_block(placed.label, sizes, label_height, sizes.gap + layout.size().y);
                 let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
-                let lines_top = top + sizes.label_line + detail + sizes.gap;
+                let lines_top = top + label_height + detail + sizes.gap;
                 let rect = Rect::from_x_y_ranges(band.x_range(), lines_top..=lines_top + layout.size().y);
                 cx.part(LINES, rect).tooltip(Label::from(text.text().into_owned()));
             }
