@@ -25,6 +25,7 @@ impl Writer<'_> {
             return;
         }
         let del = self.is_del(props);
+        let sym_font = props.sym_font.as_deref().filter(|f| !f.trim().is_empty());
         let run = |w: &mut W, f: &dyn Fn(&mut W)| {
             w.open("w:r", &[]);
             rpr(w, props);
@@ -52,7 +53,19 @@ impl Writer<'_> {
                             flush(w, &mut buf);
                             w.empty("w:br", &[]);
                         }
+                        '\u{000C}' | '\u{000E}' => {
+                            flush(w, &mut buf);
+                            w.empty("w:br", &[("w:type", if c == '\u{000C}' { "page" } else { "column" })]);
+                        }
+                        '\u{2011}' | '\u{00AD}' => {
+                            flush(w, &mut buf);
+                            w.empty(if c == '\u{2011}' { "w:noBreakHyphen" } else { "w:softHyphen" }, &[]);
+                        }
                         c if (c as u32) < 0x20 || c == craft_wordmodel::para::OBJ => {}
+                        c if (0x20..=0xFFFF).contains(&u32::from(c)) && sym_font.is_some() => {
+                            flush(w, &mut buf);
+                            w.empty("w:sym", &[("w:font", sym_font.unwrap_or_default()), ("w:char", &format!("{:04X}", u32::from(c)))]);
+                        }
                         c => buf.push(c),
                     }
                 }
