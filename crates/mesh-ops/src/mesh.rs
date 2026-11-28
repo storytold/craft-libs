@@ -408,6 +408,11 @@ impl Mesh {
     /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
     /// this mesh's material count.
     pub fn append(&mut self, other: &Mesh) {
+        // A mesh with submeshes and no material names uses one implicit material 0; give it a
+        // slot so the other side's materials do not take its index.
+        if self.materials.is_empty() && !self.submeshes.is_empty() {
+            self.materials.push(String::new());
+        }
         let base = self.positions.len() as u32;
         let ibase = self.indices.len() as u32;
         let mbase = self.materials.len();
@@ -426,6 +431,9 @@ impl Mesh {
         }
         self.indices.extend(other.indices.iter().map(|i| i + base));
         self.materials.extend(other.materials.iter().cloned());
+        if other.materials.is_empty() && !other.submeshes.is_empty() {
+            self.materials.push(String::new());
+        }
         self.submeshes.extend(other.submeshes.iter().map(|s| SubMesh {
             name: s.name.clone(),
             material: s.material + mbase,
@@ -699,6 +707,17 @@ mod tests {
         a.validate().unwrap();
         a.colors.pop();
         assert!(a.validate().is_err());
+
+        // A side with submeshes and no material names keeps its implicit material.
+        let mut unnamed = quad();
+        unnamed.materials.clear();
+        let mut named = quad();
+        named.append(&unnamed);
+        named.validate().unwrap();
+        assert_eq!((named.materials.len(), named.submeshes[1].material), (2, 1));
+        unnamed.append(&quad());
+        unnamed.validate().unwrap();
+        assert_eq!((unnamed.materials.len(), unnamed.submeshes[1].material), (2, 1));
     }
 
     #[test]
