@@ -264,7 +264,10 @@ fn covers_of(ctx: &Context, viewport: ViewportId, owner: Id, part: PartRef, band
 pub(super) fn publish_regions(ctx: &Context, viewport: ViewportId) {
     let parts = with_exclusive(ctx, viewport, |exclusive| exclusive.current.clone());
     let regions = regions_of(ctx, viewport, &parts);
-    with_exclusive(ctx, viewport, |exclusive| exclusive.done = regions.clone());
+    with_exclusive(ctx, viewport, |exclusive| {
+        exclusive.last = parts;
+        exclusive.done = regions.clone();
+    });
     if let Some(sink) = PerViewport::<Record>::with(ctx, viewport, |record| record.sink.clone()) {
         let pixels_per_point = scale::pixels_per_point(ctx);
         sink.publish(regions.map(|regions| Published { regions, pixels_per_point }));
@@ -285,10 +288,11 @@ struct ExclusivePart {
     rect: Rect,
 }
 
-/// A viewport's exclusive parts: those the running pass declared so far, and the regions of its last complete pass.
+/// A viewport's exclusive parts as the running pass declares them, and as the last complete pass published them.
 #[derive(Default)]
 pub(super) struct Exclusive {
     current: Vec<ExclusivePart>,
+    last: Vec<ExclusivePart>,
     pub(super) done: Option<CaptionRegions>,
 }
 
@@ -302,11 +306,20 @@ pub(super) fn with_exclusive<R>(ctx: &Context, viewport: ViewportId, f: impl FnO
         |exclusive, step| {
             exclusive.current.clear();
             if matches!(step, PassStep::Skipped) {
+                exclusive.last.clear();
                 exclusive.done = None;
             }
         },
         f,
     )
+}
+
+/// The exclusive parts of the last complete pass at the pointer. Keep their identities so the
+/// app-side hit test can apply caption precedence to the same shapes as the native hit sink.
+pub(crate) fn exclusive_at(ctx: &Context, viewport: ViewportId, at: Pos2) -> smallvec::SmallVec<[(Id, PartRef, WindowHit); 4]> {
+    with_exclusive(ctx, viewport, |exclusive| {
+        exclusive.last.iter().filter(|part| part.rect.contains(at)).map(|part| (part.owner, part.part, part.hit)).collect()
+    })
 }
 
 /// Records that `part` of the component `owner` is, over `rect`, what `hit` says for the running viewport's window. A

@@ -32,7 +32,7 @@ mod spec;
 mod viewport;
 
 pub use hit::{CaptionRegions, HitSink, ResizeEdge, WindowHit};
-pub(crate) use hit::{hit_sink_installed, note_exclusive};
+pub(crate) use hit::{exclusive_at, hit_sink_installed, note_exclusive};
 use hit::{publish_regions, replay_caption_events};
 pub use host::{KeyEquivalent, WindowFacts, WindowHost};
 pub(crate) use host::{clear_source_pointer, note_moved_pointer, note_source_pointer, system_pointer};

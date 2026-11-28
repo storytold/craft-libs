@@ -9,6 +9,7 @@ use crate::runtime::egui::{input, pass};
 use crate::runtime::frame::{PerViewport, Stamped};
 use crate::runtime::inputs::{self, Input};
 use crate::runtime::sampler;
+use crate::runtime::windows::{self, WindowHit};
 use craft_behavior::press::{MULTI_TAP_SLOP, MULTI_TAP_TIME};
 use craft_behavior::{
     Buttons, MultiTap, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape,
@@ -1216,6 +1217,11 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
     let beneath = body.map(|(root, parent)| (root, parent, to_layer(parent)));
     let on_layer = to_layer(layer);
     let withheld = withheld_roots(ctx, viewport);
+    let exclusive = windows::exclusive_at(ctx, viewport, at);
+    let window_hit = |shape: &Shape<Id>| {
+        let part = shape.part?;
+        exclusive.iter().find(|(owner, key, _)| *owner == shape.owner && *key == part).map(|(_, _, hit)| *hit)
+    };
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         // Bottom to top: the body layer's root on its own layer, then the roots on the layer in paint order.
         let mut stack: Vec<(u8, Id, &RootRecord, Pos2)> = Vec::new();
@@ -1228,6 +1234,20 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             stack.extend(roots.iter().map(|(root, entry)| (1, *root, entry, on_layer)));
         }
         let shown = stack.iter().any(|(_, _, entry, point)| entry.placed.iter().any(|placed| placed.clip.contains(*point)));
+        // Native hit testing already gives a caption button precedence over a resize grip or
+        // move band. For app-side hits, skip those competing parts only when a live caption
+        // actually lies on the hit layer. Other overlays and controls keep their paint order.
+        let caption = !context
+            && exclusive.iter().any(|(_, _, hit)| matches!(hit, WindowHit::Caption(_)))
+            && stack.iter().any(|(_, root, entry, point)| {
+                entry.shapes.iter().zip(&entry.placed).any(|(shape, placed)| {
+                    (!withheld.contains(root) || shape.owner == *root)
+                        && placed.clip.contains(*point)
+                        && shape.sense.contains(craft_behavior::Sense::CLICK)
+                        && shape.hits(*point)
+                        && matches!(window_hit(shape), Some(WindowHit::Caption(_)))
+                })
+            });
         let click = targets.click.filter(|widget| !record.last_grounds.contains(widget));
         let text_of = click.and_then(|widget| record.last_texts.get(&widget).copied());
         let foreign = text_of.is_none() && click.is_some_and(|widget| !registered_in(&record.last, widget));
@@ -1244,7 +1264,13 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
                 if shown { placed.clip.contains(point) } else { shape.shape.bounds().intersects(placed.clip) }
             };
             let kept: Vec<usize> = (0..entry.shapes.len())
-                .filter(|&index| (members || entry.shapes[index].owner == root) && entry.shapes[index].hits(point) && shows(index))
+                .filter(|&index| {
+                    let shape = &entry.shapes[index];
+                    (members || shape.owner == root)
+                        && shape.hits(point)
+                        && shows(index)
+                        && !(caption && matches!(window_hit(shape), Some(WindowHit::Resize(_) | WindowHit::Move)))
+                })
                 .collect();
             if kept.is_empty() {
                 continue;
