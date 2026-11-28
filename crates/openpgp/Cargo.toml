@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 # rPGP: the OpenPGP packets and the cryptography (MIT OR Apache-2.0). Pinned: every size cap in
 # this crate was written against this version's parser.
-pgp = { version = "=0.21.0", default-features = false }
+pgp = { version = "=0.21.1", default-features = false }
 thiserror = { workspace = true }
 # rPGP's generation of RustCrypto digests (MIT OR Apache-2.0).
 sha2 = { version = "0.10", default-features = false }
@@ -21,7 +21,7 @@ sha3 = { version = "0.10", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Random numbers in the browser, which rPGP's dependencies ask for even when it only checks.
-pgp = { version = "=0.21.0", default-features = false, features = ["wasm"] }
+pgp = { version = "=0.21.1", default-features = false, features = ["wasm"] }
 
 [dev-dependencies]
 craft-testkit = { workspace = true }
