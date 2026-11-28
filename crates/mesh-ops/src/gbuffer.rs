@@ -37,6 +37,45 @@ pub struct Surface {
     pub tri: u32,
 }
 
+/// Where the triangles that wrote a texel hold its center.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Contact {
+    /// Some triangle holds the center inside it.
+    Interior,
+    /// Every triangle holds the center on its boundary; their wedges are in the band's map.
+    Boundary,
+    /// The texel already counts as an overlap.
+    Counted,
+}
+
+/// The angular wedge (start angle, counterclockwise sweep, radians) a triangle covers around a
+/// texel center on its boundary: a half-plane on an edge, the corner's angle on a corner.
+type Wedge = (f64, f64);
+
+fn angle(v: Vec2) -> f64 {
+    f64::from(v.y).atan2(f64::from(v.x))
+}
+
+/// The wedge around a texel center on edge `e0`–`e1` on the side of corner `c`.
+fn edge_wedge(e0: Vec2, e1: Vec2, c: Vec2) -> Wedge {
+    let start = if edge(e0, e1, c) > 0.0 { angle(e1 - e0) } else { angle(e0 - e1) };
+    (start, std::f64::consts::PI)
+}
+
+/// The wedge of the triangle's corner at `v` between its edges toward `q` and `r`.
+fn corner_wedge(v: Vec2, q: Vec2, r: Vec2) -> Wedge {
+    let (a, b) = (angle(q - v), angle(r - v));
+    let sweep = (b - a).rem_euclid(std::f64::consts::TAU);
+    if sweep <= std::f64::consts::PI { (a, sweep) } else { (b, std::f64::consts::TAU - sweep) }
+}
+
+/// Whether the open wedges share more than a rounding error of angle.
+fn wedges_overlap((a1, s1): Wedge, (a2, s2): Wedge) -> bool {
+    const TOLERANCE: f64 = 1e-7;
+    let d = (a2 - a1).rem_euclid(std::f64::consts::TAU);
+    d < s1 - TOLERANCE || d > std::f64::consts::TAU - s2 + TOLERANCE
+}
+
 fn edge(a: Vec2, b: Vec2, p: Vec2) -> f32 {
     (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
 }
@@ -71,10 +110,10 @@ impl UvGBuffer {
             .enumerate()
             .map(|(bi, (tri, bary))| {
                 let mut overlaps = 0u32;
-                // When the only triangle that wrote a texel holds its center on exactly one of its
-                // edges, within the inside test's tolerance, that edge's UV endpoints and the
-                // corner opposite it. None after an interior or corner hit, or after a second write.
-                let mut contact: Vec<Option<[Vec2; 3]>> = vec![None; tri.len()];
+                // Where the triangles that wrote each texel hold its center, within the inside
+                // test's tolerance.
+                let mut contact: Vec<Contact> = vec![Contact::Interior; tri.len()];
+                let mut wedges: std::collections::HashMap<usize, Vec<Wedge>> = std::collections::HashMap::new();
                 let row0 = bi as u32 * BAND;
                 let rows = (tri.len() as u32) / w;
                 for &t in bins.get(bi).map(Vec::as_slice).unwrap_or(&[]) {
@@ -86,7 +125,6 @@ impl UvGBuffer {
                         continue;
                     }
                     let eps = -1e-6 * area.abs();
-                    let edges = [[pb, pc, pa], [pc, pa, pb], [pa, pb, pc]];
                     let x0 = pa.x.min(pb.x).min(pc.x).floor().max(0.0) as u32;
                     let x1 = (pa.x.max(pb.x).max(pc.x).ceil().min(w as f32) as u32).min(w);
                     let y0 = (pa.y.min(pb.y).min(pc.y).floor().max(row0 as f32) as u32).max(row0);
@@ -99,29 +137,41 @@ impl UvGBuffer {
                                 continue;
                             }
                             let i = ((y - row0) * w + x) as usize;
-                            // Two triangles that share an edge (the same two UV endpoints) from
-                            // opposite sides both write the centers on it, and that pair is not an
-                            // overlap. Every other second write is one, including stacked copies
-                            // that touch only boundary centers and edges that merely cross.
-                            let on_edge = [w0, w1, w2].map(|v| v <= -eps);
-                            let hit = match on_edge {
-                                [true, false, false] => Some(edges[0]),
-                                [false, true, false] => Some(edges[1]),
-                                [false, false, true] => Some(edges[2]),
-                                _ => None,
+                            // A center on a triangle's boundary gets the wedge of directions the
+                            // triangle covers around it. Triangles whose wedges at a center do not
+                            // overlap (two sides of a shared edge, a fan around a shared corner)
+                            // meet there without overlapping. Every other second write is an
+                            // overlap, including stacked copies that touch only boundary centers
+                            // and edges that merely cross. A texel counts once however many
+                            // triangles write it.
+                            let hit = match [w0, w1, w2].map(|v| v <= -eps) {
+                                [false, false, false] => None,
+                                [true, false, false] => Some(edge_wedge(pb, pc, pa)),
+                                [false, true, false] => Some(edge_wedge(pc, pa, pb)),
+                                [false, false, true] => Some(edge_wedge(pa, pb, pc)),
+                                [true, true, false] => Some(corner_wedge(pc, pa, pb)),
+                                [true, false, true] => Some(corner_wedge(pb, pc, pa)),
+                                _ => Some(corner_wedge(pa, pb, pc)),
                             };
                             if let (Some(slot), Some(bw), Some(seen)) = (tri.get_mut(i), bary.get_mut(i), contact.get_mut(i)) {
                                 if *slot == NO_TRI {
-                                    *seen = hit;
-                                } else {
-                                    let shared_edge = matches!((*seen, hit), (Some([a0, a1, ac]), Some([b0, b1, bc]))
-                                        if ((a0 == b0 && a1 == b1) || (a0 == b1 && a1 == b0))
-                                            && edge(a0, a1, ac).signum() != edge(a0, a1, bc).signum()
-                                            && edge(a0, a1, bc) != 0.0);
-                                    if !shared_edge {
-                                        overlaps += 1;
+                                    *seen = match hit {
+                                        Some(wedge) => {
+                                            wedges.insert(i, vec![wedge]);
+                                            Contact::Boundary
+                                        }
+                                        None => Contact::Interior,
+                                    };
+                                } else if *seen != Contact::Counted {
+                                    let earlier = if *seen == Contact::Boundary { wedges.get_mut(&i) } else { None };
+                                    match (earlier, hit) {
+                                        (Some(earlier), Some(wedge)) if !earlier.iter().any(|e| wedges_overlap(*e, wedge)) => earlier.push(wedge),
+                                        _ => {
+                                            overlaps += 1;
+                                            *seen = Contact::Counted;
+                                            wedges.remove(&i);
+                                        }
                                     }
-                                    *seen = None;
                                 }
                                 *slot = t;
                                 let inv = 1.0 / area.abs();
@@ -232,6 +282,24 @@ mod tests {
         let uv = vec![Vec2::new(0.0, 0.5), Vec2::new(1.0, 0.5), Vec2::new(0.5, 1.0), Vec2::new(0.0, 0.49), Vec2::new(1.0, 0.51), Vec2::new(0.5, 0.0)];
         let m = Mesh::from_parts(vec![Vec3::ZERO; 6], None, uv, vec![0, 1, 2, 3, 4, 5], "m").unwrap();
         assert_eq!(UvGBuffer::new(&m, 0, 1, 1).overlaps, 1);
+    }
+
+    #[test]
+    fn corners_meet_without_overlap_and_a_texel_counts_once() {
+        // A 2×2 grid of quads at 3×3 puts the middle texel center on the shared grid vertex.
+        let g = UvGBuffer::new(&crate::primitives::plane(2.0, 2), 0, 3, 3);
+        assert_eq!(g.covered_count(), 9);
+        assert_eq!(g.overlaps, 0);
+        // Three stacked copies overlap on every covered texel, each counted once.
+        let uv = vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, uv, vec![0, 1, 2, 0, 1, 2, 0, 1, 2], "m").unwrap();
+        let g = UvGBuffer::new(&m, 0, 8, 8);
+        assert_eq!(g.overlaps as usize, g.covered_count());
+        // Stacked copies whose only covered center is a shared corner overlap there.
+        let uv = vec![Vec2::new(0.5, 0.5), Vec2::new(1.0, 0.5), Vec2::new(0.5, 1.0)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, uv, vec![0, 1, 2, 0, 1, 2], "m").unwrap();
+        let g = UvGBuffer::new(&m, 0, 1, 1);
+        assert_eq!((g.covered_count(), g.overlaps), (1, 1));
     }
 
     #[test]
