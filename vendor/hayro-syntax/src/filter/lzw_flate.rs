@@ -19,14 +19,16 @@ pub(crate) mod flate {
 
     /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`), and `rows`
     /// the `/Height` of the image the data is the samples of, if it is (see [`untagged_png_rows`]).
-    #[cfg(feature = "unsafe")]
+    /// `decode_controlled` also returns whether inflating stopped at `limit` (PdfCraft patch 55):
+    /// told before the predictor is undone, which leaves fewer bytes than were inflated.
+    #[cfg(all(test, feature = "unsafe"))]
     pub(crate) fn decode(
         data: &[u8],
         params: &Dict<'_>,
         limit: usize,
         rows: Option<usize>,
     ) -> Option<Vec<u8>> {
-        decode_controlled(data, params, limit, None, rows)
+        decode_controlled(data, params, limit, None, rows).map(|(d, _)| d)
     }
 
     #[cfg(feature = "unsafe")]
@@ -36,7 +38,7 @@ pub(crate) mod flate {
         limit: usize,
         control: Option<&crate::cancel::Control>,
         rows: Option<usize>,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<(Vec<u8>, bool)> {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
@@ -66,22 +68,23 @@ pub(crate) mod flate {
                 fallback::decode(data, limit, control)
             })?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
-        if decoded.len() >= limit {
+        let cut = decoded.len() >= limit;
+        if cut {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
         let mut params = PredictorParams::from_params(params);
         params.control = control.cloned();
-        undo_predictor(decoded, &params, rows)
+        undo_predictor(decoded, &params, rows).map(|d| (d, cut))
     }
 
-    #[cfg(not(feature = "unsafe"))]
+    #[cfg(all(test, not(feature = "unsafe")))]
     pub(crate) fn decode(
         data: &[u8],
         params: &Dict<'_>,
         limit: usize,
         rows: Option<usize>,
     ) -> Option<Vec<u8>> {
-        decode_controlled(data, params, limit, None, rows)
+        decode_controlled(data, params, limit, None, rows).map(|(d, _)| d)
     }
 
     #[cfg(not(feature = "unsafe"))]
@@ -91,15 +94,16 @@ pub(crate) mod flate {
         limit: usize,
         control: Option<&crate::cancel::Control>,
         rows: Option<usize>,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<(Vec<u8>, bool)> {
         let decoded = fallback::decode(data, limit, control)?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
-        if decoded.len() >= limit {
+        let cut = decoded.len() >= limit;
+        if cut {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
         let mut params = PredictorParams::from_params(params);
         params.control = control.cloned();
-        undo_predictor(decoded, &params, rows)
+        undo_predictor(decoded, &params, rows).map(|d| (d, cut))
     }
 
     /// PdfCraft patch: the predictor undone, unless the image's rows carry none
@@ -952,22 +956,26 @@ pub(crate) mod lzw {
 
     /// Decode a LZW-encoded stream. PdfCraft patch: `limit` is the most bytes produced (see
     /// `filter::decode_limit`); with a full table every 12-bit code can repeat an entry of
-    /// thousands of bytes.
+    /// thousands of bytes. `decode_controlled` also returns whether decoding stopped at `limit`
+    /// (PdfCraft patch 55): told before the predictor is undone, which leaves fewer bytes than
+    /// were decoded.
+    #[cfg(test)]
     pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
-        decode_controlled(data, params, limit, None)
+        decode_controlled(data, params, limit, None).map(|(d, _)| d)
     }
 
-    pub(crate) fn decode_controlled(data: &[u8], params: &Dict<'_>, limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
+    pub(crate) fn decode_controlled(data: &[u8], params: &Dict<'_>, limit: usize, control: Option<&crate::cancel::Control>) -> Option<(Vec<u8>, bool)> {
         let mut params = PredictorParams::from_params(params);
         params.control = control.cloned();
 
         let decoded = decode_impl(data, params.early_change, limit, control)?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
-        if decoded.len() >= limit {
+        let cut = decoded.len() >= limit;
+        if cut {
             warn!("LZW stream stopped at its decode limit of {limit} bytes");
         }
 
-        apply_predictor(decoded, &params)
+        apply_predictor(decoded, &params).map(|d| (d, cut))
     }
 
     const CLEAR_TABLE: usize = 256;

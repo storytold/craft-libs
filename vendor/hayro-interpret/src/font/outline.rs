@@ -113,6 +113,44 @@ impl OutlineFont {
         }
     }
 
+    /// PdfCraft patch (107): the kind of font, as [`crate::font::FontFacts::kind`] gives it.
+    pub(crate) fn font_kind(&self) -> crate::font::FontKind {
+        match self {
+            Self::Type1(t) => t.font_kind(),
+            Self::TrueType(_) => crate::font::FontKind::TrueType,
+            Self::Type0(t) => t.font_kind(),
+        }
+    }
+
+    /// PdfCraft patch (107): `f` called with the font's facts and those of code `char_code`
+    /// drawn as glyph `gid` ([`crate::font::Glyph::with_facts`]).
+    pub(crate) fn with_facts<R>(
+        &self,
+        char_code: u32,
+        gid: GlyphId,
+        f: impl FnOnce(&crate::font::FontFacts<'_>, &crate::font::GlyphFacts<'_>) -> R,
+    ) -> R {
+        match self {
+            Self::Type1(t) => t.with_facts(char_code, gid, f),
+            Self::TrueType(t) => t.with_facts(char_code, gid, f),
+            Self::Type0(t) => t.with_facts(char_code, gid, f),
+        }
+    }
+
+    /// PdfCraft patch (107): the font's key ([`crate::font::Glyph::font_key`]).
+    pub(crate) fn font_key(&self) -> u128 {
+        let facts = match self {
+            Self::Type1(t) => t.dict_facts(),
+            Self::TrueType(t) => t.dict_facts(),
+            Self::Type0(t) => t.dict_facts(),
+        };
+        facts
+            .object_key
+            .get()
+            .copied()
+            .unwrap_or_else(|| self.cache_key())
+    }
+
     /// Get the advance width for a glyph by character code.
     pub(crate) fn glyph_advance_width(&self, char_code: u32) -> Option<f32> {
         match self {
