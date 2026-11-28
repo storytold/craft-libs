@@ -3,7 +3,9 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
+use craft_host::{AppInfo, Host};
 use craft_imaging::ui::adjust::{CurvesPanel, Levels, LevelsEditor, ToneChannels, ToneCurves, ToneSpace};
 use craft_imaging::ui::curve::Curve;
 use craft_theme::Srgba;
@@ -17,6 +19,15 @@ fn grey(v: f32) -> Srgba {
 
 fn rgb() -> ToneChannels {
     ToneChannels::of(ToneSpace::Rgb, false)
+}
+
+/// A host whose numbers are written as in `en-US`, so a field's text doesn't follow the region of the machine that
+/// runs the trial.
+fn decimal_point() -> Arc<Host> {
+    let (i18n, problems) = craft_i18n::I18n::from_owned(std::iter::empty(), &[]);
+    assert!(problems.is_empty(), "{problems:?}");
+    i18n.set_format(craft_i18n::Format::from_tag("en-US"));
+    Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(Arc::new(i18n)).build())
 }
 
 /// Auto clips a tenth of a percent at both ends, back to gamma 1, outputs kept.
@@ -91,7 +102,7 @@ fn the_levels_fields_hold_their_values_whole() {
         let mut fixture = Fixture::new(move |ui| {
             let _ = LevelsEditor::new("Levels", Bind::bound(&mut *held.borrow_mut())).show(ui);
         });
-        fixture.room(Vec2::new(800.0, 600.0));
+        fixture.host(decimal_point()).room(Vec2::new(800.0, 600.0));
         fixture.settle();
         for value in shown {
             let painted: Vec<_> = fixture.texts().iter().filter(|text| text.text == value).collect();
