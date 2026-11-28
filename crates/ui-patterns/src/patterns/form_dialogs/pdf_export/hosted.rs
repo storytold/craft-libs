@@ -219,7 +219,7 @@ impl HostedPdfExport {
         self.flattener_presets = names;
     }
 
-    /// Whether the flattener select shows `[Custom]`.
+    /// Whether the flattener select shows `[Custom]`, which also marks the chosen preset as modified.
     pub fn set_custom_flattener(&mut self, on: bool) {
         self.custom_flattener = on;
     }

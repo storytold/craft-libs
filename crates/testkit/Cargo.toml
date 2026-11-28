@@ -1,6 +1,6 @@
 [package]
 name = "craft-testkit"
-description = "Test support shared by the Craft apps and the craft-libs crates: source-level platform regression guards, test deadlines, hostile-input hammering, a reentrant test lock, and locating a package's binaries from its integration tests and running them with bounded output. Test support only."
+description = "Test support shared by the Craft apps and the craft-libs crates: source-level platform regression guards, test deadlines, hostile-input hammering, a reentrant test lock, skip-or-fail helpers, and locating a package's binaries from its integration tests and running them with bounded output. Test support only."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,10 +15,20 @@ path = "tests/fixture/child.rs"
 test = false
 doc = false
 
+[features]
+# `font-coverage`: `skip::craft_fonts_cover`, which parses font data with skrifa.
+font-coverage = ["dep:skrifa"]
+
 [dependencies]
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+skrifa = { workspace = true, optional = true }
+
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { version = "11.0.0", default-features = false, features = ["std", "job-object", "kill-on-drop"] }
 
 [lints]
 workspace = true

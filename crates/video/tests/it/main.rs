@@ -60,6 +60,14 @@ mod mpeg2;
 #[path = "ffv1.rs"]
 mod ffv1;
 
+#[cfg(feature = "bink-decode")]
+#[path = "bink_oracle.rs"]
+mod bink_oracle;
+
+#[cfg(feature = "rawvideo")]
+#[path = "rawvideo.rs"]
+mod rawvideo;
+
 #[cfg(feature = "prores")]
 #[path = "prores/main.rs"]
 mod prores;
@@ -71,6 +79,10 @@ mod hevc;
 #[cfg(feature = "av1")]
 #[path = "av1/main.rs"]
 mod av1;
+
+#[cfg(feature = "theora")]
+#[path = "theora.rs"]
+mod theora;
 
 #[path = "track/main.rs"]
 mod track;

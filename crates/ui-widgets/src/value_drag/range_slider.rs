@@ -140,7 +140,7 @@ impl<'a> RangeSlider<'a> {
     }
 
     /// [`RangeSlider::marks`] at the values, each with a caption centred under its mark. The slider is taller by one
-    /// caption line.
+    /// caption line, and at least as wide as the captions need to sit apart with a gap between them.
     pub fn marks_labelled<L: Into<Label>>(mut self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
         self.marks.set_labelled(marks);
         self
@@ -192,7 +192,8 @@ impl Component for RangeSlider<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.marks.lay_out(&cx.style.mark_text, cx.style.space, |label| cx.env.resolve(label), |run| cx.layout(run).size());
-        Vec2::new(cx.style.length, cx.icon() + self.marks.below(&cx.style.track))
+        let labels = self.marks.least_width(&self.track_scale());
+        Vec2::new(cx.style.length.max(labels), cx.icon() + self.marks.below(&cx.style.track))
     }
 
     /// No wheel bits: as a value control the row takes the vertical wheel only while focused or armed, and no scope

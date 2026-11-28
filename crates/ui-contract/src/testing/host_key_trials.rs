@@ -1387,6 +1387,48 @@ fn clipboard_with_canvas(keys: KeyUse, event: Event) -> (bool, Vec<String>) {
     (events.borrow().contains(&event), fired)
 }
 
+/// What `edit.cut` resolves to while a host canvas declares `keys` and the app holds Cut disabled with a translated
+/// title and a hint saying why: its label, whether it is enabled, its hint, and its label once the app retitles it.
+fn cut_with_canvas(keys: KeyUse) -> (String, bool, Option<String>, String) {
+    let canvas = named_id("host canvas");
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, keys);
+    };
+    let held = |title: &str| {
+        let mut states = crate::runtime::commands::CommandStates::new();
+        states.set(EditCommands::Cut, crate::runtime::commands::CommandState::new().title(title).hint("Nothing is selected").enabled(false));
+        CommandInput::new().states(&crate::contract::Tracked::new(states))
+    };
+    let mut frames = Frames::new();
+    frames.commands(held("Ausschneiden"));
+    frames.frame(Vec::new(), &mut show);
+    fixture::host_focus(&frames.ctx, canvas);
+    frames.idle(2, &mut show);
+    let cut = crate::runtime::commands::resolve(&frames.ctx, EditCommands::Cut);
+    frames.commands(held("Couper"));
+    frames.idle(2, &mut show);
+    let retitled = crate::runtime::commands::resolve(&frames.ctx, EditCommands::Cut);
+    (cut.label.to_string(), cut.enabled, cut.hint.as_deref().map(str::to_owned), retitled.label.to_string())
+}
+
+/// An edit the focused part declares answers for its own flags, but its label is still the app's title for it, and
+/// follows a new one, so the label of a library edit does not change language with the focus (#3569). The app's hint
+/// explains the app's own disabled state, so it does not describe an edit the part enables.
+#[trial]
+fn a_declared_edit_keeps_the_app_s_title() {
+    let (declared, enabled, declared_hint, declared_retitled) = cut_with_canvas(KeyUse::CANVAS.with_edits(EditSet::NONE.with(EditCommand::Cut)));
+    let (undeclared, app_enabled, app_hint, undeclared_retitled) = cut_with_canvas(KeyUse::CANVAS);
+    assert!(enabled && !app_enabled, "the canvas answers for Cut's flags, the app does without the canvas's Cut");
+    assert!(app_hint.is_some(), "the app answers for Cut: its hint says why Cut is unavailable");
+    assert_eq!(declared_hint, None, "the canvas enables Cut: the app's reason does not describe it");
+    assert_ne!(undeclared, undeclared_retitled, "the app answers for Cut: its title, then its new one");
+    assert_eq!(declared, undeclared, "the canvas answers for Cut: still the app's title");
+    assert_eq!(declared_retitled, undeclared_retitled, "and the app's new title");
+}
+
 #[trial]
 fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     let edits = EditSet::NONE.with(EditCommand::Cut).with(EditCommand::Copy).with(EditCommand::Paste);

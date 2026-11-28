@@ -228,12 +228,15 @@ mod tests {
                 })
                 .collect()
         };
+        // Every globals input is a prefix of the same 11-byte segment records.
+        let all_globals = globals(MAX_SEGMENTS - 1);
         // The image's page information and region, and in random access its end of file segment.
         for (flags, organization, image) in [(0x01, "sequential", 2), (0x00, "random access", 3)] {
             let data = with_file_header(&embedded, flags, Some(1));
-            let (at_cap, past_cap) = (globals(MAX_SEGMENTS - image), globals(MAX_SEGMENTS - image + 1));
-            assert_eq!(decode_jbig2(&data, Some(&at_cap), w, h, max).unwrap(), bits, "{organization}: at the cap");
-            let refused = decode_jbig2(&data, Some(&past_cap), w, h, max).unwrap_err();
+            let at_cap = &all_globals[..(MAX_SEGMENTS - image) as usize * 11];
+            let past_cap = &all_globals[..(MAX_SEGMENTS - image + 1) as usize * 11];
+            assert_eq!(decode_jbig2(&data, Some(at_cap), w, h, max).unwrap(), bits, "{organization}: at the cap");
+            let refused = decode_jbig2(&data, Some(past_cap), w, h, max).unwrap_err();
             assert!(refused.to_string().contains("too many segments"), "{organization}: {refused}");
         }
     }

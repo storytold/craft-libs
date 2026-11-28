@@ -5,6 +5,12 @@ Licensed under the MIT License or the Apache License, Version 2.0, at your optio
 
 Third-party material
 
+Windows oracle process cleanup
+
+`craft-testkit` uses the unmodified `process-wrap` 11.0.0 dependency by Félix Saparelli
+for Windows Job Objects. It is licensed under Apache-2.0 OR MIT and is available from
+https://github.com/watchexec/process-wrap and crates.io.
+
 Optional DWG bridge
 
 `craft-dwg` uses `acadrust` 0.6.6 unmodified as a separate dependency for DWG reading and writing.
@@ -289,8 +295,8 @@ linesweeper
 
 linesweeper 0.5.0 (https://crates.io/crates/linesweeper/0.5.0), MIT OR Apache-2.0, is stored in
 vendor/linesweeper with its upstream license files and local patches, to src/sweep/sweep_line.rs,
-src/curve/transverse.rs, src/curve/mod.rs, src/curve/line.rs and docs/sweep.typ. Its manifest names
-Joe Neeman as author, and its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See
+src/segments.rs, src/curve/transverse.rs, src/curve/mod.rs, src/curve/line.rs and docs/sweep.typ. Its
+manifest names Joe Neeman as author, and its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See
 vendor/linesweeper/README.craft.md and vendor/linesweeper/SOURCE.json for provenance, the local
 patches and the files left out.
 

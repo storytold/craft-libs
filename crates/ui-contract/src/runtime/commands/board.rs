@@ -413,7 +413,7 @@ impl Shown {
     /// The entry `reader` keeps for `command`.
     fn find(&self, reader: &Reader, number: u32, command: &CommandRef) -> Option<u64> {
         let ids = self.by_reader.get(reader)?.get(&number)?;
-        ids.iter().copied().find(|id| self.entries.get(id).is_some_and(|entry| entry.kept.resolved.command == *command))
+        ids.iter().copied().find(|id| self.entries.get(id).is_some_and(|entry| *entry.kept.resolved.command == *command))
     }
 
     /// Keeps `kept` for `reader`, in place of what it kept for the same command.
@@ -806,6 +806,13 @@ impl Board {
         };
         let state = this.or(last);
         let flags = resolve_flags(this.map(CommandState::flags), last.map(CommandState::flags));
+        // The focused part answers for a declared edit's flags, but its title and icon stay the app's, so the edit's
+        // label does not change language with the focus (#3569). The hint stays the part's: the app's hint describes
+        // the app's own enable state, which the part's flags override.
+        let app_number = matches!(declaring, Some(Declaration::Focused { .. })).then(|| self.numbers.get(command.id.as_str()).copied()).flatten();
+        let shown = state.or_else(|| app_number.and_then(|number| self.app_state(number, command)));
+        // The resolution reads the app's held state, so a change to it invalidates the kept resolution.
+        let key = key.or(app_number.map(|number| (number, None)));
         let reached = declaring.is_some()
             || instance.is_some_and(|id| match reach {
                 Reach::Focus => {
@@ -828,9 +835,9 @@ impl Board {
         let chord = self.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command));
         let chord_text = chord.and_then(|chord| self.keymap.as_ref()?.shown_text.get(&chord).cloned());
         let resolved = ResolvedCommand {
-            label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
+            label: shown.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
             catalog_label: def.map(|def| Arc::from(def.label.as_str())),
-            icon: state.and_then(|s| s.icon_ref().cloned()).or_else(|| def.and_then(|def| def.icon.clone())),
+            icon: shown.and_then(|s| s.icon_ref().cloned()).or_else(|| def.and_then(|def| def.icon.clone())),
             chord,
             chord_text,
             enabled: flags.enabled && !refused,
@@ -841,7 +848,7 @@ impl Board {
             hint_alone: state.is_some_and(CommandState::is_hint_alone),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             edit: self.registry.edit_of(&command.id).is_some(),
-            command: command.clone(),
+            command: Arc::new(command.clone()),
             instance,
         };
         (resolved, key)
@@ -1809,7 +1816,10 @@ pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: Fi
     if !command.enabled || !crate::runtime::measure::effect(ctx, "board::fire_resolved") {
         return false;
     }
-    queue(ctx, Fired { target: command.instance, ..Fired::new(command.command.clone(), source, FirePhase::Press, pass::now(ctx)) }.mods(mods));
+    queue(
+        ctx,
+        Fired { target: command.instance, ..Fired::new(CommandRef::clone(&command.command), source, FirePhase::Press, pass::now(ctx)) }.mods(mods),
+    );
     true
 }
 

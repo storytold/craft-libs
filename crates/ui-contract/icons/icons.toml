@@ -1755,6 +1755,37 @@ carbon = "volume--mute"
 tabler = "volume-off"
 
 [[icon]]
+name = "volume"
+directional = false
+lucide = "volume-2"
+phosphor = "speaker-simple-high"
+carbon = "volume--up"
+tabler = "volume"
+
+[[icon]]
+name = "mic"
+directional = false
+lucide = "mic"
+phosphor = "microphone"
+carbon = "microphone"
+tabler = "microphone"
+
+[[icon]]
+name = "mic_off"
+directional = false
+lucide = "mic-off"
+phosphor = "microphone-slash"
+carbon = "microphone--off"
+tabler = "microphone-off"
+
+[[icon]]
+name = "radio"
+directional = false
+lucide = "radio"
+phosphor = "broadcast"
+tabler = "broadcast"  # near: arcs above the dot only
+
+[[icon]]
 name = "solo"
 directional = false
 lucide = "headphones"

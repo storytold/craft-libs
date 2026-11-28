@@ -368,3 +368,257 @@ fn an_oversized_manifest_and_a_directory_face_are_errors() {
     let r = run(Embed::new(), Some(&dir), None);
     assert!(r.result.is_ok() && warnings(&r).iter().any(|w| w.contains("larger than")), "{:?}", r.cargo);
 }
+
+#[test]
+fn sha256_matches_the_standard_vectors_in_any_pieces() {
+    use crate::sha256::{Sha256, file_hex, hex};
+    assert_eq!(hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert_eq!(hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    let two_blocks = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    assert_eq!(hex(two_blocks), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    let million = vec![b'a'; 1_000_000];
+    assert_eq!(hex(&million), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+    // Pieces that start and end inside a block give the digest of the whole.
+    for piece in [1, 7, 55, 56, 63, 64, 65, 1000] {
+        let mut sha = Sha256::new();
+        for chunk in million.chunks(piece) {
+            sha.update(chunk);
+        }
+        assert_eq!(sha.finish(), hex(&million), "{piece}-byte pieces");
+    }
+    let scratch = Scratch::new("sha256-file");
+    let file = scratch.0.join("f");
+    for len in [0, 55, 56, 64, 65_537] {
+        let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&file, &data).unwrap();
+        assert_eq!(file_hex(&file, 65_537).unwrap(), hex(&data), "{len} bytes");
+    }
+    assert!(file_hex(&file, 65_536).unwrap_err().to_string().contains("larger than 65536 bytes"));
+    assert!(file_hex(&scratch.0, 10).is_err(), "a directory");
+}
+
+/// A checkout in `scratch` whose one face, `fonts/a.ttf`, holds `font` and whose manifest line
+/// gives `sha256`.
+fn hashed_checkout(scratch: &Scratch, font: &[u8], sha256: &str) -> PathBuf {
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    std::fs::write(dir.join("fonts/a.ttf"), font).unwrap();
+    std::fs::write(dir.join("fonts/OFL.txt"), b"licence").unwrap();
+    std::fs::write(dir.join("fonts/manifest.txt"), format!("Sans | Regular | fonts/a.ttf | Latn | OFL-1.1 | fonts/OFL.txt | {sha256} | src\n"))
+        .unwrap();
+    dir
+}
+
+#[test]
+fn a_font_file_that_differs_from_its_manifest_hash_is_not_embedded() {
+    use crate::sha256::hex;
+    let scratch = Scratch::new("hash-mismatch");
+    let font = b"font bytes";
+    let dir = hashed_checkout(&scratch, font, &hex(font).to_ascii_uppercase());
+    assert_eq!(run(Embed::new(), Some(&dir), Some("1")).result.unwrap(), ["Sans Regular"]);
+
+    let dir = hashed_checkout(&scratch, font, &hex(b"other bytes"));
+    let r = run(Embed::new(), Some(&dir), Some("1"));
+    match &r.result {
+        Err(Error::HashMismatch { file, expected, actual, .. }) => {
+            assert_eq!((file.as_str(), expected.as_str(), actual.as_str()), ("fonts/a.ttf", hex(b"other bytes").as_str(), hex(font).as_str()));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(r.table.trim(), "&[]");
+    let err = r.result.unwrap_err().to_string();
+    assert!(err.contains("fonts/a.ttf") && err.contains(&hex(font)), "{err}");
+    // Not required: a warning and an empty table, as for a missing font file.
+    let r = run(Embed::new(), Some(&dir), None);
+    assert!(r.result.as_ref().unwrap().is_empty());
+    assert_eq!(r.table.trim(), "&[]");
+    assert!(warnings(&r).iter().any(|w| w.contains("building without craft-fonts") && w.contains("SHA-256")), "{:?}", r.cargo);
+    // Served faces are checked too: the manifest's hash becomes their integrity value.
+    let served = scratch.0.join("served");
+    assert!(matches!(run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1")).result, Err(Error::HashMismatch { .. })));
+    assert!(!served.join("a.ttf").exists());
+}
+
+/// A rerun of a build that is not required takes a file's hash from the cache beside the table
+/// while its size and modification time are unchanged, and hashes it again once they change. A
+/// required build hashes every file.
+#[test]
+fn the_hash_cache_is_used_only_while_the_file_is_unchanged_and_not_when_required() {
+    use crate::sha256::hex;
+    let scratch = Scratch::new("hash-cache");
+    let font = b"font bytes";
+    let dir = hashed_checkout(&scratch, font, &hex(font));
+    let out = scratch.0.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    // The embedded faces, and the hash a mismatch warning gives as the file's.
+    let run_in = |required: Option<&str>| {
+        let env = Env { dir: Some(dir.clone().into()), required: required.map(OsString::from), out_dir: Some(out.clone().into()) };
+        let mut cargo = Vec::new();
+        let faces = Embed::new().run(&env, Path::new("craft_fonts.rs"), &mut cargo).map(|faces| faces.len()).ok();
+        let warned = cargo.iter().find_map(|line| Some(line.split_once("has SHA-256 ")?.1.get(..64)?.to_owned()));
+        (faces, warned)
+    };
+    assert_eq!(run_in(None), (Some(1), None));
+    let cache = out.join("craft_fonts.rs.sha256.txt");
+    let text = std::fs::read_to_string(&cache).unwrap();
+    assert!(text.starts_with(&format!("{}\t10\t", hex(font))), "{text}");
+
+    // A cached hash is trusted while the stamp matches: a wrong one shows in the warning.
+    let wrong = hex(b"cached");
+    std::fs::write(&cache, text.replacen(&hex(font), &wrong, 1)).unwrap();
+    assert_eq!(run_in(None), (Some(0), Some(wrong)));
+    // A required build reads the file instead.
+    assert_eq!(run_in(Some("1")), (Some(1), None));
+
+    // A changed file is hashed again, whatever the cache holds.
+    std::fs::write(dir.join("fonts/a.ttf"), b"other font bytes").unwrap();
+    assert_eq!(run_in(None), (Some(0), Some(hex(b"other font bytes"))));
+    // An unreadable cache costs a rehash, not a failure.
+    std::fs::write(dir.join("fonts/a.ttf"), font).unwrap();
+    std::fs::write(&cache, "not a cache line\n").unwrap();
+    assert_eq!(run_in(None), (Some(1), None));
+}
+
+#[test]
+fn separate_generated_tables_keep_their_hash_cache() {
+    use crate::sha256::hex;
+    let scratch = Scratch::new("hash-cache-tables");
+    let font = b"first font bytes";
+    let dir = hashed_checkout(&scratch, font, &hex(font));
+    std::fs::write(dir.join("fonts/b.ttf"), b"second font bytes").unwrap();
+    let manifest = format!(
+        "Sans | Regular | fonts/a.ttf | Latn | OFL-1.1 | fonts/OFL.txt | {} | src\nMono | Regular | fonts/b.ttf | Latn | OFL-1.1 | fonts/OFL.txt | {} | src\n",
+        hex(font),
+        hex(b"second font bytes")
+    );
+    std::fs::write(dir.join("fonts/manifest.txt"), manifest).unwrap();
+    let out = scratch.0.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let run_in = |family: &str, table: &str| {
+        let env = Env { dir: Some(dir.clone().into()), required: None, out_dir: Some(out.clone().into()) };
+        let mut cargo = Vec::new();
+        let faces = Embed::documents(&[family]).run(&env, Path::new(table), &mut cargo).unwrap();
+        (faces.len(), cargo)
+    };
+    assert_eq!(run_in("Sans", "faces.rs").0, 1);
+    let cache = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| std::fs::read_to_string(path).is_ok_and(|text| text.starts_with(&format!("{}\t", hex(font)))))
+        .unwrap();
+    let cached = std::fs::read_to_string(&cache).unwrap();
+    let wrong = hex(b"cached first font");
+    std::fs::write(&cache, cached.replacen(&hex(font), &wrong, 1)).unwrap();
+    assert_eq!(run_in("Mono", "faces.inc").0, 1);
+    let (faces, cargo) = run_in("Sans", "faces.rs");
+    assert_eq!(faces, 0, "the first table's cached hash was discarded");
+    assert!(cargo.iter().any(|line| line.contains(&wrong)), "{cargo:?}");
+}
+
+/// `Embed::tab_face` adds only the Noto Sans Condensed SemiBold row of `fonts/latin-manifest.txt`, with the `tab` role.
+/// A checkout without that manifest or row keeps its other faces, required or not; a broken manifest or row is an
+/// error only when required. The face counts for none of the scripts a required build asks for and covers none of the
+/// characters of a checked text, and a served table leaves it out.
+#[test]
+fn the_tab_face_comes_from_the_latin_manifest_with_the_tab_role() {
+    let scratch = Scratch::new("tab-face");
+    let dir = checkout(&scratch, &[("Noto Sans Arabic", "Arab", "", tiny_font(&[(0x627, 0x627, None)], &[]))]);
+    std::fs::write(dir.join("fonts/OFL.txt"), b"licence").unwrap();
+    std::fs::write(dir.join("fonts/condensed.ttf"), tiny_font(&[(0x41, 0x5A, None)], &[])).unwrap();
+    std::fs::write(dir.join("fonts/inter.ttf"), tiny_font(&[(0x41, 0x5A, None)], &[])).unwrap();
+    let latin = dir.join("fonts/latin-manifest.txt");
+    let row = |family: &str, style: &str, file: &str| format!("{family} | {style} | {file} | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n");
+    let both = row("Inter", "SemiBold", "fonts/inter.ttf") + &row("Noto Sans", "Condensed SemiBold", "fonts/condensed.ttf");
+    std::fs::write(&latin, &both).unwrap();
+
+    let r = run(Embed::new().tab_face(), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular", "Noto Sans Condensed SemiBold"]);
+    assert!(r.table.contains(r#"family: "Noto Sans", style: "Condensed SemiBold""#) && r.table.contains(r#"role: Some("tab")"#), "{}", r.table);
+    assert!(!r.table.contains("Inter"), "{}", r.table);
+    assert!(r.cargo.iter().any(|l| l == &format!("cargo::rerun-if-changed={}", latin.display())), "{:?}", r.cargo);
+    // Scripts and the filter narrow only the main manifest's faces.
+    let r = run(Embed::new().scripts(&["Arab"]).filter(|f| f.has_script("Arab")).tab_face(), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular", "Noto Sans Condensed SemiBold"]);
+    // The tab-title face does not stand in for a required script the main manifest lacks.
+    let r = run(Embed::new().scripts(&["Latn"]).tab_face(), Some(&dir), Some("1"));
+    assert!(matches!(&r.result, Err(Error::NoFaces { .. })), "{:?}", r.result);
+    let r = run(Embed::new().scripts(&["Arab", "Latn"]).tab_face(), Some(&dir), Some("1"));
+    assert!(matches!(&r.result, Err(Error::MissingScripts { scripts, .. }) if scripts == &["Latn"]), "{:?}", r.result);
+    let r = run(Embed::new(), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+    // A served table carries no roles, so it leaves the face out.
+    let r = run(Embed::new().tab_face().serve(scratch.0.join("served"), "fonts/"), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+    assert!(warnings(&r).iter().any(|w| w.contains("not serving the tab-title face")), "{:?}", r.cargo);
+    // Only tab titles draw in the face, so it covers none of the characters of a checked text.
+    std::fs::write(dir.join("fonts/condensed.ttf"), tiny_font(&[(0x41, 0x5A, None), (0x4E00, 0x4E00, None)], &[])).unwrap();
+    let text = scratch.0.join("text.ftl");
+    std::fs::write(&text, "x = \u{4E00}\n").unwrap();
+    let r = run(Embed::new().tab_face().check_text([&text]), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular", "Noto Sans Condensed SemiBold"]);
+    assert!(warnings(&r).iter().any(|w| w.contains("1 character no embedded face covers (\u{4E00})")), "{:?}", r.cargo);
+
+    // No row for the face, or no latin manifest at all: the other faces and a warning, even when required.
+    std::fs::write(&latin, row("Inter", "SemiBold", "fonts/inter.ttf")).unwrap();
+    for required in [None, Some("1")] {
+        let r = run(Embed::new().tab_face(), Some(&dir), required);
+        assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+        assert!(warnings(&r).iter().any(|w| w.contains("has no Noto Sans Condensed SemiBold row")), "{:?}", r.cargo);
+    }
+    std::fs::remove_file(&latin).unwrap();
+    for required in [None, Some("1")] {
+        let r = run(Embed::new().tab_face(), Some(&dir), required);
+        assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+        assert!(warnings(&r).iter().any(|w| w.contains("latin-manifest.txt does not exist")), "{:?}", r.cargo);
+        assert!(r.cargo.iter().any(|l| l == &format!("cargo::rerun-if-changed={}", dir.join("fonts").display())), "{:?}", r.cargo);
+    }
+
+    // A manifest line that does not parse, or a row whose file is missing.
+    for broken in ["Noto Sans | Condensed SemiBold | fonts/condensed.ttf\n".to_owned(), row("Noto Sans", "Condensed SemiBold", "fonts/gone.ttf")] {
+        std::fs::write(&latin, &broken).unwrap();
+        let r = run(Embed::new().tab_face(), Some(&dir), None);
+        assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"], "{broken}");
+        assert!(warnings(&r).iter().any(|w| w.contains("not embedding the tab-title face")), "{broken}: {:?}", r.cargo);
+        let r = run(Embed::new().tab_face(), Some(&dir), Some("1"));
+        assert!(matches!(r.result, Err(Error::Parse { .. } | Error::Read { .. })), "{broken}: {:?}", r.result);
+    }
+    // The build reruns when the missing file is added: it watches the folder the file would be in.
+    let r = run(Embed::new().tab_face(), Some(&dir), None);
+    assert!(r.cargo.iter().any(|l| l == &format!("cargo::rerun-if-changed={}", dir.join("fonts").display())), "{:?}", r.cargo);
+}
+
+fn tab_hash_checkout(scratch: &Scratch) -> PathBuf {
+    let dir = checkout(scratch, &[("Noto Sans Arabic", "Arab", "", tiny_font(&[(0x627, 0x627, None)], &[]))]);
+    std::fs::write(dir.join("fonts/OFL.txt"), b"licence").unwrap();
+    std::fs::write(dir.join("fonts/condensed.ttf"), tiny_font(&[(0x41, 0x5A, None)], &[])).unwrap();
+    std::fs::write(
+        dir.join("fonts/latin-manifest.txt"),
+        format!(
+            "Noto Sans | Condensed SemiBold | fonts/condensed.ttf | Latn | OFL-1.1 | fonts/OFL.txt | {} | src\n",
+            crate::sha256::hex(b"other font bytes")
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn an_optional_tab_hash_mismatch_keeps_main_faces() {
+    let scratch = Scratch::new("optional-tab-hash");
+    let dir = tab_hash_checkout(&scratch);
+    let r = run(Embed::new().tab_face(), Some(&dir), None);
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"], "valid main faces remain available");
+    assert!(!r.table.contains("Condensed SemiBold"));
+    assert!(warnings(&r).iter().any(|warning| warning.contains("not embedding the tab-title face") && warning.contains("SHA-256")), "{:?}", r.cargo);
+}
+
+#[test]
+fn a_required_tab_hash_mismatch_names_the_latin_manifest() {
+    let scratch = Scratch::new("required-tab-hash");
+    let dir = tab_hash_checkout(&scratch);
+    let r = run(Embed::new().tab_face(), Some(&dir), Some("1"));
+    match r.result {
+        Err(Error::HashMismatch { manifest, .. }) => assert_eq!(manifest, dir.join("fonts/latin-manifest.txt")),
+        other => panic!("{other:?}"),
+    }
+}

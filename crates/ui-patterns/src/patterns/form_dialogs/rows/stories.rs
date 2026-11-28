@@ -28,9 +28,10 @@ fn patterns() -> PresetSource<'static, String> {
     PresetSource::new((), PresetFns::new(pattern_rows))
 }
 
-/// One row of every kind the rows show, a section, a row that waits for a check box, a row with a unit menu, a
+/// One row of every kind the rows show, a section, a row that waits for a check box, a range row with a step of a half,
+/// a row with a unit menu, a
 /// multi-line text row, a text row forty characters wide, a searchable choice, a radio row with a disabled option, a radio row with its options in a row,
-/// a blend row, a pattern row, a files row in folder mode and a section of read-only rows.
+/// a blend row, a pattern row, a files row in folder mode, a color row with opacity and a section of read-only rows.
 fn params() -> Vec<Param> {
     let mut params = Param::parse_list(SPEC);
     let blend = vec![
@@ -47,6 +48,7 @@ fn params() -> Vec<Param> {
     params.push(Param::new("fit", "Fit", ParamKind::radio(sizes(), Some("medium".to_owned()))).options_in_row());
     params.push(Param::new("angle", "Angle", ParamKind::angle(30.0)));
     params.push(Param::new("centre", "Centre", ParamKind::point([50.0, 50.0])));
+    params.push(Param::new("shadow", "Shadow", ParamKind::color_with_alpha(Some([0.0, 0.0, 0.0, 0.5]))));
     params.push(Param::section("Output"));
     params.push(Param::number("width", "Width", 640.0, 1.0, 0).bounds(Some(1.0), None).unit(UnitKind::Pixels));
     params.push(Param::number_with_units(
@@ -65,6 +67,7 @@ fn params() -> Vec<Param> {
     params.push(Param::new("kernel", "Kernel", ParamKind::grid(9, 0)));
     params.push(Param::new("sharpen", "Sharpen", ParamKind::bool(false)));
     params.push(Param::new("amount", "Amount", ParamKind::range(0.0, 100.0, 50.0, Default::default())).enabled_when("sharpen", true));
+    params.push(Param::new("gain", "Gain", ParamKind::range(-30.0, 30.0, 0.0, Default::default())).step(0.5));
     params.push(Param::new("notes", "Notes", ParamKind::text("")).multiline(3));
     params.push(Param::new("caption", "Caption", ParamKind::text("CONFIDENTIAL")).field_chars(40));
     params.push(Param::section("Camera Data"));
@@ -79,6 +82,19 @@ fn param_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let patterns = patterns();
     let (fields, fields_at) = data.value_at("fields", DialogFields::new());
     ParamRows::new("Filter", &params, fields_at.bind(fields)).patterns(&patterns).show(ui).into()
+}
+
+/// Number, int and range rows with unit text no `UnitKind` names (`kbps`, `s`, `MiB`) beside a row in milliseconds.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_unit_labels(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = vec![
+        Param::number("bitrate", "Bitrate", 6000.0, 50.0, 0).bounds(Some(100.0), Some(200_000.0)).unit_label("kbps"),
+        Param::new("keyframes", "Keyframe interval", ParamKind::int(Some(1), Some(20), 2)).unit_label("s"),
+        Param::new("offset", "Sync offset", ParamKind::number(Some(0.0), Some(20_000.0), 0.0, 1.0, 0)).unit(UnitKind::Milliseconds),
+        Param::new("buffer", "Buffer", ParamKind::range(1.0, 512.0, 64.0, Default::default())).unit_label("MiB"),
+    ];
+    let (fields, fields_at) = data.value_at("fields", DialogFields::new());
+    ParamRows::new("Output", &params, fields_at.bind(fields)).show(ui).into()
 }
 
 /// The rows of `params` over the story's values, which `setup` may prepare once.

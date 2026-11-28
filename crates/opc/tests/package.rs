@@ -182,10 +182,24 @@ fn skipped_parts_count_against_the_inflate_budget() {
     assert_eq!(Package::open(&z, &refuse).err(), Some(Error::PackageTooLarge { limit: 100 }));
 }
 
+/// Renames every entry spelled `from` to `to`, a name of the same length, in its local and
+/// central headers: for names the writer refuses to store.
+fn rename_entries(z: &mut [u8], from: &[u8], to: &[u8]) {
+    assert_eq!(from.len(), to.len());
+    let found: Vec<usize> = z.windows(from.len()).enumerate().filter(|(_, w)| *w == from).map(|(i, _)| i).collect();
+    assert_eq!(found.len(), 2, "one local and one central header");
+    for at in found {
+        z[at..at + to.len()].copy_from_slice(to);
+    }
+}
+
 #[test]
 fn backslash_zip_entry_names_are_found() {
-    let z = zip_of(&[("PPT\\Slides\\Slide1.xml", b"<a/>".to_vec()), ("/docProps/core.xml", b"<b/>".to_vec())]);
+    // A legacy writer's leading `/` stays a readable part: part names are never filesystem paths.
+    let mut z = zip_of(&[("PPT\\Slides\\Slide1.xml", b"<a/>".to_vec()), ("xdocProps/core.xml", b"<b/>".to_vec())]);
+    rename_entries(&mut z, b"xdocProps/core.xml", b"/docProps/core.xml");
     let p = Package::open(&z, &LIMITS).unwrap();
+    assert_eq!(p.get("docProps/core.xml"), Some(&b"<b/>"[..]));
     assert!(p.get("ppt/slides/slide1.xml").is_some());
     assert_eq!(p.canonical("ppt/slides/slide1.xml"), Some("PPT/Slides/Slide1.xml"));
     assert_eq!(p.canonical("docprops/core.xml"), Some("docProps/core.xml"));
@@ -195,6 +209,34 @@ fn backslash_zip_entry_names_are_found() {
     assert_eq!(lazy.canonical("/DOCPROPS/core.xml").as_deref(), Some("docProps/core.xml"));
     assert_eq!(lazy.canonical("nothing"), None);
     assert_eq!(lazy.read("PPT/slides/slide1.xml").unwrap().as_deref(), Some(&b"<a/>"[..]));
+    assert_eq!(lazy.read("docProps/core.xml").unwrap().as_deref(), Some(&b"<b/>"[..]));
+}
+
+#[test]
+fn traversal_zip_entry_names_are_not_parts() {
+    let mut z = zip_of(&[("a.xml", b"<a/>".to_vec()), ("xx/evil.xml", b"<e/>".to_vec()), ("C_/evil2.xml", b"<f/>".to_vec())]);
+    rename_entries(&mut z, b"xx/evil.xml", b"../evil.xml");
+    rename_entries(&mut z, b"C_/evil2.xml", b"C:/evil2.xml");
+    let p = Package::open(&z, &LIMITS).unwrap();
+    assert_eq!(p.names().collect::<Vec<_>>(), ["a.xml"]);
+    let mut lazy = LazyPackage::open(&z, &LIMITS).unwrap();
+    assert_eq!(lazy.names(), ["a.xml"]);
+    assert_eq!(lazy.read("../evil.xml").unwrap(), None);
+    assert_eq!(lazy.read("evil.xml").unwrap(), None);
+}
+
+/// Indexing part names reads only the central directory: one part whose local header is
+/// damaged leaves the others readable.
+#[test]
+fn a_damaged_local_header_does_not_stop_the_package_opening() {
+    let mut z = zip_of(&[("a.xml", b"<a/>".to_vec()), ("bad.xml", b"<b/>".to_vec())]);
+    let local = z.windows(7).position(|w| w == b"bad.xml").unwrap() - 30;
+    assert_eq!(&z[local..local + 4], b"PK\x03\x04");
+    z[local] = b'X';
+    let p = Package::open(&z, &LIMITS).unwrap();
+    assert_eq!(p.get("a.xml"), Some(&b"<a/>"[..]));
+    let mut lazy = LazyPackage::open(&z, &LIMITS).unwrap();
+    assert_eq!(lazy.read("a.xml").unwrap().as_deref(), Some(&b"<a/>"[..]));
 }
 
 #[test]
