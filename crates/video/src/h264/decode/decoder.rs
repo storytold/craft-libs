@@ -23,10 +23,6 @@ use std::sync::{Arc, Mutex};
 /// stream packet. Each picture is a full frame, and small slices make them cheap to ask for.
 const MAX_PICTURES_PER_CALL: usize = 64;
 
-/// The decoder supports at most 16 reference pictures, so constructing more
-/// inferred gap pictures cannot improve a usable reference list.
-const MAX_INFERRED_GAP_FRAMES: u32 = 16;
-
 /// One slice of a picture job.
 struct SliceJob {
     sh: SliceHeader,
@@ -540,10 +536,6 @@ impl Decoder {
         } else {
             let max = sps.max_frame_num();
             if sh.frame_num != self.prev_ref_frame_num && sh.frame_num != (self.prev_ref_frame_num + 1) % max {
-                let gap = (sh.frame_num + max - self.prev_ref_frame_num - 1) % max;
-                if gap > MAX_INFERRED_GAP_FRAMES {
-                    return Err(Error::Invalid("frame number gap exceeds the supported reference limit".into()));
-                }
                 // frame_num gap (8.2.5.2): insert "non-existing" frames. Their samples are never used by
                 // conforming streams; copy the latest decoded frame for concealment.
                 let meta = Arc::new(output_meta(sps, pts, false));
