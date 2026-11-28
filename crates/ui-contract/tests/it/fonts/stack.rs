@@ -281,3 +281,42 @@ fn variable_faces_draw_at_regular_weight() {
     set.tweak.coords.push(*b"wght", 300.0);
     assert!(!set_weight(&mut set, 400));
 }
+
+/// The embedded Inter subsets keep their TrueType hinting tables so skrifa runs Inter's native bytecode
+/// interpreter (`Engine::AutoFallback`) instead of falling back to the generic autohinter, and retain
+/// an outline on `.notdef` so missing characters show a visible tofu box.
+#[trial]
+fn the_default_inter_faces_keep_their_truetype_hinting() {
+    use skrifa::MetadataProvider as _;
+
+    struct CountingPen(usize);
+    impl skrifa::outline::OutlinePen for CountingPen {
+        fn move_to(&mut self, _x: f32, _y: f32) {
+            self.0 += 1;
+        }
+        fn line_to(&mut self, _x: f32, _y: f32) {
+            self.0 += 1;
+        }
+        fn quad_to(&mut self, _cx0: f32, _cy0: f32, _x: f32, _y: f32) {
+            self.0 += 1;
+        }
+        fn curve_to(&mut self, _cx0: f32, _cy0: f32, _cx1: f32, _cy1: f32, _x: f32, _y: f32) {
+            self.0 += 1;
+        }
+        fn close(&mut self) {}
+    }
+
+    let defaults = craft_ui::fonts::deflated_default_definitions();
+    for name in ["Inter-Regular", "Inter-SemiBold"] {
+        let data = defaults.font_data.get(name).unwrap_or_else(|| panic!("{name} is in the default fonts"));
+        let face = skrifa::FontRef::from_index((*data.font).as_ref(), data.index).unwrap_or_else(|e| panic!("parse {name}: {e}"));
+        let outlines = face.outline_glyphs();
+        assert!(outlines.prefer_interpreter(), "{name} should retain TrueType hinting for skrifa's interpreter");
+        let notdef = outlines.get(skrifa::GlyphId::NOTDEF).unwrap_or_else(|| panic!("{name} .notdef (glyph 0) should exist"));
+        let mut pen = CountingPen(0);
+        notdef
+            .draw((skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()), &mut pen)
+            .unwrap_or_else(|e| panic!("draw {name} .notdef: {e}"));
+        assert!(pen.0 > 0, "{name} .notdef (glyph 0) should have a non-empty outline");
+    }
+}
