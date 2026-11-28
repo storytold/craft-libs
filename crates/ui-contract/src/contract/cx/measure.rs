@@ -16,6 +16,9 @@ use std::hash::Hash;
 pub struct MeasureCx<'a, C: Component> {
     /// What the inherited context holds that component code may read.
     pub env: EnvView<'a>,
+    /// The env `env` views: the env installed for `ui`, in the component's own scope, so its layout facts are those of
+    /// the place `ui`'s children are shown in.
+    pub(crate) scope: &'a crate::runtime::env::Env,
     /// The component's cached style.
     pub style: &'a C::Style,
     /// `Common` after step 1.
@@ -73,7 +76,7 @@ impl<C: Component> MeasureCx<'_, C> {
             // The column is an input of this measure call besides its room (step 5 opens the call), and of the calls
             // around it that measure it.
             let ctx = self.ui.ctx();
-            let width = crate::layout::row_alone_room(self.ui).unwrap_or_else(|| crate::layout::flow_room(self.ui).x);
+            let width = crate::layout::row_alone_room(self.scope).unwrap_or_else(|| crate::layout::flow_room(self.ui, self.scope).x);
             let width = layout_memory::read_input(ctx, layout_memory::calls_from(ctx), self.id.with("column_room"), width);
             Some(width).filter(|width| width.is_finite())
         });
@@ -86,7 +89,7 @@ impl<C: Component> MeasureCx<'_, C> {
     /// Whether the component is a direct child of a `Row` body, a bar's included. A component that could wrap into
     /// lines keeps its one-line least there, and the row's shrink step decides who gives way.
     pub fn in_row(&self) -> bool {
-        crate::layout::row_alone_room(self.ui).is_some()
+        crate::layout::row_alone_room(self.scope).is_some()
     }
 
     /// The width a band picture sizes at (a plot, a strip), one whose height is its own whatever its width: it takes

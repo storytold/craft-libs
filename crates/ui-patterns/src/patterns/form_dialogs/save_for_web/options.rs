@@ -25,7 +25,6 @@ use crate::patterns::presets::{
 use crate::pickers::{Select, UnitSelect};
 
 use crate::runtime::env::{Env, Label, UnitKind, Units};
-use crate::runtime::focus::{self, FocusTarget};
 
 use crate::sections::Section;
 use crate::style::TypeRole;
@@ -204,7 +203,8 @@ fn preset_row(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, live:
 }
 
 /// "Optimize to File Size…" and, once opened, its rows; OK, or Enter in the Desired File Size field, files the search.
-/// While the rows are closed, the host's last answer shows as a line while the settings are the ones it found.
+/// OK waits while the Desired File Size holds text that does not parse. While the rows are closed, the host's last
+/// answer shows as a line while the settings are the ones it found.
 fn optimize_rows(ui: &mut Ui, kit: &Kit<'_>, options: &SaveForWebOptions, live: &mut Live, asked: &mut Asked) {
     let Kit { words, units, .. } = *kit;
     if !live.optimize.open {
@@ -219,10 +219,19 @@ fn optimize_rows(ui: &mut Ui, kit: &Kit<'_>, options: &SaveForWebOptions, live: 
         }
         return;
     }
+    let mut unparsed = false;
     row(ui, &words.optimize_size, "optimize-size", |ui| {
-        let edit = whole(units, words.optimize_size.clone(), live.optimize.desired_k(), DESIRED_K).submits().show(ui).edit;
-        if let Some(k) = edit.value().cloned().flatten() {
-            live.optimize.k = Some(k);
+        // An `f32` field takes no blank value, so empty text does not parse, as text that is not a number does not.
+        let edit = NumberField::named(words.optimize_size.clone(), Bind::given(live.optimize.desired_k() as f32))
+            .codec(NumberCodec::new(units.reader(None), 0))
+            .step(1.0)
+            .range(DESIRED_K)
+            .submits()
+            .show(ui)
+            .edit;
+        unparsed = edit.unparsed;
+        if let Some(k) = edit.value().copied() {
+            live.optimize.k = Some(f64::from(k));
         }
         if edit.submitted && edit.submit_mods == craft_keymap::Mods::NONE {
             asked.optimize_request = Some(live.optimize.request(options));
@@ -248,7 +257,7 @@ fn optimize_rows(ui: &mut Ui, kit: &Kit<'_>, options: &SaveForWebOptions, live: 
         Text::new(reason.clone()).role(TypeRole::Caption).shade(Shade::Faint).id_salt("optimize-refused").show(ui);
     }
     Row::new().id_salt("optimize-buttons").show(ui, |ui, _| {
-        if clicked(&Button::new(words.optimize_ok.clone()).id_salt("optimize-ok").default_stop().show(ui)) {
+        if clicked(&Button::new(words.optimize_ok.clone()).id_salt("optimize-ok").enabled(!unparsed).default_stop().show(ui)) {
             asked.optimize_request = Some(live.optimize.request(options));
         }
         if clicked(&Button::new(words.optimize_cancel.clone()).id_salt("optimize-cancel").show(ui)) {
@@ -418,56 +427,21 @@ fn color_table_section(ui: &mut Ui, kit: &Kit<'_>, live: &mut Live, asked: &mut 
         if !deleted.is_empty() {
             asked.table.push(ColorTableEvent { edit: ColorTableEdit::Delete, colors: deleted });
         }
-        let web_shifted = marks.and_then(|marks| marks.web_shifted.as_deref());
-        let shifted_count = web_shifted.map(|shifted| selected.iter().filter(|color| shifted.contains(color)).count());
-        // A mixed selection offers both actions. Each keeps its identity when the other appears or disappears.
-        let show_shift = shifted_count.is_none_or(|count| count == 0 || count < selected.len());
-        let show_unshift = shifted_count.is_none_or(|count| count > 0);
         let tools = [
-            show_shift.then_some(("web_colors", &words.web_shift, ColorTableEdit::WebShift)),
-            show_unshift.then_some(("undo", &words.unshift, ColorTableEdit::Unshift)),
-            Some(("lock", &words.lock, ColorTableEdit::Lock)),
-            Some(("grid", &words.make_transparent, ColorTableEdit::Transparent)),
-            Some(("trash", &words.delete_color, ColorTableEdit::Delete)),
+            ("web_colors", &words.web_shift, ColorTableEdit::WebShift),
+            ("undo", &words.unshift, ColorTableEdit::Unshift),
+            ("lock", &words.lock, ColorTableEdit::Lock),
+            ("grid", &words.make_transparent, ColorTableEdit::Transparent),
+            ("trash", &words.delete_color, ColorTableEdit::Delete),
         ];
         Row::new().id_salt("table-tools").show(ui, |ui, _| {
-            let interactive = !crate::runtime::measure::active(ui.ctx());
-            let focused_action = live.table_actions.iter().position(|id| id.is_some_and(|id| focus::is_focused(ui.ctx(), id)));
-            let mut targets = [None; 2];
-            for (index, tool) in tools.iter().enumerate() {
-                let Some((icon, label, edit)) = tool else { continue };
+            for (icon, label, edit) in &tools {
                 let button = IconButton::new(IconId::new(icon)).label((*label).clone()).enabled(!selected.is_empty()).id_salt(*icon).show(ui);
-                if !selected.is_empty()
-                    && let Some(target) = targets.get_mut(index)
-                {
-                    *target = Some(button.response.id);
-                }
                 if clicked(&button) {
-                    let colors = match (edit, web_shifted) {
-                        (ColorTableEdit::Unshift, Some(shifted)) => selected.iter().copied().filter(|color| shifted.contains(color)).collect(),
-                        _ => selected.clone(),
-                    };
-                    asked.table.push(ColorTableEvent { edit: edit.clone(), colors });
+                    asked.table.push(ColorTableEvent { edit: edit.clone(), colors: selected.clone() });
                 }
             }
             let more = IconButton::new(IconId::new("more")).label(words.table_menu.clone()).id_salt("menu").show(ui);
-            if interactive {
-                let mut recover = focused_action.is_some_and(|index| targets[index].is_none());
-                // Recover on the following frame so presses can finish choosing their own focus.
-                if live.recover_table_focus && ui.memory(|memory| memory.focused().is_none()) {
-                    if ui.input(|input| input.pointer.any_pressed() || input.key_pressed(egui::Key::Tab)) {
-                        recover = true;
-                    } else {
-                        let target = targets.into_iter().flatten().next().unwrap_or(more.response.id);
-                        focus::request(ui.ctx(), FocusTarget::Id(target));
-                    }
-                }
-                live.recover_table_focus = recover;
-                live.table_actions = targets;
-                if recover {
-                    crate::runtime::frame::request_repaint(ui.ctx());
-                }
-            }
             let orders = [
                 (&words.order_unsorted, TableOrder::Unsorted),
                 (&words.order_hue, TableOrder::Hue),

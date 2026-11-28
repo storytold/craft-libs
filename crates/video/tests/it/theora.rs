@@ -50,6 +50,20 @@ fn psnr(a: &[u8], b: &[u8]) -> f64 {
 }
 
 #[test]
+fn test_theora_encoder_rejects_zero_frame_rate_components() {
+    let config = EncoderConfig { width: 16, height: 16, pic_width: 16, pic_height: 16, ..EncoderConfig::default() };
+    for (fps_num, fps_den) in [(0, 1), (25, 0), (0, 0)] {
+        assert!(matches!(Encoder::new(EncoderConfig { fps_num, fps_den, ..config.clone() }), Err(Error::InvalidHeader(_))));
+    }
+    for (fps_num, fps_den) in [(1, 1), (30_000, 1001), (u32::MAX, u32::MAX)] {
+        let encoder = Encoder::new(EncoderConfig { fps_num, fps_den, ..config.clone() }).unwrap();
+        let header = IdentificationHeader::parse(&encoder.headers().0).unwrap();
+        assert_eq!((header.info.fps_num, header.info.fps_den), (fps_num, fps_den));
+        assert_eq!((encoder.config().fps_num, encoder.config().fps_den), (fps_num, fps_den));
+    }
+}
+
+#[test]
 fn test_theora_headers_roundtrip() {
     let cfg = EncoderConfig {
         width: 320,

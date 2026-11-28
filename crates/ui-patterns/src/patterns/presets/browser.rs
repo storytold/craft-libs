@@ -98,8 +98,7 @@ impl<K> BrowserKey<K> {
 }
 
 /// The app's change of a selection change the browser's collection reports: only the rows `selectable` accepts stay in
-/// it, so action rows and groups are never part of the host's selection. Cell changes do not occur under the modes the
-/// browser allows.
+/// it. Action rows are never part of the host's selection. Cell changes do not occur under the modes the browser allows.
 fn app_change<K>(change: SelectionChange<BrowserKey<K>>, selectable: impl Fn(&K) -> bool) -> Option<SelectionChange<K>> {
     match change {
         SelectionChange::Set(keys) => {
@@ -299,6 +298,9 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 's
     /// How picks select: `Single` by default; `Multi` gives the collection rules in both views.
     #[prop]
     select: SelectMode,
+    /// Lets selection interactions include titled groups in both views. Group disclosure remains a separate control.
+    #[prop]
+    select_groups: bool,
     /// Scrolls this preset into view once.
     #[prop]
     reveal: Option<K>,
@@ -394,6 +396,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser
             source,
             selection: None,
             select: SelectMode::Single,
+            select_groups: false,
             reveal: None,
             cell_shape: CellShape::Square,
             tiles: PresetTiles::Thumbnails,
@@ -556,7 +559,13 @@ struct Plan<K> {
     group_rows: Vec<usize>,
 }
 
-fn grid_plan<K: Clone>(rows: &[PresetRow<K>], shown: &[usize], open: impl Fn(usize) -> bool, count: impl Fn(usize) -> Option<String>) -> Plan<K> {
+fn grid_plan<K: Clone>(
+    rows: &[PresetRow<K>],
+    shown: &[usize],
+    open: impl Fn(usize) -> bool,
+    count: impl Fn(usize) -> Option<String>,
+    select_groups: bool,
+) -> Plan<K> {
     let mut plan = Plan { tiles: Vec::new(), groups: Vec::new(), group_rows: Vec::new() };
     let mut counting = false;
     for &at in shown {
@@ -567,6 +576,9 @@ fn grid_plan<K: Clone>(rows: &[PresetRow<K>], shown: &[usize], open: impl Fn(usi
                 .open(open)
                 .depth(row.depth)
                 .icon(folder(open));
+            if select_groups {
+                group = group.selectable();
+            }
             if let Some(detail) = count(at) {
                 group = group.detail(detail);
             }
@@ -723,6 +735,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
             source,
             selection,
             select,
+            select_groups,
             reveal,
             cell_shape,
             tiles: tile_size,
@@ -831,6 +844,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
                 zoom: local.zoom,
                 selection: held.clone(),
                 select,
+                select_groups,
                 reveal: reveal.clone(),
                 menu_target,
                 cell_shape,
@@ -933,6 +947,7 @@ struct ListProps<'p, 'a, K: 'static> {
     zoom: f64,
     selection: Selection<K>,
     select: SelectMode,
+    select_groups: bool,
     reveal: Option<K>,
     menu_target: Option<K>,
     cell_shape: CellShape,
@@ -1005,6 +1020,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
     let shown = shown_rows(rows, &open_flags, matcher.as_ref());
     let counted = |at: usize| rows[at].count.map(|n| words.group_count.text(n as u64, &env.format().integer(n as u64)));
     let ruled_heads = group_heads == GroupHeads::Rule;
+    let select_groups = props.select_groups && !ruled_heads && select != SelectMode::None;
     let shown_selection = Selection::new(
         held.items.iter().cloned().map(BrowserKey::Preset).collect(),
         held.lead.clone().map(BrowserKey::Preset),
@@ -1044,7 +1060,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
         let response = Notice::new(Tone::Neutral, message).layout(NoticeLayout::Centred).show(ui).response;
         (response, Rc::new(RowMap { rows, displayed: Vec::new() }), Pass { seen: Vec::new(), grid: Vec::new() })
     } else if view == PresetView::Grid {
-        let plan = grid_plan(rows, &shown, |at| open_flags[at], counted);
+        let plan = grid_plan(rows, &shown, |at| open_flags[at], counted, select_groups);
         let tiles = Shown { rows, at: plan.tiles.clone(), open: vec![false; plan.tiles.len()], tree: false, actions: 0 };
         // The grid's positions count its group header rows as the list's count its group rows: the shown rows.
         let map = Rc::new(RowMap { rows, displayed: shown.clone() });
@@ -1226,7 +1242,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
                     toggle(&mut open_flags, &mut events, at, Some(open));
                 }
             }
-            GridEvent::GroupPicked { group, .. } => {
+            GridEvent::GroupPicked { group, .. } if !select_groups => {
                 if let Some(&at) = grid_group_row(&shown, rows, group) {
                     toggle(&mut open_flags, &mut events, at, None);
                 }
@@ -1259,7 +1275,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
         for event in pass.seen {
             match event {
                 Seen::Selection(change) => {
-                    let selectable = |key: &K| row_of(key).is_some_and(|at| !rows[at].is_group());
+                    let selectable = |key: &K| row_of(key).is_some_and(|at| select_groups || !rows[at].is_group());
                     if let Some(change) = app_change(change, selectable) {
                         held.apply(change.clone());
                         events.push(PresetEvent::Selection(change));

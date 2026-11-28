@@ -4,6 +4,7 @@ use craft_behavior::{Selection, SelectionChange, SelectionModel};
 use craft_ui::contract::{Bind, DropAt, DropPlace, DropZone, ListDrag, SelectMode};
 use craft_ui::patterns::presets::{PresetBrowser, PresetDrop, PresetEvent, PresetFns, PresetRow, PresetSource, PresetState, PresetView};
 use craft_ui::runtime::drag;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Sense, UiBuilder, pos2, vec2};
 use std::cell::RefCell;
@@ -243,6 +244,56 @@ fn multi_selection_ranges_toggles_and_reports_select_for_each_plain_pick() {
         events.borrow_mut().clear();
         secondary_click_preset(&mut fixture, 3);
         assert_eq!(items(), vec![2, 3], "a secondary press on a selected preset leaves the selection whole in {view:?}");
+    }
+}
+
+#[trial]
+fn titled_groups_join_modifier_selection_only_when_enabled() {
+    for view in [PresetView::List, PresetView::Grid] {
+        for enabled in [false, true] {
+            let rows = PresetSource::new(
+                (),
+                PresetFns::new(|_, _| vec![PresetRow::group(GROUP, "Group", 0), PresetRow::item(ALPHA, "Alpha", 1), PresetRow::item(2, "Beta", 1)]),
+            );
+            let mut state = PresetState::new();
+            let selection = Rc::new(RefCell::new(Selection::default()));
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let (held, seen) = (selection.clone(), events.clone());
+            let mut fixture = Fixture::new(move |ui| {
+                let out = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows)
+                    .view_lock(view)
+                    .select(SelectMode::Multi)
+                    .select_groups(enabled)
+                    .selection(Bind::bound(&mut *held.borrow_mut()))
+                    .show(ui);
+                seen.borrow_mut().extend(out.events);
+            });
+            fixture.room(vec2(480.0, 320.0)).settle();
+            let alpha = fixture.by_label("Alpha").expect("the first preset is shown");
+            fixture.click(&alpha).settle();
+            assert_eq!(selection.borrow().items, [ALPHA]);
+            events.borrow_mut().clear();
+            let group = fixture.by_label("Group").expect("the group header is shown");
+            fixture.hold(Modifiers::COMMAND).click(&group).hold(Modifiers::NONE).settle();
+            let expected = if enabled { vec![ALPHA, GROUP] } else { vec![ALPHA] };
+            assert_eq!(selection.borrow().items, expected, "{view:?}, group selection enabled: {enabled}");
+            assert!(!events.borrow().iter().any(|event| matches!(event, PresetEvent::Select { .. })));
+            if enabled {
+                assert_eq!(fixture.tree().selected_of(group.node), Some(true));
+                assert!(fixture.by_label("Beta").is_some(), "the group remains open in {view:?}");
+                fixture.advance(1.0);
+                fixture.hold(Modifiers::COMMAND).click(&group).hold(Modifiers::NONE).settle();
+                assert_eq!(selection.borrow().items, [ALPHA], "Cmd/Ctrl toggles the group off in {view:?}");
+                fixture.access(AccessActionKind::Click, &group).settle();
+                assert_eq!(selection.borrow().items, [GROUP], "accessibility Click selects the group in {view:?}");
+                let beta = fixture.by_label("Beta").expect("accessibility Click keeps the group open");
+                fixture.hold(Modifiers::SHIFT).click(&beta).hold(Modifiers::NONE).settle();
+                assert_eq!(selection.borrow().items, [GROUP, ALPHA, 2], "Shift range includes the group in {view:?}");
+                fixture.access(AccessActionKind::Click, &group).settle();
+                fixture.key(Key::Enter, Modifiers::NONE).settle();
+                assert!(fixture.by_label("Beta").is_none(), "Enter closes the selected group in {view:?}");
+            }
+        }
     }
 }
 

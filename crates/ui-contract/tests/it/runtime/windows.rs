@@ -358,7 +358,11 @@ fn an_app_modal_takes_the_keyboard_from_a_window_it_blocks() {
         let windows = on_x11();
         windows.root_info(focus(root));
         windows.child_info(focus(float));
-        let frame = || windows.frame(vec![], vec![], |ui| ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |_, _| {}));
+        let frame = || {
+            windows.frame(vec![], vec![], |ui| {
+                Palette::new("float", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            })
+        };
         for _ in 0..4 {
             frame();
         }
@@ -448,6 +452,26 @@ fn a_popup_window_of_the_modals_window_keeps_the_keyboard() {
     let popup = outs.last().and_then(|out| popup_window(out, palette)).expect("the layer opened in the palette shows in a popup window");
     assert_eq!(windows.facts(popup).focused, Some(true), "the popup window has the keyboard");
     assert_eq!(outs.iter().map(|out| focus_requests(out, palette)).sum::<usize>(), 0, "the modal's window leaves it there");
+}
+
+/// A popup window opened in a palette's first frames stays open while the palette's window has the focus: the
+/// palette counts among the app's windows from the frame it opened in, before the main window's input lists it, so
+/// the app is not away.
+#[trial]
+fn a_popup_window_opened_with_its_palette_stays_open() {
+    let windows = on_x11();
+    windows.root_info(focus(false));
+    windows.child_info(focus(true));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                Modal { common: Common::new(), props: menu_layer() }.id_salt("popup").show(ui, |_, _| {});
+            });
+        })
+    };
+    let outs: Vec<Out> = (0..4).map(|_| frame()).collect();
+    let palette = builder_titled(&outs[0], "tool").0;
+    assert!(popup_window(&outs[3], palette).is_some(), "the layer opened with its palette still shows in its popup window");
 }
 
 /// A layer in a popup window keeps the scroll that a focus move below its view gave it while it is open, and starts at

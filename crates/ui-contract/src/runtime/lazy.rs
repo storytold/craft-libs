@@ -20,12 +20,14 @@ use crate::runtime::env::Flow;
 use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::{self, PerViewport};
 use crate::runtime::inputs::{self, Input};
-use crate::runtime::layout_memory;
+use crate::runtime::layout_memory::{self, Handed};
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
+use crate::runtime::{Clip, Shift};
 use crate::style::EnvKey;
 use egui::emath::GuiRounding as _;
 use egui::{Context, Id, IdMap, IdSet, Layout, RecordShift, Rect, Vec2};
+use smallvec::SmallVec;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -85,7 +87,7 @@ pub(crate) struct Anchor {
 }
 
 /// Where the children of a scroll area started in the real run that laid its content out, from the view's start.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Placed {
     /// The child the area's scroll position names, the child it glides to (`Lazy::reveal`) and the axes it scrolls
     /// along, as the area had them when the run began. They are the area's own state, not inputs of its children, so
@@ -99,6 +101,36 @@ pub(crate) struct Placed {
     pub(crate) first: Option<(Id, Vec2)>,
     /// The place of the child the area glides to, when the run reached it.
     pub(crate) reveal: Option<Vec2>,
+    /// When the area is a bar's line, its rules and members in run order (`note_line`).
+    pub(crate) line: Vec<LineItem>,
+}
+
+/// What a bar's line holds, in run order: a rule (`Component::RULE`) is the bar's to draw, and shows only when the member
+/// after it shows.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LineItem {
+    /// A rule: a line in `look` along `axis` through the middle of `rect`, in `clip`, as the rule had them.
+    Rule { rect: Rect, clip: Clip, axis: craft_behavior::Axis, look: crate::style::RuleLook },
+    /// A member that is not a rule; `cut` when the bar's view shows it only in part, so it does not show.
+    Member { cut: bool },
+}
+
+impl Shift for LineItem {
+    fn shifted(&self, by: &RecordShift) -> Self {
+        match self {
+            LineItem::Rule { rect, clip, axis, look } => LineItem::Rule { rect: rect.shifted(by), clip: clip.shifted(by), axis: *axis, look: *look },
+            LineItem::Member { cut } => LineItem::Member { cut: *cut },
+        }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        match (self, to) {
+            (LineItem::Rule { rect, clip, axis, look }, LineItem::Rule { rect: to_rect, clip: to_clip, .. }) => {
+                LineItem::Rule { rect: rect.snapped(to_rect, within), clip: clip.snapped(to_clip, within), axis: *axis, look: *look }
+            }
+            _ => self.clone(),
+        }
+    }
 }
 
 impl Placed {
@@ -131,6 +163,11 @@ pub(crate) enum Decision {
     Skip(Vec2),
 }
 
+/// The most sizing measures a memoized view keeps (`Entry::measures`). A body measures a view in at most two layout
+/// contexts in a pass (a capped body or a layer with a footer drafts it at its content height, then lays it out at its
+/// room); the others keep a context that returns after a change of key or room.
+const MEASURES: usize = 4;
+
 #[derive(Clone, Default)]
 struct Entry {
     /// The scroll area the child is kept under.
@@ -140,6 +177,17 @@ struct Entry {
     /// in its real run, so each kind places the child as it last laid it out. Out of view the child keeps it at any
     /// room; it is measured again when it meets the reach.
     sizes: [Option<Measured>; 2],
+    /// The pass of the last measuring run in `sizes`.
+    measuring_pass: u64,
+    /// What the sizing runs that showed a memoized view measured, one per layout context (the key of the content it
+    /// showed, the flow of the body around it and the room's size), each with the last pass that measured or took it,
+    /// the most recently used last, at most `MEASURES`. A sizing run in one of these contexts replays (`settled`). A
+    /// draft taken back keeps them (`write`): a measure is a fact of its inputs, so a view a body drafts at its content
+    /// height and then lays out at its room replays in both in the next pass. A real run keeps only the ones of its own
+    /// pass (`ran`): it may show content its key does not name (a value it read was edited), which a measure of an
+    /// earlier pass does not hold. Each keeps what its run handed forward (`layout_memory::handing_forward`), which a
+    /// replay hands forward again.
+    measures: SmallVec<[(Measured, u64, Handed); MEASURES]>,
     /// What the child registered with the focus service in the last real run that showed it. Out of view the
     /// child registers it again in its place, so Tab and F6 reach its stops; it runs while one of them holds focus
     /// or a focus request asks to reveal one.
@@ -172,8 +220,15 @@ pub(crate) struct Measured {
     pub(crate) fills: Option<craft_behavior::Axis>,
 }
 
-/// Where a memoized view ran: it replays only at a place of the same size, layer, layout, opacity, flow and environment,
-/// and its record moves with the room's position (`Place::shift_to`).
+impl Measured {
+    /// Whether the measure is of the content keyed `key`, in `flow` and a room of the size `room`.
+    fn of(&self, key: Key, flow: Flow, room: Vec2) -> bool {
+        self.key == key && self.flow == flow && self.room.size() == room
+    }
+}
+
+/// Where a memoized view ran: it replays only at a place of the same size, layer, layout, AccessKit state, opacity, flow
+/// and environment, and its record moves with the room's position (`Place::shift_to`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Place {
     /// The region its parent offered it.
@@ -185,6 +240,9 @@ pub(crate) struct Place {
     /// The font atlas the run's text points into (`Fonts::atlas_generation`): egui clears the atlas when it fills up
     /// and rebuilds it for new text options, and a kept galley's glyphs then name other glyphs.
     pub(crate) atlas: u64,
+    /// Whether the pass built AccessKit nodes (`access::builds_nodes`): a run with AccessKit off keeps no nodes, which a
+    /// pass with it on must show, and AccessKit turns on mid-session (a screen reader starts, automation reads the tree).
+    pub(crate) access: bool,
     /// The opacity everything painted in the room is faded to (`Ui::opacity`, a layer fading in or out): the run's
     /// colours hold it.
     pub(crate) opacity: f32,
@@ -212,7 +270,8 @@ struct Moved {
 
 impl Place {
     /// How a run at this place that took `rect` replays at `now`, or `None` when it cannot. The room may have moved;
-    /// its size, the layer, layout, scale, font atlas, opacity, flow and environment are the ones the run had. A record
+    /// its size, the layer, layout, scale, font atlas, AccessKit state, opacity, flow and environment are the ones the run
+    /// had. A record
     /// that shows an overlay replays only at the room and clip of its run (`Record::pinned`). Any other record moves by
     /// the room's move when that keeps where a run places content (`keeps_placement`, so a moved record is what a run
     /// there gives) and, for a move, the record holds nothing a move cannot place (`Record::movable`: no paint
@@ -231,6 +290,7 @@ impl Place {
             && now.layout == self.layout
             && now.pixels_per_point == self.pixels_per_point
             && now.atlas == self.atlas
+            && now.access == self.access
             && now.opacity == self.opacity
             && now.env == self.env
             && now.flow == self.flow;
@@ -281,8 +341,12 @@ struct Settled {
     place: Place,
     /// The rect its content took.
     rect: Rect,
-    /// The pointer was over it, or one of its stops held focus: it runs again to show that they left.
+    /// A press held that started in it, or one of its stops was the target of a focus request: it runs again to show
+    /// that they ended.
     engaged: bool,
+    /// What pointer sensing gave it (`pointer::Sensed`) and the hover point, screen points, when it ran.
+    sensed: crate::runtime::pointer::Sensed,
+    pointer: Option<egui::Pos2>,
     /// What it ran for: its props key after the run.
     key: Key,
     /// The pass it ran in.
@@ -346,6 +410,25 @@ impl Entry {
     fn memo(&self) -> bool {
         self.settled.as_ref().is_some_and(|settled| matches!(settled.key, Key::Memo(_)))
     }
+
+    /// Keeps the sizing measure `measured` of the pass `pass`, with what its run handed forward, as the most recently
+    /// used, in place of the one of its layout context; the least recently used goes when `MEASURES` are kept.
+    fn keep_measure(&mut self, measured: Measured, handed: Handed, pass: u64) {
+        self.measures.retain(|(kept, ..)| !kept.of(measured.key, measured.flow, measured.room.size()));
+        if self.measures.len() == MEASURES {
+            self.measures.remove(0);
+        }
+        self.measures.push((measured, pass, handed));
+    }
+
+    /// The sizing measure of the content keyed `key` in `flow` and a room of the size `room`, with what its run handed
+    /// forward, taken in the pass `pass`: it becomes the most recently used.
+    fn measure_in(&mut self, key: Key, flow: Flow, room: Vec2, pass: u64) -> Option<(Measured, Handed)> {
+        let at = self.measures.iter().position(|(kept, ..)| kept.of(key, flow, room))?;
+        let (measured, _, handed) = self.measures.remove(at);
+        self.measures.push((measured, pass, handed.clone()));
+        Some((measured, handed))
+    }
 }
 
 impl Store {
@@ -401,7 +484,8 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
 
 /// Runs `f` on the store as `with` does, for a write to the entry of the child `id`: inside a draft
 /// (`layout_memory::draft`) the entry as it was goes to the draft, so a measuring run taken back leaves the entry, its
-/// extents and this pass's decisions included, as it found it.
+/// extents and this pass's decisions included, as it found it. It keeps the sizing measures the draft found
+/// (`Entry::measures`): they are facts of their inputs, not state of the pass.
 fn write<R>(ctx: &Context, id: Id, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
     let drafting = layout_memory::drafting(ctx);
     let (out, before) = with(ctx, |store, pass_nr, frame| {
@@ -413,9 +497,19 @@ fn write<R>(ctx: &Context, id: Id, f: impl FnOnce(&mut Store, u64, u64) -> R) ->
         layout_memory::note_undo(
             ctx,
             Box::new(move |ctx: &Context| {
-                PerViewport::<Store>::with(ctx, viewport, |store| match before {
-                    Some(entry) => drop(store.entries.insert(id, entry)),
-                    None => drop(store.entries.remove(&id)),
+                PerViewport::<Store>::with(ctx, viewport, |store| {
+                    let now = store.entries.remove(&id);
+                    let restored = match (before, now) {
+                        (Some(entry), None) => Some(entry),
+                        (Some(entry), Some(now)) => Some(Entry { measures: now.measures, ..entry }),
+                        (None, Some(now)) if !now.measures.is_empty() => {
+                            Some(Entry { owner: now.owner, touched: now.touched, measures: now.measures, ..Entry::default() })
+                        }
+                        (None, _) => None,
+                    };
+                    if let Some(entry) = restored {
+                        store.entries.insert(id, entry);
+                    }
                 });
             }),
         );
@@ -423,22 +517,25 @@ fn write<R>(ctx: &Context, id: Id, f: impl FnOnce(&mut Store, u64, u64) -> R) ->
     out
 }
 
-/// Decides whether the child `id`, whose content starts at `at` in this run, runs this pass. It runs when its extent
-/// placed at `at` meets the view, or when one of its stops holds focus or is the target of a focus request. Its
-/// extent is the one a run showed it at, else `estimate`. The first run of a pass decides; every later run of the
-/// pass gets the same answer, so a measuring run and the real run lay out the same children.
+/// Decides whether the child `id`, whose content starts at `at` in this run, runs this pass. It runs when its shown
+/// extent placed at `at` meets the view, or when one of its stops holds focus or is the target of a focus request. Its
+/// shown extent is the one its last real run showed it at, else the one a measuring run found, else `estimate`. The
+/// first run of a pass decides; every later run of the pass gets the same answer, so a measuring run and the real run
+/// lay out the same children. The answer does not depend on which kind of run decides: a child whose real extent is
+/// more than its content's (a card its grid row stretches) meets the view by its shown extent in both.
 pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, estimate: Vec2) -> Decision {
     let targets = crate::runtime::focus::targets(ctx);
     write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(Some(view.owner), id, frame);
         let kind = usize::from(!sizing);
-        // A child the other kind of run showed last takes that run's extent.
+        // A skipped child takes this kind of run's extent in flow; one the other kind of run showed last takes that one.
         let size = entry.sizes[kind].or(entry.sizes[1 - kind]).map_or(estimate, |measured| measured.size);
         let skip = match entry.decided {
             Some((decided_in, skip)) if decided_in == pass_nr => skip,
             _ => {
+                let shown = entry.sizes[1].or(entry.sizes[0]).map_or(estimate, |measured| measured.size);
                 let focus = entry.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
-                let skip = !focus && !at(size).intersects(view.rect);
+                let skip = !focus && !at(shown).intersects(view.rect);
                 entry.decided = Some((pass_nr, skip));
                 skip
             }
@@ -448,11 +545,17 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
 }
 
 /// Records what a run that showed the child `id` found: what it measured in a run of this kind and, from a real run,
-/// what it registered with the focus service.
-pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, measured: Measured, registered: Option<Transcript>) {
-    write(ctx, id, |store, _, frame| {
+/// what it registered with the focus service, and from a memoized view's sizing run what it handed forward.
+pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, (measured, handed): (Measured, Handed), registered: Option<Transcript>) {
+    write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(owner, id, frame);
         entry.sizes[usize::from(!sizing)] = Some(measured);
+        if sizing {
+            entry.measuring_pass = pass_nr;
+            if matches!(measured.key, Key::Memo(_)) {
+                entry.keep_measure(measured, handed, pass_nr);
+            }
+        }
         if let Some(registered) = registered {
             entry.focus = Arc::new(registered);
         }
@@ -466,10 +569,14 @@ pub(crate) fn fills(ctx: &Context, id: Id, sizing: bool) -> Option<craft_behavio
     with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.sizes[own].or(entry.sizes[other])).and_then(|measured| measured.fills))
 }
 
-/// The extent the child `id` took in the last measuring or real run that showed it (this pass's measuring run once it
-/// ran), at whatever room it had; `None` before any run showed it.
+/// The extent the child `id` took in this pass's measuring run once it ran, else in the last real run that showed it,
+/// at whatever room it had; `None` before any run showed it.
 pub(crate) fn last_extent(ctx: &Context, id: Id) -> Option<Vec2> {
-    with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.sizes[1].map(|measured| measured.size)))
+    with(ctx, |store, pass_nr, _| {
+        let entry = store.entries.get(&id)?;
+        let measured = entry.sizes[0].filter(|_| entry.measuring_pass == pass_nr);
+        measured.or(entry.sizes[1]).map(|measured| measured.size)
+    })
 }
 
 /// Registers what the skipped child `id` registered with the focus service in the last real run that showed it, in
@@ -481,21 +588,41 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
     }
 }
 
-/// Whether the memoized view `id` adds its last real run to this pass in place of running, the extent that run took in
-/// a run of this kind (`call`), the rect the kept real run takes now and the shift its record moves by. The first real
-/// run of a pass decides from what changed since that run and from its key, and every later real run of the pass takes
-/// its answer; a real run also needs a place the run can move to (`Place::shift_to`), which a measuring run cannot
-/// tell. A measuring run asks the same each time, with its own key, and decides nothing for the pass: a call that shows
-/// other content runs and leaves the decision to the calls after it. A sizing run takes the extent the last sizing run
-/// measured of the content the kept run showed (its key) in the room it offers now and in the same flow; when that
-/// sizing run showed other content or had another room or flow, or there was none, it runs once as a measuring run,
-/// which keeps no record, so the real run still replays.
+/// How a memoized view replays (`settled`).
+pub(crate) struct Replay {
+    /// The extent its kept run takes in a run of this kind.
+    pub(crate) size: Vec2,
+    /// The axis its content filled there (`Measured::fills`).
+    pub(crate) fills: Option<craft_behavior::Axis>,
+    /// What the sizing run whose measure a sizing run takes handed forward; nothing in another run.
+    pub(crate) handed: Handed,
+    /// The rect the kept real run takes now.
+    pub(crate) rect: Rect,
+    /// The shift its record moves by.
+    pub(crate) shift: RecordShift,
+}
+
+/// Whether the memoized view `id` adds its last real run to this pass in place of running, and how (`Replay`). The
+/// first real run of a pass decides from what changed since that run and from its key, and every later real run of the
+/// pass takes its answer; a real run also needs a place the run can move to (`Place::shift_to`), which a measuring run
+/// cannot tell. A measuring run asks the same each time, with its own key, and decides nothing for the pass: a call
+/// that shows other content runs and leaves the decision to the calls after it. A sizing run takes the extent a sizing
+/// run measured of the content the kept run showed (its key) in a room of the size it offers now and in the same flow
+/// (`Entry::measures`), and hands forward again what that run handed forward, which content outside the view reads in
+/// the pass; when none did, it runs once as a measuring run, which keeps no record, so the real run still replays.
 ///
 /// It replays when its last run was in an earlier pass, of this frame or an earlier one, and since then:
 /// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no texture it shows still
 ///   loading, no wake time reached;
-/// - the pointer is not over it or an overlay layer it shows, no press started on either and none of its widgets is
-///   dragged, and none of that held in its last run;
+/// - what pointer sensing gives it is what its run saw (`pointer::Sensed`: the hover, part and pointer-over facts of
+///   the components whose shapes it registered and of its egui widgets), so a move within one part of it, a
+///   collection's row among them, leaves it alone, and a move onto another part, in or out runs it; while it is under
+///   the pointer, the modifiers are the ones its run saw; the pointer did not move in a rect its run follows the
+///   pointer in (`pointer::follows_pointer`, which a hover position read marks), now or then; no wheel share or owed
+///   ease of this pass goes to a taker it registered; no tap of this pass lies in it; while a drag session runs, the
+///   pointer is not over it or an overlay layer it shows;
+/// - no press that is held started on it or an overlay layer it shows, none of its widgets is dragged, and none of
+///   that held in its last run;
 /// - the focus is where its run left it (`replay::Held`: the same stop and egui widget of it, or none), and while the
 ///   focus is in it no key, text, IME, clipboard or AccessKit event came (`Input::Sent`, which such a run reads);
 /// - none of its stops is the target of a focus request, now or in its last run;
@@ -504,7 +631,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`), or,
 ///   replaying a run of this frame, after that run started;
 /// - the call's key is the one of its last run (its props key after that run), and its environment (theme, density,
-///   scale, language, window active) and the flow of the body around it (`Flow`) the ones it ran in;
+///   scale, language, window active), the flow of the body around it (`Flow`) and whether the pass builds AccessKit
+///   nodes the ones it ran in;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`) and asked for no discard pass: what it added is
 ///   what the pass was thrown away for;
 /// - the shown life of no component it showed ended (`memory::ended_since`): a replay would show memory state that is
@@ -512,15 +640,7 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no framework input its run read outside its props has moved (`runtime::inputs`), the scroll view a nested `Lazy`
 ///   child of it decided by is the same (moved with it, `moved`), no command waits for a command scope instance of
 ///   it, and no close waits for a layer it shows.
-pub(crate) fn settled(
-    ctx: &Context,
-    owner: Option<Id>,
-    id: Id,
-    call: Call,
-    view: Option<View>,
-    key: Key,
-    moving: &[Id],
-) -> Option<(Vec2, Rect, RecordShift)> {
+pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, call: Call, view: Option<View>, key: Key, moving: &[Id]) -> Option<Replay> {
     let (place, sizing, flow) = match call {
         Call::Real(place) => (Some(place), None, place.flow),
         Call::Measuring { room, flow } => (None, room, flow),
@@ -573,29 +693,33 @@ pub(crate) fn settled(
         }
         settled.and_then(|(moved, settled)| {
             // An extent depends on the room's size, not on where the room is.
-            let size = match sizing {
+            let (size, fills, handed) = match sizing {
                 Some(room) => {
-                    entry.sizes[0]
-                        .filter(|measured| measured.key == settled.key && measured.flow == flow && measured.room.size() == room.size())?
-                        .size
+                    let (measured, handed) = entry.measure_in(settled.key, flow, room.size(), pass_nr)?;
+                    (measured.size, measured.fills, handed)
                 }
-                None => match entry.sizes[1].filter(|measured| measured.key == settled.key && measured.flow == flow) {
-                    Some(measured) => measured.size,
-                    // A real run's place has the kept run's flow (`Place::shift_to`); a measuring run checks it here.
-                    None => (settled.place.flow == flow).then(|| settled.rect.size())?,
-                },
+                None => {
+                    let fills = entry.sizes[1].or(entry.sizes[0]).and_then(|measured| measured.fills);
+                    match entry.sizes[1].filter(|measured| measured.key == settled.key && measured.flow == flow) {
+                        Some(measured) => (measured.size, fills, Handed::default()),
+                        // A real run's place has the kept run's flow (`Place::shift_to`); a measuring run checks it here.
+                        None => ((settled.place.flow == flow).then(|| settled.rect.size())?, fills, Handed::default()),
+                    }
+                }
             };
-            Some((size, moved, settled))
+            Some((size, fills, handed, moved, settled))
         })
     });
     // The pointer over it, a press that started on it, the memory of the components it showed, the framework inputs it
     // read and the commands queued for its instances are read outside the store.
-    let (size, Moved { shift, with_clip }, settled) = settled?;
+    let (size, fills, handed, Moved { shift, with_clip }, settled) = settled?;
     let rect = shift.rect(settled.rect);
     // The scroll view a nested child decided by: the run's, moved with the record, while the clip moved with it; a run
     // that lay wholly in its clip ran every nested child, which holds at any view.
     let view = place.and_then(|_| with_clip.then(|| (settled.view.map(|ran| ran.moved(shift.offset)), view)));
-    if engaged(ctx, settled.place.layer, rect.intersect(shift.clip), &settled.record.facts.overlays)
+    let shown = rect.intersect(shift.clip);
+    if pressed(ctx, settled.place.layer, shown, &settled.record.facts.overlays)
+        || pointer_reaches(ctx, &settled, shown, shift.offset)
         || crate::runtime::memory::ended_since(ctx, &settled.record.facts.owners, settled.lives)
         || moved(ctx, &settled, view)
     {
@@ -608,7 +732,7 @@ pub(crate) fn settled(
         }
         return None;
     }
-    Some((size, rect, shift))
+    Some(Replay { size, fills, handed, rect, shift })
 }
 
 /// Whether something a memoized view's run read outside its props moved since: a framework input it read has another
@@ -624,16 +748,40 @@ fn moved(ctx: &Context, settled: &Settled, view: Option<(Option<View>, Option<Vi
         || crate::runtime::overlay::close_queued(ctx, &facts.layers)
 }
 
-/// Whether the pointer is over `rect` (shown) on `layer` or over one of the overlay layers `overlays` shown, or a
-/// press that is held started there. Both halves ask whether the layer is the top layer at the point, so a pointer or
-/// a press on an overlay above the view leaves it alone.
-fn engaged(ctx: &Context, layer: Layer, rect: Rect, overlays: &[replay::ShownLayer]) -> bool {
-    let over = |layer: Layer, rect: Rect| {
+/// Whether a press that is held started in `rect` (shown) on `layer` or in one of the overlay layers `overlays` shown,
+/// with the layer the top layer at its origin, so a press on an overlay above the view leaves it alone.
+fn pressed(ctx: &Context, layer: Layer, rect: Rect, overlays: &[replay::ShownLayer]) -> bool {
+    let Some(origin) = input_state::held_press_origin(ctx) else { return false };
+    let on = |layer: Layer, rect: Rect| {
         let screen = ctx.layer_transform_to_global(layer).map_or(rect, |transform| transform * rect);
-        ctx.rect_contains_pointer(layer, rect)
-            || input_state::held_press_origin(ctx).is_some_and(|origin| screen.contains(origin) && ctx.layer_id_at(origin) == Some(layer))
+        screen.contains(origin) && ctx.layer_id_at(origin) == Some(layer)
     };
-    over(layer, rect) || overlays.iter().any(|shown| over(shown.layer, shown.rect))
+    on(layer, rect) || overlays.iter().any(|shown| on(shown.layer, shown.rect))
+}
+
+/// Whether the pointer input of this pass reaches the kept run `settled`, which replays at `rect` (shown), moved by
+/// `offset`: the pointer rules of `settled`.
+fn pointer_reaches(ctx: &Context, settled: &Settled, rect: Rect, offset: Vec2) -> bool {
+    let facts = &settled.record.facts;
+    let sensed = crate::runtime::pointer::sensed(ctx, &facts.sensors, &settled.record.widgets);
+    let changed = |input: Input| inputs::generation(ctx, input) != settled.seen[input as usize];
+    let hover = crate::runtime::pointer::hover_point(ctx);
+    let follows = changed(Input::Pointer)
+        && facts
+            .follows
+            .iter()
+            .any(|ran| hover.is_some_and(|at| ran.translate(offset).contains(at)) || settled.pointer.is_some_and(|at| ran.contains(at)));
+    let layer = settled.place.layer;
+    let over = |layer: Layer, rect: Rect| ctx.rect_contains_pointer(layer, rect);
+    let dragged = crate::runtime::drag::running(ctx) && (over(layer, rect) || facts.overlays.iter().any(|shown| over(shown.layer, shown.rect)));
+    let tapped = crate::runtime::pointer::with_frame(ctx, |frame, _| frame.and_then(|frame| frame.multi_tap))
+        .is_some_and(|tap| ctx.layer_transform_to_global(layer).map_or(rect, |transform| transform * rect).contains(tap.at));
+    sensed != settled.sensed
+        || (!sensed.is_empty() && changed(Input::Modifiers))
+        || follows
+        || crate::runtime::wheel::reaches(ctx, &facts.takers)
+        || dragged
+        || tapped
 }
 
 /// Adds the last real run of the memoized view `id` to the running pass, in place of running it, at the place `shift`
@@ -655,8 +803,10 @@ pub(crate) fn audit(
     same: Option<crate::runtime::audit::SameOutput>,
     shift: &RecordShift,
 ) {
-    // A pass that turned to discard during the audit run paints nothing: its run is no shown run to compare with.
-    if ctx.will_discard() {
+    // A pass that turned to discard during the audit run paints nothing: its run is no shown run to compare with. A
+    // discard layout memory asked for (a layout entry the run placed by was gone or moved) reaches egui only in the end
+    // hook.
+    if ctx.will_discard() || crate::runtime::layout_memory::discard_pending(ctx) {
         return;
     }
     let Some(kept) = with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.settled.clone())) else { return };
@@ -695,6 +845,7 @@ pub(crate) struct Ran {
 /// Keeps the real run `record` of the memoized view `id`, which ran at `place` and took `rect`. A run in a pass egui
 /// will discard keeps none: egui paints nothing of that pass (`Painter::is_visible` is false in it), so the run registers
 /// invisible widgets and no nodes, which a shown pass's replay must not add. The kept record stays the last shown pass's.
+/// The view keeps the sizing measures of this pass only (`Entry::measures`).
 pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect, Ran { key, edits, seen, view, output }: Ran) {
     if ctx.will_discard() {
         return;
@@ -702,13 +853,17 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
     let revealed = focus::targets(ctx)[1];
     let engaged_now = record.focus.stop_ids().any(|stop| revealed == Some(stop));
     let lives = crate::runtime::memory::ended_generation(ctx);
-    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now, key, pass: 0, edits, output, lives, seen, view };
-    settled.engaged |= engaged(ctx, place.layer, rect.intersect(place.clip), &settled.record.facts.overlays);
+    let sensed = crate::runtime::pointer::sensed(ctx, &record.facts.sensors, &record.widgets);
+    let pointer = crate::runtime::pointer::hover_point(ctx);
+    let mut settled =
+        Settled { record, frame: 0, place, rect, engaged: engaged_now, sensed, pointer, key, pass: 0, edits, output, lives, seen, view };
+    settled.engaged |= pressed(ctx, place.layer, rect.intersect(place.clip), &settled.record.facts.overlays);
     with(ctx, |store, pass_nr, frame| {
         settled.frame = frame;
         settled.pass = pass_nr;
         if let Some(entry) = store.entries.get_mut(&id) {
             entry.settled = Some(Arc::new(settled));
+            entry.measures.retain(|(_, seen, _)| *seen == pass_nr);
         }
     });
 }
@@ -793,6 +948,20 @@ fn note_place(ctx: &Context, owner: Id, id: Id, rect: Rect) {
             && let Some(view) = placed.view
         {
             placed.note(id, view.start_of(rect) - view.start_of(view.rect), rect.size());
+        }
+    });
+}
+
+/// Notes, in the real run that lays out the bar line `owner`, its next rule or member `item`. A settled run around it
+/// that is replayed later notes it again, moved with the run, so the bar draws the rules its replayed members hold; a
+/// line inside the replayed run does not lay out in that pass, and its record holds the rules it drew.
+pub(crate) fn note_line(ctx: &Context, owner: Id, item: LineItem) {
+    replay::journal(ctx, || (owner, item.clone()), |ctx, (owner, item)| note_line(ctx, *owner, item.clone()));
+    with(ctx, |store, _, _| {
+        if let Some(placed) = store.placed.get_mut(&owner)
+            && placed.view.is_some()
+        {
+            placed.line.push(item);
         }
     });
 }

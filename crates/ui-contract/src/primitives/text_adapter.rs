@@ -442,6 +442,11 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     text_edit::select(ctx, id, anchor, caret);
 }
 
+/// Forgets the Undo/Redo history of the text widget `id`.
+pub(crate) fn clear_history(ctx: &Context, id: Id) {
+    text_edit::clear_history(ctx, id);
+}
+
 /// `TextOptions::arrows_from_end`: before the widget reads a plain Left or Right, a selection of the whole text
 /// collapses to its end.
 fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
@@ -596,6 +601,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         baseline,
         scroll,
         line_break: line_break(input.options.submit_key),
+        colors: input.options.color_ranges.as_deref(),
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
@@ -734,6 +740,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             baseline: None,
             scroll: 0.0,
             line_break: line_break(SubmitKey::default()),
+            colors: None,
         },
     );
     crate::runtime::pointer::record_text_widget(&ctx, widget, owner);

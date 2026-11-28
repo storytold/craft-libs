@@ -146,7 +146,7 @@ fn a_focused_split_handle_and_stack_divider_show_the_focus_ring() {
         let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0usize], 0), Node::tabs(vec![1usize], 0));
         let mut layout = Layout::new(Some(root), Vec::new());
         let limits = |_: &usize| SizeLimits::default();
-        SplitArea::new("Panels", Bind::bound(&mut layout), FrameRules::new(&limits)).show(ui, |_, _| ());
+        SplitArea::new("Panels", Bind::bound(&mut layout), FrameRules::new(&limits), 0).show(ui, |_, _| ());
     });
     fixture.room(Vec2::new(400.0, 300.0)).settle();
     let handle = tab_to_part(&mut fixture, "handle");

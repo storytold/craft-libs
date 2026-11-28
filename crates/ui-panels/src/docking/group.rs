@@ -757,8 +757,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
     /// on it comes out of its outbox. A titled group shows the shown panel's title, count and close button in place of
     /// the tab row.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        for (command, state) in self.command_states.drain(..) {
-            cx.publish(command, state);
+        // A measuring run of the header comes before the real one in some passes: both read the states.
+        for (command, state) in &self.command_states {
+            cx.publish(*command, state.clone());
         }
         while let Some((command, _)) = cx.take_command::<DockCommands>() {
             self.reported.commands.push(command);

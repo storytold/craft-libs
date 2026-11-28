@@ -622,6 +622,8 @@ pub(crate) struct RowOptions {
     resets: Vec<String>,
     /// The row takes input only while the number under the key is above the bound ([`Param::enabled_above`]).
     enabled_above: Option<(String, f64)>,
+    /// Additional field conditions that must all hold ([`Param::and_enabled_when_in`]).
+    enabled_when_also: Vec<(String, Vec<FieldValue>)>,
     /// The row takes input only while the values under the two keys differ ([`Param::enabled_when_differs`]).
     enabled_when_differs: Option<(String, String)>,
     /// The value the row shows while it is disabled ([`Param::disabled_value`]).
@@ -919,6 +921,14 @@ impl Param {
     #[must_use]
     pub fn enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
         self.enable = Enable::When(key.into(), values.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Adds a condition: the row takes input only while `fields[key]` equals one of `values` and every other
+    /// enable condition holds. A missing field does not satisfy it.
+    #[must_use]
+    pub fn and_enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
+        self.options.get_or_insert_default().enabled_when_also.push((key.into(), values.into_iter().map(Into::into).collect()));
         self
     }
 
@@ -1531,8 +1541,7 @@ impl Param {
         self.shown && self.visible_when.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
     }
 
-    /// Whether the row takes input with `fields`: every condition its `enabled_when`,
-    /// [`enabled_above`](Param::enabled_above) and [`enabled_when_differs`](Param::enabled_when_differs) set holds.
+    /// Whether the row takes input with `fields`: every enable condition must hold.
     pub fn enabled(&self, fields: &DialogFields) -> bool {
         let options = self.options.as_deref();
         let enabled = match &self.enable {
@@ -1541,6 +1550,8 @@ impl Param {
             Enable::Off => false,
         };
         enabled
+            && options
+                .is_none_or(|options| options.enabled_when_also.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held))))
             && options.and_then(|options| options.enabled_above.as_ref()).is_none_or(|(key, bound)| fields.number(key).is_some_and(|n| n > *bound))
             && options.and_then(|options| options.enabled_when_differs.as_ref()).is_none_or(|(a, b)| fields.get(a) != fields.get(b))
     }
@@ -1699,7 +1710,7 @@ pub(crate) fn edited_rows(params: &[Param], before: &DialogFields, after: &Dialo
         .iter()
         .filter(|param| {
             differs(&param.key)
-                || param.unit_key().is_some_and(&differs)
+                || param.unit_key().is_some_and(differs)
                 || matches!(&param.kind, ParamKind::Custom(row) if row.companions.iter().any(|key| differs(key)))
                 || (matches!(param.kind, ParamKind::Files { .. }) && (differs(&param.folder_key()) || differs(&param.use_folder_key())))
         })

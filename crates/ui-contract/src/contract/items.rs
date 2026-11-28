@@ -107,6 +107,10 @@ const SECTION: craft_behavior::PartKey = craft_behavior::PartKey::new("section")
 const EDGE: craft_behavior::PartKey = craft_behavior::PartKey::new("items_edge");
 /// The sub-node of a toggle cell of an item row; the index is the hash of the row's key and the column.
 const TOGGLE_CELL: craft_behavior::PartKey = craft_behavior::PartKey::new("toggle_cell");
+/// The hover-only part over an item row's rect; the index is the hash of the row's key. The parts under the pointer
+/// (`pointer::parts_under`) name the row it is over, under the row's own shapes, so a memoized view around the
+/// collection replays while the pointer moves within one row.
+const ROW: craft_behavior::PartKey = craft_behavior::PartKey::new("items_row");
 /// The part an item row's own access node stands for in the collection: AccessKit requests on the row's node reach
 /// the collection under this part, the index being the hash of the row's key.
 const ITEM_NODE: craft_behavior::PartKey = craft_behavior::PartKey::new("item_node");
@@ -274,6 +278,9 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     pressed: Option<(usize, crate::contract::collection::RowPressed)>,
     /// The rows above and below the edge-press band declared this pass.
     edge: Option<(C::Key, C::Key)>,
+    /// The item rows that declare their `ROW` part this pass: the hash of the row's key, the row and its rect in the
+    /// rows' view.
+    row_parts: Vec<(u64, usize, Rect)>,
 }
 
 /// The primary-ness, click count, position in the layout's coordinates and scroll offset of a press on a row.
@@ -338,6 +345,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             renaming_at_read: None,
             pressed: None,
             edge: None,
+            row_parts: Vec::new(),
         }
     }
 }

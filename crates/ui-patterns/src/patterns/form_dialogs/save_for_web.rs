@@ -328,10 +328,6 @@ struct Live {
     reported: u64,
     /// The selection of the Color Table's cells.
     table: Selection<usize>,
-    /// The Shift and Unshift focus targets from the table's last frame.
-    table_actions: [Option<egui::Id>; 2],
-    /// Restore focus on the next frame if a palette action disappeared while focused.
-    recover_table_focus: bool,
     /// The colour of the palette entry whose colour request is out.
     editing: Option<[u8; 3]>,
     /// The Download speed of the captions in Kbps; not remembered.
@@ -355,8 +351,6 @@ impl Default for Live {
             revision: 1,
             reported: 0,
             table: Selection::default(),
-            table_actions: [None; 2],
-            recover_table_focus: false,
             editing: None,
             speed: OPENING_SPEED,
             preset: PresetState::new(),
