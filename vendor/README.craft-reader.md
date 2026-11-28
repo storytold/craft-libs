@@ -95,6 +95,15 @@ colorants paint through their alternate space (`Plate::spots_as_process`) and no
 overprints. Masks in other color spaces are unchanged. A test in
 `crates/pdf/tests/plates.rs` checks process, spot, RGB and backdrop colors.
 
+A craft-libs patch, labeled `Craft patch (zero width)` in `hayro-interpret`
+`font/standard_font.rs` (`StandardKind::outline_glyph`), keeps the stand-in's glyph shape when
+a simple font the document names but doesn't embed declares a `/Widths` entry of 0 for the
+glyph (pdfcraft #8524, an unembedded `Arial-BoldMT` whose headings' letters had zero widths).
+The stand-in is narrowed to a narrower `/Widths` advance (PdfCraft patch 57), and narrowed to 0
+the glyph vanished; now a zero advance only places the next glyph, as PDFium and pdf.js draw
+it. Positive advances are narrowed as before. Test:
+`interpretation::zero_width_stand_in::a_zero_width_keeps_the_stand_ins_glyph_shape`.
+
 The output-intent conversion of patch 36 goes through a `color::CmykConversion` trait, so
 that callers can convert with their own color management. `CmykSimulation::new` keeps
 #2770's moxcms conversion as the default, and `CmykSimulation::with_conversion` takes a

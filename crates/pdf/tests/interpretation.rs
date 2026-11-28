@@ -197,6 +197,46 @@ mod rectangles {
     }
 }
 
+/// A simple font the document names but doesn't embed is drawn with a stand-in, each glyph
+/// narrowed to a narrower `/Widths` advance so neighbours don't overlap. A `/Widths` entry of 0
+/// is no width to narrow to: the glyph was scaled to nothing and vanished, where PDFium and
+/// pdf.js draw the stand-in's shape and only move on by the declared 0 (pdfcraft #8524, an
+/// unembedded `Arial-BoldMT` whose `/Widths` holds zeros for the letters of its headings).
+#[cfg(all(feature = "raster", not(target_arch = "wasm32")))]
+mod zero_width_stand_in {
+    use craft_pdf::raster::{self, Options, RenderCache};
+
+    /// The columns holding dark pixels when `H` is shown at 24 pt in an unembedded `Arial-BoldMT`
+    /// whose `/Widths` gives the letter `width`, on a 60 × 30 pt page.
+    fn dark_columns(width: u32) -> Vec<u32> {
+        let content = "BT /F1 24 Tf 4 6 Td (H) Tj ET";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 60 30] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /Font /Subtype /TrueType /BaseFont /Arial-BoldMT /Encoding /WinAnsiEncoding /FirstChar 72 /LastChar 72 /Widths [{width}] /FontDescriptor 6 0 R >> endobj\n6 0 obj << /Type /FontDescriptor /FontName /Arial-BoldMT /Flags 32 /FontBBox [-600 -200 2000 1000] /ItalicAngle 0 /Ascent 900 /Descent -200 /CapHeight 700 /StemV 140 /FontWeight 700 >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        );
+        let pdf = craft_pdf::open_slice(bytes.as_bytes(), None).unwrap();
+        let page = raster::render(&pdf.pages()[0], &RenderCache::new(), &Default::default(), &Options { background: [255; 4], ..Default::default() })
+            .unwrap();
+        let pixels = page.bytes().as_chunks::<4>().0;
+        let width = page.width as usize;
+        (0..width).filter(|&x| pixels.iter().skip(x).step_by(width).any(|p| p[0] < 128)).map(|x| x as u32).collect()
+    }
+
+    #[test]
+    fn a_zero_width_keeps_the_stand_ins_glyph_shape() {
+        let natural = dark_columns(722);
+        let zero = dark_columns(0);
+        assert!(!zero.is_empty(), "the H is drawn");
+        // Helvetica-Bold's H is 722 units wide, so a 722 advance leaves it as it is; the zero
+        // advance draws the same shape.
+        assert_eq!(zero, natural, "the glyph is the stand-in's own, not scaled to nothing");
+        // A narrower advance still narrows the glyph: 300 units at 24 pt is 7.2 pt.
+        let narrowed = dark_columns(300);
+        assert!(!narrowed.is_empty() && narrowed.len() <= 9, "narrowed to its advance: {narrowed:?}");
+        assert!(narrowed.len() < zero.len(), "{narrowed:?} vs {zero:?}");
+    }
+}
+
 #[cfg(feature = "interpret")]
 mod image_limits {
     use craft_pdf::interpret::{
