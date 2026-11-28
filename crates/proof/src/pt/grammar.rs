@@ -14,7 +14,7 @@
 //! No comma rule (`que` opens clauses only sometimes) and no English rule (such as `a`/`an`)
 //! applies to Portuguese text.
 
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
 /// Words Portuguese repeats on purpose: interjections, onomatopoeia and emphatic doubling.
 const ALLOWED_REPEATS: &[&str] = &[
@@ -31,8 +31,8 @@ const ABBREVIATIONS: &[&str] = &[
     "esp", "fr", "it", "al", "obs", "att", "obs",
 ];
 
-fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
-    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Pt }
+fn issue(rule: &'static str, start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
+    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Pt, rule: Some(rule) }
 }
 
 fn capitalize(w: &str) -> String {
@@ -101,7 +101,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             && w0.to_lowercase() == w1.to_lowercase()
             && !ALLOWED_REPEATS.contains(&w0.to_lowercase().as_str())
         {
-            v.push(issue(*a0, *b1, format!("Palavra repetida: \"{w1}\""), vec![w0.to_string()]));
+            v.push(issue(rules::REPEATED_WORD, *a0, *b1, format!("Palavra repetida: \"{w1}\""), vec![w0.to_string()]));
         }
     }
 }
@@ -126,11 +126,11 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             _ => false,
         };
         if flag {
-            v.push(issue(i, i + 1 + p.len_utf8(), "Espaço antes da pontuação".into(), vec![p.to_string()]));
+            v.push(issue(rules::SPACE_BEFORE_PUNCTUATION, i, i + 1 + p.len_utf8(), "Espaço antes da pontuação".into(), vec![p.to_string()]));
         }
     }
     for run in crate::space_runs(text) {
-        v.push(issue(run.start, run.end, "Espaço duplo".into(), vec![" ".into()]));
+        v.push(issue(rules::DOUBLE_SPACE, run.start, run.end, "Espaço duplo".into(), vec![" ".into()]));
     }
 }
 
@@ -147,7 +147,7 @@ fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: 
             ends_sentence(text.get(pb..a).unwrap_or(""), text.get(pa..pb).unwrap_or(""))
         };
         if starts && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
-            v.push(issue(a, b, "Letra maiúscula no início da frase".into(), vec![capitalize(w)]));
+            v.push(issue(rules::SENTENCE_CAPITAL, a, b, "Letra maiúscula no início da frase".into(), vec![capitalize(w)]));
         }
     }
 }
@@ -171,7 +171,7 @@ fn doubled_punctuation(text: &str, v: &mut Vec<Issue>) {
                 b'.' => vec![".".into(), "…".into()],
                 _ => vec![char::from(b).to_string()],
             };
-            v.push(issue(i, end, "Sinal repetido".into(), suggestions));
+            v.push(issue(rules::DOUBLED_PUNCTUATION, i, end, "Sinal repetido".into(), suggestions));
         }
         i += run.max(1);
     }

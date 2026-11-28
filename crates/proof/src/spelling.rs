@@ -32,10 +32,20 @@ pub(crate) fn word_to_check_in<'a>(d: &AffixDict, word: &'a str, opts: &Options)
     if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
         return None;
     }
-    if opts.ignore_uppercase && in_capitals(w) && n <= 6 {
+    if opts.ignore_uppercase && in_capitals(w) && n <= capitals_limit(opts) {
         return None;
     }
     Some(w)
+}
+
+/// The most letters of a word in capitals Ignore words in UPPERCASE skips in the languages with a
+/// dictionary (`NASA`, not `ORGANISATIONS`), unless [`Options::ignore_uppercase_any_length`] is on. (English
+/// has always skipped them whatever their length.)
+pub(crate) const ABBREVIATION_LETTERS: usize = 6;
+
+/// The longest word in capitals `opts` skips: [`ABBREVIATION_LETTERS`], or any length.
+pub(crate) fn capitals_limit(opts: &Options) -> usize {
+    if opts.ignore_uppercase_any_length { usize::MAX } else { ABBREVIATION_LETTERS }
 }
 
 /// Is `w` in capitals: a cased letter and no lower-case one? Only a word with a cased letter can
@@ -50,3 +60,26 @@ pub(crate) fn in_capitals(w: &str) -> bool {
 pub(crate) fn capitals_part(part: &str, max: usize) -> bool {
     part.chars().count() <= max && (in_capitals(part) || !part.chars().any(char::is_alphabetic))
 }
+
+/// Does a whitespace-delimited token look like a file address: a network path (`\\server\share`), a
+/// drive path (`C:\dir`, `C:/dir`), a `file:` address, or a path from the root or the home folder that
+/// has another `/` further on (`/usr/lib`, `~/docs/a`)? Brackets and quotes before it are not part of it.
+/// Spelling skips its words with [`Options::ignore_file_addresses`].
+pub(crate) fn is_file_address(token: &str) -> bool {
+    let t = token.trim_start_matches(['(', '[', '{', '<', '"', '\'', '“', '‘', '«']);
+    let mut chars = t.chars();
+    let (first, second, third) = (chars.next(), chars.next(), chars.next());
+    if t.starts_with("\\\\") {
+        return true;
+    }
+    if first.is_some_and(|c| c.is_ascii_alphabetic()) && second == Some(':') && matches!(third, Some('\\' | '/')) {
+        return true;
+    }
+    if t.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("file:")) {
+        return true;
+    }
+    t.strip_prefix('/').or_else(|| t.strip_prefix("~/")).is_some_and(|rest| rest.contains('/'))
+}
+
+#[cfg(test)]
+mod tests;

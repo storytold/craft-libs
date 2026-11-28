@@ -24,7 +24,7 @@
 //! No agreement or conjugation rule, and no English rule (such as `a`/`an`), applies to French
 //! text.
 
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
 /// Non-breaking space, before `:` and inside `« »`.
 const NBSP: char = '\u{A0}';
@@ -201,8 +201,8 @@ const MUTE_H: &[&str] = &[
     "hospitalité",
 ];
 
-fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
-    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::from_tag(Some("fr-FR")) }
+fn issue(rule: &'static str, start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
+    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::from_tag(Some("fr-FR")), rule: Some(rule) }
 }
 
 /// Is `c` a space that doesn't break (or a thin space some writers use instead)?
@@ -268,7 +268,7 @@ fn high_punctuation(text: &str, quebec: bool, v: &mut Vec<Issue>) {
                 _ => after.is_none_or(|a| a.is_whitespace() || matches!(a, '!' | '?' | '»' | '"' | '”' | ')')),
             };
             if ends {
-                v.push(issue(i, i + p.len_utf8(), message, vec![fix]));
+                v.push(issue(rules::HIGH_PUNCTUATION, i, i + p.len_utf8(), message, vec![fix]));
             }
         }
     }
@@ -283,14 +283,14 @@ fn guillemets(text: &str, v: &mut Vec<Issue>) {
                 let mut next = text.get(i + len..).unwrap_or("").chars();
                 let message = format!("Espace insécable attendue après {}", quoted("«"));
                 if next.next().is_some_and(char::is_alphanumeric) {
-                    v.push(issue(i, i + len, message, vec![format!("«{NBSP}")]));
+                    v.push(issue(rules::GUILLEMETS, i, i + len, message, vec![format!("«{NBSP}")]));
                 }
             }
             '»' => {
                 let prev = text.get(..i).unwrap_or("").chars().next_back();
                 let message = format!("Espace insécable attendue avant {}", quoted("»"));
                 if prev.is_some_and(|n| n.is_alphanumeric() || matches!(n, '.' | '!' | '?' | '…')) {
-                    v.push(issue(i, i + len, message, vec![format!("{NBSP}»")]));
+                    v.push(issue(rules::GUILLEMETS, i, i + len, message, vec![format!("{NBSP}»")]));
                 }
             }
             _ => {}
@@ -314,7 +314,7 @@ fn straight_quotes(text: &str, v: &mut Vec<Issue>) {
         if !opens || !closes || !phrase.chars().any(char::is_alphabetic) || phrase.chars().count() > 120 || phrase.contains('\n') {
             continue;
         }
-        v.push(issue(*a, b + 1, format!("Guillemets français attendus{NBSP}: {}", quoted(phrase)), vec![quoted(phrase)]));
+        v.push(issue(rules::STRAIGHT_QUOTES, *a, b + 1, format!("Guillemets français attendus{NBSP}: {}", quoted(phrase)), vec![quoted(phrase)]));
     }
 }
 
@@ -332,7 +332,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             // `de De…`, `Bora Bora`: a capitalized second word is a name.
             && !starts_upper(w1)
         {
-            v.push(issue(*a0, *b1, format!("Mot répété{NBSP}: {}", quoted(w1)), vec![w0.to_string()]));
+            v.push(issue(rules::REPEATED_WORD, *a0, *b1, format!("Mot répété{NBSP}: {}", quoted(w1)), vec![w0.to_string()]));
         }
     }
 }
@@ -398,7 +398,7 @@ fn sentence_capitals(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         if word_like && w.chars().next().is_some_and(char::is_lowercase) && ends_sentence(gap, prev, w, dialogue) && !is_address(token_at(text, *a1))
         {
             let fixed: String = w.chars().next().map(|f| f.to_uppercase().chain(w.chars().skip(1)).collect()).unwrap_or_default();
-            v.push(issue(*a1, *b1, "Majuscule attendue en début de phrase".into(), vec![fixed]));
+            v.push(issue(rules::SENTENCE_CAPITAL, *a1, *b1, "Majuscule attendue en début de phrase".into(), vec![fixed]));
         }
     }
 }
@@ -453,7 +453,7 @@ fn elisions(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         }
         let head = if capital { crate::affix::capitalize(elided) } else { (*elided).to_string() };
         let fixed = format!("{head}’{w1}");
-        v.push(issue(*a0, *b1, format!("Élision{NBSP}: {}", quoted(&fixed)), vec![fixed]));
+        v.push(issue(rules::ELISION, *a0, *b1, format!("Élision{NBSP}: {}", quoted(&fixed)), vec![fixed]));
     }
 }
 

@@ -1,15 +1,15 @@
 //! Hunspell dictionaries installed on the system, read at runtime.
 //!
-//! WordCraft doesn't bundle large spelling dictionaries. For languages with an affix dictionary
+//! The crate doesn't bundle large spelling dictionaries. For languages with an affix dictionary
 //! (Polish, Russian), it reads the standard Hunspell `.aff`/`.dic` pair installed by the operating system,
 //! a package manager or LibreOffice, with [`crate::affix::AffixDict::from_hunspell`]. When none is
 //! installed the language has no spelling check (no marks, no errors), like Word without the
 //! language's proofing tools.
 //!
-//! Search order: the folder set with [`set_dictionary_dir`], the directory in
-//! `WORDCRAFT_DICTIONARIES`, WordCraft's own `dictionaries` folder under the user's application
-//! data (on every desktop system), then an installed Language pack ([`crate::packs`]), then the
-//! usual system locations. On the web there are only the first and the packs.
+//! Search order: the folder set with [`set_dictionary_dir`], the host's own environment variable
+//! and folders ([`HostFolders`], [`set_host`]; none unless the host names them), then an installed
+//! Language pack ([`crate::packs`]), then the usual system locations. On the web there are only the
+//! first and the packs.
 
 mod decode;
 mod search;
@@ -20,12 +20,13 @@ use crate::affix::AffixDict;
 
 pub use decode::decode;
 pub(crate) use decode::dic_entry_end;
-#[cfg(test)]
-pub(crate) use search::ordered;
 pub use search::{
-    candidates, candidates_exact, candidates_in, clear_load_error, find, find_in, load_error, note_load, search_dirs, set_dictionary_dir,
-    user_candidates, user_dirs,
+    HostFolders, app_folders, candidates, candidates_exact, candidates_in, clear_load_error, find, find_in, host, load_error, note_load, search_dirs,
+    set_dictionary_dir, set_host, user_candidates, user_dirs,
 };
+#[cfg(test)]
+pub(crate) use search::{Os, app_folders_for, first_tier, ordered};
+pub(crate) use search::{candidate_tiers, split_user_tier};
 
 /// Largest `.aff` or `.dic` file read (real ones are a few MB).
 pub(crate) const MAX_FILE: u64 = 64 << 20;

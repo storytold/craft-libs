@@ -280,10 +280,14 @@ impl ProofLang {
 
     /// Does WordCraft check spelling in this language? For a [`ProofLang::Pack`] language, German
     /// and Bulgarian: is a dictionary for it available now (read on first use, cached until the dictionaries folder or
-    /// the packs change)?
+    /// the packs change)? For an English: is there a source of spelling (always, unless the build
+    /// leaves out SCOWL and the built-in list, and none is registered or installed)?
     pub fn is_proofed(self) -> bool {
         match self.spelling_locale() {
             Some(l) => crate::pack_lang::has_dictionary(l),
+            // An English is proofed when it has a source: always, unless the build leaves out SCOWL
+            // and the built-in list (the `embed-english` and `builtin-moby` features).
+            None if self.is_english() => crate::english::has_source(self),
             None => Self::PROOFED.contains(&self),
         }
     }

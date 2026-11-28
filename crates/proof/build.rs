@@ -8,6 +8,11 @@
 //! hyphenation that needs the data is off). With `CRAFT_I18N_REQUIRED=1` (releases) any of those
 //! is an error instead.
 //!
+//! Two features leave English data out: without `embed-english` the SCOWL dictionaries and their notice
+//! are not embedded, and without `builtin-moby` the Moby word list is not (`EN_US_DIC` here, and the
+//! crate's own `data/en-words.dic`). Neither is "missing" then: a release check
+//! (`CRAFT_I18N_REQUIRED=1`) doesn't ask for them.
+//!
 //! When every file in [`FILES`] this build embeds (English and the [`opted_in`] locales) is
 //! there, the `craft_proof_data` cfg is set (the tests that pin results of the data use it). A
 //! partial data folder doesn't set it, so those tests don't run against it.
@@ -45,6 +50,14 @@ const FILES: &[(&str, &str, bool)] = &[
     ("EXTRA_RU", "ru/ru-extra.txt", false),
 ];
 
+/// The files of SCOWL (the `embed-english` feature): the four Englishes' Hunspell pairs and the notice.
+const SCOWL_FILES: &[&str] =
+    &["EN_US_AFF", "EN_US_SPELLING", "EN_GB_AFF", "EN_GB_SPELLING", "EN_CA_AFF", "EN_CA_SPELLING", "EN_AU_AFF", "EN_AU_SPELLING", "SCOWL_NOTICE"];
+
+/// The file of the Moby word list (the `builtin-moby` feature); the crate's own copy, `data/en-words.dic`,
+/// is left out of the build by the same feature.
+const MOBY_FILES: &[&str] = &["EN_US_DIC"];
+
 /// The locales embedded by default besides English: every carry-over locale, until Language
 /// packs are published and pinned (CP4.4 then makes the default English only).
 const DEFAULT_EMBED: &[&str] = &["de", "pl", "pt", "it", "ru"];
@@ -74,6 +87,9 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_REQUIRED");
     println!("cargo::rerun-if-env-changed=CRAFT_PROOF_EMBED");
+    // Cargo sets `CARGO_FEATURE_<NAME>` for each feature in force.
+    let embed_english = std::env::var_os("CARGO_FEATURE_EMBED_ENGLISH").is_some();
+    let builtin_moby = std::env::var_os("CARGO_FEATURE_BUILTIN_MOBY").is_some();
     println!("cargo::rustc-check-cfg=cfg(craft_proof_data)");
     println!("cargo::rustc-check-cfg=cfg(craft_proof_embed, values(\"pl\", \"pt\", \"it\", \"de\", \"ru\"))");
     let opted = opted_in();
@@ -104,7 +120,9 @@ fn main() {
     let mut locales: Vec<String> = Vec::new();
     for &(name, rel, bytes) in FILES {
         let locale = rel.split('/').next().unwrap_or_default();
-        let wanted = embeds(rel, locale, &opted);
+        // A file that a feature leaves out is not wanted: no warning, no error with CRAFT_I18N_REQUIRED.
+        let left_out = (!embed_english && SCOWL_FILES.contains(&name)) || (!builtin_moby && MOBY_FILES.contains(&name));
+        let wanted = embeds(rel, locale, &opted) && !left_out;
         wanted_files += usize::from(wanted);
         let file = dir.as_ref().filter(|_| wanted).map(|d| d.join(rel)).filter(|f| f.is_file());
         if let (Some(d), None, true) = (&dir, &file, wanted) {
@@ -130,7 +148,8 @@ fn main() {
         };
         let _ = writeln!(o, "/// `language-data/{rel}` (empty when it isn't embedded).\npub(crate) static {name}: {ty} = {value};");
     }
-    if embedded > 0 && embedded == wanted_files {
+    // The tests that pin results of the data need all of it, SCOWL and the Moby list too.
+    if embedded > 0 && embedded == wanted_files && embed_english && builtin_moby {
         println!("cargo::rustc-cfg=craft_proof_data");
     }
     let _ = writeln!(o, "/// The locales whose Language data is embedded.\npub(crate) static EMBEDDED_LOCALES: &[&str] = &{locales:?};");

@@ -75,15 +75,19 @@ fn unreadable_english_dictionary_is_reported_and_skipped() {
             let error = dictionary_load_error(lang).unwrap_or_default();
             assert!(error.contains(reason), "{lang:?}: {error}");
         }
-        assert!(!is_correct_in("becuase", lang) && is_correct_in("because", lang) && is_correct_in("houses", lang), "{lang:?}");
-        assert!(suggest_in("becuase", 3, lang).contains(&"because".to_string()), "{lang:?}");
+        // The next source marks `becuase`; a build without the built-in list and with no dictionary
+        // of the system's has none (`tests/it/features.rs`).
+        if cfg!(feature = "builtin-moby") || english_source(lang) != Some(EnglishSource::Missing) {
+            assert!(!is_correct_in("becuase", lang) && is_correct_in("because", lang) && is_correct_in("houses", lang), "{lang:?}");
+            assert!(suggest_in("becuase", 3, lang).contains(&"because".to_string()), "{lang:?}");
+        }
     }
     drop_english_files(&dir, english);
     assert_eq!(dictionary_load_error(ProofLang::EnGb), None, "a new folder forgets the old errors");
 }
 
 /// The test dictionaries' folder the dictionaries-folder tests leave set for the rest of the run.
-fn shared_test_folder() -> std::path::PathBuf {
+pub(crate) fn shared_test_folder() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("wc-proof-dictionaries-{}", std::process::id()));
     write_test_dictionaries(&dir);
     dir
@@ -317,14 +321,88 @@ fn a_paragraph_never_evicts_its_own_dictionaries() {
     let _ = std::fs::remove_dir_all(&root);
     let langs = many_packs(&root, 2);
     packs::set_packs_dir(Some(root.clone()));
-    pack_lang::set_budget(1);
+    set_budget(1);
     let (a, b) = (langs[0], langs[1]);
     let text = "wordqa wordqb wordqa wordqb wordqa wordqb";
     let spans: Vec<(Range<usize>, ProofLang)> = (0..6).map(|k| (k * 7..k * 7 + 6, if k % 2 == 0 { a } else { b })).collect();
     let loads = pack_lang::loads();
     assert!(check_text(text, &spans).is_empty());
     assert_eq!(pack_lang::loads() - loads, 2);
-    pack_lang::set_budget(pack_lang::MAX_LOADED_BYTES);
+    set_budget(DEFAULT_BUDGET);
+    packs::set_packs_dir(None);
+    set_dictionaries_folder(Some(shared_test_folder()));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The host's budget: `memory_estimate()` reports the loaded pack dictionaries and the registered
+/// pairs, and `set_budget` drops the least recently used dictionary at once when it is lowered
+/// (never a registered pair, which the host removes itself); a dictionary dropped loads again on
+/// its next use.
+#[test]
+fn a_lowered_budget_drops_the_least_recently_used_dictionary() {
+    /// Gives the budget back to the tests that follow, even when an assertion fails.
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_budget(DEFAULT_BUDGET);
+        }
+    }
+    crate::hold_dictionary_tests();
+    let _restore = Restore;
+    set_dictionaries_folder(Some(shared_test_folder()));
+    let root = std::env::temp_dir().join(format!("wc-proof-host-budget-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let langs = many_packs(&root, 3);
+    packs::set_packs_dir(Some(root.clone()));
+    assert_eq!(budget(), DEFAULT_BUDGET, "the budget starts at its default");
+    assert_eq!(memory_estimate(), 0, "nothing is loaded");
+    let word = |l: &ProofLang| format!("word{}", l.pack_locale().unwrap());
+    // Load all three (a, b, c), then use a again: b is the least recently used, then c, then a.
+    for l in [&langs[0], &langs[1], &langs[2], &langs[0]] {
+        assert!(is_correct_in(&word(l), *l));
+    }
+    let each = (b"SET UTF-8\n".len() + b"1\nwordqa\n".len()) as u64 * 6;
+    assert_eq!(memory_estimate(), 3 * each);
+    let loads = pack_lang::loads();
+
+    set_budget(2 * each);
+    assert_eq!(budget(), 2 * each);
+    assert_eq!(memory_estimate(), 2 * each, "one went at once, without waiting for the next load");
+    for l in [&langs[0], &langs[2]] {
+        assert!(is_correct_in(&word(l), *l));
+    }
+    assert_eq!(pack_lang::loads(), loads, "a and c are still loaded: the oldest, b, was dropped");
+    assert!(is_correct_in(&word(&langs[1]), langs[1]));
+    assert_eq!(pack_lang::loads(), loads + 1, "b loads again on its next use");
+    // b's load made room by dropping the least recently used, a (a, c, b were used in that order).
+    assert_eq!(memory_estimate(), 2 * each);
+    assert!(is_correct_in(&word(&langs[0]), langs[0]));
+    assert_eq!(pack_lang::loads(), loads + 2, "so it is a that loads again now");
+
+    // A registered pair counts and stays; every loaded dictionary goes when nothing is left for them.
+    set_budget(DEFAULT_BUDGET);
+    register_dictionary("qz", b"SET UTF-8\n", b"1\nregistered\n").unwrap();
+    let pair = (b"SET UTF-8\n".len() + b"1\nregistered\n".len()) as u64 * 6;
+    assert_eq!(memory_estimate(), pair, "registering loads every dictionary again, so the loaded ones are gone");
+    for l in [&langs[0], &langs[1]] {
+        assert!(is_correct_in(&word(l), *l));
+    }
+    assert_eq!(memory_estimate(), 2 * each + pair);
+    set_budget(1);
+    assert_eq!(memory_estimate(), pair, "the pair is the host's to remove");
+    assert!(is_correct_in("registered", ProofLang::from_tag(Some("qz"))));
+    assert!(unregister_dictionary("qz"));
+    assert_eq!(memory_estimate(), 0);
+    // Any value is a budget: a huge one never overflows the sums, and a dictionary used while it is
+    // loaded is kept even when it alone is over the budget.
+    set_budget(u64::MAX);
+    assert!(is_correct_in(&word(&langs[0]), langs[0]));
+    assert_eq!(memory_estimate(), each);
+    set_budget(0);
+    assert_eq!(memory_estimate(), 0);
+    assert!(is_correct_in(&word(&langs[0]), langs[0]) && !is_correct_in("wordzz", langs[0]));
+    assert_eq!(memory_estimate(), each, "a dictionary over the budget still loads, and goes at the next load or change");
+    set_budget(DEFAULT_BUDGET);
     packs::set_packs_dir(None);
     set_dictionaries_folder(Some(shared_test_folder()));
     let _ = std::fs::remove_dir_all(&root);
@@ -585,6 +663,34 @@ fn user_dictionary_and_ignore_all_match_both_normalization_forms() {
     assert!(!std::fs::read_to_string(&path).unwrap().lines().any(|l| l == "zqguardádo"));
     assert!(!is_correct_in("zqguardádo", es));
     let _ = std::fs::remove_file(&path);
+}
+
+/// The host's own folders are searched like the folder set with `set_dictionaries_folder`
+/// (before the packs and the system's), setting them checks text again, and clearing them
+/// forgets what they held. The pair's language is one nothing else in the run has a file for.
+#[test]
+fn a_host_folder_is_searched_and_clearing_it_forgets_its_words() {
+    crate::hold_dictionary_tests();
+    set_dictionaries_folder(Some(shared_test_folder()));
+    let dir = std::env::temp_dir().join(format!("wc-proof-host-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("qh.aff"), "SET UTF-8\n").unwrap();
+    std::fs::write(dir.join("qh.dic"), "1\nhostword\n").unwrap();
+    let qh = ProofLang::from_tag(Some("qh"));
+    assert!(is_correct_in("anything", qh), "no dictionary: nothing is marked");
+    let generation = dictionary_generation();
+    set_host_folders(HostFolders { env_var: None, folders: vec![dir.clone()] });
+    assert!(dictionary_generation() > generation);
+    assert!(is_correct_in("hostword", qh) && !is_correct_in("anything", qh));
+    assert_eq!(pack_dictionary_file(qh), Some(dir.join("qh.dic")));
+    assert!(hunspell::user_dirs().contains(&dir), "the host's folders are the ones the person keeps dictionaries in");
+    set_host_folders(HostFolders::default());
+    assert!(is_correct_in("anything", qh), "the folder is forgotten");
+    assert_eq!(pack_dictionary_file(qh), None);
+    assert!(!hunspell::user_dirs().contains(&dir));
+    set_dictionaries_folder(Some(shared_test_folder()));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn flagged(t: &str, v: &[Issue]) -> Vec<String> {

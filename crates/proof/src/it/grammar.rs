@@ -20,7 +20,7 @@
 //!
 //! No comma rule and no English rule (such as `a`/`an`) applies to Italian text.
 
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
 /// Words Italian repeats on purpose: emphatic doubling, interjections, onomatopoeia.
 const ALLOWED_REPEATS: &[&str] = &[
@@ -137,8 +137,8 @@ const ABBREVIATIONS: &[&str] = &[
     "beato",
 ];
 
-fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
-    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::It }
+fn issue(rule: &'static str, start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
+    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::It, rule: Some(rule) }
 }
 
 /// Is `prev`, before a period, an abbreviation, an initial, a number or a Roman numeral (after
@@ -185,7 +185,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             && w0.to_lowercase() == w1.to_lowercase()
             && !ALLOWED_REPEATS.contains(&w0.to_lowercase().as_str())
         {
-            v.push(issue(*a0, *b1, format!("Parola ripetuta: \"{w1}\""), vec![w0.to_string()]));
+            v.push(issue(rules::REPEATED_WORD, *a0, *b1, format!("Parola ripetuta: \"{w1}\""), vec![w0.to_string()]));
         }
     }
 }
@@ -210,11 +210,11 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             _ => false,
         };
         if flag {
-            v.push(issue(i, i + 1 + p.len_utf8(), "Spazio prima della punteggiatura".into(), vec![p.to_string()]));
+            v.push(issue(rules::SPACE_BEFORE_PUNCTUATION, i, i + 1 + p.len_utf8(), "Spazio prima della punteggiatura".into(), vec![p.to_string()]));
         }
     }
     for run in crate::space_runs(text) {
-        v.push(issue(run.start, run.end, "Spazio doppio".into(), vec![" ".into()]));
+        v.push(issue(rules::DOUBLE_SPACE, run.start, run.end, "Spazio doppio".into(), vec![" ".into()]));
     }
 }
 
@@ -224,7 +224,7 @@ fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: 
         let Some(w) = text.get(*a..*b) else { continue };
         if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
             let fixed: String = w.chars().next().map(|f| f.to_uppercase().chain(w.chars().skip(1)).collect()).unwrap_or_default();
-            v.push(issue(*a, *b, "Maiuscola a inizio frase".into(), vec![fixed]));
+            v.push(issue(rules::SENTENCE_CAPITAL, *a, *b, "Maiuscola a inizio frase".into(), vec![fixed]));
         }
         // Only the gap before the next word: the rest of the paragraph never ends a sentence.
         let next = ws.get(i + 1).map_or(text.len(), |n| n.0);
@@ -238,7 +238,7 @@ fn doubled_punctuation(text: &str, v: &mut Vec<Issue>) {
             if pat == ".." && text.get(i + 2..).is_some_and(|r| r.starts_with('.')) {
                 continue; // ellipsis
             }
-            v.push(issue(i, i + pat.len(), "Punteggiatura doppia".into(), vec![pat[..1].into()]));
+            v.push(issue(rules::DOUBLED_PUNCTUATION, i, i + pat.len(), "Punteggiatura doppia".into(), vec![pat[..1].into()]));
         }
     }
 }
@@ -259,7 +259,7 @@ fn po(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             "po" if !apostrophe => "po'",
             _ => continue,
         };
-        v.push(issue(*a, *b, "Si scrive «po'», con l'apostrofo e senza accento".into(), vec![fix.into()]));
+        v.push(issue(rules::PO_APOSTROPHE, *a, *b, "Si scrive «po'», con l'apostrofo e senza accento".into(), vec![fix.into()]));
     }
 }
 
@@ -275,7 +275,7 @@ pub(crate) fn qual_elided(word: &str) -> Option<String> {
 fn qual_e(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
     for (a, b) in ws {
         if let Some(fix) = text.get(*a..*b).and_then(qual_elided) {
-            v.push(issue(*a, *b, "«Qual è» si scrive senza apostrofo".into(), vec![fix]));
+            v.push(issue(rules::QUAL_E, *a, *b, "«Qual è» si scrive senza apostrofo".into(), vec![fix]));
         }
     }
 }
@@ -291,7 +291,7 @@ fn e_apostrophe(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         let ends = after.next().is_none_or(char::is_whitespace);
         let quoted = text.get(..*a).and_then(|t| t.chars().next_back()).is_some_and(|c| is_apostrophe(c) || c == '‘');
         if ends && !quoted {
-            v.push(issue(*a, *b + ap.len_utf8(), "«È» si scrive con l'accento, non con l'apostrofo".into(), vec!["È".into()]));
+            v.push(issue(rules::E_APOSTROPHE, *a, *b + ap.len_utf8(), "«È» si scrive con l'accento, non con l'apostrofo".into(), vec!["È".into()]));
         }
     }
 }
@@ -320,7 +320,13 @@ fn un_apostrophe(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             && tail.ends_with('o')
             && !FEMININE_IN_O.contains(&tail)
         {
-            v.push(issue(*a, *b, format!("Davanti a un nome maschile «{head}» non vuole l'apostrofo"), vec![format!("{head} {tail}")]));
+            v.push(issue(
+                rules::UN_APOSTROPHE_MASCULINE,
+                *a,
+                *b,
+                format!("Davanti a un nome maschile «{head}» non vuole l'apostrofo"),
+                vec![format!("{head} {tail}")],
+            ));
         }
     }
     for pair in ws.windows(2) {
@@ -332,7 +338,13 @@ fn un_apostrophe(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             && starts_with_vowel(w1)
             && feminine_in_a(w1)
         {
-            v.push(issue(*a0, *b1, format!("Davanti a un nome femminile si scrive «{w0}'», con l'apostrofo"), vec![format!("{w0}'{w1}")]));
+            v.push(issue(
+                rules::UN_APOSTROPHE_FEMININE,
+                *a0,
+                *b1,
+                format!("Davanti a un nome femminile si scrive «{w0}'», con l'apostrofo"),
+                vec![format!("{w0}'{w1}")],
+            ));
         }
     }
 }

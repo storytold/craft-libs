@@ -8,10 +8,10 @@
 
 use unicode_normalization::UnicodeNormalization;
 
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
-fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>, lang: ProofLang) -> Issue {
-    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang }
+fn issue(rule: &'static str, start: usize, end: usize, message: String, suggestions: Vec<String>, lang: ProofLang) -> Issue {
+    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang, rule: Some(rule) }
 }
 
 /// Grammar issues in a paragraph of Spanish text; `lang` is the variety (they explain the same in
@@ -34,7 +34,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], lang: ProofLang, v: &mut Ve
         let [(a0, b0), (a1, b1)] = pair else { continue };
         let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
         if !gap.is_empty() && gap.chars().all(char::is_whitespace) && letters(w0) && folded(w0) == folded(w1) {
-            v.push(issue(*a0, *b1, format!("Palabra repetida: «{w1}»"), vec![w0.to_string()], lang));
+            v.push(issue(rules::REPEATED_WORD, *a0, *b1, format!("Palabra repetida: «{w1}»"), vec![w0.to_string()], lang));
         }
     }
 }
@@ -45,7 +45,14 @@ fn spaces(text: &str, lang: ProofLang, v: &mut Vec<Issue>) {
         if matches!(c, '¿' | '¡')
             && text.get(i + c.len_utf8()..).is_some_and(|r| r.starts_with(' ') && r.trim_start().chars().next().is_some_and(char::is_alphanumeric))
         {
-            v.push(issue(i, i + c.len_utf8() + 1, "Espacio después de un signo de apertura".into(), vec![c.to_string()], lang));
+            v.push(issue(
+                rules::SPACE_AFTER_OPENING_MARK,
+                i,
+                i + c.len_utf8() + 1,
+                "Espacio después de un signo de apertura".into(),
+                vec![c.to_string()],
+                lang,
+            ));
             continue;
         }
         if c != ' ' {
@@ -72,11 +79,18 @@ fn spaces(text: &str, lang: ProofLang, v: &mut Vec<Issue>) {
                 _ => false,
             };
         if flag {
-            v.push(issue(i, i + 1 + p.len_utf8(), "Espacio antes de un signo de puntuación".into(), vec![p.to_string()], lang));
+            v.push(issue(
+                rules::SPACE_BEFORE_PUNCTUATION,
+                i,
+                i + 1 + p.len_utf8(),
+                "Espacio antes de un signo de puntuación".into(),
+                vec![p.to_string()],
+                lang,
+            ));
         }
     }
     for run in crate::space_runs(text) {
-        v.push(issue(run.start, run.end, "Espacio doble".into(), vec![" ".into()], lang));
+        v.push(issue(rules::DOUBLE_SPACE, run.start, run.end, "Espacio doble".into(), vec![" ".into()], lang));
     }
 }
 
@@ -170,7 +184,7 @@ fn opening_marks(text: &str, lang: ProofLang, v: &mut Vec<Issue>) {
         if !sentence.chars().any(char::is_alphabetic) {
             continue;
         }
-        v.push(issue(start, i + 1, message.into(), vec![format!("{opener}{sentence}")], lang));
+        v.push(issue(rules::OPENING_MARKS, start, i + 1, message.into(), vec![format!("{opener}{sentence}")], lang));
     }
 }
 

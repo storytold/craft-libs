@@ -11,7 +11,7 @@
 //! - **Doubled punctuation** (`..`, `,,`, `;;`).
 
 use super::suggest::turkish_to_lower;
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
 /// Turkish reduplications and emphatic word pairings that are intentionally repeated.
 const ALLOWED_REPEATS: &[&str] = &[
@@ -167,6 +167,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
                 message: "Yinelenen sözcük".into(),
                 suggestions: Vec::new(),
                 lang: ProofLang::Tr,
+                rule: Some(rules::REPEATED_WORD),
             });
         }
     }
@@ -208,6 +209,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
                     message: "Noktalama işaretinden önce boşluk bırakılmaz".into(),
                     suggestions: vec![c.to_string()],
                     lang: ProofLang::Tr,
+                    rule: Some(rules::SPACE_BEFORE_PUNCTUATION),
                 });
             }
         }
@@ -220,6 +222,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
             message: "Fazladan boşluk".into(),
             suggestions: vec![" ".into()],
             lang: ProofLang::Tr,
+            rule: Some(rules::DOUBLE_SPACE),
         });
     }
     // 3. Comma before or after conjunctions (`ali, ve veli` or `ve, veli`)
@@ -242,6 +245,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
                 message: format!("'{word}' bağlacından önce virgül konulmaz"),
                 suggestions: vec![String::new()],
                 lang: ProofLang::Tr,
+                rule: Some(rules::COMMA_BEFORE_CONJUNCTION),
             });
         }
         // Check comma after conjunction
@@ -258,6 +262,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
                 message: format!("'{word}' bağlacından sonra virgül konulmaz"),
                 suggestions: vec![String::new()],
                 lang: ProofLang::Tr,
+                rule: Some(rules::COMMA_AFTER_CONJUNCTION),
             });
         }
     }
@@ -278,6 +283,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
                     message: "Cümle büyük harfle başlar".into(),
                     suggestions: vec![cap],
                     lang: ProofLang::Tr,
+                    rule: Some(rules::SENTENCE_CAPITAL),
                 });
             }
             continue;
@@ -311,6 +317,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
                     message: "Cümle büyük harfle başlar".into(),
                     suggestions: vec![cap],
                     lang: ProofLang::Tr,
+                    rule: Some(rules::SENTENCE_CAPITAL),
                 });
             }
         }

@@ -1,10 +1,10 @@
 //! Generic repeated-word and spacing checks with Czech messages.
 //! No Czech-specific grammar, comma or sentence-capital rules are inferred.
 
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
-fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
-    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Cs }
+fn issue(rule: &'static str, start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
+    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Cs, rule: Some(rule) }
 }
 
 /// Checks `text` for repeated words and spacing problems, with Czech messages.
@@ -29,7 +29,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             && w0.to_lowercase() == w1.to_lowercase()
             && !ALLOWED_REPEATS.contains(&w0.to_lowercase().as_str())
         {
-            v.push(issue(*a0, *b1, format!("Opakované slovo: „{w1}“"), vec![w0.to_string()]));
+            v.push(issue(rules::REPEATED_WORD, *a0, *b1, format!("Opakované slovo: „{w1}“"), vec![w0.to_string()]));
         }
     }
 }
@@ -60,10 +60,10 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
                 _ => false,
             };
         if flag {
-            v.push(issue(i, i + 1 + p.len_utf8(), "Mezera před interpunkcí".into(), vec![p.to_string()]));
+            v.push(issue(rules::SPACE_BEFORE_PUNCTUATION, i, i + 1 + p.len_utf8(), "Mezera před interpunkcí".into(), vec![p.to_string()]));
         }
     }
     for run in crate::space_runs(text) {
-        v.push(issue(run.start, run.end, "Dvojitá mezera".into(), vec![" ".into()]));
+        v.push(issue(rules::DOUBLE_SPACE, run.start, run.end, "Dvojitá mezera".into(), vec![" ".into()]));
     }
 }

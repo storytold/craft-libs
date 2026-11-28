@@ -76,7 +76,7 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
             || w.split('-').all(|p| {
                 p.chars().count() <= 1
                     || CLITICS.iter().any(|c| p.eq_ignore_ascii_case(c))
-                    || (opts.ignore_uppercase && crate::spelling::capitals_part(p, 6))
+                    || (opts.ignore_uppercase && crate::spelling::capitals_part(p, crate::spelling::capitals_limit(opts)))
                     || known(d, p)
             });
     }
