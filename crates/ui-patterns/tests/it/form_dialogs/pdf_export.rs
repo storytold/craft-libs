@@ -182,6 +182,28 @@ fn reset_restores_the_chosen_preset_and_keeps_the_artboards() {
     assert!(!host.get_mut::<HostedPdfExport>().expect("open").settings().marks.trim, "an unlisted preset restores nothing");
 }
 
+/// Custom flattener options mark the chosen preset as modified, as a changed setting does, and turning them off shows
+/// the preset's name again.
+#[trial]
+fn custom_flattener_options_mark_the_preset_as_modified() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    host.borrow_mut().open(dialog());
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture.idle(10);
+    let painted = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|run| run.text == text);
+    assert!(painted(&fixture, "Mine") && !painted(&fixture, "Mine (modified)"), "the preset as it opens: {:?}", fixture.texts());
+
+    let custom = |host: &Rc<RefCell<DialogHost>>, on: bool| host.borrow_mut().get_mut::<HostedPdfExport>().expect("open").set_custom_flattener(on);
+    custom(&host, true);
+    fixture.idle(4);
+    assert!(painted(&fixture, "Mine (modified)"), "custom flattener options: {:?}", fixture.texts());
+    custom(&host, false);
+    fixture.idle(4);
+    assert!(painted(&fixture, "Mine") && !painted(&fixture, "Mine (modified)"), "without them: {:?}", fixture.texts());
+}
+
 #[trial]
 fn summary_text_writes_lf_whatever_the_values_hold() {
     let words = Rc::new(RefCell::new(None));

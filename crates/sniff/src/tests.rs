@@ -46,6 +46,25 @@ fn ebml(doc_type: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// A ZIP local file header whose first entry is `mimetype`.
+fn ora(mimetype: &[u8], compression: u16) -> Vec<u8> {
+    let mut bytes = b"PK\x03\x04".to_vec();
+    bytes.extend_from_slice(&20u16.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&compression.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    let len = u32::try_from(mimetype.len()).unwrap();
+    bytes.extend_from_slice(&len.to_le_bytes());
+    bytes.extend_from_slice(&len.to_le_bytes());
+    bytes.extend_from_slice(&8u16.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(b"mimetype");
+    bytes.extend_from_slice(mimetype);
+    bytes
+}
+
 #[test]
 fn names_fixed_prefixes() {
     let cases: &[(&[u8], Kind)] = &[
@@ -67,6 +86,8 @@ fn names_fixed_prefixes() {
         (b"Kaydara FBX Binary  \0\x1a\0", Kind::Fbx),
         (b"ply\nformat ascii 1.0\n", Kind::Ply),
         (b"ply\r\nformat binary_little_endian 1.0\r\n", Kind::Ply),
+        (b"silhouette04;\x01\x04\0\0\0", Kind::Studio),
+        (b"silhouette05;\x01\x04\0\0\0", Kind::Studio),
         (b"PK\x03\x04\x14\0", Kind::Zip),
         (b"PK\x05\x06\0\0\0\0", Kind::Zip),
         (b"7z\xbc\xaf\x27\x1c\0\x04", Kind::SevenZip),
@@ -261,8 +282,186 @@ fn reads_only_the_head() {
 }
 
 #[test]
+fn names_openraster_and_silhouette_studio() {
+    // Silhouette Studio: v2 (.studio) and v3 (.studio3).
+    assert_eq!(identify(b"silhouette04;\x01\x04\0\0\0"), Some(Kind::Studio));
+    assert_eq!(identify(b"silhouette05;\x01\x04\0\0\0"), Some(Kind::Studio));
+    // Truncated Studio magic bytes return None.
+    assert_eq!(identify(b"silhouette04"), None);
+    assert_eq!(identify(b"silhouette"), None);
+    assert_eq!(identify(b"sil"), None);
+    // Modified Studio magic bytes return None.
+    assert_eq!(identify(b"silhouette03;\x01"), None);
+    assert_eq!(identify(b"silhouette06;\x01"), None);
+    assert_eq!(identify(b"silhouette04:\x01"), None);
+
+    // OpenRaster (.ora): ZIP archive with stored "mimetype" entry holding "image/openraster".
+    let valid_ora = ora(b"image/openraster", 0);
+    assert_eq!(identify(&valid_ora), Some(Kind::Ora));
+    // Non-zero compression: deflated (method 8) is not stored -> falls back to Zip.
+    assert_eq!(identify(&ora(b"image/openraster", 8)), Some(Kind::Zip));
+    // Different mimetype -> falls back to Zip.
+    assert_eq!(identify(&ora(b"image/png", 0)), Some(Kind::Zip));
+    // Truncated ORA mimetype inside ZIP:
+    assert_eq!(identify(&ora(b"image/openraste", 0)), Some(Kind::Zip));
+    // Truncated magic bytes return None.
+    assert_eq!(identify(b"PK"), None);
+    assert_eq!(identify(b"PK\x03"), None);
+    // Modified magic bytes return None.
+    assert_eq!(identify(b"PK\x03\x05"), None);
+    assert_eq!(identify(b"image/openraster"), None);
+
+    // OpenRaster with ZIP64 extra field (sizes 0xffffffff):
+    let mut zip64_ora = b"PK\x03\x04".to_vec();
+    zip64_ora.extend_from_slice(&45u16.to_le_bytes());
+    zip64_ora.extend_from_slice(&0u16.to_le_bytes());
+    zip64_ora.extend_from_slice(&0u16.to_le_bytes());
+    zip64_ora.extend_from_slice(&0u16.to_le_bytes());
+    zip64_ora.extend_from_slice(&0u16.to_le_bytes());
+    zip64_ora.extend_from_slice(&0u32.to_le_bytes());
+    zip64_ora.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+    zip64_ora.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+    zip64_ora.extend_from_slice(&8u16.to_le_bytes());
+    zip64_ora.extend_from_slice(&20u16.to_le_bytes());
+    zip64_ora.extend_from_slice(b"mimetype");
+    zip64_ora.extend_from_slice(&1u16.to_le_bytes());
+    zip64_ora.extend_from_slice(&16u16.to_le_bytes());
+    zip64_ora.extend_from_slice(&16u64.to_le_bytes());
+    zip64_ora.extend_from_slice(&16u64.to_le_bytes());
+    zip64_ora.extend_from_slice(b"image/openraster");
+    assert_eq!(identify(&zip64_ora), Some(Kind::Ora));
+
+    // OpenRaster with general-purpose bit 3 and following data descriptor:
+    let mut descriptor_ora = b"PK\x03\x04".to_vec();
+    descriptor_ora.extend_from_slice(&20u16.to_le_bytes());
+    descriptor_ora.extend_from_slice(&8u16.to_le_bytes());
+    descriptor_ora.extend_from_slice(&0u16.to_le_bytes());
+    descriptor_ora.extend_from_slice(&0u16.to_le_bytes());
+    descriptor_ora.extend_from_slice(&0u16.to_le_bytes());
+    descriptor_ora.extend_from_slice(&0u32.to_le_bytes());
+    descriptor_ora.extend_from_slice(&0u32.to_le_bytes());
+    descriptor_ora.extend_from_slice(&0u32.to_le_bytes());
+    descriptor_ora.extend_from_slice(&8u16.to_le_bytes());
+    descriptor_ora.extend_from_slice(&0u16.to_le_bytes());
+    descriptor_ora.extend_from_slice(b"mimetype");
+    descriptor_ora.extend_from_slice(b"image/openraster");
+    descriptor_ora.extend_from_slice(b"PK\x07\x08");
+    descriptor_ora.extend_from_slice(&0u32.to_le_bytes());
+    descriptor_ora.extend_from_slice(&16u32.to_le_bytes());
+    descriptor_ora.extend_from_slice(&16u32.to_le_bytes());
+    assert_eq!(identify(&descriptor_ora), Some(Kind::Ora));
+
+    // Streamed ZIP64 OpenRaster (bit 3 set, 0xffffffff local sizes, zero ZIP64 extra sizes, and 64-bit descriptor):
+    let mut zip64_desc_ora = b"PK\x03\x04".to_vec();
+    zip64_desc_ora.extend_from_slice(&45u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&8u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&0u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&0u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&0u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&0u32.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&8u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&20u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(b"mimetype");
+    zip64_desc_ora.extend_from_slice(&1u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&16u16.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&0u64.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&0u64.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(b"image/openraster");
+    zip64_desc_ora.extend_from_slice(b"PK\x07\x08");
+    zip64_desc_ora.extend_from_slice(&0u32.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&16u64.to_le_bytes());
+    zip64_desc_ora.extend_from_slice(&16u64.to_le_bytes());
+    assert_eq!(identify(&zip64_desc_ora), Some(Kind::Ora));
+}
+
+#[test]
+fn openraster_extra_fields_boundary_and_zip_fallback() {
+    // OpenRaster specifies that the first entry must be an uncompressed "mimetype" file,
+    // but permits arbitrary ZIP extra fields.
+    // When extra fields push the "image/openraster" payload past HEAD bytes (4096),
+    // identify safely falls back to Kind::Zip even when the complete file is supplied.
+
+    fn ora_with_extra(mime: &[u8], extra: &[u8]) -> Vec<u8> {
+        let mut b = b"PK\x03\x04".to_vec();
+        b.extend_from_slice(&20u16.to_le_bytes());
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        let len = u32::try_from(mime.len()).unwrap_or(0);
+        b.extend_from_slice(&len.to_le_bytes());
+        b.extend_from_slice(&len.to_le_bytes());
+        b.extend_from_slice(&8u16.to_le_bytes());
+        let extra_len = u16::try_from(extra.len()).unwrap_or(0);
+        b.extend_from_slice(&extra_len.to_le_bytes());
+        b.extend_from_slice(b"mimetype");
+        b.extend_from_slice(extra);
+        b.extend_from_slice(mime);
+        b
+    }
+
+    fn make_ordinary_extra(total_len: usize) -> Vec<u8> {
+        let mut extra = Vec::with_capacity(total_len);
+        // Ordinary Info-ZIP Extended Timestamp (0x5455): flag (1 byte) + modtime (4 bytes)
+        if total_len >= 9 {
+            extra.extend_from_slice(&0x5455u16.to_le_bytes());
+            extra.extend_from_slice(&5u16.to_le_bytes());
+            extra.push(1);
+            extra.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+        }
+        // Fill remaining extra field space with ordinary Info-ZIP Unix metadata (0x7875)
+        while extra.len() < total_len {
+            let remaining = total_len.saturating_sub(extra.len());
+            if remaining >= 4 {
+                let data_len = remaining.saturating_sub(4).min(u16::MAX as usize);
+                let data_u16 = u16::try_from(data_len).unwrap_or(u16::MAX);
+                extra.extend_from_slice(&0x7875u16.to_le_bytes());
+                extra.extend_from_slice(&data_u16.to_le_bytes());
+                extra.resize(extra.len().saturating_add(data_len), 0);
+            } else {
+                extra.resize(total_len, 0);
+                break;
+            }
+        }
+        extra
+    }
+
+    // Header (30) + "mimetype" (8) = 38 bytes before extra fields.
+    // "image/openraster" = 16 bytes.
+    // Total before payload end = 38 + extra_len + 16 = 54 + extra_len.
+    // At HEAD = 4096:
+    // extra_len = 4096 - 54 = 4042: payload ends exactly at byte 4096 (inside HEAD).
+    let extra_at_boundary = make_ordinary_extra(4042);
+    let ora_at_boundary = ora_with_extra(b"image/openraster", &extra_at_boundary);
+    assert_eq!(ora_at_boundary.len(), HEAD);
+    assert_eq!(identify(&ora_at_boundary), Some(Kind::Ora));
+
+    // extra_len = 4043: payload ends at byte 4097 (crosses HEAD by 1 byte).
+    // Even when the full 4097 bytes are supplied, identify caps at HEAD and falls back to Zip.
+    let extra_past_boundary = make_ordinary_extra(4043);
+    let ora_past_boundary = ora_with_extra(b"image/openraster", &extra_past_boundary);
+    assert_eq!(ora_past_boundary.len(), HEAD + 1);
+    assert_eq!(identify(&ora_past_boundary), Some(Kind::Zip));
+
+    // extra_len = 4100: payload starts at byte 4138 (entirely beyond HEAD).
+    let extra_well_past = make_ordinary_extra(4100);
+    let ora_well_past = ora_with_extra(b"image/openraster", &extra_well_past);
+    assert_eq!(identify(&ora_well_past), Some(Kind::Zip));
+}
+
+#[test]
 fn every_prefix_of_every_sample_is_safe() {
-    let mut samples = vec![ftyp(b"mif1", &[b"avif"]), ebml(b"webm"), ogg(b"OpusHead"), riff(b"RIFF", b"WAVE")];
+    let mut samples = vec![
+        ftyp(b"mif1", &[b"avif"]),
+        ebml(b"webm"),
+        ogg(b"OpusHead"),
+        riff(b"RIFF", b"WAVE"),
+        ora(b"image/openraster", 0),
+        b"silhouette04;\x01\x04\0\0\0".to_vec(),
+    ];
     samples.push(padded(b"MZ", 0x100));
     samples.push((0..=255).collect());
     for sample in &samples {
@@ -308,4 +507,10 @@ fn media_types_apps_send() {
     assert_eq!(Kind::Elf.family(), Family::Executable);
     assert_eq!(Kind::Sqlite.family(), Family::Database);
     assert_eq!(Kind::Pdf.family(), Family::Document);
+    assert_eq!(Kind::Ora.mime_type(), "image/openraster");
+    assert_eq!(Kind::Ora.extension(), "ora");
+    assert_eq!(Kind::Ora.family(), Family::Image);
+    assert_eq!(Kind::Studio.mime_type(), "application/x-silhouette-studio");
+    assert_eq!(Kind::Studio.extension(), "studio");
+    assert_eq!(Kind::Studio.family(), Family::Document);
 }

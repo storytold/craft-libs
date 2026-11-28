@@ -642,6 +642,15 @@ fn a_closed_dialog_still_collects_and_reports_nothing() {
 }
 
 #[test]
+fn a_link_answer_arriving_with_no_sheet_open_asks_for_nothing() {
+    let (ctx, mut dialog, backend) = ready();
+    dialog.signed_out();
+    let before = backend.seen().len();
+    dialog.receive(&ctx, 99, Ok(Answer::Linked));
+    assert_eq!(backend.seen().len(), before);
+}
+
+#[test]
 fn pressing_return_takes_the_first_match_or_an_address() {
     let (_ctx, mut dialog, _) = ready();
     let sheet = dialog.open.as_mut().expect("open");

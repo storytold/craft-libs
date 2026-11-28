@@ -539,6 +539,8 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
         ProofLang::Ru => &["ru"],
         ProofLang::Cs => &["cs"],
         ProofLang::Id => &["id"],
+        ProofLang::Gu => &["gu-in", "gu"],
+        ProofLang::Hi => &["hi-in", "hi"],
         ProofLang::Es => &["es-es", "es"],
         ProofLang::EsMx => &["es-mx", "es-419", "es"],
         ProofLang::Es419 => &["es-419", "es"],

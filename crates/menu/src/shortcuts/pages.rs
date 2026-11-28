@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use craft_keymap::{CommandDef, CommandKind, CommandRef, Keymap};
 
-use super::state::{Review, Target};
+use super::state::Review;
 use super::view::area_key;
 use super::{Area, DialogState, ShortcutsDialog};
 
@@ -120,7 +120,7 @@ pub struct DialogSnapshot {
     pub selected: Option<CommandRef>,
     /// Commands whose bindings differ from the defaults, with their binding texts.
     pub overrides: Vec<(CommandRef, Vec<String>)>,
-    /// The conflict bar's chord and the commands holding it, while it shows.
+    /// The pending conflict's chord and the commands holding it. Another prompt or app tab can hide the conflict bar.
     pub conflict: Option<(String, Vec<CommandRef>)>,
     /// Whether a chord is being recorded, and the command it is for.
     pub recording: Option<CommandRef>,
@@ -241,18 +241,12 @@ impl DialogState {
             selected: self.selected.clone(),
             overrides: keymap.overrides().iter().filter_map(|(key, texts)| Some((command(key)?, texts.to_vec()))).collect(),
             conflict: self.conflict.as_ref().map(|c| (c.binding.to_string(), c.holders.iter().map(|h| h.command.clone()).collect())),
-            recording: self.recording.as_ref().and_then(|r| match &r.target {
-                Target::Cell { command, .. } | Target::HoldCell { command, .. } | Target::Field { command } => Some(command.clone()),
-                Target::Search | Target::Code { .. } => None,
-            }),
+            recording: self.recording.as_ref().and_then(|r| r.target.command().cloned()),
             set: self.set.clone(),
             can_undo: self.can_undo(),
             // The switch sets the setting and the keymap's holds in one step, so the keymap's flag is the setting's.
             holds: self.holds_shown.then(|| keymap.holds()),
-            recording_hold: self.recording.as_ref().and_then(|r| match &r.target {
-                Target::HoldCell { command, .. } => Some(command.clone()),
-                _ => None,
-            }),
+            recording_hold: self.recording.as_ref().filter(|r| r.target.is_hold()).and_then(|r| r.target.command().cloned()),
             review: self.review.as_ref().map(ReviewSnapshot::of),
             pressed: self.field.as_ref().map(|f| f.binding.to_string()),
             holders: self.field.as_ref().map(|f| f.holders.iter().map(|h| h.command.clone()).collect()).unwrap_or_default(),

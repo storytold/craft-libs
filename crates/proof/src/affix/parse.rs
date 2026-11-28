@@ -297,7 +297,7 @@ impl Rules {
     /// themselves, or with an `AF` table the alias its leading digits number, as Hunspell reads
     /// them (`2x` is alias 2). A field without digits or an undefined alias reads as no flags:
     /// the stem is still a word, the rule still applies, without the flags (Hunspell warns).
-    fn flags<'a>(&'a self, written: &'a str) -> &'a str {
+    pub(super) fn flags<'a>(&'a self, written: &'a str) -> &'a str {
         if !self.aliases_on {
             return written;
         }
@@ -502,12 +502,11 @@ pub(super) fn parse_aff(aff: &str, english: bool) -> Result<Rules, String> {
             }
         }
     }
-    // Aliases may be declared after the rules that use them; resolve once all are read.
+    // Continuation aliases are resolved by build after every directive has been read.
     // Hunspell removes `IGNORE` characters from the appended text only: a stripped text that
     // holds one never matches a stem (stems lose them too), so the rule never applies.
     let resolve = |rules: &mut Vec<RawRule>, r: &Rules| {
         for rule in rules.iter_mut() {
-            rule.4 = r.flags(&rule.4).to_string();
             rule.3 = r.strip_ignored(&rule.3);
         }
     };

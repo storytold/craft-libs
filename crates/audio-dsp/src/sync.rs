@@ -354,38 +354,7 @@ pub fn find_offset(a: &[f32], b: &[f32], sample_rate: u32, opts: &SyncOptions) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::Rng;
-
-    /// Speech-like test signal: voiced syllables (harmonics of a gliding pitch under an envelope),
-    /// noise bursts (consonants) and pauses.
-    fn speechy(sr: f64, secs: f64, seed: u64) -> Vec<f32> {
-        let n = (sr * secs) as usize;
-        let mut rng = Rng::new(seed);
-        let mut out = vec![0.0f32; n];
-        let mut i = 0usize;
-        while i < n {
-            let len = ((0.08 + 0.25 * (rng.uniform() * 0.5 + 0.5) as f64) * sr) as usize;
-            let kind = rng.uniform();
-            let f0 = 110.0 + 120.0 * (rng.uniform() as f64 * 0.5 + 0.5);
-            let glide = 1.0 + 0.3 * rng.uniform() as f64;
-            let amp = 0.2 + 0.3 * (rng.uniform() * 0.5 + 0.5);
-            for k in 0..len.min(n - i) {
-                let t = k as f64 / sr;
-                let env = (std::f64::consts::PI * k as f64 / len as f64).sin() as f32;
-                let v = if kind > 0.3 {
-                    let f = f0 * (1.0 + (glide - 1.0) * k as f64 / len as f64);
-                    (1..8).map(|h| ((2.0 * std::f64::consts::PI * f * h as f64 * t).sin() / h as f64) as f32).sum::<f32>()
-                } else if kind > -0.4 {
-                    rng.uniform()
-                } else {
-                    0.0
-                };
-                out[i + k] = v * env * amp;
-            }
-            i += len + ((rng.uniform() * 0.5 + 0.5) * 0.15 * sr as f32) as usize;
-        }
-        out
-    }
+    use crate::testutil::{Rng, speechy};
 
     /// `x` delayed by `delay` samples (fractional: windowed-sinc interpolation), scaled by `gain`,
     /// optionally colored by a zero-phase low-pass (`[k, 1-2k, k]`, so the delay stays exact), with
