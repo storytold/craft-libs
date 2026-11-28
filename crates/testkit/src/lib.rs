@@ -14,6 +14,11 @@
 //! * `guards::rust_sources`: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits (`guards::rust_sources_with_limits`). It is not built for `wasm32`.
 //!
+//! On native targets, the `fixtures` module locates generated test fixtures under `<workspace>/target/fixtures`,
+//! generates a missing one into a claimed temporary sibling, publishes it under a per-output lock that
+//! keeps a complete file another process published first, and prints the `FIXTURE made`, `cached` and
+//! `skipped` lines that FilmCraft's `cargo xtask fixtures` counts.
+//!
 //! [`rng`] holds two seeded generators for repeatable test input, [`rng::XorShift64`] and
 //! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
 //!
@@ -69,6 +74,8 @@
 pub mod corpus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fixtures;
 pub mod fonts;
 pub mod guards;
 pub mod hostile;

@@ -21,11 +21,15 @@ sha2 = { version = "0.10", default-features = false, features = ["std"], optiona
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 skrifa = { workspace = true, optional = true }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 serde_json = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [[test]]
 name = "mcp"

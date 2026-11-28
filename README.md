@@ -432,7 +432,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   prints a `SKIPPED:` line when a test lacks a program, a corpus or the craft-fonts faces, or fails the
   test when the variable the caller names is `1`. Any other value of that variable except empty fails
   the test as a configuration error. Its `corpus` module (the `corpus` feature) checks a corpus folder
-  against a pinned SHA-256 list. Not published.
+  against a pinned SHA-256 list. Its `fixtures` module (native targets only) generates test fixtures
+  under `target/fixtures` and publishes each one under a lock. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each). With `ui`, the canvas text editor, Character and

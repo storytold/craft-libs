@@ -611,7 +611,8 @@ fn renderer_operators(data: &[u8]) -> Vec<Vec<u8>> {
     let mut iter = hayro_syntax::content::UntypedIter::new(data);
     let mut out = Vec::new();
     while let Some(instruction) = iter.next() {
-        out.push(instruction.operator.as_ref().to_vec());
+        let operator: &[u8] = instruction.operator.as_ref();
+        out.push(operator.to_vec());
     }
     out
 }

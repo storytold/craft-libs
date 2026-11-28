@@ -258,6 +258,25 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## fixtures
+
+The `fixtures` module (native targets only) generates missing test fixtures and shares them between test runs and processes:
+
+- `fixtures_root(var)` is the nonempty value of `var` (default `CRAFT_FIXTURES_DIR`) or `<workspace>/target/fixtures`. The workspace is the one that holds the package under test, found from the `CARGO_MANIFEST_DIR` that Cargo and nextest set when they run tests: the folder named by the package's `package.workspace` key, or else the nearest folder whose `Cargo.toml` has a `[workspace]` table. A test binary run without `CARGO_MANIFEST_DIR` needs the root variable. `CARGO_TARGET_DIR` does not move the root. `fixtures_dir(sub, var)` creates a folder below the root and rejects an absolute `sub`, one containing `..`, and on Windows one with a drive inside it (`group\C:outside`). It creates the folder one level at a time and returns an error, without creating the rest, when a level resolves outside the root or is not a folder, for example a symbolic link or junction under the root that points elsewhere. The check uses paths, so it does not detect a folder that another process replaces with a link while the call runs or after it returns.
+- `temp_path(out)` creates a new, empty sibling of `out` with `create_new`, keeping the extension. A name that already exists is never reused.
+- `publish(tmp, out)` moves a nonempty regular file into place while holding a lock on `<out>.fixture-lock`. When `out` is already a nonempty regular file, it is kept and `tmp` is removed; the check reads only the type and length of `out`, so a nonempty `out` that cannot be read is kept too. A directory at `out` is an error, and so are an `out` whose name ends with `.fixture-lock` and a file system that does not support the lock.
+- `generate(out, required_var, make)` and `generate_with(out, required, make)` return a cached fixture without calling `make`, or run `make` on a claimed temporary file and publish it. The temporary file is removed when `make` fails, panics, writes nothing or makes `out` name the temporary file, and such an `out` is not returned. When `make` fails after another process published `out`, the published file is returned. A fixture that cannot be made follows the [skip](#skip) rule with the required variable `generate` is given (default `CRAFT_TEST_REQUIRED`): unset or empty prints `SKIPPED: <reason>` on standard error and returns `None`, `1` fails the test, and any other value, `0` included, fails the test as a configuration error. Only `generate` reads the required variable. `generate_with` uses the caller's `required` value instead: `true` fails the test, and `false` prints the skip line and returns `None`.
+- `run_generator(cmd, env, max_output)` runs a generator with `env` added to the child's environment only, and keeps at most `max_output` bytes of each output stream (`DEFAULT_MAX_OUTPUT` is 64 KiB). The variables and stream settings stay on `cmd`, so use a new `Command` for each call that needs a clean environment.
+- `report(name, status)` and `generate_and_report(name, outputs, generate)` print one of these lines on standard output, which FilmCraft's `cargo xtask fixtures` counts:
+
+  ```text
+  FIXTURE made <name>
+  FIXTURE cached <name>
+  FIXTURE skipped <name>
+  ```
+
+A complete fixture is a nonempty regular file. A consumer that needs a valid media file checks its format after generation.
+
 ## mcp
 
 The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The module is built on every target except `wasm32`, and it opens no network connection.
@@ -451,6 +470,13 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
 
+### fixtures
+
+| Part | Repository | Path | Commit |
+|---|---|---|---|
+| Locations, publication with winner reuse, reporting, and the moved tests | storytold/filmcraft | `crates/testkit/src/fixtures.rs` | `e4ab3c6a99` |
+| `generate_with` and the required rule, with `failed_generator_skips_when_optional` and `failed_generator_fails_when_required` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4f8` |
+
 ### mcp
 
 | Code | Repository | Path | SHA |
@@ -532,6 +558,15 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### fixtures
+
+| Consumer | Copy it replaces | State |
+|---|---|---|
+| FilmCraft | `crates/testkit/src/fixtures.rs` (passes `FILMCRAFT_FIXTURES_DIR` and `FILMCRAFT_REQUIRE_ORACLES`) | Not switched |
+| EffectCraft | `crates/media/tests/it/footage.rs` | Not switched |
+| craft-libs `audio` and `video` tests | `crates/audio/tests/codecs/testkit.rs`, `crates/video/tests/vp8/common/mod.rs` | Not switched |
+| `craft-media-testkit` | its `fixtures` module and `temp_path` (keeps its public names) | Not switched |
 
 ### mcp
 

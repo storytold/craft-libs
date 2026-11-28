@@ -111,7 +111,7 @@ pub fn skip(reason: &str, required_var: &str) -> bool {
 /// Fail the test when `required` is set, otherwise print the skip line and return `false`. It
 /// fails the test with a panic.
 #[allow(clippy::panic)]
-fn skip_with(required: bool, reason: &str, required_var: &str) -> bool {
+pub(crate) fn skip_with(required: bool, reason: &str, required_var: &str) -> bool {
     if required {
         panic!("{reason}, and {required_var}=1 forbids skipping this test");
     }
