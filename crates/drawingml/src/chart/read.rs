@@ -1625,6 +1625,9 @@ mod tests {
         );
         let mut old = serde_json::to_value(read_chart_xml(xml.as_bytes()).unwrap()).unwrap();
         old["rawMetadataVersion"] = serde_json::json!(1);
+        for series in old["series"].as_array_mut().unwrap() {
+            series.as_object_mut().unwrap().remove("sourceIdx");
+        }
         old["series"][0]["secondaryAxis"] = serde_json::json!(false);
         old["yMax"] = serde_json::json!(90.0);
         old["y2Max"] = serde_json::Value::Null;
@@ -1779,6 +1782,7 @@ mod tests {
                 old["rawMetadataVersion"] = serde_json::json!(1);
                 for series in old["series"].as_array_mut().unwrap() {
                     series.as_object_mut().unwrap().remove("markerVisible");
+                    series.as_object_mut().unwrap().remove("sourceIdx");
                 }
                 let old: Chart = serde_json::from_value(old).unwrap();
                 assert!(crate::chart::write::chart_xml(&old).1, "unchanged version1 saves retain their raw part");
@@ -1830,4 +1834,175 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn review_6094537368_series_kind_edits_do_not_inherit_stacked_visibility() {
+        for (visible, symbol, target, expected) in [
+            (false, None, ChartType::LineMarkers, ChartType::LineMarkers),
+            (true, None, ChartType::Line, ChartType::Line),
+            (false, Some("none"), ChartType::LineMarkers, ChartType::Line),
+            (true, Some("circle"), ChartType::Line, ChartType::LineMarkers),
+        ] {
+            let xml = review_line_chart("stacked", visible, &[("Edited", symbol)]);
+            let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!(chart.kind, ChartType::StackedLine);
+            chart.series[0].kind = Some(target);
+            let (written, kept) = crate::chart::write::chart_xml(&chart);
+            assert!(!kept);
+            let back = read_chart_xml(&written).unwrap();
+            assert_eq!(back.series[0].kind, Some(expected), "visible={visible}, symbol={symbol:?}, target={target:?}");
+            assert_eq!(back.series[0].values, vec![Some(7.0)]);
+            assert_eq!(back.series[0].marker.as_deref(), symbol, "explicit symbols still take precedence");
+        }
+    }
+
+    #[test]
+    fn review_6094537368_same_kind_secondary_axes_drive_shared_helpers() {
+        let xml = same_kind_chart_xml()
+            .replace(r#"<c:max val="90"/>"#, r#"<c:min val="2"/><c:max val="90"/>"#)
+            .replace(r#"<c:max val="10"/>"#, r#"<c:min val="0"/><c:max val="10"/>"#)
+            .replace(r#"<c:axPos val="r"/>"#, r#"<c:axPos val="r"/><c:numFmt formatCode="0%" sourceLinked="0"/><c:majorUnit val="5"/>"#)
+            .replace(r#"<c:axPos val="l"/>"#, r#"<c:axPos val="l"/><c:numFmt formatCode="0.0" sourceLinked="0"/><c:majorUnit val="2"/>"#);
+        let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(chart.kind, ChartType::Column);
+        assert!(!chart.on_secondary(&chart.series[0]));
+        assert!(chart.on_secondary(&chart.series[1]));
+        assert_eq!(chart.axis_range(false), Some((0.0, 10.0)));
+        assert_eq!(chart.axis_range(true), Some((0.0, 7.0)), "secondary range is data extent, not explicit scale bounds");
+        assert_eq!(chart.axis_scale(false, 5), Some((0.0, 10.0, 2.0)));
+        assert_eq!(chart.axis_scale(true, 5), Some((2.0, 90.0, 5.0)));
+        assert_eq!(chart.data_label(&chart.series[0], 0.5), "0.5");
+        assert_eq!(chart.data_label(&chart.series[1], 0.5), "50%");
+        chart.series[1].number_format = Some("0.00".into());
+        assert_eq!(chart.data_label(&chart.series[1], 0.5), "0.50", "series format wins over the axis");
+        chart.y_min = None;
+        chart.y_max = None;
+        assert_eq!(chart.axis_range(false), Some((0.0, 2.0)), "secondary values do not enlarge the inferred primary extent");
+        chart.series.retain(|s| s.secondary_axis);
+        assert_eq!(chart.axis_range(false), None, "there is no populated primary axis");
+        assert_eq!(chart.axis_scale(false, 5), None);
+        assert_eq!(chart.axis_range(true), Some((0.0, 7.0)));
+
+        for kind in [ChartType::Column, ChartType::StackedColumn, ChartType::PercentColumn, ChartType::Waterfall] {
+            let single = Chart::sample(kind);
+            assert_eq!(single.axis_range(false), Some(single.value_range()), "unchanged single-axis aggregate for {kind:?}");
+            assert_eq!(single.axis_range(true), None);
+            assert!(single.axis_scale(false, 5).is_some());
+            assert_eq!(single.axis_scale(true, 5), None);
+        }
+        let empty = Chart { series: vec![], ..Default::default() };
+        assert_eq!(empty.axis_range(false), Some((0.0, 0.0)), "the existing empty primary default remains");
+        assert_eq!(empty.axis_scale(true, 5), None);
+    }
+
+    fn review_source_ids_chart(second_id: u32) -> String {
+        metadata_chart(&format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+<c:ser><c:idx val="0"/><c:order val="1"/><c:tx><c:v>A</c:v></c:tx><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>
+<c:ser><c:idx val="{second_id}"/><c:order val="0"/><c:tx><c:strRef><c:f>Data!$Z$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>B</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:f>Data!$Z$2:$Z$2</c:f><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
+</c:barChart>"#))
+    }
+
+    fn review_written_ids(bytes: &[u8]) -> Vec<(String, u32, u32)> {
+        let root = crate::xmlx::parse(bytes).unwrap();
+        root.path(&[Local("chart"), Local("plotArea")]).unwrap().elements()
+            .filter(|g| g.local().ends_with("Chart"))
+            .flat_map(|g| g.children(Local("ser")))
+            .map(|s| {
+                let value = |name| s.child(Local(name)).and_then(|v| v.attr_local("val")).unwrap().parse().unwrap();
+                (rich_text(s).unwrap(), value("idx"), value("order"))
+            }).collect()
+    }
+
+    #[test]
+    fn review_6094537368_source_ids_survive_reorder_new_series_and_duplicate_ids() {
+        for second_id in [1, u32::MAX] {
+            let xml = review_source_ids_chart(second_id);
+            let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!(chart.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["B", "A"]);
+            chart.title = Some("Title only".into());
+            let (written, kept) = crate::chart::write::chart_xml(&chart);
+            assert!(!kept);
+            assert_eq!(review_written_ids(&written), [("B".into(), second_id, 0), ("A".into(), 0, 1)]);
+
+            let mut duplicate = chart.series[0].clone();
+            duplicate.name = "Duplicate B".into();
+            chart.series.push(duplicate);
+            chart.series.insert(0, Series { name: "New".into(), values: vec![Some(13.0)], ..Default::default() });
+            let written = crate::chart::write::chart_xml(&chart).0;
+            let (new_id, duplicate_id) = if second_id == 1 { (2, 3) } else { (1, 2) };
+            assert_eq!(review_written_ids(&written), [
+                ("New".into(), new_id, 0), ("B".into(), second_id, 1), ("A".into(), 0, 2), ("Duplicate B".into(), duplicate_id, 3),
+            ]);
+            let back = read_chart_xml(&written).unwrap();
+            assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), [vec![Some(13.0)], vec![Some(7.0)], vec![Some(2.0)], vec![Some(7.0)]]);
+            assert_eq!(back.series[0].refs.values.as_deref(), Some("Sheet1!$B$2:$B$2"));
+            assert_eq!(back.series[1].refs.name.as_deref(), Some("Data!$Z$1"));
+            assert_eq!(back.series[1].refs.values.as_deref(), Some("Data!$Z$2:$Z$2"));
+            assert_eq!(back.series[2].refs.name.as_deref(), Some("Sheet1!$D$1"));
+            assert_eq!(back.series[2].refs.values.as_deref(), Some("Sheet1!$D$2:$D$2"), "formula columns follow display position, not source ID");
+            assert_eq!(back.series[3].refs.values.as_deref(), Some("Data!$Z$2:$Z$2"));
+        }
+        for invalid in [None, Some("-1"), Some("1.5"), Some("4294967296"), Some("bad")] {
+            let idx = invalid.map(|v| format!(r#"<c:idx val="{v}"/>"#)).unwrap_or_default();
+            let xml = review_source_ids_chart(1).replacen(r#"<c:idx val="1"/>"#, &idx, 1).replace(
+                "</c:barChart>",
+                r#"<c:ser><c:idx val="1"/><c:order val="2"/><c:tx><c:v>C</c:v></c:tx></c:ser></c:barChart>"#,
+            );
+            let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+            chart.title = Some("Rebuild invalid ID".into());
+            let written = crate::chart::write::chart_xml(&chart).0;
+            assert_eq!(review_written_ids(&written), [("B".into(), 2, 0), ("A".into(), 0, 1), ("C".into(), 1, 2)], "invalid={invalid:?}");
+        }
+    }
+
+    #[test]
+    fn review_6094537368_source_ids_preserve_old_raw_projections_and_real_id_edits() {
+        let xml = review_source_ids_chart(1).replace("</c:chartSpace>", r#"<c:extLst><c:ext uri="urn:craft:original-series-identity"><own:preserved xmlns:own="urn:craft:original"/></c:ext></c:extLst></c:chartSpace>"#);
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        for version in [0, 1, 2] {
+            let mut previous = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
+            previous.raw = Some(xml.clone());
+            let previous: Chart = serde_json::from_str(&serde_json::to_string(&previous).unwrap()).unwrap();
+            let (written, kept) = crate::chart::write::chart_xml(&previous);
+            assert!(kept, "unchanged saved interpretation{version} preserves raw XML");
+            assert!(crate::xmlx::parse(&written).unwrap().find(Local("preserved")).is_some());
+
+            // An actual new identity edit is not silently stripped on an older model.
+            let mut edited = serde_json::to_value(&previous).unwrap();
+            edited["series"][0]["sourceIdx"] = serde_json::json!(17);
+            let edited: Chart = serde_json::from_value(edited).unwrap();
+            let (written, kept) = crate::chart::write::chart_xml(&edited);
+            assert!(!kept, "a new ID edit must rebuild even with saved interpretation{version}");
+            assert_eq!(review_written_ids(&written)[0].1, 17);
+        }
+        let current = read_chart_xml(xml.as_bytes()).unwrap();
+        let current: Chart = serde_json::from_str(&serde_json::to_string(&current).unwrap()).unwrap();
+        assert!(crate::chart::write::chart_xml(&current).1, "unchanged current identities also retain raw XML");
+    }
+
+    #[test]
+    fn review_6094537368_reciprocal_axes_keep_duplicate_partner_and_candidate_order() {
+        for tag in ["catAx", "dateAx", "valAx"] {
+            for valid_first in [false, true] {
+                for first_pair in [true, false] {
+                    let partner = |cross| format!(r#"<c:{tag}><c:axId val="10"/><c:axPos val="b"/><c:crossAx val="{cross}"/></c:{tag}>"#);
+                    let valid = partner(if first_pair { 20 } else { 999 });
+                    let invalid = partner(999);
+                    let partners = if valid_first { valid + &invalid } else { invalid + &valid };
+                    let xml = metadata_chart(&format!(r#"<c:barChart><c:barDir val="col"/><c:ser><c:tx><c:v>Secondary</c:v></c:tx></c:ser><c:axId val="30"/><c:axId val="40"/></c:barChart>
+<c:valAx><c:axId val="70"/><c:axPos val="l"/><c:crossAx val="80"/></c:valAx>
+<c:valAx><c:axId val="20"/><c:scaling><c:max val="10"/></c:scaling><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>
+<c:valAx><c:axId val="60"/><c:scaling><c:max val="60"/></c:scaling><c:axPos val="l"/><c:crossAx val="50"/></c:valAx>{partners}
+<c:catAx><c:axId val="50"/><c:axPos val="b"/><c:crossAx val="60"/></c:catAx>
+<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/></c:catAx>
+<c:valAx><c:axId val="40"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="30"/></c:valAx>"#));
+                    let chart = read_chart_xml(xml.as_bytes()).unwrap();
+                    assert_eq!(chart.y_max, Some(if first_pair { 10.0 } else { 60.0 }), "tag={tag}, valid_first={valid_first}");
+                    assert_eq!(chart.y2_max, Some(90.0));
+                    assert!(chart.series[0].secondary_axis);
+                }
+            }
+        }
+    }
+
 }
