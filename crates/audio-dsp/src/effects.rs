@@ -22,7 +22,7 @@ pub(crate) mod util;
 pub(crate) mod voice;
 
 pub(crate) use channel::{Amplify, Balance, ChannelVolume, Invert, Route, Routing};
-pub use character::RingMod;
+pub use character::{Bitcrusher, RingMod};
 pub(crate) use declick::ClickRemover;
 pub use dither::Dither;
 pub use dynamics::{Compressor, Gate, Limiter, Maximizer};
@@ -158,6 +158,7 @@ static REGISTRY: &[EffectInfo] = &[
     entry!("click_remover", "Automatic Click Remover", Restoration, ClickRemover),
     entry!("channel_mixer", "Channel Mixer", Channel, ChannelMixer),
     entry!("distortion", "Distortion", Special, Distortion),
+    entry!("bitcrusher", "Bitcrusher", Special, Bitcrusher),
     entry!("guitar_suite", "GuitarSuite", Special, GuitarSuite),
     entry!("mastering", "Mastering", Special, Mastering),
     entry!("vocal_enhancer", "Vocal Enhancer", Special, VocalEnhancer),
