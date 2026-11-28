@@ -1087,10 +1087,11 @@ fn the_header_repeats_the_first_pages_edges_and_instruction_count() {
     ];
     let b = write_cmx(&drawing(pages)).unwrap().bytes;
     let cont = 12 + 8;
-    let page = page_index(&b)[0][0] + 8;
+    let chunk = page_index(&b)[0][0];
+    let page = chunk + 8;
     // Begin page's field 1: the page number, the flags, the edges, the end offset, the layer count
     // and the instruction count.
-    let fields = field_starts(&b, page + 4);
+    let fields = field_starts(&b, page + 4, page + instruction_size(&b, page, page + u32_at(&b, chunk + 4)));
     assert_eq!(fields[0].0, 1);
     let f1 = fields[0].1;
     assert_eq!(&b[cont + 96..cont + 112], &b[f1 + 6..f1 + 22]);
