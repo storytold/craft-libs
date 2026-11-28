@@ -345,8 +345,9 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
             0x0031 => g.styles.font(&mut c),
             0x0092 => g.styles.palette(&mut c),
             0x0293 => g.styles.style(&mut c),
-            // MsoDrawingGroup: one buffer of drawing records, cut at MAX_DRAWING.
-            0x00EB if dgg.len() < MAX_DRAWING => dgg.extend(c.rest()),
+            // MsoDrawingGroup: one buffer of drawing records, cut at MAX_DRAWING. A full buffer skips
+            // the record without copying it.
+            0x00EB if dgg.len() < MAX_DRAWING => keep_drawing(&mut dgg, &c.rest(), MAX_DRAWING),
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
                 let _ctab = c.u16()?;
@@ -968,10 +969,19 @@ fn object_record(rec: &Record<'_>, c: &mut Cursor<'_, '_>, st: &mut SheetState<'
                 st.notes.push((cell, object, author, flags & 0x0002 != 0));
             }
         }
-        0x00EC if st.drawing.len() < MAX_DRAWING => st.drawing.extend(c.rest()),
+        // MsoDrawing: the sheet's drawing records, joined and cut at MAX_DRAWING.
+        0x00EC if st.drawing.len() < MAX_DRAWING => keep_drawing(&mut st.drawing, &c.rest(), MAX_DRAWING),
         _ => {}
     }
     Ok(())
+}
+
+/// Appends a drawing fragment to `buf`, keeping at most `cap` bytes: the fragment that reaches
+/// the cap is cut there, and later ones are dropped. The drawing reader keeps what is left of a
+/// record that is cut short.
+fn keep_drawing(buf: &mut Vec<u8>, bytes: &[u8], cap: usize) {
+    let room = cap.saturating_sub(buf.len());
+    buf.extend_from_slice(bytes.get(..room).unwrap_or(bytes));
 }
 
 /// One CF record of the current CondFmt; `None` when it is not kept.
@@ -1115,5 +1125,17 @@ mod tests {
         // a shorter formula would fit the 2 bytes left, but the cut-off holds
         assert!(!budget.try_shared_text(1));
         assert!(budget.try_text(1), "text the read needs is still charged normally");
+    }
+
+    #[test]
+    fn drawing_records_stop_at_the_cap() {
+        let cap = 16;
+        let mut buf = vec![0; cap - 1];
+        keep_drawing(&mut buf, &[1; 8], cap);
+        assert!(buf.len() <= cap, "a fragment that reaches the cap is cut there");
+        assert_eq!(buf.last(), Some(&1), "the part that fits is kept");
+        let full = buf.clone();
+        keep_drawing(&mut buf, &[2; 8], cap);
+        assert_eq!(buf, full, "nothing is added once the cap is reached");
     }
 }
