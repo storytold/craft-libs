@@ -237,7 +237,7 @@ impl Reader<'_> {
     }
 
     /// Keep one part's bytes and content type (not its relationships).
-    fn keep_part(&mut self, part: &str) -> bool {
+    pub(super) fn keep_part(&mut self, part: &str) -> bool {
         let lower = part.to_ascii_lowercase();
         // `wordcraft:` names are WordCraft's own bookkeeping in `passthrough`, never a file's part.
         if !manifest_field_ok(part)

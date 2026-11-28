@@ -52,9 +52,8 @@ pub(crate) fn keep_rels(rels: &Rels) -> Result<Vec<u8>, DocxError> {
     Ok(bytes)
 }
 
-/// Rebind only mail-merge external sources to newly allocated IDs. Missing, ambiguous, internal
-/// or unsupported references refuse the save rather than silently turning a template into a letter.
-pub(super) fn write(doc: &Document, out: &mut PartRels) -> Result<Option<String>, DocxError> {
+/// Rebind external sources and the single embedded recipient leaf to newly allocated IDs.
+pub(super) fn write(doc: &Document, out: &mut PartRels, embeds: &mut super::embed::EmbedWriter<'_>) -> Result<Option<String>, DocxError> {
     let missing_settings = || {
         if doc.passthrough.contains_key(MAIL_MERGE_RELS) {
             Err(DocxError::MailMerge("retained mail merge settings are missing".into()))
@@ -90,10 +89,21 @@ pub(super) fn write(doc: &Document, out: &mut PartRels) -> Result<Option<String>
     }
     let mut merge = original.clone();
     let mut ids = BTreeMap::<String, String>::new();
+    let recipient_id = original.child("w:odso").and_then(|o| o.child("w:recipientData")).and_then(|r| r.attr("r:id"));
+    let mut recipient = None;
     let mut pending = vec![&mut merge];
     while let Some(e) = pending.pop() {
         if e.name.starts_with("?:") || e.attrs.iter().any(|(k, _)| k.starts_with("?:")) {
             return Err(DocxError::MailMerge("unrecognised namespace in mailMerge".into()));
+        }
+        let is_recipient = e.name == "w:recipientData";
+        if is_recipient
+            && (recipient.is_some()
+                || recipient_id.is_none_or(|id| id.trim().is_empty())
+                || e.attrs.iter().filter(|(name, _)| name == "r:id").count() != 1
+                || e.attr("r:id") != recipient_id)
+        {
+            return Err(DocxError::MailMerge("expected one recipient data reference".into()));
         }
         let source_type = match e.name.as_str() {
             "w:dataSource" | "w:src" => Some("mailMergeSource"),
@@ -122,16 +132,25 @@ pub(super) fn write(doc: &Document, out: &mut PartRels) -> Result<Option<String>
                     && (kind == format!("http://schemas.openxmlformats.org/officeDocument/2006/relationships/{suffix}")
                         || kind == format!("http://purl.oclc.org/ooxml/officeDocument/relationships/{suffix}"))
             });
-            if !external || !source || target.trim().is_empty() {
-                return Err(DocxError::MailMerge(format!(
-                    "unsupported or empty source relationship {id}; only external mail merge sources are preserved"
-                )));
+            let supported = if is_recipient {
+                rel.attr("TargetMode").is_none_or(|v| v.eq_ignore_ascii_case("Internal")) && crate::mail_merge::recipient_kind(kind)
+            } else {
+                external && source
+            };
+            if !supported || target.trim().is_empty() {
+                return Err(DocxError::MailMerge(format!("unsupported or empty mail merge relationship {id}")));
             }
             if let Some(new) = ids.get(id) {
                 *id = new.clone();
                 continue;
             }
-            let new = out.add(kind, target, true);
+            let new = if is_recipient {
+                let new = out.add(kind, "", false);
+                recipient = Some((new.clone(), target));
+                new
+            } else {
+                out.add(kind, target, true)
+            };
             ids.insert(id.clone(), new.clone());
             *id = new;
         }
@@ -139,6 +158,15 @@ pub(super) fn write(doc: &Document, out: &mut PartRels) -> Result<Option<String>
             Node::El(e) => Some(e),
             Node::Text(_) => None,
         }));
+    }
+    // Only write the part after validating all of the relationship references. A caller
+    // that explicitly discards an unsupported mail merge must leave no orphaned recipient data.
+    if let Some((id, target)) = recipient {
+        let Some((_, _, path, _)) = out.list.iter_mut().find(|(rid, ..)| rid == &id) else {
+            return Err(DocxError::MailMerge("missing allocated recipient data ID".into()));
+        };
+        let written = embeds.recipient_data(target)?;
+        *path = craft_opc::relative("word/settings.xml", &written);
     }
     // Original producers may use other prefixes. The canonical subtree declares its own aliases.
     merge.attrs.push(("xmlns:w".into(), "http://schemas.openxmlformats.org/wordprocessingml/2006/main".into()));
@@ -170,7 +198,10 @@ pub(super) fn source_relationships(settings: &[u8], rels: PartRels) -> Result<Pa
     let mut out = PartRels::default();
     for (id, kind, target, external) in rels.list {
         let kind = match kind.rsplit_once('/') {
-            Some((prefix, suffix)) if [TRANSITIONAL, STRICT].contains(&prefix) && matches!(suffix, "mailMergeSource" | "mailMergeHeaderSource") => {
+            Some((prefix, suffix))
+                if [TRANSITIONAL, STRICT].contains(&prefix)
+                    && matches!(suffix, "mailMergeSource" | "mailMergeHeaderSource" | "mailMergeRecipientData") =>
+            {
                 format!("{namespace}/{suffix}")
             }
             _ => kind,

@@ -29,6 +29,7 @@ mod legacy_forms;
 mod ligatures;
 mod line_numbering;
 mod locked_canvas;
+mod mail_merge_recipients;
 mod malformed;
 mod math_normal_text;
 mod missing_pictures;

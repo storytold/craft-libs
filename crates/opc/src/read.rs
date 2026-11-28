@@ -55,6 +55,8 @@ pub struct Package {
     lower: HashMap<String, String>,
     /// Names of the entries the archive could not produce, in archive order.
     skipped: Vec<String>,
+    ambiguous_targets: HashSet<String>,
+    colliding_targets: HashSet<String>,
 }
 
 impl Package {
@@ -129,17 +131,19 @@ impl Package {
 
     fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>, skipped: Vec<String>) -> Package {
         let mut lower: HashMap<String, String> = HashMap::new();
-        let mut collides = false;
+        let mut colliding_targets = HashSet::new();
         for name in files.keys() {
             match lower.entry(name.to_ascii_lowercase()) {
-                Entry::Occupied(_) => collides = true,
+                Entry::Occupied(entry) => {
+                    colliding_targets.insert(entry.key().clone());
+                }
                 Entry::Vacant(v) => {
                     v.insert(name.clone());
                 }
             }
         }
-        if !collides {
-            return Package { files, lower, skipped };
+        if colliding_targets.is_empty() {
+            return Package { files, lower, skipped, ambiguous_targets: HashSet::new(), colliding_targets };
         }
         // Entries whose names differ only in case are one part, so every spelling of the name
         // reaches the same stored entry. The spelling kept is the one a relationship names, so
@@ -151,14 +155,20 @@ impl Package {
                 named.insert(t);
             });
         }
+        let mut named_keys = HashSet::new();
+        let mut ambiguous_targets = HashSet::new();
         for name in files.keys().rev().filter(|n| named.contains(n.as_str())) {
-            lower.insert(name.to_ascii_lowercase(), name.clone());
+            let key = name.to_ascii_lowercase();
+            if !named_keys.insert(key.clone()) {
+                ambiguous_targets.insert(key.clone());
+            }
+            lower.insert(key, name.clone());
         }
         let before = files.len();
         files.retain(|name, _| lower.get(&name.to_ascii_lowercase()) == Some(name));
         let dropped = before.saturating_sub(files.len());
         log::warn!("opc: {dropped} zip entries are other spellings of parts already read; they are left out");
-        Package { files, lower, skipped }
+        Package { files, lower, skipped, ambiguous_targets, colliding_targets }
     }
 
     /// The entries of the archive that could not be read and were left out, by name.
@@ -179,6 +189,14 @@ impl Package {
     /// The stored spelling of part `name` (leading `/` ignored; case-insensitive).
     pub fn canonical(&self, name: &str) -> Option<&str> {
         self.lower.get(&normalize(name)).map(String::as_str)
+    }
+
+    /// Whether the target names multiple stored case spellings, or cannot choose between
+    /// colliding entries by an exact spelling.
+    pub fn has_ambiguous_spelling(&self, name: &str) -> bool {
+        let key = normalize(name);
+        self.ambiguous_targets.contains(&key)
+            || (self.colliding_targets.contains(&key) && self.lower.get(&key).is_some_and(|stored| stored != name.trim_start_matches('/')))
     }
 
     /// Part bytes by name (leading `/` ignored; case-insensitive).

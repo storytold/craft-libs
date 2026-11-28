@@ -4,6 +4,41 @@ use super::{
 };
 
 impl Reader<'_> {
+    /// Keep the referenced recipient leaf. A malformed leaf can be opened, but saving it
+    /// requires an explicit decision to discard the mail-merge settings.
+    fn keep_recipient_data(&mut self, path: &str, settings: &El) -> bool {
+        let Some(odso) = settings.child("w:mailMerge").and_then(|m| m.child("w:odso")) else { return true };
+        let mut refs = odso.children("w:recipientData");
+        let Some(reference) = refs.next() else { return true };
+        let Some(id) = reference.attr("r:id").filter(|id| !id.trim().is_empty()) else { return false };
+        if refs.next().is_some() {
+            return false;
+        }
+        let Ok(Some(rels)) = self.pkg.xml_strict(&craft_opc::rels_path(path)) else { return false };
+        let mut matches = rels.els().filter(|r| r.local() == "Relationship" && r.attr("Id") == Some(id));
+        let Some(rel) = matches.next() else { return false };
+        if matches.next().is_some()
+            || !crate::mail_merge::recipient_kind(rel.attr("Type").unwrap_or(""))
+            || rel.attr("TargetMode").is_some_and(|mode| !mode.eq_ignore_ascii_case("Internal"))
+        {
+            return false;
+        }
+        let Some(target) = rel
+            .attr("Target")
+            .and_then(|raw| crate::mail_merge::recipient_target(path, raw))
+            .and_then(|target| self.pkg.unambiguous_part_name(&target).map(str::to_owned))
+        else {
+            return false;
+        };
+        if self.pkg.get(&craft_opc::rels_path(&target)).is_some() {
+            return false;
+        }
+        let Some(bytes) = self.pkg.get(&target) else { return false };
+        let pkg = self.pkg;
+        let Some(ct) = self.content_types.get_or_insert_with(|| crate::package::ContentTypes::read(pkg)).of(&target) else { return false };
+        crate::mail_merge::validate_recipient(bytes, ct).is_ok() && self.keep_part(&target)
+    }
+
     pub(super) fn read_settings(&mut self, path: &str) -> Result<(), DocxError> {
         let Some(root) = self.xml(path)? else { return Ok(()) };
         let mail_merge = root.child("w:mailMerge").is_some();
@@ -18,6 +53,9 @@ impl Reader<'_> {
                     self.doc.passthrough.insert(crate::package::MAIL_MERGE_RELS.into(), Arc::new(kept));
                 }
                 Err(e) => log::warn!("docx: not keeping mail merge relationships: {e}"),
+            }
+            if !self.keep_recipient_data(path, &root) {
+                self.doc.passthrough.remove(crate::package::MAIL_MERGE_RELS);
             }
         }
         let s = &mut self.doc.settings;

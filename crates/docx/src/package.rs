@@ -293,6 +293,13 @@ impl Package {
         Ok(())
     }
 
+    pub(crate) fn unambiguous_part_name(&self, name: &str) -> Option<&str> {
+        if self.opc.has_ambiguous_spelling(name) {
+            return None;
+        }
+        self.opc.canonical(name)
+    }
+
     /// Part bytes by name (leading `/` ignored; case-insensitive).
     pub fn get(&self, name: &str) -> Option<&[u8]> {
         self.opc.get(name)

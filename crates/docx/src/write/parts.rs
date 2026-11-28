@@ -138,7 +138,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
         push_part(&mut entries, &mut overrides, "word/numbering.xml", numbering_xml(doc), &format!("{CT_WML}numbering+xml"), PartRels::default());
     }
     rels.add(rt::SETTINGS, "settings.xml", false);
-    let (settings, settings_rels) = write_settings(doc, &wr, options)?;
+    let (settings, settings_rels) = write_settings(doc, &mut wr, options)?;
     push_part(&mut entries, &mut overrides, "word/settings.xml", settings, &format!("{CT_WML}settings+xml"), settings_rels);
     rels.add(rt::THEME, "theme/theme1.xml", false);
     push_part(
@@ -279,7 +279,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
     Ok(entries)
 }
 
-fn write_settings(doc: &Document, wr: &Writer<'_>, options: WriteOptions) -> Result<(Vec<u8>, PartRels), DocxError> {
+fn write_settings(doc: &Document, wr: &mut Writer<'_>, options: WriteOptions) -> Result<(Vec<u8>, PartRels), DocxError> {
     // The attached template is an external relationship of the settings part (§17.15.1.6).
     let template = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty());
     let template_relationships = || {
@@ -288,7 +288,7 @@ fn write_settings(doc: &Document, wr: &Writer<'_>, options: WriteOptions) -> Res
         (rels, id)
     };
     let (mut settings_rels, template_rel) = template_relationships();
-    let mail_merge = match mail_merge::write(doc, &mut settings_rels) {
+    let mail_merge = match mail_merge::write(doc, &mut settings_rels, &mut wr.embeds) {
         Ok(merge) => merge,
         Err(DocxError::MailMerge(_)) if options.discard_unusable_mail_merge => {
             // Discard any partial source relationships and retain the template.
