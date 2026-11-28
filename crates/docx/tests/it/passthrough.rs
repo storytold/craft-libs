@@ -250,6 +250,283 @@ fn comments_without_durable_ids_get_unique_ones() {
     assert!(dates.iter().all(|(_, utc)| utc.is_empty()), "{dates:?}");
 }
 
+/// The reactions namespace ([MS-OREACTXML]).
+const CR: &str = "http://schemas.microsoft.com/office/comments/2020/reactions";
+
+/// commentsExtensible.xml with one Like on the first comment, its namespaces declared on the
+/// root, as Word writes it.
+const LIKE_CEX: &str = r#"<w16cex:commentsExtensible xmlns:w16cex="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:w16="http://schemas.microsoft.com/office/word/2018/wordml" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="w16 cr"><w16cex:commentExtensible w16cex:durableId="5A1B2C3D" w16cex:dateUtc="2026-01-02T09:00:00Z"><w16cex:extLst><w16:ext w16:uri="{CE6994B0-6A32-4C9F-8C6B-6E91EDA988CE}"><cr:reactions><cr:reaction reactionType="1"><cr:reactionInfo dateUtc="2026-01-04T06:16:20Z"><cr:user userId="ann@example.com" userProvider="None" userName="Ann"/></cr:reactionInfo></cr:reaction></cr:reactions></w16:ext></w16cex:extLst></w16cex:commentExtensible><w16cex:commentExtensible w16cex:durableId="0F00BA12" w16cex:dateUtc="2026-01-03T10:00:00Z"/></w16cex:commentsExtensible>"#;
+
+/// [`comments_package`] with `cex` as its commentsExtensible.xml, read.
+fn comments_with_cex(cex: &str) -> craft_wordmodel::Document {
+    let files = unzip(&comments_package(true));
+    let entries: Vec<(&str, Vec<u8>)> =
+        files.iter().map(|(k, v)| (k.as_str(), if k == "word/commentsExtensible.xml" { cex.as_bytes().to_vec() } else { v.clone() })).collect();
+    craft_docx::read(&zip(&entries)).unwrap()
+}
+
+fn liked_comments() -> craft_wordmodel::Document {
+    comments_with_cex(LIKE_CEX)
+}
+
+/// The written commentsExtensible.xml read by namespace, whatever prefixes it uses.
+fn written_cex(files: &BTreeMap<String, Vec<u8>>) -> craft_xml::El {
+    let namespaces = [
+        ("cex", "http://schemas.microsoft.com/office/word/2018/wordml/cex"),
+        ("w16", "http://schemas.microsoft.com/office/word/2018/wordml"),
+        ("cr", CR),
+    ];
+    let canonical = craft_xml::Canonical { namespaces: &namespaces, unknown: "?", element: None, attr_value: None };
+    craft_xml::Options::canonical(&canonical).strict().parse(text(files, "word/commentsExtensible.xml").as_bytes()).unwrap()
+}
+
+#[test]
+fn a_comments_reactions_survive_open_and_save() {
+    let doc = liked_comments();
+    for files in [save(&doc), save(&craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap())] {
+        let cex = written_cex(&files);
+        let comments: Vec<_> = cex.children("cex:commentExtensible").collect();
+        let reaction = comments[0].find("cr:reaction").unwrap_or_else(|| panic!("{}", text(&files, "word/commentsExtensible.xml")));
+        assert_eq!(reaction.attr("reactionType"), Some("1"));
+        let user = reaction.find("cr:user").unwrap();
+        assert_eq!((user.attr("userId"), user.attr("userName")), (Some("ann@example.com"), Some("Ann")));
+        assert!(reaction.find("cr:reactionInfo").unwrap().attr("dateUtc").is_some());
+        assert!(comments[1].elements().next().is_none(), "the comment without reactions gets none");
+    }
+}
+
+#[test]
+fn reactions_follow_the_privacy_settings() {
+    let mut doc = liked_comments();
+    doc.settings.remove_date_time = true;
+    let files = save(&doc);
+    let cex = written_cex(&files);
+    let reaction = cex.find("cr:reaction").unwrap();
+    assert!(reaction.find("cr:user").is_some());
+    assert!(cex.descendants().all(|e| e.attr_local("dateUtc").is_none()), "{}", text(&files, "word/commentsExtensible.xml"));
+    // The people who reacted are personal information.
+    doc.settings.remove_personal_info = true;
+    let files = save(&doc);
+    assert!(written_cex(&files).find("cr:reaction").is_none(), "{}", text(&files, "word/commentsExtensible.xml"));
+}
+
+/// Kept markup takes its namespaces along, wherever the file declared them; markup using a prefix
+/// nothing declares isn't kept, as a save could only write it as markup no reader accepts.
+#[test]
+fn kept_extensions_carry_their_namespaces_and_undeclared_prefixes_are_not_kept() {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex"><x:commentExtensible x:durableId="5A1B2C3D" xmlns:r="{CR}"><x:extLst><ext xmlns="http://schemas.microsoft.com/office/word/2018/wordml" uri="{{CE6994B0-6A32-4C9F-8C6B-6E91EDA988CE}}"><r:reactions><r:reaction reactionType="2"/></r:reactions></ext></x:extLst></x:commentExtensible><x:commentExtensible x:durableId="0F00BA12" x:dateUtc="2026-01-03T10:00:00Z"><x:extLst><nope:thing/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    let doc = comments_with_cex(&cex);
+    let c: Vec<_> = doc.comments.values().collect();
+    assert!(c[1].extensions.is_none() && c[1].date_utc.is_some(), "{:?}", c[1]);
+    let files = save(&doc);
+    let cex = written_cex(&files);
+    let reaction = cex.find("cr:reaction").unwrap_or_else(|| panic!("{}", text(&files, "word/commentsExtensible.xml")));
+    assert_eq!(reaction.attr("reactionType"), Some("2"));
+}
+
+/// A prefix kept markup only lists as ignorable, declared outside it, goes along too.
+#[test]
+fn kept_extensions_carry_the_namespaces_their_own_ignorable_lists() {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:zz="urn:zz" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D"><x:extLst mc:Ignorable="zz"><r:reactions><r:reaction reactionType="2"/></r:reactions></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    let files = save(&comments_with_cex(&cex));
+    let written = text(&files, "word/commentsExtensible.xml");
+    assert!(written.contains(r#"mc:Ignorable="zz""#), "{written}");
+    assert!(written.contains(r#"xmlns:zz="urn:zz""#), "{written}");
+}
+
+/// A prefix the file marks ignorable outside kept markup stays ignorable in it when the markup
+/// declares it again with the same namespace, and not when it binds it to another one.
+#[test]
+fn kept_extensions_keep_an_outer_ignorable_prefix_they_declare_again_alike() {
+    for (same, markup) in kept_marks_q_ignorable("", r#"xmlns:q="urn:q""#) {
+        assert!(same, "{markup}");
+    }
+    for (other, markup) in kept_marks_q_ignorable("", r#"xmlns:q="urn:other""#) {
+        assert!(!other, "{markup}");
+    }
+}
+
+/// A prefix the file marks ignorable outside kept markup stays ignorable in it when the markup
+/// binds the file's Markup Compatibility prefix to another namespace.
+#[test]
+fn kept_extensions_keep_an_outer_ignorable_prefix_when_they_rebind_mc() {
+    for (kept, markup) in kept_marks_q_ignorable("", r#"xmlns:mc="urn:vendor""#) {
+        assert!(kept, "{markup}");
+    }
+}
+
+/// The root marks a namespace ignorable, not a prefix: kept markup doesn't mark the namespace
+/// a comment element binds that prefix to instead, through a save and a second round trip.
+#[test]
+fn kept_extensions_do_not_mark_ignorable_a_prefix_their_comment_rebinds() {
+    for (marked, markup) in kept_marks_q_ignorable(r#"xmlns:q="urn:b""#, "") {
+        assert!(!marked && markup.contains(r#"xmlns:q="urn:b""#), "{markup}");
+    }
+}
+
+/// The root marks the namespace `q` names ignorable, and `alias` names it too: when the comment
+/// element binds `q` to another namespace, kept markup naming `alias` (here in
+/// `mc:ProcessContent`, which needs its prefix ignorable) still marks that namespace ignorable,
+/// under `alias`, through a save and a second round trip.
+#[test]
+fn kept_extensions_mark_ignorable_under_another_prefix_a_namespace_whose_prefix_their_comment_rebinds() {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:old" xmlns:alias="urn:old" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" xmlns:q="urn:b"><x:extLst mc:ProcessContent="alias:note"><alias:note><r:reactions/></alias:note></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    for (ext, markup) in kept_markup(&cex) {
+        let ignorable = ignorable_namespaces(&ext);
+        assert!(ignorable.contains(&"urn:old") && !ignorable.contains(&"urn:b"), "{markup}");
+        assert!(ext.ns_decls().any(|d| d == ("alias", "urn:old")), "{markup}");
+    }
+}
+
+/// As above, with `alias` declared only on markup inside the `extLst`: the kept element declares
+/// the namespace itself and marks it ignorable, under `alias` or, when the comment element binds
+/// `alias` to something else, under a prefix of its own, through a save and a second round trip.
+#[test]
+fn kept_extensions_mark_ignorable_a_namespace_only_their_inner_markup_names() {
+    for comment_alias in ["", r#"xmlns:alias="urn:c""#] {
+        let cex = format!(
+            r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:old" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" xmlns:q="urn:b" {comment_alias}><x:extLst><r:reactions xmlns:alias="urn:old" mc:ProcessContent="alias:note"><alias:note/></r:reactions></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+        );
+        for (ext, markup) in kept_markup(&cex) {
+            let ignorable = ignorable_namespaces(&ext);
+            assert!(ignorable.contains(&"urn:old"), "{markup}");
+            assert!(!ignorable.contains(&"urn:b") && !ignorable.contains(&"urn:c"), "{markup}");
+            let inner = ext.find("r:reactions").unwrap_or_else(|| panic!("{markup}"));
+            assert!(inner.ns_decls().any(|d| d == ("alias", "urn:old")), "{markup}");
+        }
+    }
+}
+
+/// As above, with only a default namespace naming it, on the `extLst` or on markup inside it:
+/// the kept element declares the namespace under a prefix and marks it ignorable, through a save
+/// and a second round trip.
+#[test]
+fn kept_extensions_mark_ignorable_a_namespace_only_a_default_namespace_names() {
+    let inside = r#"<x:extLst><r:reactions><note xmlns="urn:old"/></r:reactions></x:extLst>"#;
+    let on_ext = r#"<x:extLst xmlns="urn:old"><note/></x:extLst>"#;
+    for ext in [inside, on_ext] {
+        let cex = format!(
+            r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:old" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" xmlns:q="urn:b">{ext}</x:commentExtensible></x:commentsExtensible>"#
+        );
+        for (kept, markup) in kept_markup(&cex) {
+            let ignorable = ignorable_namespaces(&kept);
+            assert!(ignorable.contains(&"urn:old") && !ignorable.contains(&"urn:b"), "{markup}");
+            let default = kept.ns_decls().chain(kept.descendants().flat_map(craft_xml::El::ns_decls)).find(|(p, _)| p.is_empty());
+            assert_eq!(default, Some(("", "urn:old")), "the note stays in urn:old: {markup}");
+        }
+    }
+}
+
+const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+
+/// The extension kept from commentsExtensible.xml `cex`, as read and after a save and a second
+/// read: each parsed, and as written.
+fn kept_markup(cex: &str) -> Vec<(craft_xml::El, String)> {
+    let doc = comments_with_cex(cex);
+    let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    [doc, back]
+        .iter()
+        .map(|d| {
+            let markup = d.comments.values().find_map(|c| c.extensions.clone()).unwrap();
+            (craft_xml::Options::default().strict().parse(markup.as_bytes()).unwrap(), markup)
+        })
+        .collect()
+}
+
+/// The namespaces kept markup `ext` marks ignorable by Markup Compatibility, by its own
+/// declarations.
+fn ignorable_namespaces(ext: &craft_xml::El) -> Vec<&str> {
+    let mce: Vec<&str> = ext.ns_decls().filter(|(_, u)| *u == MCE).map(|(p, _)| p).collect();
+    let tokens = ext.attrs.iter().filter(|(k, _)| k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && mce.contains(&p)));
+    tokens.flat_map(|(_, v)| v.split_whitespace()).filter_map(|t| ext.ns_decls().find(|(p, _)| *p == t).map(|(_, u)| u)).collect()
+}
+
+/// Whether the extension kept from an `extLst` carrying `ext_decls`, in a comment element
+/// carrying `comment_decls`, under a root that marks `q` ignorable, marks `q` ignorable by
+/// Markup Compatibility, as read and after a save and a second read; each with the kept markup.
+fn kept_marks_q_ignorable(comment_decls: &str, ext_decls: &str) -> Vec<(bool, String)> {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:q" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" {comment_decls}><x:extLst {ext_decls}><r:reactions q:note="n"/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    kept_markup(&cex)
+        .into_iter()
+        .map(|(ext, markup)| {
+            let mce: Vec<&str> = ext.ns_decls().filter(|(_, u)| *u == MCE).map(|(p, _)| p).collect();
+            let marked = ext.attrs.iter().any(|(k, v)| {
+                k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && mce.contains(&p)) && v.split_whitespace().any(|t| t == "q")
+            });
+            (marked, markup)
+        })
+        .collect()
+}
+
+/// The namespace `prefix` names on the first element called `name` in `root`, by the
+/// declarations on the way down.
+fn binding_at(root: &craft_xml::El, name: &str, prefix: &str) -> Option<String> {
+    fn find(e: &craft_xml::El, name: &str, prefix: &str, scope: &mut Vec<(String, String)>) -> Option<Option<String>> {
+        let mark = scope.len();
+        scope.extend(e.ns_decls().map(|(p, u)| (p.to_string(), u.to_string())));
+        let found = if e.name == name {
+            Some(scope.iter().rev().find(|(p, _)| p == prefix).map(|(_, u)| u.clone()))
+        } else {
+            e.elements().find_map(|k| find(k, name, prefix, scope))
+        };
+        scope.truncate(mark);
+        found
+    }
+    find(root, name, prefix, &mut Vec::new()).flatten()
+}
+
+/// A prefix kept markup names only in a Markup Compatibility attribute (`mc:Choice/@Requires`,
+/// `mc:MustUnderstand`, `mc:ProcessContent`, `mc:PreserveElements`, `mc:PreserveAttributes`),
+/// declared outside it, still names the same namespace where it's used after a save and a
+/// second round trip. A prefix nothing declares isn't kept.
+#[test]
+fn kept_extensions_carry_the_namespaces_their_compatibility_attributes_name() {
+    let cases = [
+        ("mc:Choice", r#"<mc:AlternateContent><mc:Choice Requires="q"><r:reactions/></mc:Choice><mc:Fallback/></mc:AlternateContent>"#),
+        ("r:reactions", r#"<r:reactions mc:MustUnderstand="q"/>"#),
+        ("r:reactions", r#"<r:reactions mc:ProcessContent="q:box"/>"#),
+        ("r:reactions", r#"<r:reactions mc:PreserveElements="q:*"/>"#),
+        ("r:reactions", r#"<r:reactions mc:PreserveAttributes="q:note"/>"#),
+    ];
+    let cex = |declare: &str, ext: &str| {
+        format!(
+            r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:r="{CR}"{declare}><x:commentExtensible x:durableId="5A1B2C3D" x:dateUtc="2026-01-02T09:00:00Z"><x:extLst>{ext}</x:extLst></x:commentExtensible></x:commentsExtensible>"#
+        )
+    };
+    for (name, ext) in cases {
+        let doc = comments_with_cex(&cex(r#" xmlns:q="urn:q""#, ext));
+        for files in [save(&doc), save(&craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap())] {
+            let written = text(&files, "word/commentsExtensible.xml");
+            let root = craft_xml::Options::default().strict().parse(written.as_bytes()).unwrap();
+            assert_eq!(binding_at(&root, name, "q").as_deref(), Some("urn:q"), "{ext}: {written}");
+        }
+        let c = comments_with_cex(&cex("", ext)).comments.values().next().cloned().unwrap();
+        assert!(c.extensions.is_none() && c.date_utc.is_some(), "{ext}: {c:?}");
+    }
+}
+
+/// Leaving the dates out keeps a namespace whose prefix happens to be `dateUtc`, so what uses it
+/// still opens.
+#[test]
+fn leaving_dates_out_keeps_a_namespace_named_date_utc() {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D"><x:extLst xmlns:dateUtc="urn:d"><r:reactions><r:reaction reactionType="2"><dateUtc:item dateUtc="2026-01-04T06:16:20Z"/></r:reaction></r:reactions></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    let mut doc = comments_with_cex(&cex);
+    doc.settings.remove_date_time = true;
+    let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    let kept = back.comments.values().find_map(|c| c.extensions.clone()).unwrap_or_default();
+    assert!(kept.contains("dateUtc:item") && !kept.contains("2026-01-04"), "{kept}");
+}
+
 /// A local `w:date` with a `Z` (older files have no `dateUtc`) isn't saved as the UTC time either,
 /// so it doesn't shift by the user's offset after a round trip.
 #[test]

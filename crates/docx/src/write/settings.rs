@@ -199,7 +199,7 @@ pub(super) fn write_comment_ids(
     let reserved: std::collections::HashSet<&str> = doc.comments.values().filter_map(|c| c.durable_id.as_deref()).collect();
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut next = 0x1000_0000u32;
-    let mut rows: Vec<(String, String, Option<String>)> = Vec::new();
+    let mut rows: Vec<(String, String, Option<String>, Option<String>)> = Vec::new();
     for (cid, pid) in comment_paras {
         let Some(c) = doc.comments.get(cid) else { continue };
         let kept = c.durable_id.as_deref().filter(|d| durable_id_ok(d)).map(|d| format!("{:08X}", u32::from_str_radix(d, 16).unwrap_or(0)));
@@ -217,7 +217,8 @@ pub(super) fn write_comment_ids(
         // Only a known UTC time: `w:date` is local time, often with a `Z` it doesn't mean.
         // Remove date and time on save (#1062): no comment date here either.
         let utc = if doc.settings.remove_date_time { None } else { c.date_utc.clone() };
-        rows.push((pid.clone(), durable, utc));
+        let ext = c.extensions.as_deref().and_then(|x| comment_extensions(x, doc.settings.remove_personal_info, doc.settings.remove_date_time));
+        rows.push((pid.clone(), durable, utc, ext));
     }
     let mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
     let mut w = W::new();
@@ -225,7 +226,7 @@ pub(super) fn write_comment_ids(
         "w16cid:commentsIds",
         &[("xmlns:mc", mc), ("xmlns:w16cid", "http://schemas.microsoft.com/office/word/2016/wordml/cid"), ("mc:Ignorable", "w16cid")],
     );
-    for (pid, durable, _) in &rows {
+    for (pid, durable, ..) in &rows {
         w.empty("w16cid:commentId", &[("w16cid:paraId", pid), ("w16cid:durableId", durable)]);
     }
     w.close("w16cid:commentsIds");
@@ -237,15 +238,45 @@ pub(super) fn write_comment_ids(
         "w16cex:commentsExtensible",
         &[("xmlns:mc", mc), ("xmlns:w16cex", "http://schemas.microsoft.com/office/word/2018/wordml/cex"), ("mc:Ignorable", "w16cex")],
     );
-    for (_, durable, utc) in &rows {
-        match utc {
-            Some(d) => w.empty("w16cex:commentExtensible", &[("w16cex:durableId", durable), ("w16cex:dateUtc", d)]),
-            None => w.empty("w16cex:commentExtensible", &[("w16cex:durableId", durable)]),
+    for (_, durable, utc, ext) in &rows {
+        let mut a = vec![("w16cex:durableId", durable.as_str())];
+        if let Some(d) = utc {
+            a.push(("w16cex:dateUtc", d.as_str()));
+        }
+        match ext {
+            Some(x) => {
+                w.open("w16cex:commentExtensible", &a);
+                w.raw(x);
+                w.close("w16cex:commentExtensible");
+            }
+            None => w.empty("w16cex:commentExtensible", &a),
         }
     }
     w.close("w16cex:commentsExtensible");
     rels.add(rt::COMMENTS_EXTENSIBLE, "commentsExtensible.xml", false);
     push_part(entries, overrides, "word/commentsExtensible.xml", w.into_bytes(), &format!("{CT_WML}commentsExtensible+xml"), PartRels::default());
+}
+
+/// A comment's kept extension list ([`craft_wordmodel::Comment::extensions`]) as markup to write
+/// inside its `w16cex:commentExtensible`: read back and written again, so only a well-formed
+/// `extLst` goes out, within the limits it was read with. Its reactions name the people who
+/// reacted, so none goes out when personal information is removed on save; when dates and times
+/// are, its `dateUtc`s are left out (a namespace declaration named `dateUtc` stays).
+fn comment_extensions(markup: &str, names: bool, dates: bool) -> Option<String> {
+    fn drop_dates(e: &mut craft_xml::El) {
+        e.attrs.retain(|(k, _)| k.starts_with("xmlns:") || k.rsplit(':').next() != Some("dateUtc"));
+        for kid in e.elements_mut() {
+            drop_dates(kid);
+        }
+    }
+    if names {
+        return None;
+    }
+    let (mut el, _) = xml::parse_as_written_counted(markup.as_bytes(), xml::MAX_ELEMENTS).ok().filter(|(e, _)| e.local() == "extLst")?;
+    if dates {
+        drop_dates(&mut el);
+    }
+    Some(el.to_xml())
 }
 
 pub(super) fn theme_xml(doc: &Document) -> Vec<u8> {

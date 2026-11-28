@@ -390,7 +390,26 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool, max: u
         Some(requirements.into_iter().map(|p| scope.uri(p).map_or("?", |u| requirement_prefix(u.as_bytes()))).collect::<Vec<_>>().join(" "))
     };
     let canonical = craft_xml::Canonical { namespaces: &namespaces, unknown: "?", element: Some(&element), attr_value: Some(&requires) };
-    let limits = craft_xml::Limits {
+    let mut options = craft_xml::Options::canonical(&canonical).with_limits(limits(max));
+    if strict {
+        options = options.strict();
+    }
+    let root = options.parse(bytes).map_err(|e| parse_error(&e, max))?;
+    Ok(from_tree_counted(root))
+}
+
+/// A lenient parse with the names and namespace declarations as written, for markup kept whole
+/// and written back whatever its vocabulary ([`El::to_xml`] keeps only the namespaces the
+/// reader knows), with the number of elements it built. The limits are [`parse_counted`]'s.
+pub(crate) fn parse_as_written_counted(bytes: &[u8], max: usize) -> Result<(craft_xml::El, usize), DocxError> {
+    let root = craft_xml::Options::default().with_limits(limits(max)).parse(bytes).map_err(|e| parse_error(&e, max))?;
+    let count = 1 + root.descendants().count();
+    Ok((root, count))
+}
+
+/// The parser's limits, stopping at `max` elements.
+fn limits(max: usize) -> craft_xml::Limits {
+    craft_xml::Limits {
         // The flat (single-file) form of a package may be larger than any one part.
         max_input: 2 << 30,
         // `MAX_DEPTH` open elements, and an empty element inside the deepest (craft-xml counts the
@@ -403,17 +422,15 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool, max: u
         max_elements: max,
         max_attrs: MAX_ATTRS,
         max_attrs_total: 2 * MAX_ELEMENTS,
-    };
-    let mut options = craft_xml::Options::canonical(&canonical).with_limits(limits);
-    if strict {
-        options = options.strict();
     }
-    let root = options.parse(bytes).map_err(|e| match &e {
+}
+
+fn parse_error(e: &craft_xml::Error, max: usize) -> DocxError {
+    match e {
         craft_xml::Error::TooManyElements(_) => DocxError::Limit(format!("over the XML element budget for this parse: at most {max} elements")),
         e if e.is_limit() => DocxError::Limit(e.to_string()),
         e => DocxError::Xml(e.to_string()),
-    })?;
-    Ok(from_tree_counted(root))
+    }
 }
 
 /// The `craft-xml` tree as this module's (whose shape the reader was written against), with the

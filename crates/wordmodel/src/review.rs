@@ -20,6 +20,11 @@ pub struct Comment {
     /// or the time the app stamped the comment with.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date_utc: Option<String>,
+    /// The extension list Word keeps beside the comment's durable id (`w16cex:extLst` in
+    /// `commentsExtensible.xml`: its reactions, and whatever a later Word adds), as read: markup
+    /// that declares every namespace it uses, so a save writes it back as it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
