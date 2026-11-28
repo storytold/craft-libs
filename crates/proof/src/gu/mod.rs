@@ -130,6 +130,34 @@ mod tests {
         }
     }
 
+    /// A zero-width joiner or non-joiner in a conjunct (`પુસ્` U+200D `તક`) keeps the word whole,
+    /// and the word is found under the dictionary's spelling, which has no joiner.
+    #[test]
+    fn words_with_joiners_are_one_word_and_spelled() {
+        test_dict::install();
+        for word in ["પુસ્\u{200D}તક", "પુસ્\u{200C}તકોમાં"] {
+            let text = format!("ઘર {word} ગામ");
+            let at = text.find(word).unwrap();
+            assert!(crate::words(&text).contains(&(at, at + word.len())), "{word:?}");
+            assert!(is_correct(word), "{word:?}");
+            let issues = crate::check_text(&text, &[(0..text.len(), crate::ProofLang::Gu)]);
+            assert!(issues.is_empty(), "{word:?}: {issues:?}");
+        }
+        // Still a misspelling with a joiner, and a joiner at a word's edge is not in the word.
+        assert!(!is_correct("પુસ્\u{200D}તકક"));
+        let text = "ઘર\u{200D} ગામ";
+        assert!(crate::words(text).contains(&(0, "ઘર".len())));
+        // A word with a joiner written twice is a repeated word.
+        let text = "પુસ્\u{200D}તક પુસ્\u{200D}તક";
+        let issues = crate::check_grammar_in(text, crate::ProofLang::Gu);
+        assert!(issues.iter().any(|i| i.start == 0 && i.end == text.len()), "{issues:?}");
+        // A word Gujarati repeats on purpose (`જલ્દી જલ્દી`) still is one when typed with a joiner.
+        for text in ["જલ્\u{200D}દી જલ્\u{200D}દી", "જલ્\u{200C}દી જલ્\u{200C}દી"] {
+            let issues = crate::check_grammar_in(text, crate::ProofLang::Gu);
+            assert!(issues.is_empty(), "{text:?}: {issues:?}");
+        }
+    }
+
     #[test]
     fn forbidden_words_are_rejected() {
         test_dict::install();

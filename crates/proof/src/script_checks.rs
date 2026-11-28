@@ -46,10 +46,13 @@ pub(crate) fn is_correct(script: &Script, d: &AffixDict, word: &str, opts: &crat
 }
 
 /// Is one word (no hyphens) in the dictionary or the user dictionary, spelled as it is or as the
-/// script's [`Script::variant`]?
+/// script's [`Script::variant`]? A word with a zero-width joiner or non-joiner (`પુસ્` U+200D
+/// `તક`) is tried as typed, then without its joiners, as a dictionary that ignores them
+/// (Hunspell's `IGNORE`) would: they choose how a conjunct is drawn, not how the word is spelled.
 fn known(script: &Script, d: &AffixDict, w: &str) -> bool {
     let listed = |w: &str| d.check(w) || crate::in_user_dictionary(&w.to_lowercase());
-    listed(w) || script.variant.and_then(|v| v(w)).is_some_and(|v| listed(&v))
+    let spelled = |w: &str| listed(w) || script.variant.and_then(|v| v(w)).is_some_and(|v| listed(&v));
+    spelled(w) || (w.contains(crate::indic::is_joiner) && spelled(&w.replace(crate::indic::is_joiner, "")))
 }
 
 /// A language's script, messages and choices for [`check`].
@@ -91,9 +94,11 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], rules: &Rules, v: &mut Vec<
         let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
         if !gap.is_empty()
             && gap.chars().all(char::is_whitespace)
-            && w0.chars().all(|c| c.is_alphabetic() || (rules.script.is_letter)(c))
+            && w0.chars().all(|c| c.is_alphabetic() || (rules.script.is_letter)(c) || crate::indic::is_joiner(c))
             && w0 == w1
-            && (rules.flag_repeat)(w0)
+            // The words a language repeats on purpose are listed without joiners (`જલ્દી`), so
+            // `જલ્` U+200D `દી` twice is the same intentional repeat.
+            && (rules.flag_repeat)(&w0.replace(crate::indic::is_joiner, ""))
         {
             v.push(issue(rules, *a0, *b1, format!("{}: “{w1}”", rules.repeated_word), vec![w0.to_string()]));
         }

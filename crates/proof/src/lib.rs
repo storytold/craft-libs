@@ -489,13 +489,32 @@ fn in_dialect(s: &str, word: &str, lang: ProofLang) -> String {
 }
 
 /// Words in `text`: (byte start, byte end). Combining marks belong to the word they follow, so a
-/// word typed decomposed (`tambie\u{301}n`, NFD) is one word, as its precomposed form is.
+/// word typed decomposed (`tambie\u{301}n`, NFD) is one word, as its precomposed form is. A
+/// zero-width joiner or non-joiner between two letters, digits or marks is inside the word, as in
+/// Unicode's word boundaries (UAX #29): Indic text uses one to choose how a conjunct is drawn
+/// (`क्` U+200D `ष`, `પુસ્` U+200D `તક`). A joiner at a word's edge is not part of it.
 pub fn words(text: &str) -> Vec<(usize, usize)> {
+    use indic::is_joiner;
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
-    let is_w = |c: char| c.is_alphanumeric() || c == '\'' || c == '’' || c == '-' || unicode_normalization::char::is_combining_mark(c);
+    let is_core = |c: char| c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c);
+    let is_w = |c: char| is_core(c) || c == '\'' || c == '’' || c == '-';
+    // The char before was a letter, digit or mark, or a joiner kept after one.
+    let mut after_core = false;
+    // Is the first char after the current run of joiners a letter, digit or mark? Looked up once
+    // per run, so a long run of joiners costs linear time, not quadratic.
+    let mut run_ends_core: Option<bool> = None;
     for (i, c) in text.char_indices() {
-        match (start, is_w(c)) {
+        let w = if is_joiner(c) {
+            after_core
+                && *run_ends_core
+                    .get_or_insert_with(|| text.get(i + c.len_utf8()..).and_then(|rest| rest.chars().find(|&n| !is_joiner(n))).is_some_and(is_core))
+        } else {
+            run_ends_core = None;
+            is_w(c)
+        };
+        after_core = if is_joiner(c) { w } else { is_core(c) };
+        match (start, w) {
             (None, true) => start = Some(i),
             (Some(s), false) => {
                 out.push((s, i));
