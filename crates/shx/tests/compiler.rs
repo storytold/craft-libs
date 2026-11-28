@@ -91,7 +91,7 @@ fn invalid_typed_operands_report_source_lines() {
     for source in ["*UNIFONT,6,X\n256\n*65,1,A\n0", "*BIGFONT 1,1,-1,2\n*65,1,A\n0", "*0,1,F\n256", "*-1,1,A\n0"] {
         assert!(matches!(compile(source), Err(ShxError::Source(_, _))), "{source}");
     }
-    let large_record = format!("*65,1,{}\n0", "x".repeat(65535));
+    let large_record = format!("*65,1,A\n{}0", "1,".repeat(65535));
     assert_eq!(compile(&large_record), Err(ShxError::TooLarge));
 }
 
@@ -105,5 +105,21 @@ fn errors_have_useful_display_messages() {
         (ShxError::Source(7, "bad operand".into()), "line 7: bad operand"),
     ] {
         assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
+fn a_name_the_reader_would_drop_does_not_compile() {
+    let long = "N".repeat(1025);
+    assert_eq!(
+        compile(&format!("*1,1,X\n0\n*2,1,{long}\n0\n")).err(),
+        Some(ShxError::Source(3, "the name of shape 2 is longer than 1024 bytes".into()))
+    );
+    let nul = format!("{}\0", "N".repeat(1024));
+    let short = "N".repeat(1024);
+    for name in [&short, &nul] {
+        let font = craft_shx::parse::parse(&compile(&format!("*BIGFONT 1,1,081,09F\n*082A0,1,{name}\n010,0\n")).unwrap()).unwrap();
+        let record = font.records.get(&0x82A0).unwrap();
+        assert_eq!(font.data.get(record.name.0..record.name.1), Some(short.as_bytes()));
     }
 }

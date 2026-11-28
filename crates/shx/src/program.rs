@@ -85,10 +85,10 @@ pub struct Glyph {
 const MAX_DEPTH: usize = 16;
 /// Location stack (the format promises four).
 const MAX_STACK: usize = 64;
-/// Bytes run per glyph, subshapes included.
-const MAX_STEPS: usize = 200_000;
-/// Points per glyph.
-const MAX_POINTS: usize = 50_000;
+/// Bytes run per glyph, subshapes included (16 shapes of the format's 2,000 bytes).
+const MAX_STEPS: usize = 32_768;
+/// Points per glyph (128 full circles): every character of a text may draw this many.
+const MAX_POINTS: usize = 8_192;
 /// Coordinates in font units.
 const MAX_COORD: f64 = 1.0e7;
 /// Arc segments per full turn.
@@ -158,6 +158,11 @@ fn direction(d: u8) -> Point {
     Point::new(x, y)
 }
 
+/// Whether a pen position is within the coordinate bound.
+fn bounded(p: Point) -> bool {
+    p.is_finite() && p.x.abs().max(p.y.abs()) <= MAX_COORD
+}
+
 /// A two's complement operand byte.
 fn signed(b: u8) -> f64 {
     f64::from(i8::from_le_bytes([b]))
@@ -193,7 +198,7 @@ impl Pen<'_> {
 
     /// Move the pen by `d` font units (already scaled), drawing when the pen is down.
     fn to(&mut self, target: Point) -> Res {
-        if !target.is_finite() || target.x.abs().max(target.y.abs()) > MAX_COORD {
+        if !bounded(target) {
             return Err(Broken);
         }
         if self.down {
@@ -382,8 +387,12 @@ impl Pen<'_> {
                 }
                 let (pos, axes, down) = (self.pos, self.axes, self.down);
                 let cell = self.cell();
+                let at = pos + Point::new(x * axes.x, y * axes.y) * self.scale;
+                if !bounded(at) {
+                    return Err(Broken);
+                }
                 self.flush();
-                self.pos = pos + Point::new(x * axes.x, y * axes.y) * self.scale;
+                self.pos = at;
                 self.axes = Point::new(axes.x * w / cell.x, axes.y * h / cell.y);
                 let res = self.run(n, depth + 1);
                 self.flush();
@@ -439,6 +448,36 @@ mod tests {
         let bytes = crate::compile("*1,3,A\n7,1,0\n").unwrap();
         let font = crate::parse::parse(&bytes).unwrap();
         assert!(outline(&font, 1, false).is_err());
+    }
+    #[test]
+    fn a_far_extended_subshape_cell_is_cut_off() {
+        // Hostile: nested cells 255 units out put the pen 255^4 units away; a location pushed there
+        // and popped at the top became the advance.
+        let mut src = String::from("*BIGFONT 6,1,081,09F\n*0,5,far\n1,0,0,1,0\n");
+        for k in 1..=3 {
+            src.push_str(&format!("*08F0{k},10,L\n7,0,08F0{},255,0,255,255,0\n", k + 1));
+        }
+        src.push_str("*08F04,2,PUSH\n5,0\n*082A0,10,T\n7,0,08F01,255,0,255,255,6,0\n*082A1,10,NEAR\n7,0,08F04,255,0,255,255,6,0\n");
+        let font = crate::parse::parse(&crate::compile(&src).unwrap()).unwrap();
+        assert!(outline(&font, 0x82A0, false).is_err());
+        assert_eq!(outline(&font, 0x82A1, false).unwrap().advance, Point::new(255.0, 0.0));
+    }
+    #[test]
+    fn subshape_fan_out_past_the_point_and_step_bounds_is_cut_off() {
+        // Hostile: a few hundred bytes of fan-out drew 48,000 points per character (1.7 GB for a
+        // 1,000-character text) or ran 200,000 steps per character with the pen up.
+        let src = format!(
+            "*1,1,TOO_MANY_POINTS\n{a}0\n*2,1,HUNDRED\n{b}0\n*3,3,V\n011,019,0\n*4,1,ENOUGH\n{c}0\n*5,1,TOO_MANY_STEPS\n{d}0\n*6,1,UP\n{e}0\n*7,3,U\n2,010,0\n",
+            a = "7,2,".repeat(41),
+            b = "7,3,".repeat(100),
+            c = "7,2,".repeat(40),
+            d = "7,6,".repeat(100),
+            e = "7,7,".repeat(100),
+        );
+        let font = crate::parse::parse(&crate::compile(&src).unwrap()).unwrap();
+        assert!(outline(&font, 1, false).is_err() && outline(&font, 5, false).is_err());
+        assert_eq!(outline(&font, 4, false).unwrap().strokes.iter().map(Vec::len).sum::<usize>(), 8001);
+        assert!(outline(&font, 6, false).is_ok());
     }
 }
 

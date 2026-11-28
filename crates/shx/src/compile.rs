@@ -13,6 +13,7 @@
 //! program's own length is written.
 
 use super::ShxError;
+use super::parse::MAX_NAME;
 const SHAPES_10: &[u8] = b"AutoCAD-86 shapes 1.0\r\n\x1a";
 const BIGFONT: &[u8] = b"AutoCAD-86 bigfont 1.0\r\n\x1a";
 const UNIFONT: &[u8] = b"AutoCAD-86 unifont 1.0\r\n\x1a";
@@ -241,6 +242,9 @@ pub fn compile(source: &str) -> Result<Vec<u8>, ShxError> {
     let mut seen = std::collections::HashSet::new();
     for (num, name, line, toks) in defs {
         let number = u16::try_from(num).map_err(|_| ShxError::Source(line, format!("shape number {num} out of range")))?;
+        if name.bytes().filter(|b| *b != 0).count() > MAX_NAME {
+            return Err(ShxError::Source(line, format!("the name of shape {number} is longer than {MAX_NAME} bytes")));
+        }
         let program = if number == 0 {
             // The font record: plain bytes.
             toks.iter().map(|x| u8::try_from(*x).map_err(|_| ShxError::Source(line, "bad font record".into()))).collect::<Result<Vec<u8>, _>>()?
