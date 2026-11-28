@@ -2,7 +2,10 @@
 
 pub(crate) mod bar;
 
+pub(crate) mod anchor_gap;
+
 pub(crate) mod closed;
+pub(crate) mod memo_kept;
 
 pub(crate) mod context_capture;
 pub(crate) mod context_capture_guards;
