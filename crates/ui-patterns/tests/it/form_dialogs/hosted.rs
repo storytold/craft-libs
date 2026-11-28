@@ -12,6 +12,7 @@ use craft_ui::patterns::form_dialogs::{
 };
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::runtime::measure;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 use serde_json::{Value, json};
@@ -501,6 +502,225 @@ fn image_size_alt_digits_pick_resample_without_typing_into_a_field() {
     assert_eq!(resample(&host), Some(json!("nearestNeighbor")), "Alt+7 picks a listed method");
 }
 
+/// The automation fields of the one open dialog.
+fn open_fields(host: &Rc<RefCell<DialogHost>>) -> Value {
+    host.borrow().open_dialogs().into_iter().next().and_then(|open| open.fields).unwrap_or(Value::Null)
+}
+
+/// Sets `field` of the one open dialog as automation does.
+fn set_open_field(fixture: &mut Fixture, host: &Rc<RefCell<DialogHost>>, field: &str, value: Value) {
+    let ctx = fixture.ctx().clone();
+    let id = host.borrow().open_dialogs().into_iter().next().map(|open| open.id).expect("a dialog is open");
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, field, value), Ok(()), "{field} is set");
+    fixture.settle();
+}
+
+/// Clicks the Resample checkbox.
+fn click_resample(fixture: &mut Fixture) {
+    let resample = fixture.by_label("Resample").expect("the Resample checkbox");
+    fixture.click(&resample).settle();
+}
+
+/// Cancels and takes the open Image Size.
+fn close_image_size(fixture: &mut Fixture, host: &Rc<RefCell<DialogHost>>) {
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().cancel::<HostedImageSize>(&ctx), "the dialog closes");
+    host.borrow_mut().take::<HostedImageSize>();
+    fixture.settle();
+}
+
+/// PhotoCraft #14797 (measured in Photoshop): turning Resample off with the sides in Pixels or Percent switches them to
+/// the physical unit shown last, Inches when none was, and they take input; turning it back on keeps that unit.
+#[trial]
+fn image_size_resample_off_switches_pixels_and_percent_to_the_last_physical_unit() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let units = |host: &Rc<RefCell<DialogHost>>| {
+        let fields = open_fields(host);
+        (fields["unit"].clone(), fields["widthUnit"].clone())
+    };
+
+    // No physical unit shown yet: Inches.
+    host.borrow_mut().open(image_size());
+    fixture.settle();
+    click_resample(&mut fixture);
+    assert_eq!(open_fields(&host)["resample"], Value::Null, "Resample is off");
+    assert_eq!(units(&host), (json!("inches"), json!("inches")), "Pixels switches to Inches");
+    for side in ["Width", "Height"] {
+        let field = fixture.by_label(side).expect("the side's field");
+        assert!(!fixture.tree().is_disabled_key(field.node), "the {side} field takes input");
+    }
+    click_resample(&mut fixture);
+    assert_eq!(open_fields(&host)["resample"], json!("automatic"), "Resample is on again");
+    assert_eq!(units(&host), (json!("inches"), json!("inches")), "back on keeps the physical unit");
+    close_image_size(&mut fixture, &host);
+
+    // Centimeters shown last, then Pixels picked: off goes back to Centimeters.
+    host.borrow_mut().open(image_size_of(ImageSizeValues::new(PICTURE).unit(UnitKind::Centimetres)));
+    fixture.settle();
+    set_open_field(&mut fixture, &host, "unit", json!("pixels"));
+    click_resample(&mut fixture);
+    assert_eq!(units(&host), (json!("centimetres"), json!("centimetres")), "Pixels switches to the unit shown last");
+    close_image_size(&mut fixture, &host);
+
+    // The unit the app keeps from an earlier dialog seeds it; a kind that is not a physical length does not.
+    host.borrow_mut().open(image_size_of(ImageSizeValues::new(PICTURE).physical_unit(UnitKind::Points)));
+    fixture.settle();
+    click_resample(&mut fixture);
+    assert_eq!(units(&host), (json!("points"), json!("points")), "the seeded unit");
+    close_image_size(&mut fixture, &host);
+    host.borrow_mut().open(image_size_of(ImageSizeValues::new(PICTURE).physical_unit(UnitKind::Columns)));
+    fixture.settle();
+    click_resample(&mut fixture);
+    assert_eq!(units(&host), (json!("inches"), json!("inches")), "Columns does not seed it");
+    close_image_size(&mut fixture, &host);
+
+    // Percent switches as Pixels does.
+    host.borrow_mut().open(image_size_of(ImageSizeValues::new(PICTURE).unit(UnitKind::Percent)));
+    fixture.settle();
+    click_resample(&mut fixture);
+    assert_eq!(units(&host), (json!("inches"), json!("inches")), "Percent switches to Inches");
+    close_image_size(&mut fixture, &host);
+
+    // A physical unit already shown stays.
+    host.borrow_mut().open(image_size_of(ImageSizeValues::new(PICTURE).unit(UnitKind::Millimetres)));
+    fixture.settle();
+    click_resample(&mut fixture);
+    assert_eq!(units(&host), (json!("millimetres"), json!("millimetres")), "a physical unit stays");
+}
+
+/// PhotoCraft #14797 (measured in Photoshop): while Resample is off, Pixels is a disabled row in the Width and Height
+/// unit menus and Percent stays pickable; the method list and the Dimensions line stay shown, greyed, and back on the
+/// method is the one it had.
+#[trial]
+fn image_size_resample_off_greys_pixels_the_method_and_the_dimensions() {
+    use craft_ui::contract::overlay::close_popups;
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let disabled = |fixture: &Fixture, label: &str| {
+        let node = fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown"));
+        fixture.tree().is_disabled_key(node.node)
+    };
+    // Opens the unit menu `menu` (as assistive technology activates it) and reads whether its Pixels and Percent rows are disabled.
+    let menu_rows = |fixture: &mut Fixture, menu: &str| {
+        let select = fixture.by_label(menu).unwrap_or_else(|| panic!("the {menu} select"));
+        fixture.access(AccessActionKind::Click, &select).idle(4);
+        let rows = (disabled(fixture, "Pixels"), disabled(fixture, "Percent"));
+        close_popups(&fixture.ctx().clone());
+        fixture.settle();
+        rows
+    };
+
+    host.borrow_mut().open(image_size());
+    fixture.settle();
+    set_open_field(&mut fixture, &host, "resample", json!("bilinear"));
+    assert!(!disabled(&fixture, "Resample method"), "the method list takes a pick while resampling");
+    assert!(!disabled(&fixture, "Dimensions"), "the Dimensions line is at full strength while resampling");
+    assert_eq!(menu_rows(&mut fixture, "Width unit"), (false, false), "Pixels is pickable while resampling");
+
+    click_resample(&mut fixture);
+    assert!(disabled(&fixture, "Resample method"), "the method list is shown, greyed");
+    assert!(disabled(&fixture, "Dimensions"), "the Dimensions line is greyed");
+    assert_eq!(menu_rows(&mut fixture, "Width unit"), (true, false), "the Width menu greys Pixels, not Percent");
+    assert_eq!(menu_rows(&mut fixture, "Height unit"), (true, false), "the Height menu greys Pixels, not Percent");
+
+    click_resample(&mut fixture);
+    assert_eq!(open_fields(&host)["resample"], json!("bilinear"), "back on, the method is the one it had");
+    assert!(!disabled(&fixture, "Resample method"));
+    assert!(!disabled(&fixture, "Dimensions"));
+    assert_eq!(menu_rows(&mut fixture, "Width unit"), (false, false), "Pixels is pickable again");
+}
+
+/// The physical unit picked in the Width menu stays remembered when Reset puts back the opening values: the memory is
+/// not a shown value, and no copy of the values the dialog makes (here the opening copy Reset restores) loses it.
+/// Resample off then switches to it.
+#[trial]
+fn image_size_remembers_a_picked_physical_unit_through_reset() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(image_size());
+    fixture.settle();
+    let select = fixture.by_label("Width unit").expect("the Width unit select");
+    fixture.access(AccessActionKind::Click, &select).idle(4);
+    let centimetres = fixture.by_label("Centimetres").expect("the Centimetres row");
+    fixture.access(AccessActionKind::Click, &centimetres).settle();
+    assert_eq!(open_fields(&host)["unit"], json!("centimetres"), "the pick shows Centimetres");
+    fixture.hold(Modifiers::ALT).idle(2);
+    let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
+    fixture.click(&reset).idle(2);
+    fixture.hold(Modifiers::NONE).settle();
+    assert_eq!(open_fields(&host)["unit"], json!("pixels"), "Reset puts back Pixels");
+    click_resample(&mut fixture);
+    assert_eq!(open_fields(&host)["unit"], json!("centimetres"), "Resample off switches to the unit picked last");
+}
+
+/// PhotoCraft #14797 (measured in Photoshop): 400 x 300 px at 72 ppi, Centimeters used last, Resample off, Width
+/// 28.22 cm keeps 400 x 300 px and gives 36.0028 px/in and a height of 21.165 cm.
+#[trial]
+fn image_size_resample_off_width_in_centimetres_changes_only_the_resolution() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let values = ImageSizeValues::new(PixelSize::new(400, 300)).pixels_per_inch(72.0).unit(UnitKind::Centimetres);
+    host.borrow_mut().open(image_size_of(values));
+    fixture.settle();
+    set_open_field(&mut fixture, &host, "unit", json!("pixels"));
+    click_resample(&mut fixture);
+    // Through the row's setter: typed text would read the decimal separator of the test machine's locale.
+    set_open_field(&mut fixture, &host, "width", json!(28.22));
+    let fields = open_fields(&host);
+    assert_eq!(fields["unit"], json!("centimetres"));
+    let number = |key: &str| fields[key].as_f64().unwrap_or(f64::NAN);
+    assert!((number("resolution") - 36.0028).abs() < 1e-3, "the resolution: {fields}");
+    assert!((number("height") - 21.165).abs() < 1e-3, "the height in cm: {}", number("height"));
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().confirm::<HostedImageSize>(&ctx), "OK is enabled");
+    let answered = host.borrow_mut().take::<HostedImageSize>().and_then(DialogResult::ok).expect("OK answers");
+    assert_eq!(answered.size, PixelSize::new(400, 300), "the pixels stay");
+    assert_eq!(answered.resample, None);
+    assert!((answered.pixels_per_inch - 36.0028).abs() < 1e-3);
+}
+
+/// Not measured, so today's behaviour stays: Resample off reached without the checkbox (automation's `"resample":
+/// null`, or a dialog opened with it off) keeps Pixels with the sides greyed, and a Columns width beside a Pixels
+/// height keeps the shared unit. Canvas Size always resamples, so its menus keep Pixels pickable.
+#[trial]
+fn image_size_resample_off_without_the_checkbox_or_with_columns_keeps_the_units() {
+    use craft_ui::contract::overlay::close_popups;
+    use craft_ui::runtime::env::ColumnSize;
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let side_disabled = |fixture: &Fixture, label: &str| {
+        let node = fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown"));
+        fixture.tree().is_disabled_key(node.node)
+    };
+
+    host.borrow_mut().open(image_size());
+    fixture.settle();
+    set_open_field(&mut fixture, &host, "resample", Value::Null);
+    assert_eq!(open_fields(&host)["unit"], json!("pixels"), "automation's Resample off keeps Pixels");
+    assert!(side_disabled(&fixture, "Width"), "and the width stays greyed");
+    close_image_size(&mut fixture, &host);
+
+    host.borrow_mut().open(image_size_of(ImageSizeValues::new(PICTURE).resampling(false)));
+    fixture.settle();
+    assert_eq!(open_fields(&host)["unit"], json!("pixels"), "a dialog opened with Resample off keeps Pixels");
+    close_image_size(&mut fixture, &host);
+
+    host.borrow_mut().open(image_size_of(ImageSizeValues::new(PICTURE).column_size(ColumnSize::new(180.0, 12.0))));
+    fixture.settle();
+    set_open_field(&mut fixture, &host, "widthUnit", json!("columns"));
+    click_resample(&mut fixture);
+    let fields = open_fields(&host);
+    assert_eq!((fields["widthUnit"].clone(), fields["unit"].clone()), (json!("columns"), json!("pixels")), "Columns keeps the shared unit");
+    close_image_size(&mut fixture, &host);
+
+    host.borrow_mut().open(canvas_size());
+    fixture.settle();
+    let select = fixture.by_label("Width unit").expect("the Width unit select");
+    fixture.access(AccessActionKind::Click, &select).idle(4);
+    assert!(!side_disabled(&fixture, "Pixels"), "Canvas Size keeps Pixels pickable");
+    close_popups(&fixture.ctx().clone());
+}
 /// A dialog with one colour row whose dropper opens armed.
 fn dropper(fields: &mut DialogFields) -> ParamDialog<'_> {
     let tint = Param::new("tint", "Tint", ParamKind::color(Some([0.0, 0.0, 1.0]))).eyedropper().armed(true);

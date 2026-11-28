@@ -317,6 +317,8 @@ pub(super) struct Kit {
     /// `lengths` and Columns: what the width offers when the values carry a column size.
     widths: Vec<Entry<UnitKind>>,
     resolutions: Vec<Entry<UnitKind>>,
+    /// Whether the width and height menus grey Pixels while Resample is off (Image Size only).
+    grey_pixels_off: bool,
 }
 
 /// The length units in Canvas Size order.
@@ -363,7 +365,14 @@ impl Kit {
             widths,
             resolutions: entries(&RESOLUTION_UNITS),
             units,
+            grey_pixels_off: false,
         }
+    }
+
+    /// Greys Pixels in the width and height menus while Resample is off, since the pixel count is fixed then.
+    pub(super) fn resample_off_greys_pixels(mut self) -> Self {
+        self.grey_pixels_off = true;
+        self
     }
 
     pub(super) fn words(&self) -> &SizingWords {
@@ -372,7 +381,12 @@ impl Kit {
 
     /// A line of text named `label`.
     pub(super) fn readout(&self, ui: &mut Ui, label: &Label, text: String, tone: Option<Tone>) {
-        Field::new(label.clone()).show(ui, |ui, _| {
+        self.readout_enabled(ui, label, text, tone, true);
+    }
+
+    /// [`readout`](Self::readout), greyed unless `enabled`.
+    pub(super) fn readout_enabled(&self, ui: &mut Ui, label: &Label, text: String, tone: Option<Tone>, enabled: bool) {
+        Field::new(label.clone()).enabled(enabled).show(ui, |ui, _| {
             let text = Text::new(text.clone());
             match tone {
                 Some(tone) => text.tone(tone).show(ui),
@@ -456,6 +470,13 @@ impl Kit {
             Dimension::Width => size.is_width_editable(),
             Dimension::Height => size.is_editable(),
             Dimension::Resolution => true,
+        };
+        let greyed: Vec<Entry<UnitKind>>;
+        let entries = if !self.grey_pixels_off || size.is_resampling() || matches!(which, Dimension::Resolution) {
+            entries
+        } else {
+            greyed = entries.iter().map(|entry| entry.clone().enabled(entry.value() != Some(&UnitKind::Pixels))).collect();
+            &greyed
         };
         let mut field = Field::new(name.clone()).id_salt(salt);
         if !editable {
