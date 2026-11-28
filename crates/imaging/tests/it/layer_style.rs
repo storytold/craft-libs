@@ -352,3 +352,58 @@ fn the_fx_menu_adds_an_effect_and_shows_the_one_the_layer_already_has() {
     assert_eq!(host.draft.style.effect(EffectId(2)).map(|effect| effect.on), Some(true), "the layer's own Satin is turned on");
     assert_eq!(host.draft.page, LayerStylePage::Effect(EffectId(2)), "and its page shows");
 }
+
+/// The bar works on the effect the page shows, which is what the app's bar worked on: after the fx menu adds a second
+/// Drop Shadow the new one is the page shown, and the trash takes that one out, not the row the list still leads.
+#[trial]
+fn the_bar_acts_on_the_effect_the_page_shows_after_the_fx_menu_adds_one() {
+    let (mut fixture, host) = bar_rig(vec![shadow(1, 5.0)], LayerStylePage::Effect(EffectId(1)));
+    fixture.click(&one(&fixture, Role::LIST_ITEM, "Drop Shadow"));
+    fixture.idle(2);
+    fixture.click(&one(&fixture, Role::BUTTON, "Add a layer style"));
+    fixture.idle(2);
+    fixture.click(&one(&fixture, Role::MENU_ITEM, "Drop Shadow"));
+    fixture.idle(2);
+    {
+        let host = host.borrow();
+        assert_eq!(ids(&host.draft.style), [1, 2], "the menu added a second Drop Shadow");
+        assert_eq!(host.draft.page, LayerStylePage::Effect(EffectId(2)), "and the new one is the page shown");
+    }
+    fixture.click(&one(&fixture, Role::BUTTON, "Delete effect"));
+    fixture.idle(2);
+    let host = host.borrow();
+    assert_eq!(ids(&host.draft.style), [1], "the trash took the effect the page shows, not the one the list leads");
+    let left = host.draft.style.effect(EffectId(1)).map(|effect| (effect.kind.key(), effect.on, effect.params.number("size")));
+    assert_eq!(left, Some(("dropShadow", true, Some(5.0))), "and the effect that stays keeps its values");
+}
+
+/// An effect that is turned off moves among its kind like any other, keeps its off check and its values, and the page
+/// rule of a delete holds: the other instance of the kind shows, and with none of its kind left the Styles page does.
+#[trial]
+fn a_disabled_effect_moves_and_the_page_rule_holds_as_the_effects_of_a_kind_go() {
+    let mut off = StyleParams::default();
+    off.set("size", StyleValue::Number(15.0));
+    let effects = vec![shadow(1, 5.0), EffectInstance { id: EffectId(2), kind: EffectKind::DropShadow, on: false, params: off }];
+    let (mut fixture, host) = bar_rig(effects, LayerStylePage::Effect(EffectId(2)));
+    fixture.click(&one(&fixture, Role::BUTTON, "Move effect up"));
+    fixture.idle(2);
+    {
+        let host = host.borrow();
+        assert_eq!(ids(&host.draft.style), [2, 1], "the off effect moved up among its kind");
+        let moved = host.draft.style.effect(EffectId(2)).map(|effect| (effect.on, effect.params.number("size")));
+        assert_eq!(moved, Some((false, Some(15.0))), "and it is still off with its own size");
+        assert_eq!(host.draft.page, LayerStylePage::Effect(EffectId(2)), "with its page still shown");
+    }
+    fixture.click(&one(&fixture, Role::BUTTON, "Delete effect"));
+    fixture.idle(2);
+    {
+        let host = host.borrow();
+        assert_eq!(ids(&host.draft.style), [1], "the off effect is gone");
+        assert_eq!(host.draft.page, LayerStylePage::Effect(EffectId(1)), "and the other instance of its kind shows");
+    }
+    fixture.click(&one(&fixture, Role::BUTTON, "Delete effect"));
+    fixture.idle(2);
+    let host = host.borrow();
+    assert!(host.draft.style.effects.is_empty(), "the last effect of the kind goes too");
+    assert_eq!(host.draft.page, LayerStylePage::Styles, "and the Styles page takes over when its kind has none left");
+}

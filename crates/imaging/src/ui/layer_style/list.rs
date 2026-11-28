@@ -143,8 +143,8 @@ fn instance_name(draft: &LayerStyleDraft, words: &LayerStyleWords, units: &Units
 /// check boxes or buttons share a name.
 ///
 /// Under the list its bar offers the fx menu, which adds an effect or, for a kind that takes one and has one, turns that
-/// one on and shows it; its arrows move the lead effect among the effects of its kind and its trash takes it out. An
-/// arrow with no sibling to swap with, and the trash while no effect is the lead, are greyed and do nothing.
+/// one on and shows it; its arrows move the effect the page shows among the effects of its kind and its trash takes it
+/// out. An arrow with no sibling to swap with, and the trash while the page shows no effect, are greyed and do nothing.
 pub(super) fn effect_list(
     ui: &mut Ui,
     cx: &mut BodyCx<'_>,
@@ -216,8 +216,10 @@ pub(super) fn effect_list(
             cx.keep::<Lead>().0 = Some(key.clone());
         }
     }
-    let lead = cx.keep::<Lead>().0.clone().filter(|row| rows.contains(row)).or(shown);
-    let target = match &lead {
+    let lead = cx.keep::<Lead>().0.clone().filter(|row| rows.contains(row)).or(shown.clone());
+    // The bar works on the effect the page shows, which is the row the list shows selected: the fx menu and a host's
+    // own choice move the page without moving the list's lead, and the keys stay on that lead.
+    let target = match &shown {
         Some(EffectRow::Instance(id)) => Some(*id),
         _ => None,
     };
