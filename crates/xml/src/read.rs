@@ -348,8 +348,10 @@ fn doctype_refused(input: &[u8], policy: Doctype) -> bool {
     let mut at = 0;
     while at < input.len() {
         let Some(rel) = input.get(at..).and_then(|bytes| bytes.iter().position(|b| *b == b'<')) else {
+            scanned(input.len() - at);
             break;
         };
+        scanned(rel + 1);
         at += rel;
         let Some(rest) = input.get(at..) else { break };
         if rest.starts_with(b"<!--") {
@@ -377,13 +379,43 @@ fn doctype_refused(input: &[u8], policy: Doctype) -> bool {
 fn after(input: &[u8], start: usize, terminator: &[u8]) -> usize {
     input
         .get(start..)
-        .and_then(|rest| rest.windows(terminator.len()).position(|w| w == terminator))
+        .and_then(|rest| {
+            rest.windows(terminator.len()).position(|w| {
+                scanned(1);
+                w == terminator
+            })
+        })
         .map_or(input.len(), |i| start + i + terminator.len())
+}
+
+// The places of the input `doctype_refused` and its helpers look at on this thread: each byte one
+// of them reads, or each window `after` compares. Past the limit a test sets, the count fails the
+// test at once rather than after the rest of the work.
+#[cfg(test)]
+std::thread_local! {
+    static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SCAN_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+#[inline]
+fn scanned(count: usize) {
+    #[cfg(test)]
+    {
+        let read = SCANNED.with(|scanned| {
+            scanned.set(scanned.get().saturating_add(count));
+            scanned.get()
+        });
+        let limit = SCAN_LIMIT.with(std::cell::Cell::get);
+        assert!(read <= limit, "{read} places read, more than the {limit} allowed");
+    }
+    #[cfg(not(test))]
+    let _ = count;
 }
 
 fn after_instruction(input: &[u8], mut at: usize) -> usize {
     let mut quote = None;
     while let Some(&byte) = input.get(at) {
+        scanned(1);
         if let Some(q) = quote {
             if byte == q {
                 quote = None;
@@ -402,6 +434,7 @@ fn doctype_end(input: &[u8], mut at: usize) -> (usize, bool) {
     let mut quote = None;
     let mut subset = false;
     while let Some(&byte) = input.get(at) {
+        scanned(1);
         if let Some(q) = quote {
             if byte == q {
                 quote = None;
@@ -421,6 +454,7 @@ fn doctype_end(input: &[u8], mut at: usize) -> (usize, bool) {
 fn after_markup(input: &[u8], mut at: usize) -> usize {
     let mut quote = None;
     while let Some(&byte) = input.get(at) {
+        scanned(1);
         if let Some(q) = quote {
             if byte == q {
                 quote = None;
@@ -1002,4 +1036,24 @@ fn decode_refs(s: &str, attr: bool, unknown: UnknownEntity) -> Result<String, St
 /// starts with `&` stays as it is.
 pub fn unescape(s: &str) -> String {
     decode_refs(s, false, UnknownEntity::Literal).unwrap_or_else(|_| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Looking for an internal subset reads each place of the input once, however many markers a
+    /// comment holds or how many never close.
+    #[test]
+    fn looking_for_an_internal_subset_is_linear_in_the_input() {
+        let marker = "<!DOCTYPE ";
+        let in_comment = format!("<!--{}--><x/>", marker.repeat(100_000));
+        let unclosed = format!("<x>{}", marker.repeat(100_000));
+        for input in [in_comment, unclosed] {
+            SCANNED.with(|scanned| scanned.set(0));
+            SCAN_LIMIT.with(|limit| limit.set(input.len()));
+            assert!(!doctype_refused(input.as_bytes(), Doctype::RejectInternalSubset));
+            SCAN_LIMIT.with(|limit| limit.set(usize::MAX));
+        }
+    }
 }
