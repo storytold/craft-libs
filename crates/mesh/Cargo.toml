@@ -1,6 +1,6 @@
 [package]
 name = "craft-mesh"
-description = "3D mesh file formats behind one neutral model: STL and Wavefront OBJ/MTL readers and writers, a glTF 2.0 / GLB reader and GLB writer, and PLY, FBX, 3MF, COLLADA and Alembic readers, bounded on hostile input"
+description = "3D mesh file formats behind one neutral model: STL, Wavefront OBJ/MTL, STEP (ISO 10303-21) and 3D Gaussian Splat (.splat) readers and writers, a glTF 2.0 / GLB reader and GLB writer, and PLY, FBX, 3MF, COLLADA and Alembic readers, bounded on hostile input"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -20,6 +20,8 @@ fbx = ["dep:miniz_oxide", "dep:craft-zip"]
 threemf = ["dep:craft-opc", "dep:craft-xml"]
 dae = ["dep:craft-xml"]
 abc = []
+step = []
+splat = []
 
 [dependencies]
 # glTF reading and writing, and the `extensions` and `extras` values in the model.

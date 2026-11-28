@@ -16,6 +16,10 @@ mod gltf_write;
 mod obj;
 #[cfg(feature = "ply")]
 mod ply;
+#[cfg(feature = "splat")]
+mod splat;
+#[cfg(feature = "step")]
+mod step;
 #[cfg(feature = "stl")]
 mod stl;
 #[cfg(feature = "threemf")]

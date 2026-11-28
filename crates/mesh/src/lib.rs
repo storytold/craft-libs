@@ -40,7 +40,9 @@
         feature = "fbx",
         feature = "threemf",
         feature = "dae",
-        feature = "abc"
+        feature = "abc",
+        feature = "step",
+        feature = "splat"
     )),
     allow(dead_code, unused_imports)
 )]
@@ -57,6 +59,10 @@ pub mod gltf;
 pub mod obj;
 #[cfg(feature = "ply")]
 pub mod ply;
+#[cfg(feature = "splat")]
+pub mod splat;
+#[cfg(feature = "step")]
+pub mod step;
 #[cfg(feature = "stl")]
 pub mod stl;
 #[cfg(feature = "threemf")]
