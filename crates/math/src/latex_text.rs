@@ -199,7 +199,106 @@ fn known_math_command(name: &str) -> bool {
 }
 
 fn math_symbol(name: &str) -> Option<char> {
-    MATH_SYMBOLS.iter().find(|(_, n)| *n == name).map(|(c, _)| *c).or_else(|| MATH_ALIASES.iter().find(|(n, _)| *n == name).map(|(_, c)| *c))
+    MATH_SYMBOLS
+        .iter()
+        .find(|(_, n)| *n == name)
+        .map(|(c, _)| *c)
+        .or_else(|| MATH_ALIASES.iter().find(|(n, _)| *n == name).map(|(_, c)| *c))
+        .or_else(|| table_symbols().find(|(n, _)| *n == name && !NOT_FROM_TABLE.contains(n)).map(|(_, c)| *c).filter(|c| !c.is_ascii()))
+}
+
+/// The command for a symbol character: the text path's own name, else craft-math's.
+fn symbol_name(c: char) -> Option<&'static str> {
+    MATH_SYMBOLS.iter().find(|(s, _)| *s == c).map(|(_, n)| *n).or_else(|| {
+        if c.is_ascii() {
+            return None;
+        }
+        table_symbols().find(|(_, s)| *s == c).map(|(n, _)| *n).filter(|n| !NOT_FROM_TABLE.contains(n))
+    })
+}
+
+/// The symbols of craft-math's table ([`crate::math_symbols::SYMBOLS`]) that are characters in
+/// their own right: the entries before its spaces, linear-format operators and accents.
+fn table_symbols() -> impl Iterator<Item = &'static (&'static str, char)> {
+    crate::math_symbols::SYMBOLS.iter().take_while(|(n, _)| *n != "quad")
+}
+
+/// Names in that part of the table the text path doesn't use. The export's preamble (amsmath,
+/// amssymb) doesn't define the first group, so a document using them defines them itself, and
+/// they stay its own commands. `\square` and `\blacksquare` are □ and ■, which the linear
+/// format reads as its box and matrix operators.
+const NOT_FROM_TABLE: &[&str] = &[
+    "omicron",
+    "Alpha",
+    "Beta",
+    "Epsilon",
+    "Zeta",
+    "Eta",
+    "Iota",
+    "Kappa",
+    "Mu",
+    "Nu",
+    "Omicron",
+    "Rho",
+    "Tau",
+    "Chi",
+    "coloneq",
+    "defeq",
+    "nequiv",
+    "nsubset",
+    "nsupset",
+    "oiint",
+    "oiiint",
+    "lbbrack",
+    "rbbrack",
+    "norm",
+    "qed",
+    "adots",
+    "dprime",
+    "trprime",
+    "dd",
+    "Dd",
+    "ee",
+    "ii",
+    "jj",
+    "Angstrom",
+    "rightangle",
+    "square",
+    "blacksquare",
+];
+
+/// The accent command for a combining mark the linear format puts after its base (`x̂`).
+fn accent_command(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\u{300}' => "grave",
+        '\u{301}' => "acute",
+        '\u{302}' => "hat",
+        '\u{303}' => "tilde",
+        '\u{304}' | '\u{305}' => "bar",
+        '\u{306}' => "breve",
+        '\u{307}' => "dot",
+        '\u{308}' => "ddot",
+        '\u{30C}' => "check",
+        '\u{20D7}' => "vec",
+        '\u{20DB}' => "dddot",
+        _ => return None,
+    })
+}
+
+/// The base an accent after `i` would sit on: a `(…)` or `〖…〗` group (its content), a control
+/// word or one character. The base's range in `chars`, and the index after it.
+fn accent_base(chars: &[char], parens: &[Option<usize>], brackets: &[Option<usize>], i: usize) -> Option<(usize, usize, usize)> {
+    let c = *chars.get(i)?;
+    match c {
+        '(' => parens.get(i).copied().flatten().map(|close| (i + 1, close, close + 1)),
+        '〖' => brackets.get(i).copied().flatten().map(|close| (i + 1, close, close + 1)),
+        '\\' => {
+            let n = chars.get(i + 1..).unwrap_or_default().iter().take_while(|c| c.is_ascii_alphabetic()).count();
+            (n > 0).then_some((i, i + 1 + n, i + 1 + n))
+        }
+        c if c.is_whitespace() || c.is_control() || accent_command(c).is_some() || matches!(c, '^' | '_' | '/' | '√' | ')' | '〗' | '&') => None,
+        _ => Some((i, i + 1, i + 1)),
+    }
 }
 
 /// For every `l` in `chars`, the index of the `r` that closes it, found in one stack pass.
@@ -253,6 +352,24 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
             && let Some((den, end)) = balanced(&chars, &parens, after + 1)
         {
             o.push_str(&format!("\\frac{{{}}}{{{}}}", sub(&num), sub(&den)));
+            i = end;
+            continue;
+        }
+        // An accent (a combining mark after its base: `x̂`, `(a+b)̂`) is its command around the
+        // whole base. TeX reads no combining marks: pdfLaTeX stops on them.
+        if let Some((from, to, mut end)) = accent_base(&chars, &parens, &brackets, i)
+            && chars.get(end).copied().and_then(accent_command).is_some()
+        {
+            let mut tex = sub(&chars.get(from..to).unwrap_or_default().iter().collect::<String>());
+            while let Some(cmd) = chars.get(end).copied().and_then(accent_command) {
+                tex = format!("\\{cmd}{{{tex}}}");
+                end += 1;
+            }
+            // A script takes one token: the accent and its argument are a group.
+            if o.ends_with(['^', '_']) {
+                tex = format!("{{{tex}}}");
+            }
+            o.push_str(&tex);
             i = end;
             continue;
         }
@@ -326,8 +443,14 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
             '{' => o.push_str("\\{"),
             '}' => o.push_str("\\}"),
             '~' => o.push_str("\\sim "),
-            c => match MATH_SYMBOLS.iter().find(|(s, _)| *s == c) {
-                Some((_, name)) => {
+            // An accent with no base before it.
+            c if let Some(cmd) = accent_command(c) => {
+                o.push('\\');
+                o.push_str(cmd);
+                o.push_str("{}");
+            }
+            c => match symbol_name(c) {
+                Some(name) => {
                     o.push('\\');
                     o.push_str(name);
                     // A control word needs a space only before a letter.
@@ -553,16 +676,26 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
                             o.push_str(&a);
                         }
                     }
-                    "overline" | "bar" => o.push_str(&format!("{}¯", wrap_part(&math_arg(t, pos, depth)))),
-                    "hat" | "widehat" => o.push_str(&format!("{}̂", math_arg(t, pos, depth))),
-                    "tilde" | "widetilde" => o.push_str(&format!("{}̃", math_arg(t, pos, depth))),
-                    "vec" => o.push_str(&format!("{}⃗", math_arg(t, pos, depth))),
-                    "dot" => o.push_str(&format!("{}̇", math_arg(t, pos, depth))),
-                    "ddot" => o.push_str(&format!("{}̈", math_arg(t, pos, depth))),
-                    "acute" => o.push_str(&format!("{}́", math_arg(t, pos, depth))),
-                    "grave" => o.push_str(&format!("{}̀", math_arg(t, pos, depth))),
-                    "breve" => o.push_str(&format!("{}̆", math_arg(t, pos, depth))),
-                    "check" => o.push_str(&format!("{}̌", math_arg(t, pos, depth))),
+                    "overline" => o.push_str(&format!("{}¯", wrap_part(&math_arg(t, pos, depth)))),
+                    // An accent follows its whole argument, which is parenthesised unless it is one
+                    // symbol (`\hat{AB}` → `(AB)̂`).
+                    "hat" | "widehat" | "tilde" | "widetilde" | "bar" | "vec" | "dot" | "ddot" | "dddot" | "acute" | "grave" | "breve" | "check" => {
+                        let mark = match name {
+                            "hat" | "widehat" => '\u{302}',
+                            "tilde" | "widetilde" => '\u{303}',
+                            "bar" => '\u{305}',
+                            "vec" => '\u{20D7}',
+                            "dot" => '\u{307}',
+                            "ddot" => '\u{308}',
+                            "dddot" => '\u{20DB}',
+                            "acute" => '\u{301}',
+                            "grave" => '\u{300}',
+                            "breve" => '\u{306}',
+                            _ => '\u{30C}',
+                        };
+                        o.push_str(&wrap_part(&math_arg(t, pos, depth)));
+                        o.push(mark);
+                    }
                     "pmod" => {
                         let a = math_arg(t, pos, depth);
                         o.push_str(&format!(" (mod {a})"));
@@ -579,6 +712,7 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
                     "!" | "limits" | "nolimits" | "nonumber" | "notag" => {}
                     "\\" | "cr" => o.push(' '),
                     "{" | "}" | "%" | "#" | "&" | "$" | "_" => o.push_str(name),
+                    "|" => o.push('‖'),
                     "label" | "tag" => {
                         let _ = math_arg(t, pos, depth);
                     }
@@ -644,6 +778,19 @@ mod tests {
         ] {
             assert_eq!(linear_to_latex(linear), tex, "{linear}");
         }
+    }
+
+    /// The text path takes symbols from craft-math's table up to its spaces: never a space, a
+    /// linear-format operator or an accent.
+    #[test]
+    fn symbols_from_the_shared_table_stop_before_its_operators() {
+        let names: Vec<&str> = table_symbols().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"star") && names.contains(&"spadesuit"), "{names:?}");
+        for n in ["quad", "sqrt", "matrix", "over", "begin", "left", "hat", "vec", "bar"] {
+            assert!(!names.contains(&n), "{n}");
+        }
+        assert_eq!((math_symbol("star"), symbol_name('⋆')), (Some('⋆'), Some("star")));
+        assert_eq!((math_symbol("qed"), symbol_name('∎')), (None, None));
     }
 
     /// Unmatched and deeply nested groups convert in linear time; nothing the text says becomes a
