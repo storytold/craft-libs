@@ -145,6 +145,7 @@ impl<'a, T: Value + 'static> SplitButton<'a, T> {
             align: crate::primitives::HAlign::Center,
             chord: None,
             detail: None,
+            label_lines: None,
         }
     }
 }

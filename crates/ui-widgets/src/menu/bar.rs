@@ -158,6 +158,7 @@ impl Component for TitleFace {
                 align: crate::primitives::HAlign::Center,
                 chord: None,
                 detail: None,
+                label_lines: None,
             },
         )
     }
@@ -183,6 +184,7 @@ impl Component for TitleFace {
             align: crate::primitives::HAlign::Center,
             chord: None,
             detail: None,
+            label_lines: None,
         };
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &spec, cx.content_rect);
     }

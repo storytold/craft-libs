@@ -67,6 +67,7 @@ impl CommandSearch {
             arrangement: Arrangement::Inline,
             label,
             detail: None,
+            label_lines: None,
             chord: None,
             role: Some(TypeRole::Body),
             lead: Some(&self.glyph),
