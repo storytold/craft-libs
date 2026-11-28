@@ -500,6 +500,14 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     // Focus that arrives while a button is down over the field came with a press on it.
     let frame = crate::runtime::pointer::frame_raw(&ctx);
     let by_pointer = !frame.buttons.is_empty() && frame.pos.is_some_and(|at| core.visible.contains(at));
+    // This pass's primary press on the field, its text or the room around it, while the text takes the pointer; not one
+    // on another part of the component (a clear button, a chevron).
+    let on_part = core.results.iter().any(|(&(key, _), result)| key != decl.key && result.hovered);
+    let press = frame
+        .press
+        .filter(|press| press.button == craft_behavior::PointerButton::Primary && pointer && !on_part)
+        .map(|press| press.origin)
+        .filter(|at| core.visible.contains(*at));
     if arrived_before {
         arrive(&ctx, widget, decl, state, by_pointer, select_all);
     }
@@ -522,6 +530,7 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
             focused,
             held,
             keeps_selection: held || returns_here,
+            press,
             ink,
             intents: &mut core.intents,
             list_open,

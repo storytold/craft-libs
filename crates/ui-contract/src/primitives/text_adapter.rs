@@ -169,6 +169,8 @@ pub(crate) struct AdapterIn<'a> {
     /// The part keeps the selection it had for the surface that holds the focus: its own edit menu, or a menu bar or
     /// menu the keyboard goes back to the part from, whose picks act on it.
     pub keeps_selection: bool,
+    /// This pass's primary press on the component, on its text or the room around it, while the text takes the pointer.
+    pub press: Option<Pos2>,
     pub ink: egui::Color32,
     pub intents: &'a mut Intents,
     /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's, except
@@ -464,6 +466,30 @@ fn held_mods(ctx: &Context) -> Mods {
 }
 
 /// Runs the text widget for one pass.
+/// After egui's text edit ran: a focused widget keeps the runtime's rule that egui never surrenders its focus (egui's
+/// text edit asks for the focus again on its own click, which hands its surrender back to the app's rule, so a click in
+/// the field's padding would take the focus the runtime keeps, 8.3), and a primary press in the room around the text (the
+/// field's padding) on a field that was focused (`placing`) places the caret at the nearest character, as a press on the
+/// text would: egui's widget takes only presses on itself.
+fn keep_focus_and_place_caret(ctx: &Context, widget: Id, input: &AdapterIn<'_>, shown: &text_edit::Shown, placing: bool) {
+    if !shown.focused {
+        return;
+    }
+    crate::runtime::egui::focus::hold(ctx, widget);
+    if let Some(at) = input.press.filter(|at| !input.rect.contains(*at))
+        && placing
+    {
+        let near = at.clamp(input.rect.min, input.rect.max);
+        let caret = shown.galley.cursor_from_pos(near - shown.galley_pos).index.0;
+        // Shift extends the selection from its anchor, as it does on the text: only a plain press moves the anchor too.
+        let anchor = match selection(ctx, widget).filter(|_| held_mods(ctx).shift) {
+            Some((_, anchor)) => anchor,
+            None => caret,
+        };
+        select(ctx, widget, anchor, caret);
+    }
+}
+
 pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut {
     let (ctx, widget) = (input.ctx, text_id(input.id, input.key));
     let focused_before = input.focused;
@@ -609,6 +635,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
     let shown = text_edit::show(input.ui, &env, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
+    keep_focus_and_place_caret(ctx, widget, &input, &shown, focused_before && state.preedit.is_none());
     if let Some((caret, anchor)) = kept
         && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
     {
