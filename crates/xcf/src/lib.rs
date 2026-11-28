@@ -15,9 +15,15 @@
 //! Layer modes, colour tags and composite settings are kept as the numbers GIMP wrote; what
 //! they mean to an application is the application's to decide.
 
+pub mod records;
+pub mod samples;
 #[cfg(test)]
 mod tests;
 mod tiles;
+pub mod transport;
+
+/// Inert, bounded source effect records (no native mapping or execution).
+pub mod effects;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -97,7 +103,8 @@ pub struct Precision {
     pub bytes: usize,
     /// Floating point (16, 32 or 64 bit) rather than unsigned integer.
     pub float: bool,
-    /// The values are linear light; otherwise gamma-encoded (the profile's own curve).
+    /// The values are linear light rather than nonlinear. For the exact source
+    /// transfer (including perceptual encoding), use [`Xcf::source_precision`].
     pub linear: bool,
 }
 
@@ -133,17 +140,17 @@ impl Precision {
             },
             _ => match code {
                 100 => p(1, false, true),
-                150 => p(1, false, false),
+                150 | 175 => p(1, false, false),
                 200 => p(2, false, true),
-                250 => p(2, false, false),
+                250 | 275 => p(2, false, false),
                 300 => p(4, false, true),
-                350 => p(4, false, false),
+                350 | 375 => p(4, false, false),
                 500 => p(2, true, true),
-                550 => p(2, true, false),
+                550 | 575 => p(2, true, false),
                 600 => p(4, true, true),
-                650 => p(4, true, false),
+                650 | 675 => p(4, true, false),
                 700 => p(8, true, true),
-                750 => p(8, true, false),
+                750 | 775 => p(8, true, false),
                 c => Err(invalid(format!("unknown precision {c}"))),
             },
         }
@@ -224,12 +231,15 @@ impl<'a> Cursor<'a> {
     }
 
     fn ptr(&mut self) -> Result<usize> {
+        usize::try_from(self.wire_ptr()?).map_err(|_| invalid("pointer does not fit in memory"))
+    }
+
+    fn wire_ptr(&mut self) -> Result<u64> {
         if self.wide {
             let s = self.take(8)?;
-            let v = s.first_chunk::<8>().map(|b| u64::from_be_bytes(*b)).unwrap_or(0);
-            usize::try_from(v).map_err(|_| invalid("pointer does not fit in memory"))
+            Ok(s.first_chunk::<8>().map(|b| u64::from_be_bytes(*b)).unwrap_or(0))
         } else {
-            self.u32().map(|v| v as usize)
+            self.u32().map(u64::from)
         }
     }
 
@@ -262,11 +272,22 @@ struct Prop<'a> {
 /// Reads a property list, measuring known payloads whose length words GIMP writes incorrectly.
 /// Ends at PROP_END (type 0).
 fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
+    props_version(c, None, false)
+}
+
+fn channel_props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
+    props_version(c, None, true)
+}
+
+fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>, strict_end: bool) -> Result<Vec<Prop<'a>>> {
     let mut out = Vec::new();
     loop {
         let kind = c.u32()?;
         let len = c.u32()? as usize;
         if kind == 0 {
+            if strict_end && len != 0 {
+                return Err(invalid("channel property terminator must have zero length"));
+            }
             return Ok(out);
         }
         // PROP_COLORMAP's length word was wrong in some releases (n+4 for 3n+4 bytes); its real
@@ -277,7 +298,7 @@ fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
                 let n = c.at(c.pos).u32()? as usize;
                 4usize.checked_add(n.checked_mul(3).ok_or_else(|| invalid("colormap overflow"))?).ok_or_else(|| invalid("colormap overflow"))?
             }
-            24 => user_unit_len(c)?,
+            24 => user_unit_len(c, version)?,
             48 => link_layer_len(c)?,
             _ => len,
         };
@@ -302,18 +323,27 @@ fn link_layer_len(c: &Cursor<'_>) -> Result<usize> {
     Ok(p.pos - c.pos)
 }
 
-/// The real size of a PROP_USER_UNIT payload: a float, a count and three (XCF 21+) or five
-/// strings. Measured without consuming.
-fn user_unit_len(c: &Cursor<'_>) -> Result<usize> {
+/// PROP_USER_UNIT has five strings before XCF21 and three from XCF21 onward.
+/// Its historically incorrect declared length is not a framing boundary.
+/// See <https://developer.gimp.org/core/standards/xcf/#image-properties>.
+fn user_unit_len(c: &Cursor<'_>, version: Option<u32>) -> Result<usize> {
     let mut p = c.at(c.pos);
     p.skip(8)?;
     for _ in 0..3 {
         p.string_bytes()?;
     }
-    // The two name forms of older files, when present: another string pair before the next
-    // property. Decide by whether a plausible property header follows.
+    if let Some(version) = version {
+        if version < 21 {
+            p.string_bytes()?;
+            p.string_bytes()?;
+        }
+        return Ok(p.pos - c.pos);
+    }
+    // Retain the versionless raw-property API's fallback only for callers that
+    // have no image header. Short grammatical names can resemble a property
+    // header, so file readers must supply their known version instead.
     let three = p.pos - c.pos;
-    if p.at(p.pos).u32().map(|k| k <= 64).unwrap_or(false) {
+    if p.at(p.pos).u32().map(|kind| kind <= 64).unwrap_or(false) {
         return Ok(three);
     }
     p.string_bytes()?;
@@ -382,6 +412,10 @@ pub struct Layer {
     pub name: String,
     /// `PROP_FLOATING_SELECTION`: the layer is a floating selection, not part of the stack.
     pub floating_selection: bool,
+    // Source wire identity; never dereferenced to infer an unrecorded encoding.
+    floating_target: Option<u64>,
+    // Complete parsed drawable framing, excluded from all pixel entry points.
+    source_record: std::ops::Range<usize>,
     /// 0 to 1: `PROP_FLOAT_OPACITY` when present (it wins whatever the order), else
     /// `PROP_OPACITY` / 255.
     pub opacity: f32,
@@ -430,9 +464,24 @@ pub struct Layer {
     pub effects: usize,
     hierarchy: usize,
     mask: usize,
+    // Original pointer-list position; optional effect inventory does not rescan properties.
+    effect_source: usize,
 }
 
 impl Layer {
+    // One stored layout shared by the legacy float and raw source-tile APIs.
+    fn source_layout(&self, base: BaseType) -> Result<(usize, bool)> {
+        let channels = match (base, self.layer_type) {
+            (BaseType::Rgb, 0) => 3,
+            (BaseType::Rgb, 1) => 4,
+            (BaseType::Gray, 2) | (BaseType::Indexed, 4) => 1,
+            (BaseType::Gray, 3) | (BaseType::Indexed, 5) => 2,
+            (BaseType::Rgb | BaseType::Indexed, 3) if self.floating_selection => 2,
+            _ => return Err(invalid("layer type does not match the image color model")),
+        };
+        Ok((channels, matches!(self.layer_type, 4 | 5)))
+    }
+
     /// Does the layer type carry an alpha channel?
     pub fn has_alpha(&self) -> bool {
         matches!(self.layer_type, 1 | 3 | 5)
@@ -508,7 +557,7 @@ pub struct Image {
     pub icc_profile: Option<Vec<u8>>,
     /// The `gimp-comment` parasite.
     pub comment: Option<String>,
-    /// Paths the file holds (they are not read).
+    /// Paths the file declares. Decode optional geometry with [`Xcf::paths`].
     pub path_count: usize,
     /// Every layer structure in file order, topmost first, floating selections included.
     pub layers: Vec<Layer>,
@@ -555,9 +604,14 @@ impl Image {
 
 /// A parsed XCF file: its [`Image`] and the pixels behind it.
 pub struct Xcf<'a> {
+    precision_code: u32,
     c: Cursor<'a>,
     image: Image,
     channels: Vec<usize>,
+    // Reuse the already-bounded pointer table for opt-in source-record access.
+    layer_sources: Vec<usize>,
+    // Preserve the optional table location without eagerly decoding or retaining path records.
+    path_sources: Option<records::paths::index::Table>,
     /// What is left of [`MAX_METADATA_BYTES`] after the layers; channel names are charged too.
     meta_budget: Cell<usize>,
 }
@@ -591,7 +645,8 @@ impl<'a> Xcf<'a> {
         if (width as usize).saturating_mul(height as usize).saturating_mul(16) > MAX_PIXEL_BYTES {
             return Err(invalid("the canvas exceeds the 1 GiB pixel limit"));
         }
-        let precision = if version >= 4 { Precision::from_header(version, c.u32()?)? } else { Precision::GAMMA8 };
+        let precision_code = if version >= 4 { c.u32()? } else { 150 };
+        let precision = Precision::from_header(version, precision_code)?;
         let base_type = match base_type {
             0 => BaseType::Rgb,
             1 => BaseType::Gray,
@@ -631,9 +686,39 @@ impl<'a> Xcf<'a> {
         };
         let layer_ptrs = pointers(&mut c, MAX_LAYERS, "layers")?;
         let channels = pointers(&mut c, MAX_CHANNELS, "channels")?;
+        let mut path_sources =
+            (version >= 18).then_some(records::paths::index::Table { start: c.pos, end: None, minimum_end: c.pos, target_start: None });
         if version >= 18 {
             let mut n = 0;
-            while c.ptr().ok().is_some_and(|p| p != 0) {
+            let mut first_target = usize::MAX;
+            let width = if c.wide { 8 } else { 4 };
+            loop {
+                if !keep_going() {
+                    return Err(Error::Cancelled);
+                }
+                // A missing terminator must not turn target bytes into pointer
+                // slots or enlarge the envelope enough to discard its prefix.
+                if c.pos.checked_add(width).is_none_or(|end| end > first_target) {
+                    break;
+                }
+                let Ok(pointer) = c.ptr() else { break };
+                if let Some(source) = &mut path_sources {
+                    source.minimum_end = c.pos;
+                }
+                if pointer == 0 {
+                    if let Some(source) = &mut path_sources {
+                        source.end = Some(c.pos);
+                    }
+                    break;
+                }
+                // A malformed backward offset cannot revoke earlier forward
+                // entries or pretend its target starts before the table itself.
+                if pointer >= c.pos {
+                    first_target = first_target.min(pointer);
+                    if let Some(source) = &mut path_sources {
+                        source.target_start = Some(first_target);
+                    }
+                }
                 n += 1;
                 if n > MAX_CHANNELS {
                     break;
@@ -644,14 +729,14 @@ impl<'a> Xcf<'a> {
         image.channel_count = channels.len();
         let c = c.at(0);
         let mut meta_budget = MAX_METADATA_BYTES;
-        for ptr in layer_ptrs {
+        for &ptr in &layer_ptrs {
             if !keep_going() {
                 return Err(Error::Cancelled);
             }
             let layer = layer(c.at(ptr), &image, &mut meta_budget)?;
             image.layers.push(layer);
         }
-        Ok(Xcf { c, image, channels, meta_budget: Cell::new(meta_budget) })
+        Ok(Xcf { precision_code, c, image, channels, layer_sources: layer_ptrs, path_sources, meta_budget: Cell::new(meta_budget) })
     }
 
     /// The file's header and structure.
@@ -659,18 +744,78 @@ impl<'a> Xcf<'a> {
         &self.image
     }
 
+    /// Borrow ordered image properties without changing legacy metadata policy.
+    /// Reuse `budget` across owners to bound repeated optional scans.
+    pub fn image_properties(
+        &self,
+        limits: records::Limits,
+        budget: &mut records::Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<records::Scan<records::Property<'a>>> {
+        let start = MAGIC.len() + 5 + 12 + if self.image.version >= 4 { 4 } else { 0 };
+        records::properties_with_version(self.c.b, start, self.image.version, limits, budget, keep_going)
+    }
+
+    /// Read the optional version-18+ standalone path pointer table.
+    /// Truncation and caller limits return a disclosed prefix; default parsing and
+    /// [`Image::path_count`] retain their existing tolerant behavior.
+    pub fn path_offsets(&self, limits: records::Limits, budget: &mut records::Budget, keep_going: &dyn Fn() -> bool) -> Result<records::Scan<usize>> {
+        records::paths::index::offsets(self.c.at(0), self.path_sources, limits, budget, keep_going)
+    }
+
+    /// Decode saved paths in image-property order, then standalone pointer order.
+    /// All coexisting encodings are exposed; applications choose native precedence.
+    /// `source_index` remains local to its original list, and absolute offsets identify
+    /// the original records. An incomplete optional list returns its usable prefix.
+    /// Reuse `budget` for cumulative source work, geometry and conservative merge staging.
+    /// Shape limits apply per original list; `limits.paths` bounds the combined result.
+    pub fn paths(
+        &self,
+        limits: records::paths::Limits,
+        budget: &mut records::Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<records::Scan<records::paths::SourcePath<'a>>> {
+        // Cancellation returns no paths, including the outer property staging
+        // vector. Restore its storage allowance while retaining attempted work.
+        budget.cancel_safe(|budget| {
+            let retained = budget.retained_remaining();
+            let properties = self.image_properties(
+                records::Limits { records: limits.properties, string_bytes: limits.name_bytes, payload_bytes: limits.payload_bytes },
+                budget,
+                keep_going,
+            )?;
+            let property_charge = retained - budget.retained_remaining();
+            records::paths::index::decode(self.c.at(0), self.path_sources, properties, limits, budget, keep_going, property_charge)
+        })
+    }
+
+    /// Borrow the properties of one layer, preserving duplicate records and offsets.
+    /// Invalid indices are errors; optional malformed/limited scans are explicit prefixes.
+    pub fn layer_properties(
+        &self,
+        index: usize,
+        limits: records::Limits,
+        budget: &mut records::Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<records::Scan<records::Property<'a>>> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let offset = self.layer_sources.get(index).copied().ok_or_else(|| invalid("layer index is out of bounds"))?;
+        records::layer_properties(self.c.b, offset, limits, budget, keep_going)
+    }
+
     /// Decodes the pixels of layer `index` of [`Image::layers`]; `None` for a layer that has
     /// none (a group). The decoded samples (4 bytes each) are taken from `budget` before
-    /// anything is allocated. `keep_going` is asked every 64 tiles.
+    /// anything is allocated. `keep_going` is checked before work and during tile traversal.
     pub fn layer_pixels(&self, index: usize, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<Option<Pixels>> {
         let layer = self.image.layers.get(index).ok_or_else(|| invalid("no such layer"))?;
         if layer.hierarchy == 0 {
             return Ok(None);
         }
-        let color = if self.image.base_type == BaseType::Rgb { 3 } else { 1 };
-        let source_channels = color + usize::from(layer.has_alpha());
-        let indexed = self.image.base_type == BaseType::Indexed;
-        let px = self.hierarchy(layer.hierarchy, source_channels, indexed, budget, keep_going)?;
+        let (source_channels, indexed) = layer.source_layout(self.image.base_type)?;
+        let px =
+            self.hierarchy_excluding(layer.hierarchy, source_channels, indexed, std::slice::from_ref(&layer.source_record), budget, keep_going)?;
         if (px.width, px.height) != (layer.width, layer.height) {
             let (name, lw, lh) = (&layer.name, layer.width, layer.height);
             return Err(invalid(format!("layer '{name}' pixels are {}x{} where {lw}x{lh} were declared", px.width, px.height)));
@@ -685,62 +830,91 @@ impl<'a> Xcf<'a> {
         if layer.mask == 0 {
             return Ok(None);
         }
-        self.channel_at(layer.mask, budget, keep_going).map(Some)
+        self.channel_at(layer.mask, false, budget, keep_going).map(Some)
+    }
+
+    /// Borrow ordered saved-channel properties without decoding its hierarchy.
+    /// Reuse `budget` across channels; optional framing failures return explicit
+    /// incomplete prefixes, while cancellation always propagates as an error.
+    pub fn channel_properties(
+        &self,
+        index: usize,
+        limits: records::Limits,
+        budget: &mut records::Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<records::Scan<records::Property<'a>>> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let offset = self.channels.get(index).copied().ok_or_else(|| invalid("channel index is out of bounds"))?;
+        records::channel_properties(self.c.b, offset, limits, budget, keep_going)
     }
 
     /// Decodes channel `index` (below [`Image::channel_count`]): the selection or an extra
     /// channel, the size of the canvas.
     pub fn channel(&self, index: usize, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<(Channel, Pixels)> {
         let ptr = *self.channels.get(index).ok_or_else(|| invalid("no such channel"))?;
-        self.channel_at(ptr, budget, keep_going)
+        self.channel_at(ptr, true, budget, keep_going)
     }
 
-    fn channel_at(&self, ptr: usize, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<(Channel, Pixels)> {
+    fn channel_at(&self, ptr: usize, saved: bool, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<(Channel, Pixels)> {
         let mut c = self.c.at(ptr);
         let (_w, _h) = (c.u32()?, c.u32()?);
         let name = c.string()?;
         // As for layers: repeated channel pointers must not retain unbounded copies of one name.
         self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
-        let selection = props(&mut c)?.iter().any(|p| p.kind == 4);
-        let hptr = c.ptr()?;
-        // Channels are always one plain sample per pixel, even in indexed images.
-        let px = self.hierarchy(hptr, 1, false, budget, keep_going)?;
-        Ok((Channel { name, selection }, px))
+        let name_bytes = name.len();
+        let result = (|| {
+            let properties = channel_props(&mut c)?;
+            let selection = saved && properties.iter().any(|property| property.kind == 4);
+            let hptr = c.ptr()?;
+            self.channel_effects_tail(&mut c, hptr, keep_going, None)?;
+            // Channels are always one plain sample per pixel, even in indexed images.
+            let px = self.hierarchy_excluding(hptr, 1, false, std::slice::from_ref(&(ptr..c.pos)), budget, keep_going)?;
+            Ok((Channel { name, selection }, px))
+        })();
+        if result.is_err() {
+            // Only this failed name is released; admitted pixel work and any
+            // successful nested channel reservations must remain charged.
+            self.meta_budget.set(self.meta_budget.get().saturating_add(name_bytes));
+        }
+        result
     }
 
     /// Reads a hierarchy: the first level's tiles into floats, `source_channels` as stored
     /// (indexed pixels expand to RGB here).
+    #[cfg(test)]
     fn hierarchy(&self, hptr: usize, source_channels: usize, indexed: bool, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<Pixels> {
+        self.hierarchy_excluding(hptr, source_channels, indexed, &[], budget, keep_going)
+    }
+
+    fn hierarchy_excluding(
+        &self,
+        hptr: usize,
+        source_channels: usize,
+        indexed: bool,
+        excluded: &[std::ops::Range<usize>],
+        budget: &mut usize,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<Pixels> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
         let precision = self.image.precision;
-        let mut c = self.c.at(hptr);
-        let (w, h, bpp) = (c.u32()?, c.u32()?, c.u32()? as usize);
-        if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
-            return Err(invalid(format!("drawable size {w}x{h} is out of range")));
-        }
-        let expected_bpp = source_channels.checked_mul(precision.bytes).ok_or_else(|| invalid("bpp overflow"))?;
-        if bpp != expected_bpp {
-            return Err(invalid(format!("{bpp} bytes per pixel where {expected_bpp} were expected")));
-        }
+        let mut head = self.hierarchy_head(hptr, source_channels, None)?;
+        let (w, h, bpp) = (head.width, head.height, head.bpp);
         let channels = if indexed { source_channels + 2 } else { source_channels };
         let count = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(channels)).ok_or_else(|| invalid("drawable overflow"))?;
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the pixel limit"))?;
-        let lptr = c.ptr()?;
-        let mut l = self.c.at(lptr);
-        if (l.u32()?, l.u32()?) != (w, h) {
-            return Err(invalid("the level does not match its hierarchy"));
-        }
         let across = w.div_ceil(TILE) as usize;
-        let down = h.div_ceil(TILE) as usize;
-        let mut tiles = Vec::with_capacity(across * down);
-        for _ in 0..across * down {
-            let p = l.ptr()?;
-            if p == 0 {
-                return Err(invalid("the tile list ends before every tile"));
-            }
-            tiles.push(p);
+        let tiles = self.hierarchy_tiles(&mut head, false, excluded, keep_going)?;
+        if !keep_going() {
+            return Err(Error::Cancelled);
         }
-        let mut data = vec![0.0f32; count];
+        let mut data = Vec::new();
+        data.try_reserve_exact(count).map_err(|_| invalid("not enough memory for drawable samples"))?;
+        data.resize(count, 0.0f32);
         let stride = w as usize * channels;
         let side = TILE as usize;
         for (i, &at) in tiles.iter().enumerate() {
@@ -749,8 +923,7 @@ impl<'a> Xcf<'a> {
             }
             let (tx, ty) = (i % across, i / across);
             let (tw, th) = ((w as usize - tx * side).min(side), (h as usize - ty * side).min(side));
-            let end = tiles.get(i + 1).copied().filter(|&n| n > at).unwrap_or(self.c.b.len());
-            let input = self.c.b.get(at..end.min(self.c.b.len())).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
+            let input = self.tile_input(&head, at, tiles.get(i + 1).copied(), tw * th * bpp, excluded)?;
             let raw = tiles::decode(input, self.image.compression, bpp, tw * th)?;
             for (py, row) in raw.chunks_exact(tw * bpp).enumerate() {
                 let start = (ty * side + py) * stride + tx * side * channels;
@@ -775,8 +948,44 @@ impl<'a> Xcf<'a> {
     }
 }
 
+/// The first level has one offset per tile, then a zero terminator.
+/// Raw tiles may share an offset. Compressed tile ranges require distinct starts.
+fn tile_offsets(
+    level: &mut Cursor<'_>,
+    level_start: usize,
+    count: usize,
+    compression: Compression,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Vec<usize>> {
+    let mut tiles = Vec::new();
+    tiles.try_reserve_exact(count).map_err(|_| invalid("not enough memory for tile offsets"))?;
+    for index in 0..count {
+        if index % 64 == 0 && !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let offset = level.ptr()?;
+        if offset == 0 {
+            return Err(invalid("the tile list ends before every tile"));
+        }
+        if offset >= level.b.len() {
+            return Err(invalid("a tile pointer is outside the file"));
+        }
+        if tiles.last().is_some_and(|&previous| offset < previous || (offset == previous && compression != Compression::None)) {
+            return Err(invalid("tile offsets are out of order or share a compressed range"));
+        }
+        tiles.push(offset);
+    }
+    if level.ptr()? != 0 {
+        return Err(invalid("the tile list is missing its zero terminator"));
+    }
+    if tiles.iter().any(|offset| (level_start..level.pos).contains(offset)) {
+        return Err(invalid("a tile points into its own level table"));
+    }
+    Ok(tiles)
+}
+
 fn image_props(c: &mut Cursor<'_>, image: &mut Image) -> Result<()> {
-    for p in &props(c)? {
+    for p in &props_version(c, Some(image.version), false)? {
         match p.kind {
             1 => {
                 let n = be_u32(p.data).unwrap_or(0) as usize;
@@ -828,6 +1037,7 @@ fn image_props(c: &mut Cursor<'_>, image: &mut Image) -> Result<()> {
 
 /// Reads a layer structure at `c`.
 fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<Layer> {
+    let source_start = c.pos;
     let (width, height, layer_type) = (c.u32()?, c.u32()?, c.u32()?);
     let name = c.string()?;
     // Charge the owned name against the image-wide metadata budget: repeated layer offsets
@@ -836,9 +1046,12 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
     let lprops = props(&mut c)?;
     let hierarchy = c.ptr()?;
     let mask = c.ptr()?;
+    let effect_source = c.pos;
     let mut effects = 0usize;
     if image.version >= 20 {
-        while c.ptr()? != 0 {
+        // Counting does not dereference these pointers. Leave their full wire
+        // width available for the caller's optional effect inventory.
+        while c.wire_ptr()? != 0 {
             effects += 1;
             if effects > 1024 {
                 return Err(invalid("too many layer effects"));
@@ -850,7 +1063,9 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
         2..=5 => false,
         k => return Err(invalid(format!("unknown layer type {k} on '{name}'"))),
     };
-    if type_rgb != (image.base_type != BaseType::Gray) && image.base_type != BaseType::Indexed {
+    // A floating selection attached to a channel/mask stores GrayAlpha even on RGB.
+    let gray_floating = layer_type == 3 && lprops.iter().any(|property| property.kind == 5);
+    if type_rgb != (image.base_type != BaseType::Gray) && image.base_type != BaseType::Indexed && !gray_floating {
         return Err(invalid(format!("layer '{name}' does not match the image's colour model")));
     }
     let mut l = Layer {
@@ -859,6 +1074,8 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
         layer_type,
         name,
         floating_selection: false,
+        floating_target: None,
+        source_record: source_start..c.pos,
         opacity: 1.0,
         mode: 0,
         visible: true,
@@ -882,13 +1099,21 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
         effects,
         hierarchy,
         mask,
+        effect_source,
     };
     // PROP_FLOAT_OPACITY wins over PROP_OPACITY whatever their order in the file.
     let mut float_opacity = None;
     for p in &lprops {
         let v = be_u32(p.data).unwrap_or(0);
         match p.kind {
-            5 => l.floating_selection = true,
+            5 => {
+                l.floating_selection = true;
+                l.floating_target = if c.wide {
+                    p.data.try_into().ok().map(u64::from_be_bytes)
+                } else {
+                    p.data.try_into().ok().map(u32::from_be_bytes).map(u64::from)
+                };
+            }
             6 => l.opacity = (v.min(255) as f32) / 255.0,
             33 => float_opacity = be_f32(p.data).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0)).or(float_opacity),
             7 => l.mode = v,
