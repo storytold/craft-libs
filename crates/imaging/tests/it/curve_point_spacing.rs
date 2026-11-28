@@ -1,11 +1,12 @@
-//! Curves point spacing and the point fields (photocraft #14434): a moved point keeps four input
-//! levels between it and a neighbour that is already four or more away — for drags, arrow keys and
-//! the Input field alike, since all three go through `CurveRules::move_to` — and the fields clamp a
-//! typed value to that range and keep the closest legal value. A curve loaded from a script or a
-//! file with points closer than four levels keeps today's rule: it loads, renders and moves as
-//! before, one level between the closer pair.
+//! Curves point spacing and the point fields (photocraft #14434): in a Curves dialog a moved point
+//! keeps four input levels between it and a neighbour that is already four or more away — for
+//! drags, arrow keys and the Input field alike, since all three go through `CurveRules::move_to` —
+//! and the fields clamp a typed value to that range and keep the closest legal value. The gap is
+//! the host's ask (`CurveRules::min_gap`): a bare rule set and a plain editor — the Contour
+//! Editor, the raw Develop curve, a pressure-curve prefs editor — keep today's one-level
+//! arithmetic, and a curve loaded with a closer pair keeps it under the Curves ask too.
 
-use super::curve::rig_with;
+use super::curve::{rig_gap, rig_with};
 use craft_imaging::ui::adjust::{CurvesPanel, HostedAdjustDialog, ToneChannels, ToneCurves, ToneSpace};
 use craft_imaging::ui::curve::{Curve, CurveRules};
 use craft_ui::contract::Role;
@@ -22,8 +23,9 @@ use std::sync::{Arc, Mutex};
 const THREE: [[f32; 2]; 3] = [[0.0, 0.0], [128.0, 128.0], [255.0, 255.0]];
 const FOUR: [[f32; 2]; 4] = [[0.0, 0.0], [128.0, 128.0], [140.0, 128.0], [255.0, 255.0]];
 
+/// The rules a Curves dialog host builds ([`CurveRules::MIN_GAP`]).
 fn rules() -> CurveRules {
-    CurveRules::new(255.0, 16)
+    CurveRules::new(255.0, 16).min_gap(CurveRules::MIN_GAP)
 }
 
 // The model: drags, arrow keys and the fields all move points through `move_to`.
@@ -91,7 +93,23 @@ fn a_curve_loaded_with_closer_points_keeps_the_one_level_rule() {
     assert_eq!(points[2], [11.0, 70.0]);
 }
 
+/// The four-level gap is the Curves host's ask: a bare `CurveRules` — what the Contour Editor, the
+/// raw Develop curve and a pressure-curve prefs editor get — keeps today's strictly-between
+/// arithmetic.
+#[trial]
+fn a_bare_rule_set_still_keeps_todays_one_level_arithmetic() {
+    let bare = || CurveRules::new(255.0, 16);
+    let mut points = FOUR.to_vec();
+    assert!(bare().move_to(&mut points, 2, [127.0, 128.0]), "a bare rule set moves strictly between");
+    assert_eq!(points[2], [129.0, 128.0], "one level off the neighbour at 128, as today");
+}
+
 // The graph: a drag and the arrow keys run through the same rule.
+
+/// The editor a host that asks for no gap builds — today's default.
+fn rig_default(points: &[[f32; 2]]) -> super::curve::Rig {
+    rig_with(points, false)
+}
 
 /// Drags the grabbed point to the screen position of levels `to`, from nodes calibrated on the
 /// curve's own end points — levels, never measured pixels.
@@ -113,14 +131,23 @@ fn drag(rig: &mut super::curve::Rig, from: [f32; 2], to: [f32; 2]) {
 
 #[trial]
 fn dragging_a_point_toward_a_neighbour_stops_four_levels_short() {
-    let mut rig = rig_with(&FOUR, false);
+    let mut rig = rig_gap(&FOUR, false, Some(CurveRules::MIN_GAP));
     drag(&mut rig, [140.0, 128.0], [131.0, 128.0]);
     assert_eq!(rig.points(), vec![[0.0, 0.0], [128.0, 128.0], [132.0, 128.0], [255.0, 255.0]], "the drag stops at the four-level gap");
 }
 
+/// A host that asks for no gap — the default editor every other host builds — drags as today: the
+/// point lands one level off its neighbour.
+#[trial]
+fn a_default_host_drag_still_lands_one_level_off_its_neighbour() {
+    let mut rig = rig_default(&FOUR);
+    drag(&mut rig, [140.0, 128.0], [127.0, 128.0]);
+    assert_eq!(rig.points(), vec![[0.0, 0.0], [128.0, 128.0], [129.0, 128.0], [255.0, 255.0]], "one level off the point at 128, as today");
+}
+
 #[trial]
 fn a_point_added_by_a_drag_is_clamped_the_same_way() {
-    let mut rig = rig_with(&THREE, false);
+    let mut rig = rig_gap(&THREE, false, Some(CurveRules::MIN_GAP));
     drag(&mut rig, [60.0, 60.0], [126.0, 130.0]);
     assert_eq!(
         rig.points(),
@@ -131,7 +158,7 @@ fn a_point_added_by_a_drag_is_clamped_the_same_way() {
 
 #[trial]
 fn arrow_key_steps_stop_at_the_four_level_gap() {
-    let mut rig = rig_with(&FOUR, false);
+    let mut rig = rig_gap(&FOUR, false, Some(CurveRules::MIN_GAP));
     drag(&mut rig, [140.0, 128.0], [132.0, 128.0]);
     assert_eq!(rig.points()[2], [132.0, 128.0], "the drag lands exactly four levels from the point at 128");
     rig.press_at([132.0, 128.0]);

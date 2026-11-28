@@ -346,6 +346,9 @@ pub struct CurveGraph<'a> {
     /// The most points the curve holds.
     #[prop(quantity = "points")]
     max_points: usize,
+    /// How many input levels a moved point keeps between it and a neighbour that is already at
+    /// least that far off; see [`CurveRules::min_gap`].
+    min_gap: f32,
     /// The interpolation of the curve through its points.
     #[prop]
     sampler: Option<CurveSampler<'a>>,
@@ -390,6 +393,7 @@ impl<'a> CurveGraph<'a> {
             channel: 0,
             levels: 255.0,
             max_points: 16,
+            min_gap: 1.0,
             sampler: None,
             bars: true,
             pencil: false,
@@ -412,8 +416,16 @@ impl<'a> CurveGraph<'a> {
         self
     }
 
+    /// A moved point keeps `gap` input levels (at least 1.0) between it and a neighbour that is
+    /// already at least that far off.
+    #[must_use]
+    pub fn min_gap(mut self, gap: f32) -> Self {
+        self.min_gap = gap.max(1.0);
+        self
+    }
+
     fn rules(&self) -> CurveRules {
-        CurveRules { levels: self.levels, max_points: self.max_points.max(2) }
+        CurveRules::new(self.levels, self.max_points.max(2)).min_gap(self.min_gap)
     }
 
     fn samples(&self, points: &[[f32; 2]], corners: &[bool]) -> Vec<f32> {

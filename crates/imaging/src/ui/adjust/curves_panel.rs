@@ -29,8 +29,10 @@ use super::{AdjustContext, AdjustWords, ToneChannel, ToneChannelCommands, ToneCh
 use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveRules};
 use crate::ui::histogram::{ChannelColor, HistogramData};
 
-/// The levels of a Curves value (8-bit tones) and the most points Photoshop allows.
-const RULES: CurveRules = CurveRules::new(255.0, 16);
+/// The levels of a Curves value (8-bit tones) and the most points Photoshop allows; a moved point
+/// keeps [`MIN_GAP`](CurveRules::MIN_GAP) input levels from neighbours at least that far off, the
+/// ask of photocraft #14434.
+const RULES: CurveRules = CurveRules::new(255.0, 16).min_gap(CurveRules::MIN_GAP);
 /// Smooth's moving-average radius (PhotoCraft's `smooth_curve_map`).
 const SMOOTH_RADIUS: usize = 3;
 
@@ -399,6 +401,7 @@ impl<'a> CurvesPanel<'a> {
                 .hint(hint)
                 .levels(255)
                 .max_points(RULES.max_points)
+                .min_gap(RULES.min_gap)
                 .selection(selection);
             if pencil {
                 editor = editor.pencil();
