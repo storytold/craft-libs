@@ -75,9 +75,10 @@ const MAX_TOTAL_CHARS: u64 = 64 << 20;
 const MAX_PARAGRAPHS: usize = 2_000_000;
 /// Bytes of repeated work per document beyond the text itself: piece Prm grpprls (Prcs, up
 /// to 64 KB each) interpreted (#3692), hyperlink targets (#3708), picture alt text (#3709)
-/// and floating objects (#3710) copied into every run or anchor. Past it Prms are skipped,
-/// copied strings left empty and floating objects dropped, each kind logged once a document
-/// ([`Work::log`]).
+/// and floating objects (#3710) copied into every run or anchor, and the paragraph properties
+/// each mark reads from the Data stream (`sprmPHugePapx`, up to 64 KB a mark). Past it Prms are
+/// skipped, copied strings left empty, floating objects dropped and a mark keeps its own PAPX,
+/// each kind logged once a document ([`Work::log`]).
 const MAX_WORK: u64 = 64 << 20;
 
 /// What the [`MAX_WORK`] budget pays for, and leaves out once it is spent.
@@ -91,10 +92,13 @@ enum Cost {
     AltText,
     /// A floating object copied into its anchor: past it the object is left out.
     FloatingObject,
+    /// A paragraph's properties read from the Data stream (`sprmPHugePapx`), once per mark: past
+    /// it a mark keeps the properties its own PAPX holds.
+    ParagraphProps,
 }
 
 impl Cost {
-    const ALL: [Cost; 4] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject];
+    const ALL: [Cost; 5] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject, Cost::ParagraphProps];
 
     /// What is left out, for the log.
     fn left_out(self) -> &'static str {
@@ -103,6 +107,7 @@ impl Cost {
             Cost::LinkTarget => "some hyperlinks' text is kept without its link",
             Cost::AltText => "some pictures are left without their alt text",
             Cost::FloatingObject => "some floating shapes and pictures are left out",
+            Cost::ParagraphProps => "some paragraphs and table rows keep only the properties their own PAPX holds",
         }
     }
 }
@@ -111,12 +116,12 @@ impl Cost {
 /// the document has been read, [`Work::log`]).
 struct Work {
     left: std::cell::Cell<u64>,
-    dropped: std::cell::Cell<[bool; 4]>,
+    dropped: std::cell::Cell<[bool; 5]>,
 }
 
 impl Work {
     fn new(budget: u64) -> Self {
-        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; 4]) }
+        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; 5]) }
     }
 
     /// Spends `cost` bytes on `what`: false (and `what` noted as left out) when they aren't left.
@@ -166,6 +171,18 @@ const C_SYMBOL: u16 = 0x6A09;
 /// `sprmPIlvl` / `sprmPIlfo`: the paragraph's list level and list.
 const P_ILVL: u16 = 0x260A;
 const P_ILFO: u16 = 0x460B;
+/// `sprmPHugePapx`: the whole PAPX of a paragraph that is too large for its FKP page (a table row with
+/// many cells) is this one sprm, whose operand is the offset of the real properties in the Data stream.
+const P_HUGE_PAPX: u16 = 0x6646;
+/// `sprmPTableProps`: like `sprmPHugePapx`, the offset of a `PrcData` in the Data stream. The two
+/// may refer to records that begin with each other, and the chain ends in one that begins with
+/// neither ([MS-DOC] §2.6.2).
+const P_TABLE_PROPS: u16 = 0x646B;
+/// `sprmPIstd`: the paragraph style. The FKP's own istd is zero when its PAPX is a `sprmPHugePapx`,
+/// so the style is the expanded properties' one.
+const P_ISTD: u16 = 0x4600;
+/// Most references followed from one PAPX. A chain longer than this, or a cycle, is not read.
+const MAX_PAPX_CHAIN: usize = 8;
 
 /// Errors from reading a Word 97-2003 binary file.
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
@@ -557,6 +574,45 @@ fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
     Some((base.checked_add(a)?, base.checked_add(b)?))
 }
 
+/// The properties a PAPX that is only a `sprmPHugePapx` stands for, read from the Data stream: a
+/// `PrcData` is a two-byte byte count and then a grpprl, and it may begin with another
+/// `sprmPHugePapx` or `sprmPTableProps` whose record is read in turn ([MS-DOC] §2.6.2). A reference
+/// counts only as the first sprm of its array. Each record is charged to `work`.
+///
+/// `None` when `papx` is not such a PAPX, or when the chain can't be read: a reference that points
+/// outside the stream, a chain longer than [`MAX_PAPX_CHAIN`] or one that loops, or a spent work
+/// budget. The mark then keeps the PAPX it has.
+fn expand_papx<'d>(data: &'d [u8], papx: &'d [u8], work: &Work) -> Option<&'d [u8]> {
+    let mut props = papx;
+    for hop in 0..=MAX_PAPX_CHAIN {
+        // The PAPX itself starts the chain only with a `sprmPHugePapx`; a `sprmPTableProps` beside
+        // the `sprmTDefTable` this reader uses is left as it is.
+        let reference = sprm::iter(props).next().filter(|p| p.op == P_HUGE_PAPX || (hop > 0 && p.op == P_TABLE_PROPS));
+        let Some(prl) = reference else {
+            return (hop > 0).then_some(props);
+        };
+        if hop == MAX_PAPX_CHAIN {
+            return None;
+        }
+        let [a, b, c, d, ..] = *prl.operand else { return None };
+        let at = u32::from_le_bytes([a, b, c, d]) as usize;
+        let body = at.checked_add(2)?;
+        let cb = u16::from_le_bytes(data.get(at..body)?.try_into().ok()?) as usize;
+        props = data.get(body..body.checked_add(cb)?)?;
+        if !work.charge(props.len() as u64, Cost::ParagraphProps) {
+            return None;
+        }
+    }
+    None
+}
+
+/// The paragraph style the sprms name with a `sprmPIstd`, the last one winning.
+fn papx_istd(props: &[u8]) -> Option<u16> {
+    let prl = sprm::iter(props).filter(|p| p.op == P_ISTD).last()?;
+    let [a, b, ..] = *prl.operand else { return None };
+    Some(u16::from_le_bytes([a, b]))
+}
+
 /// Everything the walker needs besides its CP range.
 struct WalkCtx<'a> {
     word: &'a [u8],
@@ -716,6 +772,12 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_mark);
+                // A PAPX that is only a `sprmPHugePapx` has istd 0: the style is in the properties it
+                // stands for.
+                let (istd, papx) = match expand_papx(ctx.data, papx, ctx.work) {
+                    Some(props) => (papx_istd(props).unwrap_or(istd), props),
+                    None => (istd, papx),
+                };
                 // The Prm of the piece holding the mark adds its paragraph sprms after the PAPX's
                 // ([MS-DOC] §2.4.6.1, step 5), as Word 6/95's fast saves record a paragraph change.
                 let extra = prm_paragraph_sprms(ctx.pieces.piece_prm(cp), ctx.work);
