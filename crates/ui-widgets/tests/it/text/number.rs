@@ -470,6 +470,63 @@ fn a_typed_value_past_the_range_commits_the_end_and_reports_it_once() {
     assert_eq!(alerts.borrow().len(), 3, "a value in range, keys, the wheel and a scrub report nothing: {:?}", alerts.borrow());
 }
 
+/// A whole-number field that promises to keep its value (photocraft#12501's Opacity): a typed fraction is not
+/// committed - the field keeps the value it held and the range alert answers the typing, as an out-of-range
+/// number's does. The same field without the promise rounds the fraction to the nearest whole and says nothing,
+/// as it has always done; an out-of-range number is taken to the nearest end rounded or not, promise or none.
+#[trial]
+fn a_field_that_keeps_on_rounding_answers_a_fraction_by_keeping_its_value() {
+    use craft_behavior::{NumberCodec, Reader};
+    use craft_ui::testing::Fixture;
+    use craft_ui::text::RangeAlert;
+    use std::rc::Rc;
+
+    let run = |keeps: bool, typed: &str| -> (Vec<RangeAlert>, Option<f64>) {
+        let value = Rc::new(Cell::new(Some(40.0)));
+        let alerts: Rc<RefCell<Vec<RangeAlert>>> = Rc::default();
+        let (held, seen) = (value.clone(), alerts.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let mut now = held.get();
+            // The trial reads its own dot-separator reader, so "50.6" is a number wherever it runs.
+            let mut field = NumberField::new("Amount", Bind::bound(&mut now))
+                .id_salt("amount")
+                .range(1.0..=100.0)
+                .commit_decimals(0)
+                .codec(NumberCodec::new(Reader::new(), 0));
+            if keeps {
+                field = field.keeps_on_rounding(true);
+            }
+            let out = field.show(ui);
+            held.set(now);
+            seen.borrow_mut().extend(out.out_of_range.clone());
+            // Where the focus goes to commit the field.
+            NumberField::new("Other", Bind::bound(&mut Some(1.0))).id_salt("other").show(ui);
+        });
+        fixture.settle();
+        let amount = fixture.by_label("Amount").expect("the field");
+        let other = fixture.by_label("Other").expect("the other field");
+        fixture.click(&amount).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(typed);
+        fixture.click(&other).settle();
+        (alerts.borrow().clone(), value.get())
+    };
+
+    let (seen, kept) = run(true, "50.6");
+    assert_eq!(kept, Some(40.0), "a fraction keeps the value the field held");
+    assert_eq!(seen.len(), 1, "and one alert answers it");
+    assert_eq!(
+        (seen[0].typed, seen[0].kept, seen[0].whole),
+        (50.6, 40.0, true),
+        "the alert names the typed number, the kept value and whole numbers"
+    );
+    let (seen, clamped) = run(true, "150");
+    assert_eq!(clamped, Some(100.0), "a promise to keep keeps only its fractions: an out-of-range number takes the nearest end");
+    assert_eq!(seen.len(), 1, "with its alert as before");
+    let (seen, rounded) = run(false, "50.6");
+    assert_eq!(rounded, Some(51.0), "without the promise the field still rounds the fraction");
+    assert!(seen.is_empty(), "and stays silent, as it has always been");
+}
+
 /// A draft that is no number owes no range alert, though "150" was typed over the field before it: text over it,
 /// text and the key that leaves in one pass. A number typed again after the refused text owes the alert again. In
 /// every case the field holds a value in its range.

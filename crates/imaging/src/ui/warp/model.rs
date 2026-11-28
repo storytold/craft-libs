@@ -344,6 +344,36 @@ impl WarpMesh {
         }
         out
     }
+
+    /// The thin guide lines of the mesh's own rule: [`thirds`](Self::thirds) for a one-patch mesh,
+    /// none once the mesh is cut.
+    pub(crate) fn own_guides(&self) -> Vec<BezPath> {
+        if self.columns() == 1 && self.rows() == 1 { self.thirds() } else { Vec::new() }
+    }
+
+    /// `lines` thin guide curves inside every cell, each way: the curves at 1/(n+1), 2/(n+1), ...
+    /// across and down each patch, so 2 in a one-patch mesh is its rule-of-thirds curves.
+    pub(crate) fn guide_paths(&self, lines: usize) -> Vec<BezPath> {
+        let curve = |q: [Point; 4]| {
+            let mut path = BezPath::new();
+            path.move_to(q[0]);
+            path.curve_to(q[1], q[2], q[3]);
+            path
+        };
+        let mut out = Vec::with_capacity(2 * lines * self.columns() * self.rows());
+        for row in 0..self.rows() {
+            for column in 0..self.columns() {
+                for step in 1..=lines {
+                    let t = step as f64 / (lines as f64 + 1.0);
+                    let strip: [[Point; 4]; 4] = std::array::from_fn(|j| std::array::from_fn(|i| self.point(3 * column + i, 3 * row + j)));
+                    out.push(curve(std::array::from_fn(|j| cubic(strip[j], t))));
+                    out.push(curve(std::array::from_fn(|i| cubic(std::array::from_fn(|j| strip[j][i]), t))));
+                }
+            }
+        }
+        out
+    }
+
     fn bernstein(t: f64) -> [f64; 4] {
         let s = 1.0 - t;
         [s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t]

@@ -198,6 +198,12 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// decimals of its own shows none when this is 0 ("10%").
     #[prop]
     commit_decimals: Option<usize>,
+    /// A typed number that would be rounded on commit is not committed: the field keeps the value it held and the
+    /// typing answers the range alert, as a number outside the range does (photocraft#12501's whole-percent Opacity
+    /// field). Beside `commit_decimals`; it never overrides the clamp - a number outside the range still goes to the
+    /// nearest end, rounded or not.
+    #[prop]
+    keeps_on_rounding: bool,
     /// An empty field means automatic: it shows the "Auto" word as its placeholder.
     #[prop]
     automatic: bool,
@@ -307,6 +313,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             mixed_word: false,
             derived: false,
             commit_decimals: None,
+            keeps_on_rounding: false,
             fixed_decimals: None,
             name_number: None,
             max_decimals: None,
@@ -568,6 +575,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             rule: self.rule(),
             snap: self.snap_typed,
             decimals: self.commit_decimals,
+            keeps_on_rounding: self.keeps_on_rounding,
             mixed,
             positive_only: self.positive_only,
             names,

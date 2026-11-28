@@ -2,7 +2,7 @@
 
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{CanvasView, EditEvent};
-use craft_imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh, WarpSplit};
+use craft_imaging::ui::warp::{CylinderValues, CylinderWarp, GUIDE_LINES_MAX, WarpEdit, WarpGrid, WarpGuides, WarpGuidesShow, WarpMesh, WarpSplit};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -42,10 +42,10 @@ struct Harness {
 }
 
 fn harness(mesh: WarpMesh) -> Harness {
-    harness_in(mesh, 0.0, false)
+    harness_in(mesh, 0.0, false, None)
 }
 
-fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
+fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool, guides: Option<WarpGuides>) -> Harness {
     let id = Rc::new(Cell::new(Id::NULL));
     let mesh = Rc::new(RefCell::new(mesh));
     let view = Rc::new(Cell::new(None));
@@ -61,7 +61,11 @@ fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
         view.set(Some(shown_view));
         let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
             let mut held = mesh.borrow_mut();
-            WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).show_at(ui, body.rect)
+            let mut grid = WarpGrid::new("Warp", Bind::bound(&mut *held), RECT);
+            if let Some(guides) = guides {
+                grid = grid.guides(guides);
+            }
+            grid.show_at(ui, body.rect)
         });
         if let Some(output) = canvas.inner {
             id.set(output.mesh.response.id);
@@ -132,7 +136,7 @@ impl Harness {
 fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
     let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target;
     for (offset, taken) in [(reach - 0.5, true), (reach + 0.5, false)] {
-        let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true);
+        let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true, None);
         // Out of the mesh along the bottom right anchor's diagonal, as the view draws it.
         let anchor = h.screen(Point::new(RECT.x1, RECT.y1));
         let out = (anchor - h.screen(RECT.center())).normalized();
@@ -383,4 +387,176 @@ fn cylinder_handles_drag_their_values_and_keep_them_sound() {
     h.fixture.key(egui::Key::ArrowRight, Modifiers::SHIFT);
     near(h.values(), [100.0, 200.0, 291.0, 80.0, 0.5, 0.5, 0.85], "Shift and an arrow");
     assert_eq!(h.count(Seen::Set), 2);
+}
+
+// -- the thin guide lines inside the cells (photocraft #12501) --
+
+/// One pass of a grid over `mesh` with the host's `guides`, as the open paths it stroked: the line
+/// width, its colour and the points of the run. The anchor squares are rects, so an open path is a
+/// patch boundary or a thin guide curve.
+fn guide_shapes(mesh: WarpMesh, guides: Option<WarpGuides>) -> Vec<(f32, egui::Color32, Vec<Pos2>)> {
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let centre = Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0);
+        let _ = Canvas::new("Document").view(CanvasView::new(room, centre, 1.0)).show(ui, |ui, body| {
+            let mut grid = WarpGrid::new("Warp", Bind::given(mesh.clone()), RECT);
+            if let Some(guides) = guides {
+                grid = grid.guides(guides);
+            }
+            grid.show_at(ui, body.rect)
+        });
+    });
+    fixture.settle();
+    fixture
+        .frame_shapes()
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Path(path) if !path.closed => match path.stroke.color {
+                egui::epaint::ColorMode::Solid(color) => Some((path.stroke.width, color, path.points.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// The guide settings with only their `lines` per cell set.
+fn density(lines: usize) -> Option<WarpGuides> {
+    Some(WarpGuides { density: Some(lines), ..WarpGuides::default() })
+}
+
+/// The guide settings that ask for the thin lines to be hidden: what is left is the mesh's boundaries.
+fn hidden() -> Option<WarpGuides> {
+    Some(WarpGuides { show: WarpGuidesShow::Never, ..WarpGuides::default() })
+}
+
+/// The thin guide curves a pass drew: its open paths that the pass with the lines hidden does not have.
+fn drawn_guides(mesh: &WarpMesh, guides: Option<WarpGuides>) -> Vec<(f32, egui::Color32, Vec<Pos2>)> {
+    let edges = guide_shapes(mesh.clone(), hidden());
+    guide_shapes(mesh.clone(), guides).into_iter().filter(|path| !edges.contains(path)).collect()
+}
+
+#[trial]
+fn a_host_density_draws_that_many_guide_curves_in_every_cell_each_way() {
+    let one = WarpMesh::identity(RECT, 1, 1);
+    let cut = WarpMesh::identity(RECT, 2, 2);
+    let edges = |mesh: &WarpMesh| guide_shapes(mesh.clone(), hidden()).len();
+    assert_eq!(edges(&one), 4, "a one-patch mesh: its two rows and two columns of anchors");
+    assert_eq!(edges(&cut), 6, "a cut mesh keeps every boundary of its four cells");
+    assert_eq!(drawn_guides(&one, None).len(), 2 * 2, "the grid's own rule draws two curves each way in the single cell");
+    assert!(drawn_guides(&cut, None).is_empty(), "the own rule draws nothing once the mesh is cut");
+    for (lines, want) in [(1, 2), (3, 6), (10, 20)] {
+        assert_eq!(drawn_guides(&one, density(lines)).len(), want, "{lines} curves each way in the single cell");
+    }
+    assert_eq!(drawn_guides(&cut, density(2)).len(), 4 * 2 * 2, "two curves each way in every one of four cells");
+    // Asking for no lines at all still leaves one each way in every cell, and the boundaries whole.
+    assert_eq!(drawn_guides(&one, density(0)), drawn_guides(&one, density(1)), "zero asks for the same lines as one");
+    assert_eq!(drawn_guides(&cut, density(0)).len(), 4 * 2, "one curve each way in every one of four cells");
+    let zero = guide_shapes(one.clone(), density(0));
+    assert!(guide_shapes(one.clone(), hidden()).iter().all(|edge| zero.contains(edge)), "the boundaries are the same lines as ever");
+    // Asking for more lines than the framework will draw still paints a mesh, and its boundaries.
+    let wild = WarpGuides { density: Some(10_000), ..WarpGuides::default() };
+    assert_eq!(guide_shapes(cut.clone(), Some(wild)).len() - edges(&cut), 2 * GUIDE_LINES_MAX * 4, "the work stays bounded");
+}
+
+#[trial]
+fn two_lines_each_way_in_one_cell_are_the_curves_the_grid_drew_before() {
+    let one = WarpMesh::identity(RECT, 1, 1);
+    assert_eq!(
+        guide_shapes(one.clone(), None),
+        guide_shapes(one, density(2)),
+        "the density that stands in for the grid's own rule paints the same pass, curve for curve"
+    );
+}
+
+#[trial]
+fn guides_the_host_hides_leave_the_boundaries_and_anchors() {
+    let one = WarpMesh::identity(RECT, 1, 1);
+    let shown = guide_shapes(one.clone(), None);
+    let off = guide_shapes(one, hidden());
+    assert_eq!(shown.len() - off.len(), 4, "the host's request hides the pair each way and nothing else");
+    assert!(off.iter().all(|edge| shown.contains(edge)), "every boundary of the hidden pass is still drawn");
+}
+
+#[trial]
+fn the_while_dragging_show_mode_draws_the_lines_only_while_a_press_drags() {
+    // The Auto row of photocraft #12501: at rest, and with the pointer hovering the middle of the
+    // mesh, no thin line shows; the grid's own press brings the lines up; its release puts them away.
+    // One curve each way, so the pass counts stay plain.
+    let guides = WarpGuides { show: WarpGuidesShow::WhileDragging, density: Some(1), ..WarpGuides::default() };
+    let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 0.0, false, Some(guides));
+    let open = |h: &mut Harness| -> Vec<(f32, egui::Color32, Vec<Pos2>)> {
+        h.fixture
+            .frame_shapes()
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Path(path) if !path.closed => match path.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => Some((path.stroke.width, color, path.points.clone())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+    let at = h.screen(RECT.center());
+    h.fixture.frame(vec![pointer::moved(at)]);
+    assert_eq!(open(&mut h).len(), 4, "at rest and under a hover: the boundaries only");
+    let to = at + shift(10.0, 5.0);
+    h.fixture.frame(vec![pointer::press(at)]);
+    h.fixture.frame(vec![pointer::moved(at + shift(4.0, 2.0))]);
+    h.fixture.frame(vec![pointer::moved(to)]);
+    assert_eq!(open(&mut h).len(), 6, "mid-drag: one guide curve each way over the boundaries");
+    h.fixture.frame(vec![pointer::release(to)]);
+    h.fixture.frame(Vec::new());
+    assert_eq!(open(&mut h).len(), 4, "the release hides them again, on the mesh the drag left behind");
+}
+
+#[trial]
+fn a_host_colour_and_share_paint_the_guide_curves_alone() {
+    let one = WarpMesh::identity(RECT, 1, 1);
+    let edges = guide_shapes(one.clone(), hidden());
+    let edge_color = edges.first().expect("a patch boundary").1;
+    let want = egui::Color32::from_rgb(200, 20, 120).linear_multiply(0.5);
+    let guides =
+        WarpGuides { line: Some(craft_ui::style::DataColor::new(egui::Color32::from_rgb(200, 20, 120))), share: 0.5, ..WarpGuides::default() };
+    let asked = drawn_guides(&one, Some(guides));
+    assert_eq!(asked.len(), 4, "the pair each way, and nothing else, takes the host's look");
+    assert!(
+        asked.iter().all(|(_, color, _)| *color == want),
+        "every guide curve takes the host's colour at its share: {:?}",
+        asked.iter().map(|(_, color, _)| *color).collect::<Vec<_>>()
+    );
+    assert_eq!(guide_shapes(one.clone(), Some(guides)).len(), guide_shapes(one.clone(), None).len(), "the same paths are drawn");
+    // A share with no colour of its own thins the theme's line; the boundaries keep it whole.
+    let shared = WarpGuides { share: 0.25, ..WarpGuides::default() };
+    let thinned = drawn_guides(&one, Some(shared));
+    assert_eq!(thinned.len(), 4, "the same four curves");
+    assert!(
+        thinned.iter().all(|(_, color, _)| color.a() < edge_color.a()),
+        "at a quarter of the alpha: {:?}",
+        thinned.iter().map(|(_, color, _)| *color).collect::<Vec<_>>()
+    );
+    let kept = guide_shapes(one.clone(), Some(shared));
+    assert!(kept.iter().filter(|path| !thinned.contains(path)).all(|(_, color, _)| *color == edge_color), "the boundaries are untouched");
+    // A share of nothing leaves the guide curves drawn with no alpha, and the boundaries whole.
+    let bare = WarpGuides { share: 0.0, ..WarpGuides::default() };
+    let faded = drawn_guides(&one, Some(bare));
+    assert_eq!(faded.len(), 4, "the same four curves");
+    assert!(
+        faded.iter().all(|(_, color, _)| color.a() == 0),
+        "at no alpha at all: {:?}",
+        faded.iter().map(|(_, color, _)| *color).collect::<Vec<_>>()
+    );
+    let after = guide_shapes(one, Some(bare));
+    assert!(after.iter().filter(|path| !faded.contains(path)).all(|(_, color, _)| *color == edge_color), "the boundaries keep their colour whole");
+}
+
+#[trial]
+fn a_grid_the_host_says_nothing_about_keeps_its_own_guides() {
+    let one = WarpMesh::identity(RECT, 1, 1);
+    let cut = WarpMesh::identity(RECT, 2, 2);
+    // The default of every field is the look the grid has always painted, so a host that sets a
+    // `WarpGuides` with nothing in it changes nothing.
+    assert_eq!(guide_shapes(one.clone(), None), guide_shapes(one.clone(), Some(WarpGuides::default())), "an empty request paints as before");
+    assert_eq!(guide_shapes(cut.clone(), None), guide_shapes(cut, Some(WarpGuides::default())), "on a cut mesh too");
 }

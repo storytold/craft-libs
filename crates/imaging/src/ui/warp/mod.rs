@@ -17,7 +17,9 @@ pub(crate) mod stories;
 
 pub use cylinder::{CylinderHandle, CylinderValues, CylinderWarp, CylinderWarpOutput, CylinderWarpStyle};
 pub use fields::{WarpFieldValues, WarpFields, WarpFieldsEdit, WarpFieldsOutput, WarpFieldsWords, WarpGridChoice, WarpStyleEntry};
-pub use grid::{POINT, SURFACE, WarpGrid, WarpGridOutput, WarpGridStyle, WarpRule, WarpSurface, WarpWords};
+pub use grid::{
+    GUIDE_LINES_MAX, POINT, SURFACE, WarpGrid, WarpGridOutput, WarpGridStyle, WarpGuides, WarpGuidesShow, WarpRule, WarpSurface, WarpWords,
+};
 pub(crate) use mesh::MeshLines;
 pub use mesh::MeshLinesStyle;
 pub use model::{WarpEdit, WarpMesh, WarpSide, WarpSplit};

@@ -108,6 +108,9 @@ pub(super) struct Ruled<V> {
     pub(super) rule: Rule,
     pub(super) snap: bool,
     pub(super) decimals: Option<usize>,
+    /// A typed number that would round on commit keeps the field's value instead, and notes the hold; see
+    /// `NumberField::keeps_on_rounding`.
+    pub(super) keeps_on_rounding: bool,
     pub(super) mixed: bool,
     pub(super) positive_only: bool,
     pub(super) names: Vec<(u32, String)>,
@@ -126,6 +129,7 @@ impl<V> Clone for Ruled<V> {
             rule: self.rule.clone(),
             snap: self.snap,
             decimals: self.decimals,
+            keeps_on_rounding: self.keeps_on_rounding,
             mixed: self.mixed,
             positive_only: self.positive_only,
             names: self.names.clone(),
@@ -189,7 +193,9 @@ impl<V: NumberValue> Codec for Ruled<V> {
     }
 
     /// The inner codec's note, with `held` set to the number read (in shown units) when it lies outside the range;
-    /// snapping and rounding are not holding. A name or a blank gives the default note.
+    /// snapping and rounding are not holding, except in a field that keeps on rounding: a number there that would
+    /// round in place keeps the value the field held, and the read number stands in the note as a hold. A name or a
+    /// blank gives the default note.
     fn parse_tagged(&self, text: &str, start: &V) -> Result<(V, ParseNote), NotAValue> {
         if let Some(name) = self.name_of(text) {
             return Ok((name, ParseNote::default()));
@@ -203,8 +209,11 @@ impl<V: NumberValue> Codec for Ruled<V> {
                 if self.positive_only && number <= 0.0 {
                     return Err(NotAValue);
                 }
-                note.held = (number < self.rule.low || number > self.rule.high).then_some(number);
-                Ok((V::of_number(self.held(number) / self.scale), note))
+                let outside = number < self.rule.low || number > self.rule.high;
+                let rounds = self.keeps_on_rounding && !outside && self.decimals.is_some_and(|places| round_to(number, places) != number);
+                note.held = (outside || rounds).then_some(number);
+                let kept = if rounds { self.shown(start) } else { None }.unwrap_or_else(|| self.held(number));
+                Ok((V::of_number(kept / self.scale), note))
             }
             None => V::blank().map(|blank| (blank, ParseNote::default())).ok_or(NotAValue),
         }
