@@ -58,6 +58,22 @@ network I/O and has no `unsafe` code.
   `to_rgba8_display` encodes 8-bit sRGB RGBA. `linear_to_srgb`, `srgb_to_linear` and `luminance`
   (Rec. 709) are scalar helpers. `resource_key` and `split_resource_key` tag a bitmap name with
   its color space.
+- **Decoding.** With the `png`, `tiff`, `hdr` and `exr` features, `decode::png`, `decode::tiff`,
+  `decode::hdr` and `decode::exr` turn a file's bytes into a plane. Integer samples are divided
+  by their maximum (255 or 65535), so a 16-bit file keeps all 65536 levels. Float samples are
+  kept as stored, values above 1 and negative values included, and OpenEXR NaN and infinities
+  too, except that 64-bit TIFF floats are narrowed to 32 bits and lose any precision beyond
+  `f32`. Gray without alpha gives a gray plane, as does an OpenEXR file of exactly one channel
+  whatever its name; every other layout gives RGBA, with alpha 1 when the file has none. The
+  result's `transfer` is `Encoded` for integer code values whose transfer
+  the file does not state, `Linear` for Radiance HDR, OpenEXR and PNG with a linear `cICP`, and
+  `Unknown` otherwise (an ICC profile, another `cICP` transfer, a float TIFF). No transfer
+  function is applied: the caller decodes sRGB color data, such as glTF base color, and leaves
+  linear data, such as normals, as it is. `alpha` is `Premultiplied` for OpenEXR and `Straight`
+  otherwise; TIFF associated alpha is converted to straight. The plane's size is checked against
+  `Limits` before it is reserved, the format decoder's own buffer is limited to `max_bytes` (for
+  OpenEXR, every channel the file declares counts at 4 bytes a sample), and CMYK and Lab TIFF, OpenEXR files with a deep part and files that end early return a
+  `DecodeError`. A Radiance HDR side over `max_side` is refused from the header.
 - **Height to normal and ORM packing.** Both read a `ScalarSource`: a plane of linear scalar
   samples that gives its size and one row at a time, so an adapter can decode a tiled or encoded
   surface in place. Besides the output, each worker keeps at most three rows for the normal map
@@ -88,8 +104,8 @@ network I/O and has no `unsafe` code.
   and two names of one set with the same role and tile are both kept and reported. See
   [Texture-set names](#texture-set-names).
 
-DDS first-surface decoding is available with the `dds` feature. Other image decoding and
-mirrored repeat are not supported.
+DDS first-surface decoding is available with the `dds` feature. Mirrored repeat is not in the
+crate yet.
 
 ## Cargo features
 
@@ -99,8 +115,13 @@ No default features.
 |---|---|---|
 | `dds` | decodes the first DDS surface to RGBA floats | `dds`, `bytemuck` |
 | `parallel` | generated images, display conversion, height to normal and ORM packing fill rows on several threads; the results are the same | `rayon` |
+| `png` | `decode::png` | `craft-image-codecs` |
+| `tiff` | `decode::tiff` | `craft-image-codecs` |
+| `hdr` | `decode::hdr` | `craft-hdr` |
+| `exr` | `decode::exr` | `craft-exr` with its `decode` feature |
+| `decode` | all four decoders | the above |
 
-Without `parallel` the crate builds for `wasm32-unknown-unknown`.
+Without `parallel` the crate builds for `wasm32-unknown-unknown`, the decoding features included.
 
 ## Limits
 
@@ -179,6 +200,7 @@ inverted.
 | `Image`, `Kind`, sampling, resizing, conversions, sRGB helpers, resource keys and the six tests `sample_survives_huge_coordinates`, `resource_keys_round_trip`, `sample_wraps_and_clamps`, `resize_box_and_bilinear`, `hostile_sizes_are_clamped`, `conversions` | MaterialCraft `crates/image/src/lib.rs` at [3133062](https://github.com/storytold/materialcraft/commit/3133062968b8a1566eda12a357cb06062db16687) |
 | `get_axes`, `sample_axes`, `sample_nearest_axes`, `sample_stored` and the integer-sampling flag | MaterialCraft `crates/image/src/lib.rs` at [6c3b35c](https://github.com/storytold/materialcraft/commit/6c3b35c39632feafcda3d7a90ff18242f3ad910f), on this crate's coordinate reduction and `f64` bilinear sum |
 | `Limits`, the `try_` constructors, `from_data`, private fields with getters, the `parallel` feature, `with_integer_sampling` and `integer_sampling` | written here |
+| the `decode` module and its features | written here, on `craft-image-codecs`, `craft-hdr` and `craft-exr` |
 | The Sobel normal, its strength scale, UV-tile clamp and uncovered-neighbor rule, the ORM channels and defaults, and the tests `gltf_png_matches_the_composite`, `directx_flips_green`, `height_becomes_normal_detail`, `ao_mixes_baked_and_channel`, `converted_maps_invert_and_derive_normals` and `uv_tiles_export_one_file_per_tile_without_padding_across`, with assertions on the new functions | TextureCraft `crates/formats/src/export/mod.rs`, `presets.rs` and `tests.rs` and `crates/core/src/channel.rs` at [b89badc](https://github.com/storytold/texturecraft/commit/b89badcd6f883751f79960f93c554fb77f063885) |
 | `ScalarSource`, row-at-a-time reading, the limit and non-finite checks, and the tiled-input tests | written here |
 | `mip`: mip chains, LOD and level selection, and their tests | written here |

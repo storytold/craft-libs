@@ -747,8 +747,8 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
     let tl = {
         let mut l = tiff::decoder::Limits::default();
         l.decoding_buffer_size = limits.alloc_usize();
-        // No compressed chunk can be larger than the file.
-        l.intermediate_buffer_size = f.b.len().max(1);
+        // Each compressed chunk must fit both the file and the allocation budget.
+        l.intermediate_buffer_size = f.b.len().max(1).min(limits.alloc_usize());
         l
     };
     let mut dec = Decoder::new(Patched { b: f.b, patches: &patches, pos: 0 }).map(|d| d.with_limits(tl.clone())).map_err(map_err)?;

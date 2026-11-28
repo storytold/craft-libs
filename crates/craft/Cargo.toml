@@ -945,7 +945,12 @@ text-ukrainian = ["text", "craft-text/ukrainian"]
 
 texture = ["dep:craft-texture"]
 texture-dds = ["texture", "craft-texture/dds"]
+texture-decode = ["texture", "craft-texture/decode"]
+texture-exr = ["texture", "craft-texture/exr"]
+texture-hdr = ["texture", "craft-texture/hdr"]
 texture-parallel = ["texture", "craft-texture/parallel"]
+texture-png = ["texture", "craft-texture/png"]
+texture-tiff = ["texture", "craft-texture/tiff"]
 
 tga = ["dep:craft-tga"]
 

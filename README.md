@@ -440,8 +440,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   (ruler, Tabs, Paragraph, Columns and Hyperlink dialogs, notes editor, find); `spell` and `find`
   (regex) are features.
 - [`craft-texture`](crates/texture/README.md): linear float image planes, gray or RGBA, with
-  nearest and bilinear sampling that repeats or clamps, resizing and display conversion. Sizes are
-  bounded by `Limits`. From MaterialCraft.
+  nearest and bilinear sampling that repeats or clamps, resizing and display conversion, and
+  (optional features) PNG, TIFF, Radiance HDR and OpenEXR decoding that keeps 16-bit and float
+  samples. Sizes are bounded by `Limits`. From MaterialCraft.
 - [`craft-timeline`](crates/timeline/README.md): timelines: exact media time, frame rates,
   timecode, the playback clock, a frame cache and frame server, and editorial interchange (ALE,
   CMX 3600 EDL, Final Cut Pro 7 XML, FCPXML, OpenTimelineIO), all egui-free; the timeline panel,

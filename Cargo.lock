@@ -4366,8 +4366,12 @@ name = "craft-texture"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "craft-exr",
+ "craft-hdr",
+ "craft-image-codecs",
  "dds",
  "half",
+ "png 0.18.1",
  "rayon",
  "thiserror 2.0.21",
 ]
