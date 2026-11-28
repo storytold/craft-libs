@@ -130,7 +130,7 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
 fn chart_within(root: &El, budget: usize) -> Option<Chart> {
-    read_chart(root, budget, 2)
+    read_chart(root, budget, 3)
 }
 
 /// Exact former metadata projection for unchanged legacy native saves, using the same caps.
@@ -141,6 +141,11 @@ pub(super) fn legacy_chart_from(root: &El) -> Option<Chart> {
 /// The published first typed projection, before stacked visibility and secondary-only axes.
 pub(super) fn metadata_v1_chart_from(root: &El) -> Option<Chart> {
     read_chart(root, MAX_CHART_POINTS, 1)
+}
+
+/// The published stacked-marker projection, before series IDs were retained.
+pub(super) fn metadata_v2_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, 2)
 }
 
 fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
@@ -206,6 +211,9 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
         for s in g.children(Local("ser")).take(1000) {
             let needs_categories = c.categories.is_empty();
             let mut ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget);
+            if version >= 3 {
+                ser.source_idx = s.child(Local("idx")).and_then(|i| i.attr_local("val")).and_then(|v| v.trim().parse::<u32>().ok());
+            }
             if version >= 2 && kind == ChartType::StackedLine {
                 ser.marker_visible = Some(match ser.marker.as_deref() {
                     Some("none") => false,
@@ -302,19 +310,21 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
     if version >= 2 {
         // A secondary-only plot still owns the right/top pair. The writer keeps the unused
         // primary pair; require reciprocal IDs so a stray or incomplete axis cannot win.
+        // The old predicate asked whether any partner matched. Index all reciprocal
+        // relations, not only the last element for an ID; duplicates keep that semantics.
+        let partners: std::collections::HashSet<(&str, &str, bool)> = pa.elements().filter_map(|a| {
+            if !matches!(a.local(), "catAx" | "dateAx" | "valAx") {
+                return None;
+            }
+            Some((a.child(Local("axId"))?.attr_local("val")?, a.child(Local("crossAx"))?.attr_local("val")?, a.is(Local("valAx"))))
+        }).collect();
         if let Some(id) = pa.children(Local("valAx")).find_map(|a| {
             let id = a.child(Local("axId"))?.attr_local("val")?;
             let cross = a.child(Local("crossAx"))?.attr_local("val")?;
             if secondary_placed(a) || !matches!(a.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("l" | "b")) {
                 return None;
             }
-            pa.elements()
-                .any(|other| {
-                    matches!(other.local(), "catAx" | "dateAx" | "valAx")
-                        && (!other.is(Local("valAx")) || val_map.get(cross) == Some(&false))
-                        && other.child(Local("axId")).and_then(|i| i.attr_local("val")) == Some(cross)
-                        && other.child(Local("crossAx")).and_then(|i| i.attr_local("val")) == Some(id)
-                })
+            (partners.contains(&(cross, id, false)) || (val_map.get(cross) == Some(&false) && partners.contains(&(cross, id, true))))
                 .then(|| id.to_string())
         }) {
             return Some(id);

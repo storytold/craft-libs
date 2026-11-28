@@ -304,17 +304,43 @@ fn point_fills(w: &mut Writer, s: &Series, g: Group) {
 /// Data points (categories and values counted per series) one chart group writes to its caches.
 const MAX_EXPORT_POINTS: usize = 4_000_000;
 
+#[derive(Clone, Copy)]
+struct SeriesIndex {
+    order: usize,
+    id: usize,
+}
+
+fn indexed_series(c: &Chart) -> Vec<(SeriesIndex, &Series)> {
+    // Reserve later imported IDs before assigning new series, so an insertion at the front
+    // cannot steal them. Duplicate IDs keep their first occurrence; the rest get free IDs.
+    let reserved: std::collections::HashSet<usize> = c.series.iter().filter_map(|s| s.source_idx.map(|id| id as usize)).collect();
+    let mut used = std::collections::HashSet::new();
+    let mut next = 0usize;
+    c.series.iter().enumerate().map(|(order, s)| {
+        let id = s.source_idx.map(|id| id as usize).filter(|id| used.insert(*id)).unwrap_or_else(|| {
+            while reserved.contains(&next) || used.contains(&next) {
+                next += 1;
+            }
+            used.insert(next);
+            next
+        });
+        (SeriesIndex { order, id }, s)
+    }).collect()
+}
+
 fn line_markers(s: &Series, kind: ChartType, override_markers: Option<bool>) -> bool {
     override_markers.unwrap_or_else(|| match s.marker.as_deref() {
         Some("none") => false,
         Some(m) if !m.is_empty() => true,
-        _ => s.marker_visible.unwrap_or(kind == ChartType::LineMarkers),
+        _ if kind == ChartType::StackedLine => s.marker_visible.unwrap_or(false),
+        _ => kind == ChartType::LineMarkers,
     })
 }
 
-fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: Group, markers: (Option<bool>, bool)) {
+fn series(w: &mut Writer, c: &Chart, s: &Series, index: SeriesIndex, kind: ChartType, g: Group, markers: (Option<bool>, bool)) {
+    let i = index.order;
     w.open("c:ser", &[]);
-    w.tag("c:idx").attr("val", i).empty();
+    w.tag("c:idx").attr("val", index.id).empty();
     w.tag("c:order").attr("val", i).empty();
     w.open("c:tx", &[]);
     let r = &s.refs;
@@ -623,7 +649,7 @@ fn series_points(c: &Chart, s: &Series, g: Group) -> usize {
     }
 }
 
-fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)], secondary: bool, override_markers: Option<bool>) {
+fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(SeriesIndex, &Series)], secondary: bool, override_markers: Option<bool>) {
     let g = group_of(kind);
     let grouping = if kind.percent() {
         "percentStacked"
@@ -719,7 +745,7 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
 }
 
 /// Retain the old per-kind cache budget before axis ownership partitions that list.
-fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)], override_markers: Option<bool>) -> [Option<ChartType>; 2] {
+fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(SeriesIndex, &Series)], override_markers: Option<bool>) -> [Option<ChartType>; 2] {
     let g = group_of(kind);
     let mut left = MAX_EXPORT_POINTS;
     let mut end = list.len();
@@ -799,7 +825,7 @@ fn merge_axis_kinds(axis_kinds: &mut [Option<ChartType>; 2], emitted: [Option<Ch
 }
 
 fn plots_and_axes(w: &mut Writer, c: &Chart, raw_kind: Option<ChartType>) {
-    let indexed: Vec<(usize, &Series)> = c.series.iter().enumerate().collect();
+    let indexed = indexed_series(c);
     let main = match c.kind {
         ChartType::Combo => c.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
         k => k,
@@ -896,6 +922,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         let back = match c.raw_metadata_version {
             0 => super::read::legacy_chart_from(&root),
             1 => super::read::metadata_v1_chart_from(&root),
+            2 => super::read::metadata_v2_chart_from(&root),
             _ => super::read::chart_from(&root),
         };
         if let Some(back) = back {

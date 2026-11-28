@@ -221,6 +221,10 @@ impl Default for Trendline {
 #[serde(default, rename_all = "camelCase")]
 pub struct Series {
     pub name: String,
+    /// The imported classic DrawingML `c:idx`, independent of the series' display order.
+    /// Missing or invalid IDs and new series get an unused ID when the chart is rebuilt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_idx: Option<u32>,
     pub values: Vec<Option<f64>>,
     /// X values for scatter/bubble.
     pub x_values: Vec<Option<f64>>,
@@ -479,8 +483,8 @@ pub struct Chart {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
     /// Metadata interpretation of retained classic chart XML: 0 is the former reader, 1 is
-    /// the first typed-metadata reader, and 2 also retains stacked marker visibility and
-    /// secondary-only axis ownership. Missing fields are version 0. Preserve when editing.
+    /// the first typed-metadata reader, 2 adds stacked marker visibility and secondary-only
+    /// axis ownership, and 3 retains series IDs. Missing fields are version 0. Preserve when editing.
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub raw_metadata_version: u16,
     /// The chart was too large to model: `raw` and `kept` are written back unchanged on save.
@@ -697,16 +701,16 @@ impl Chart {
         }
     }
 
-    /// Whether a series is plotted against the secondary value axis (combo charts only).
+    /// Whether a series is plotted against the secondary value axis, including same-type groups.
     pub fn on_secondary(&self, s: &Series) -> bool {
-        self.kind == ChartType::Combo && s.secondary_axis
+        s.secondary_axis
     }
 
-    /// The value range of one value axis: the primary axis (`y_min`/`y_max` apply), or a combo
-    /// chart's secondary axis. A combo chart stacks only its stacked series. `None` when no series
-    /// uses that axis.
+    /// The value range of one value axis: primary (`y_min`/`y_max` apply), or the secondary
+    /// data extent. A combo chart stacks only its stacked series. `None` when no series uses
+    /// that axis, except the existing empty single-axis chart's primary default.
     pub fn axis_range(&self, secondary: bool) -> Option<(f64, f64)> {
-        if self.kind != ChartType::Combo {
+        if self.kind != ChartType::Combo && !self.series.iter().any(|s| s.secondary_axis) {
             return (!secondary).then(|| self.value_range());
         }
         let (lo, hi) = self.plotted_extent(secondary)?;
@@ -723,7 +727,7 @@ impl Chart {
         }
         let ser: Vec<&Series> = self.series.iter().filter(|s| self.on_secondary(s) == secondary).collect();
         if ser.is_empty() {
-            return (!secondary && self.kind != ChartType::Combo).then_some((0.0, 0.0));
+            return (!secondary && self.kind != ChartType::Combo && self.series.is_empty()).then_some((0.0, 0.0));
         }
         let mut ext = (f64::INFINITY, f64::NEG_INFINITY);
         let has_stacked_or_percent = ser.iter().any(|s| {
