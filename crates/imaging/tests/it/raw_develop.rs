@@ -393,6 +393,57 @@ fn a_sampler_reads_the_picture_on_show() {
     assert_eq!(reading(&fixture), Some(developed), "releasing Y reads the developed pixel again");
 }
 
+#[trial]
+fn space_pans_with_the_sampler_tool_selected() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host, &Rc::new(Cell::new(false)));
+    let source = Source::new();
+    host.borrow_mut().open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::Filter)), source.clone()));
+    fixture.idle(10);
+    let canvas = focus_canvas(&mut fixture);
+    fixture.key(Key::S, Modifiers::NONE).idle(2);
+    host.borrow_mut()
+        .get_mut::<Hosted>()
+        .expect("open")
+        .workspace_mut()
+        .set_json_field(fixture.ctx(), &*source, "view", 800.0.into())
+        .expect("800% zoom");
+    fixture.idle(4);
+
+    fixture.click(&canvas).idle(4);
+    let fields = || {
+        let host = host.borrow();
+        let hosted = host.get::<Hosted>().expect("open");
+        hosted.workspace().json_fields(&**hosted.source()).expect("workspace fields")
+    };
+    let from = canvas.center() - Vec2::new(80.0, 0.0);
+    let to = from + Vec2::new(100.0, 0.0);
+    fixture.frame(vec![pointer::moved(from)]).idle(2);
+    let before = fields();
+    assert_eq!(before["samplerReadouts"].as_array().map(Vec::len), Some(1));
+    assert_eq!(before["view"].as_f64(), Some(800.0));
+
+    fixture.frame(vec![key_event(Key::Space, true)]).idle(2);
+    fixture.frame(vec![pointer::press(from)]);
+    fixture.frame(vec![pointer::moved(to)]);
+    fixture.frame(vec![pointer::release(to)]);
+    fixture.frame(vec![key_event(Key::Space, false)]).idle(2);
+    fixture.frame(vec![pointer::moved(from)]).idle(2);
+    let after = fields();
+    let x = |state: &serde_json::Value| state["pointerReadout"]["position"][0].as_f64().expect("the pointer maps to the picture");
+    assert!(x(&after) < x(&before) - 2.0, "the same screen point maps farther left after panning right");
+    assert_eq!(after["view"], before["view"], "the zoom stays put");
+    assert_eq!(after["samplerReadouts"], before["samplerReadouts"], "the drag neither adds nor moves a sampler");
+    assert_eq!(
+        host.borrow().get::<Hosted>().expect("open").workspace().session(),
+        &RawDevelopSettings::default(),
+        "panning does not edit develop settings"
+    );
+
+    fixture.click_at(from).idle(4);
+    assert_eq!(fields()["samplerReadouts"].as_array().map(Vec::len), Some(2), "the sampler tool resumes when Space is released");
+}
+
 /// A color sampler's readout shows under the zoom bar.
 fn readout_shown(fixture: &Fixture) -> bool {
     fixture.texts().iter().any(|run| run.text.starts_with("#1 "))
