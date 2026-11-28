@@ -103,11 +103,14 @@ pub fn blip_fill(w: &mut Writer, out: &mut dyn Sink, tag: &str, pf: &PictureFill
     // An image that lives outside the package is a linked picture: `a:blip` names it through
     // `r:link`; `r:embed` may only reference a part inside the package.
     let linked = out.media_linked(pf.media);
-    let rid = out.media_rel(pf.media, "image").unwrap_or_else(|| out.placeholder_rel());
+    // A vector picture carries a raster fallback in `r:embed` and the vector in the extension,
+    // which the package layer writes; `pf.svg` is an explicit vector of a picture fill.
+    let (rid, blip_svg) = out.blip_rels(pf.media).unwrap_or_else(|| (out.placeholder_rel(), None));
     w.tag(tag).attr("rotWithShape", if pf.upright { "0" } else { "1" }).open();
     let adj = &pf.adjust;
     let has_kids = pf.alpha.is_some()
         || pf.svg.is_some()
+        || blip_svg.is_some()
         || adj.brightness != 0.0
         || adj.contrast != 0.0
         || adj.grayscale
@@ -169,7 +172,8 @@ pub fn blip_fill(w: &mut Writer, out: &mut dyn Sink, tag: &str, pf: &PictureFill
             w.close();
             w.close();
         }
-        if let Some(svg) = pf.svg.and_then(|id| out.media_rel(id, "image")) {
+        // The fill's own vector wins over the one the package layer derived from the media.
+        if let Some(svg) = pf.svg.and_then(|id| out.media_rel(id, "image")).or(blip_svg) {
             w.open("a:extLst", &[]);
             w.tag("a:ext").attr("uri", "{96DAC541-7B7A-43D3-8B79-37D633B846F1}").open();
             w.tag("asvg:svgBlip").attr("xmlns:asvg", "http://schemas.microsoft.com/office/drawing/2016/SVG/main").attr("r:embed", &svg).empty();

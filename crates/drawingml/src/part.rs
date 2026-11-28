@@ -67,6 +67,12 @@ pub trait Sink {
     fn media_linked(&self, id: MediaId) -> bool;
     /// The item's file name.
     fn media_name(&self, id: MediaId) -> Option<String>;
+    /// The relationships a picture's `a:blip` needs: the `r:embed` target, and the vector for
+    /// `asvg:svgBlip` when the item is an SVG written the way PowerPoint writes one (a raster part
+    /// as the fallback, the vector in the extension). `None` when there is no such item.
+    fn blip_rels(&mut self, id: MediaId) -> Option<(String, Option<String>)> {
+        Some((self.media_rel(id, "image")?, None))
+    }
     /// A relationship to the part of that slide, in a presentation.
     fn slide_rel(&mut self, _slide: SlideId) -> Option<String> {
         None

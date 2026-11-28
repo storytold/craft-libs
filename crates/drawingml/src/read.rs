@@ -152,8 +152,15 @@ pub fn gradient(f: &El) -> Gradient {
 /// `blipFill` (either `a:` or `p:`) → picture fill, registering the image as media.
 pub fn blip_fill(src: &mut dyn Source, bf: &El) -> Option<PictureFill> {
     let blip = bf.child(Local("blip"));
-    let media = blip.and_then(|b| media_ref(src, b));
-    let media = media?;
+    // A picture saved with only a vector (`asvg:svgBlip`, no `r:embed`) is still a picture: the
+    // extension's part is what there is to draw.
+    let svg = blip.and_then(|b| b.child(Local("extLst"))).and_then(|extensions| {
+        extensions
+            .elements()
+            .filter(|extension| extension.local() == "ext" && extension.attr_local("uri") == Some("{96DAC541-7B7A-43D3-8B79-37D633B846F1}"))
+            .find_map(|extension| extension.child(Local("svgBlip")).and_then(|svg| media_ref(src, svg)))
+    });
+    let media = blip.and_then(|b| media_ref(src, b)).or(svg)?;
     let mut pf = PictureFill { media, upright: !bf.attr_local("rotWithShape").and_then(value::to_bool).unwrap_or(true), ..Default::default() };
     if let Some(layer) = blip.and_then(|b| b.child(Local("extLst"))).and_then(|x| x.find(Local("imgLayer")))
         && let Some(effect) = layer
@@ -166,12 +173,7 @@ pub fn blip_fill(src: &mut dyn Source, bf: &El) -> Option<PictureFill> {
     {
         pf.artistic = Some(crate::style::Artistic { effect, original });
     }
-    pf.svg = blip.and_then(|b| b.child(Local("extLst"))).and_then(|extensions| {
-        extensions
-            .elements()
-            .filter(|extension| extension.local() == "ext" && extension.attr_local("uri") == Some("{96DAC541-7B7A-43D3-8B79-37D633B846F1}"))
-            .find_map(|extension| extension.child(Local("svgBlip")).and_then(|svg| media_ref(src, svg)))
-    });
+    pf.svg = svg;
     if let Some(b) = blip {
         for e in b.elements() {
             match e.local() {

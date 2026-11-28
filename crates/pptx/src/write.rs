@@ -84,10 +84,19 @@ pub struct Exp<'a> {
     n_kept: u32,
     pub slide_parts: HashMap<SlideId, String>,
     pub table_styles: Vec<String>,
-    /// The ids in `table_styles`, for checking membership without a scan.
+    /// The ids in `table_style_set`, for checking membership without a scan.
     pub table_style_set: std::collections::HashSet<String>,
     placeholder: Option<String>,
+    /// Draws an SVG picture into a PNG, for the raster fallback PowerPoint keeps beside the
+    /// vector. The writer has no renderer of its own, so the caller supplies one.
+    raster: Option<Raster<'a>>,
+    /// The PNG part written for an SVG picture, by media id; `None` when the rasterizer declined.
+    svg_fallbacks: HashMap<MediaId, Option<String>>,
 }
+
+/// Draws an SVG picture into a PNG: the raster fallback PowerPoint keeps beside the vector, in
+/// `a:blip/@r:embed`, with `asvg:svgBlip` naming the vector.
+pub type Raster<'a> = &'a dyn Fn(&crate::MediaItem) -> Option<Vec<u8>>;
 
 /// A part being written: its name and relationships.
 pub struct Out {
@@ -116,6 +125,18 @@ impl Sink for Snk<'_, '_> {
     }
     fn placeholder_rel(&mut self) -> String {
         self.0.placeholder_rel(self.1)
+    }
+    fn blip_rels(&mut self, id: MediaId) -> Option<(String, Option<String>)> {
+        // An SVG picture is written the way PowerPoint writes one: the vector in `asvg:svgBlip`
+        // and a PNG fallback in `r:embed`, so a reader without SVG support still draws it.
+        if self.0.is_svg(id)
+            && let Some(part) = self.0.svg_png_part(id)
+            && let Some(svg_rid) = self.0.media_rel(self.1, id, "image")
+        {
+            let rid = self.1.rels.add("image", &craft_opc::relative(&self.1.name, &part), false);
+            return Some((rid, Some(svg_rid)));
+        }
+        self.0.media_rel(self.1, id, "image").map(|rid| (rid, None))
     }
     fn media_linked(&self, id: MediaId) -> bool {
         self.0.media(id).is_some_and(|m| m.data.is_empty() && m.link.is_some())
@@ -187,6 +208,14 @@ impl<'a> Exp<'a> {
         let p: &'a Presentation = self.p;
         self.media_at.get(&id).and_then(|&i| p.media.get(i))
     }
+    /// The content type a part is written with: the item's own, or the one its extension means
+    /// when it carries none.
+    fn content_type(m: &crate::MediaItem) -> String {
+        if !m.content_type.is_empty() && m.content_type.contains('/') {
+            return m.content_type.clone();
+        }
+        crate::mime_for(&format!("x.{}", ext_for(&m.content_type, &m.name, &m.data))).to_string()
+    }
     fn media_part(&mut self, id: MediaId) -> Option<String> {
         if let Some(p) = self.media_parts.get(&id) {
             return Some(p.clone());
@@ -196,11 +225,7 @@ impl<'a> Exp<'a> {
             return None;
         }
         let ext = ext_for(&m.content_type, &m.name, &m.data);
-        let ct = if m.content_type.is_empty() || !m.content_type.contains('/') {
-            crate::mime_for(&format!("x.{ext}")).to_string()
-        } else {
-            m.content_type.clone()
-        };
+        let ct = Self::content_type(m);
         let name = if ct.starts_with("image/") {
             self.n_image += 1;
             format!("ppt/media/image{}.{ext}", self.n_image)
@@ -210,6 +235,28 @@ impl<'a> Exp<'a> {
         };
         self.pkg.binary(&name, &ct, m.data.as_ref().clone());
         self.media_parts.insert(id, name.clone());
+        Some(name)
+    }
+    /// Is this item an SVG picture with bytes: written as a raster fallback plus the vector?
+    fn is_svg(&self, id: MediaId) -> bool {
+        self.media(id).is_some_and(|m| !m.data.is_empty() && Self::content_type(m) == "image/svg+xml")
+    }
+    /// The part written for an SVG picture's raster fallback, made once per media id. A
+    /// rasterizer that declines is remembered too, so a picture used twice is not drawn twice.
+    fn svg_png_part(&mut self, id: MediaId) -> Option<String> {
+        if let Some(part) = self.svg_fallbacks.get(&id) {
+            return part.clone();
+        }
+        let raster = self.raster;
+        let png = self.media(id).and_then(|m| raster?(m));
+        let Some(png) = png else {
+            self.svg_fallbacks.insert(id, None);
+            return None;
+        };
+        self.n_image += 1;
+        let name = format!("ppt/media/image{}.png", self.n_image);
+        self.pkg.binary(&name, "image/png", png);
+        self.svg_fallbacks.insert(id, Some(name.clone()));
         Some(name)
     }
     /// A relationship from `o` to a media item (embedded part, or external link).
@@ -563,6 +610,11 @@ fn sanitized<'p>(p: &'p Presentation, defaults: &dyn Defaults) -> std::borrow::C
 }
 
 pub fn export(p: &Presentation, defaults: &dyn Defaults, main_ct: &str) -> Result<Vec<u8>, Error> {
+    export_with(p, defaults, main_ct, None)
+}
+
+/// [`export`], with a rasterizer that gives an SVG picture its PNG fallback.
+pub fn export_with(p: &Presentation, defaults: &dyn Defaults, main_ct: &str, raster: Option<Raster<'_>>) -> Result<Vec<u8>, Error> {
     let p = sanitized(p, defaults);
     let p: &Presentation = &p;
     let mut x = Exp {
@@ -588,6 +640,8 @@ pub fn export(p: &Presentation, defaults: &dyn Defaults, main_ct: &str) -> Resul
         table_styles: vec![],
         table_style_set: Default::default(),
         placeholder: None,
+        raster,
+        svg_fallbacks: HashMap::new(),
     };
     for (i, s) in p.slides.iter().enumerate() {
         x.slide_parts.insert(s.id, format!("ppt/slides/slide{}.xml", i + 1));
