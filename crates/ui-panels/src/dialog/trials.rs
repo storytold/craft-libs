@@ -653,6 +653,62 @@ fn a_tall_body_scrolls_under_a_footer_that_stays_in_view() {
     assert_eq!(first(&fixture), Some(at_top), "a reopen starts at the top");
 }
 
+/// The painted frames of the buttons labeled `label`, each with the part of the window it can be seen in: for each
+/// painted label, the smallest rect shape around its text, and the clip that shape paints under within the window.
+fn button_frames(fixture: &mut Fixture, label: &str) -> Vec<(Rect, Rect)> {
+    let screen = fixture.ctx().content_rect();
+    let shapes = fixture.frame_clipped_shapes();
+    let texts = shapes.iter().filter_map(|(_, shape)| match shape {
+        egui::Shape::Text(text) if text.galley.text() == label => Some(shape.visual_bounding_rect()),
+        _ => None,
+    });
+    texts
+        .filter_map(|text| {
+            let around = shapes.iter().filter_map(|(clip, shape)| match shape {
+                egui::Shape::Rect(frame) if frame.rect.contains_rect(text) => Some((frame.rect, clip.intersect(screen))),
+                _ => None,
+            });
+            around.min_by(|(a, _), (b, _)| a.area().total_cmp(&b.area()))
+        })
+        .collect()
+}
+
+/// A button at the end of a tall body scrolls with the body: its whole frame, not only its label, is out of view
+/// until the body is scrolled to its end, and then in view.
+#[trial]
+fn a_button_at_the_end_of_a_tall_body_comes_wholly_into_view_at_the_end_of_the_scroll() {
+    let open = std::rc::Rc::new(Cell::new(true));
+    let mut fixture = dialog_fixture(
+        &open,
+        |dialog| dialog.buttons([FooterButton::new("OK", DialogRole::Accept)]),
+        |ui| {
+            for line in 0..60 {
+                Text::new(format!("Line {line}")).show(ui);
+            }
+            Button::new("Stop").show(ui);
+        },
+    );
+    fixture.room(SHORT_ROOM);
+    fixture.settle();
+    let before = button_frames(&mut fixture, "Stop");
+    assert!(before.iter().all(|(frame, view)| !view.intersects(*frame)), "the button is out of view before the body scrolls: {before:?}");
+
+    let over = fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect.center();
+    for _ in 0..10 {
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: WHEEL_DOWN,
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+            source: egui::MouseWheelSource::Wheel,
+        };
+        fixture.frame(vec![egui::Event::PointerMoved(over), wheel]).settle();
+    }
+    let after = button_frames(&mut fixture, "Stop");
+    assert!(!after.is_empty(), "the button's frame is painted once the body is scrolled to its end");
+    assert!(after.iter().all(|(frame, view)| view.contains_rect(*frame)), "the button's whole frame is in view at the end of the scroll: {after:?}");
+}
+
 #[trial]
 fn an_armed_answer_waits_until_its_prompt_was_seen() {
     let open = std::rc::Rc::new(Cell::new(true));

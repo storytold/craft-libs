@@ -166,6 +166,35 @@ fn a_child_a_dialog_asks_for_opens_over_it_once() {
     assert!(host.is_empty(), "a dialog that finished does not leave its child open");
 }
 
+/// A child that asks for a child of its own in a later pass opens it over itself: the new dialog holds no dialog, the
+/// asking child keeps its own parent, and both stay shown under it.
+#[trial]
+fn a_child_that_asks_for_a_child_in_a_later_pass_keeps_its_own_parent() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    let below = host.open(Probe::<1>::new("below"));
+    let asker = host.open_child(Asker { ask: false, child: None, finish: None }, below);
+    run(&mut host, &mut frames);
+
+    host.get_mut::<Asker>().unwrap().ask = true;
+    run(&mut host, &mut frames);
+    let asked = dialog_id("asked");
+    let parents = |host: &DialogHost| host.open_dialogs().into_iter().map(|open| (open.id, open.parent)).collect::<Vec<_>>();
+    assert_eq!(parents(&host), [(below, None), (asker, Some(below)), (asked, Some(asker))], "each dialog sits over the one it was opened from");
+    assert!(!host.stack().has_child(asked), "the new dialog holds no dialog");
+
+    let shown = host.get::<Probe<1>>().unwrap().shows;
+    run(&mut host, &mut frames);
+    let (below_probe, asked_probe) = (host.get::<Probe<1>>().unwrap(), host.get::<Probe<3>>().unwrap());
+    assert_eq!(below_probe.shows, shown + 1, "the dialog under the asking child still shows");
+    assert!(asked_probe.top && !below_probe.top, "the new dialog is on top");
+
+    assert!(host.cancel::<Probe<3>>(&frames.ctx));
+    run(&mut host, &mut frames);
+    assert_eq!(parents(&host), [(below, None), (asker, Some(below))], "closing the new dialog leaves the asking child over its parent");
+    assert!(host.stack().is_top(asker));
+}
+
 /// A story of a hosted alert whose title is the story's `title` knob.
 fn titled_alert(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let title = *data.value("title", "Could not open");
