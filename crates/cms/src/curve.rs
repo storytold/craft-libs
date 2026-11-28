@@ -29,6 +29,14 @@ pub fn srgb_trc() -> Curve {
 }
 
 impl Curve {
+    /// Heap bytes this curve holds: the samples of a table, nothing for a function.
+    pub fn table_bytes(&self) -> usize {
+        match self {
+            Curve::Table(t) => t.capacity() * std::mem::size_of::<f32>(),
+            _ => 0,
+        }
+    }
+
     /// Creates a gamma curve `y = x^g`. Returns `Identity` if `g == 1.0` (within 1e-6).
     pub fn gamma(g: f64) -> Result<Self, crate::CmsError> {
         if !crate::math::fits_s15f16(g) || crate::math::s15f16_round(g) <= 0.0 {

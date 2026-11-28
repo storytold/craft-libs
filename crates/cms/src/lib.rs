@@ -53,7 +53,10 @@ pub use math::Mat3;
 pub use named::{NamedColor, NamedColors};
 pub use normalize::normalize_for_embedding;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
-pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};
+pub use transform::{
+    DEFAULT_CACHE_BUDGET, MAX_CACHED, SampleKind, Transform, TransformOptions, black_point, cache_budget, cache_usage, cached, clear_cache,
+    set_cache_budget,
+};
 pub use write::profile_id;
 
 /// ICC rendering intent.

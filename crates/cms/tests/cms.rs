@@ -178,6 +178,69 @@ fn white_is_exact_on_every_path() {
     }
 }
 
+/// #63: the transform cache counted entries and cleared itself whole. A CMYK or LUT-based link
+/// holds megabytes where a matrix/TRC one holds kilobytes, so a count bounds the memory only to
+/// within an order of magnitude, and clearing everything dropped the transforms the next frames
+/// were about to use. It evicts the least recently used against a byte budget now.
+#[test]
+fn the_transform_cache_evicts_by_size_and_keeps_what_is_in_use() {
+    use craft_cms::{cache_budget, cache_usage, cached, clear_cache, set_cache_budget};
+
+    // What the issue is about: the two kinds of link are nothing like the same size.
+    let rgb = Transform::new(srgb(), lab(), Intent::RelativeColorimetric, true).unwrap().table_bytes();
+    let link = Transform::new(cmyk(), srgb(), Intent::Perceptual, true).unwrap().table_bytes();
+    assert!(rgb > 0 && link > rgb * 4, "a CMYK link is far larger than a matrix/TRC one: {link} vs {rgb}");
+    // An entry also keeps both profiles' ICC bytes, to confirm a hit against them, and the budget
+    // counts those too.
+    let held = |t: &Transform, a: &craft_cms::Profile, b: &craft_cms::Profile| t.table_bytes() + a.to_bytes().len() + b.to_bytes().len();
+    let rgb = rgb + srgb().to_bytes().len() + lab().to_bytes().len();
+    let link = link + cmyk().to_bytes().len() + srgb().to_bytes().len();
+
+    let budget = cache_budget();
+    clear_cache();
+    assert_eq!(cache_usage(), (0, 0));
+
+    // A budget that holds one of these transforms and not two.
+    set_cache_budget(link + rgb / 2);
+    let opts = |intent| TransformOptions { intent, ..Default::default() };
+    let first = cached(cmyk(), srgb(), opts(Intent::Perceptual)).unwrap();
+    let (entries, bytes) = cache_usage();
+    assert_eq!(entries, 1);
+    assert_eq!(bytes, held(&first, cmyk(), srgb()));
+
+    // The second does not fit beside the first, so the first goes -- and the caller's copy of it
+    // is still usable, which is why eviction is safe.
+    let second = cached(srgb(), lab(), opts(Intent::RelativeColorimetric)).unwrap();
+    let (entries, bytes) = cache_usage();
+    assert_eq!(entries, 1, "the older transform was evicted, not kept beside the new one");
+    assert_eq!(bytes, held(&second, srgb(), lab()));
+    let mut out = [0.0f32; 3];
+    first.eval(&[0.1, 0.2, 0.3, 0.4], &mut out).unwrap();
+
+    // Least recently used, not first inserted: asking for the older one again keeps it while the
+    // other goes.
+    set_cache_budget(rgb * 2 + link * 2);
+    clear_cache();
+    let a = cached(srgb(), lab(), opts(Intent::RelativeColorimetric)).unwrap();
+    let b = cached(srgb(), lab(), opts(Intent::Saturation)).unwrap();
+    let _ = (&a, &b);
+    assert_eq!(cache_usage().0, 2);
+    let _again = cached(srgb(), lab(), opts(Intent::RelativeColorimetric)).unwrap(); // a is now the newer
+    set_cache_budget(cache_usage().1 - 1); // room for one
+    assert_eq!(cache_usage().0, 1, "one was evicted");
+    let kept = cached(srgb(), lab(), opts(Intent::RelativeColorimetric)).unwrap();
+    assert_eq!(cache_usage().0, 1, "and it was the one asked for last, so this was a hit");
+    assert!(std::sync::Arc::ptr_eq(&kept, &_again), "the same transform, not a rebuilt one");
+
+    // A budget of nothing still keeps the transform last built: the caller holds it anyway.
+    set_cache_budget(0);
+    let only = cached(cmyk(), srgb(), opts(Intent::Perceptual)).unwrap();
+    assert_eq!(cache_usage(), (1, held(&only, cmyk(), srgb())));
+
+    set_cache_budget(budget);
+    clear_cache();
+}
+
 /// The blocked matrix/TRC path (64 pixels at a time) must match the per-pixel evaluation for
 /// every pixel count around the block size, with and without extra channels.
 #[test]
