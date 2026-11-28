@@ -111,25 +111,32 @@ fn a_shared_story_is_read_within_the_characters_of_one_document() {
 
 #[test]
 fn many_paragraphs_and_runs_are_matched_in_about_linear_time() {
-    // 200 000 paragraphs, each with its own run and format.
-    let n = 200_000;
-    let text = "a\u{2029}".repeat(n);
-    let fmt =
-        |end: usize| vec![(tag(b"Indx"), F::I32(end as i32)), (tag(b"Item"), F::Obj(tag(b"PAtt"), vec![(tag(b"Ints"), array_i32(b"Ints", &[1]))]))];
-    let blk = F::Obj(
-        tag(b"StBl"),
-        vec![
-            (tag(b"Glyp"), utf8(&text)),
-            (tag(b"GAtt"), F::Obj(tag(b"GlAS"), vec![(tag(b"Runs"), F::Objs(tag(b"GlAR"), (1..=n).map(|i| run(2 * i as i32, None)).collect()))])),
-            (tag(b"PAtt"), F::Obj(tag(b"PaAS"), vec![(tag(b"Runs"), F::Objs(tag(b"PaAR"), (1..=n).map(|i| fmt(2 * i)).collect()))])),
-        ],
-    );
-    let started = std::time::Instant::now();
-    let d = open(vec![artistic(F::Obj(tag(b"Stry"), vec![(tag(b"Blok"), F::Shared(vec![blk]))]))]);
-    let Kind::Text(t) = &d.spreads[0].nodes[0].kind else { panic!("text") };
-    assert_eq!(t.runs.len(), n);
-    // (About half a second; quadratic matching took over half a minute on the same machine.)
-    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    // `n` paragraphs, each with its own run and format, and how many paragraph ends matching
+    // them looks up.
+    let lookups = |n: usize| {
+        let text = "a\u{2029}".repeat(n);
+        let fmt = |end: usize| {
+            vec![(tag(b"Indx"), F::I32(end as i32)), (tag(b"Item"), F::Obj(tag(b"PAtt"), vec![(tag(b"Ints"), array_i32(b"Ints", &[1]))]))]
+        };
+        let blk = F::Obj(
+            tag(b"StBl"),
+            vec![
+                (tag(b"Glyp"), utf8(&text)),
+                (tag(b"GAtt"), F::Obj(tag(b"GlAS"), vec![(tag(b"Runs"), F::Objs(tag(b"GlAR"), (1..=n).map(|i| run(2 * i as i32, None)).collect()))])),
+                (tag(b"PAtt"), F::Obj(tag(b"PaAS"), vec![(tag(b"Runs"), F::Objs(tag(b"PaAR"), (1..=n).map(|i| fmt(2 * i)).collect()))])),
+            ],
+        );
+        let story = artistic(F::Obj(tag(b"Stry"), vec![(tag(b"Blok"), F::Shared(vec![blk]))]));
+        let (d, lookups) = synth::count_paragraph_lookups(|| open(vec![story]));
+        let Kind::Text(t) = &d.spreads[0].nodes[0].kind else { panic!("text") };
+        assert_eq!(t.runs.len(), n);
+        lookups
+    };
+    // Four times the paragraphs and runs: a few binary searches each, so about four times the
+    // lookups (a little more for the longer searches), where matching each run against every
+    // paragraph is sixteen times.
+    let (quarter, full) = (lookups(50_000), lookups(200_000));
+    assert!(full <= 5 * quarter, "{quarter} lookups for 50,000 paragraphs, {full} for 200,000");
 }
 
 /// A shape node of `size` px.
