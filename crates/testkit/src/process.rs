@@ -140,7 +140,9 @@ type ReaderRefused = (io::Error, Option<Box<dyn Send>>);
 
 /// Runs `cmd` under `limits` and returns its exit status and output. The exit status is not
 /// checked. The runner sets standard input, standard output and standard error, and on Unix the
-/// process group; every other setting of `cmd` is kept. A timeout too long to set a deadline
+/// process group; every other setting of `cmd` is kept, except that on Windows the Job Object
+/// wrapper replaces any creation flags set with `CommandExt::creation_flags`. No caller in this
+/// crate sets them. A timeout too long to set a deadline
 /// returns [`RunError::InvalidTimeout`] without starting the program.
 pub(crate) fn run(mut cmd: Command, limits: RunLimits, seen: &mut Observed) -> Result<Output, RunError> {
     if let Some(timeout) = limits.timeout
@@ -358,6 +360,8 @@ fn wait_for_exit_with_clock(child: &mut Child, deadline: Option<Instant>, mut no
             return Err(None);
         }
         match child_exit(child) {
+            // The child is reaped now, so a late exit is reported without signaling it.
+            Ok(Some(_)) if deadline.is_some_and(|deadline| now() > deadline) => return Err(None),
             Ok(Some(status)) => return Ok(status),
             Ok(None) => {}
             Err(e) => {
@@ -407,6 +411,17 @@ mod tests {
         let result = wait_for_exit_with_clock(&mut exited_child(), Some(deadline), || observed);
         assert!(matches!(result, Err(None)), "{result:?}");
         assert!(wait_for_exit_with_clock(&mut exited_child(), Some(deadline), || deadline).is_ok());
+    }
+
+    /// The clock passes the deadline between the check before the look at the child and the exit
+    /// it sees, so the exit is a timeout.
+    #[cfg(unix)]
+    #[test]
+    fn an_exit_seen_after_the_clock_passes_the_deadline_is_a_timeout() {
+        let deadline = Instant::now();
+        let mut reads = [deadline, deadline + Duration::from_secs(1)].into_iter();
+        let result = wait_for_exit_with_clock(&mut exited_child(), Some(deadline), || reads.next().unwrap_or(deadline + Duration::from_secs(1)));
+        assert!(matches!(result, Err(None)), "{result:?}");
     }
 
     #[test]
@@ -805,6 +820,15 @@ $output.Flush()
         let pid: u32 = std::fs::read_to_string(&marker).expect("the parent wrote no marker").trim().parse().unwrap();
         let _end = EndOnDrop(pid);
         assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe the grandchild holds");
-        assert!(!process_running(pid), "grandchild {pid} is still running");
+        // On Linux a killed process closes its pipes before it becomes a zombie, so `ps` may still
+        // list it as running for a moment after the readers finish.
+        let gone = (0..500).any(|_| {
+            let running = process_running(pid);
+            if running {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            !running
+        });
+        assert!(gone, "grandchild {pid} is still running");
     }
 }

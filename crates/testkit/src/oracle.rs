@@ -4,8 +4,10 @@
 //!
 //! 1. The file that an explicit-path variable names: `CRAFT_<PROGRAM>` for [`find`] (for example
 //!    `CRAFT_FFMPEG`), or the variable the caller passes to [`find_with`]. An empty value counts as
-//!    unset. When the value is not a file the OS can start, the lookup returns
-//!    [`OracleError::InvalidExplicitPath`] and does not search further.
+//!    unset. When the value fails the candidate check below, or the OS refuses to start it for lack
+//!    of execute permission, the lookup returns [`OracleError::InvalidExplicitPath`]. Any other
+//!    failure to start it, such as a missing script interpreter, returns [`OracleError::Start`].
+//!    Neither error leads to a search of `PATH` or the install folders.
 //! 2. Each directory on `PATH`, in order. Empty entries are skipped, and a relative entry is
 //!    resolved against the current directory at the time of the lookup. On Windows the search tries
 //!    `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists, in its order.
@@ -50,7 +52,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::process::{self, Observed, RunError, RunLimits};
 
@@ -126,7 +128,8 @@ pub enum OracleError {
     InvalidVariable { variable: String },
     /// No file with the program's name was found. The `require_*` macros skip on this error.
     Missing { program: String },
-    /// The explicit-path variable is set, but its value is not a file the OS can start.
+    /// The explicit-path variable is set, but its value fails the candidate check or the OS denies
+    /// permission to execute it. Other failures to start it return [`OracleError::Start`].
     InvalidExplicitPath { variable: String, path: PathBuf },
     /// The program was found but could not be started.
     Start { path: PathBuf, source: io::Error },
@@ -487,6 +490,11 @@ fn lookup_with_probe(
     limits: ProbeLimits,
     mut probe: impl FnMut(&Path) -> Result<Oracle, OracleError>,
 ) -> Result<Oracle, OracleError> {
+    // An invalid timeout is a configuration error even when no candidate exists. The runner sets
+    // the probe's own deadline after the spawn.
+    if Instant::now().checked_add(limits.timeout).is_none() {
+        return Err(OracleError::InvalidTimeout { timeout: limits.timeout });
+    }
     let mut denied = HashSet::new();
     loop {
         let path = if denied.is_empty() { locate(s)? } else { locate_if(s, |path| !denied.contains(path))? };
@@ -1197,6 +1205,14 @@ mod tests {
         script(d.path(), "tool", "echo tool 1.0");
         let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::MAX };
         let got = find_on(d.path(), "tool", "-v", limits);
+        assert!(matches!(got, Err(OracleError::InvalidTimeout { timeout: Duration::MAX })), "{got:?}");
+    }
+
+    /// The timeout is checked before the search, so a lookup with nothing to find still reports it.
+    #[test]
+    fn an_invalid_timeout_is_an_error_when_no_candidate_exists() {
+        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::MAX };
+        let got = find_in("craft-testkit-no-such-tool", "-v", None, None, &[], limits);
         assert!(matches!(got, Err(OracleError::InvalidTimeout { timeout: Duration::MAX })), "{got:?}");
     }
 }
