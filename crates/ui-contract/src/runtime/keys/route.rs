@@ -402,11 +402,11 @@ fn owned_shortcuts(
 /// Whether the focused stop `target`, whose keys `owner` owns, holds `press`: the press is its own and reaches neither
 /// egui's input, where the app reads its own keys, nor the app's shortcuts. A widget or popup holds the presses its
 /// routing `taken`, the keys its filter keeps from the key stage, and the presses whose text it took (`typed`: the
-/// type-ahead of a list). A text field holds the presses whose text it took, its typing; the egui text widget behind it
-/// reads the text, not the press, and the editing keys, which stay in egui's input. A recorder holds every press and a
-/// menu its navigation keys (`keeps_key`), except that a text field in a menu (a menu's search field) keeps the text
-/// field's rule: the editing chords it lists reach it as edits before routing (`Strip::press`). The letters a menu's
-/// rows' mnemonics name are the menu's claims, held before routing.
+/// type-ahead of a list). A text field holds the presses whose text it took and a plain Tab routed to an editor that
+/// keeps Tab. The egui text widget behind it reads text and the other editing keys from egui's input. A recorder
+/// holds every press and a menu its navigation keys (`keeps_key`), except that a text field in a menu (a menu's search
+/// field) keeps the text field's rule: the editing chords it lists reach it as edits before routing (`Strip::press`).
+/// The letters a menu's rows' mnemonics name are the menu's claims, held before routing.
 fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: bool, typed: bool) -> bool {
     let Some(keys) = target.map(|rec| &rec.stop.keys) else { return false };
     let text = keys.owner == OwnerClass::Text;
@@ -421,7 +421,8 @@ fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: 
         focus::KeepKeys::BlockArrows => matches!(press.key, Key::Left | Key::Right | Key::Up | Key::Down),
         _ => false,
     };
-    (widget && (taken || typed || kept)) || (open && text && typed)
+    let editor_tab = kept && taken && press.key == Key::Tab && press.mods.is_none();
+    (widget && (taken || typed || kept)) || (open && text && (typed || editor_tab))
 }
 
 /// Whether the key owner `owner` keeps a press of `key` with `mods` held from egui's input and the app's shortcuts
