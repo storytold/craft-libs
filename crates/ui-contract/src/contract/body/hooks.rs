@@ -548,60 +548,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     }
 
     fn updated(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
-        use crate::contract::Pointer as _;
-        let props = comp.props(Internal::new());
-        let (scroll, layer) = (scroll_of(props), matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. }));
-        // The OS asked a viewport mount's window to close: the container closes at step 15.
-        if matches!(props.mount, Mount::Viewport { .. }) && windows::take_close_request(cx.core.memory.ctx(), cx.core.id) {
-            self.close = true;
-            self.reason = self.reason.or(Some(CloseReason::Requested));
-        }
-        if scroll.is_some() {
-            self.scroll_input(props, cx);
-        }
-        // A reveal queued for the body moves its offset against the view this pass shows, on top of a move
-        // `scroll_input` queued, within the offsets the content allows; the next pass takes the offset at step 4, as it
-        // takes the scroll bar's, and places by it. A reveal that moves nothing queues no jump, so it costs no pass. The
-        // part of the rect the moved view shows goes on to the scroll owner around.
-        if let Some((scroll, view)) = scroll.zip(self.view)
-            && let Some(rect) = crate::contract::take_reveal(&cx.core.ctx, cx.core.id)
-        {
-            let view = self.shown_view(scroll, view);
-            let (by, _) = crate::contract::steps::reveal_move(rect, view);
-            let rtl = cx.core.env.direction().is_rtl();
-            let id = cx.core.id;
-            let from = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
-            let mut offset = from;
-            offset.y += f64::from(by.y);
-            offset.x += f64::from(if rtl { -by.x } else { by.x });
-            let offset = self.clamped(scroll, view.size(), offset);
-            // A reveal of what the view shows moves nothing: no jump, so no repeated pass.
-            if offset != from {
-                super::scroll::queue_jump(&cx.core.ctx, id, offset);
-            }
-            let moved = Vec2::new((offset.x - from.x) as f32, (offset.y - from.y) as f32);
-            let moved = Vec2::new(if rtl { -moved.x } else { moved.x }, moved.y);
-            crate::contract::Focus::reveal(cx, rect.translate(-moved).intersect(view));
-        }
-        // AccessKit Expand, Collapse and Click reach a collapsible container as an activation: it folds or unfolds.
-        if props.collapse.is_some() && cx.activation().is_some_and(|activation| activation.by_key) {
-            self.open = !self.open;
-        }
-        self.band_double(cx.core);
-        self.surface_press(comp.sense().contains(craft_behavior::Sense::SURFACE), cx.core);
-        let band = props.header.is_some_and(|header| header.band == DragBand::Move);
-        if (band || matches!(props.mount, Mount::Viewport { .. } | Mount::Window { .. }))
-            && let Some(viewport) = os_window(props, cx.core.memory.ctx(), cx.core.id, &cx.core.env)
-        {
-            self.window_os(viewport, props, cx);
-            self.window_movable(viewport, cx.core);
-        }
-        self.pane_drag(props, cx.core);
-        if layer && !(matches!(props.mount, Mount::Viewport { .. }) && windows::mount_window(cx.core.memory.ctx(), cx.core.id)) {
-            self.window_keys(props, cx);
-            self.window_drag(props, cx);
-        }
-        self.window_placed(props, cx.core);
+        let style_min = cx.style.metrics().min_size;
+        let surface = comp.sense().contains(craft_behavior::Sense::SURFACE);
+        self.updated_core(comp.props(Internal::new()), surface, style_min, cx.core);
         // The body moves and resizes the layer in screen space; the caller places it in its parent's layer space.
         let from_screen = crate::runtime::overlay::parent_space(&cx.core.ctx, cx.core.id).inverse();
         for mut change in std::mem::take(&mut self.reports) {
@@ -790,6 +739,64 @@ fn first_line_found(ctx: &Context, (header, body): (Id, Id), top: f32, moved: f3
 }
 
 impl BodyHooks<'_> {
+    /// Step 13 of a body, without the component: what `updated` does for every container type, kept out of the
+    /// generic hook so the web build carries it once. The placement changes it reports wait in `self.reports`.
+    fn updated_core(&mut self, props: &ContainerProps, surface: bool, style_min: Vec2, core: &mut CxCore<'_>) {
+        use crate::contract::Pointer as _;
+        let (scroll, layer) = (scroll_of(props), matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. }));
+        // The OS asked a viewport mount's window to close: the container closes at step 15.
+        if matches!(props.mount, Mount::Viewport { .. }) && windows::take_close_request(core.memory.ctx(), core.id) {
+            self.close = true;
+            self.reason = self.reason.or(Some(CloseReason::Requested));
+        }
+        if scroll.is_some() {
+            self.scroll_input(props, core);
+        }
+        // A reveal queued for the body moves its offset against the view this pass shows, on top of a move
+        // `scroll_input` queued, within the offsets the content allows; the next pass takes the offset at step 4, as it
+        // takes the scroll bar's, and places by it. A reveal that moves nothing queues no jump, so it costs no pass. The
+        // part of the rect the moved view shows goes on to the scroll owner around.
+        if let Some((scroll, view)) = scroll.zip(self.view)
+            && let Some(rect) = crate::contract::take_reveal(&core.ctx, core.id)
+        {
+            let view = self.shown_view(scroll, view);
+            let (by, _) = crate::contract::steps::reveal_move(rect, view);
+            let rtl = core.env.direction().is_rtl();
+            let id = core.id;
+            let from = super::scroll::queued_jump(&core.ctx, id).unwrap_or(self.offset);
+            let mut offset = from;
+            offset.y += f64::from(by.y);
+            offset.x += f64::from(if rtl { -by.x } else { by.x });
+            let offset = self.clamped(scroll, view.size(), offset);
+            // A reveal of what the view shows moves nothing: no jump, so no repeated pass.
+            if offset != from {
+                super::scroll::queue_jump(&core.ctx, id, offset);
+            }
+            let moved = Vec2::new((offset.x - from.x) as f32, (offset.y - from.y) as f32);
+            let moved = Vec2::new(if rtl { -moved.x } else { moved.x }, moved.y);
+            crate::contract::Focus::reveal(core, rect.translate(-moved).intersect(view));
+        }
+        // AccessKit Expand, Collapse and Click reach a collapsible container as an activation: it folds or unfolds.
+        if props.collapse.is_some() && core.activation().is_some_and(|activation| activation.by_key) {
+            self.open = !self.open;
+        }
+        self.band_double(core);
+        self.surface_press(surface, core);
+        let band = props.header.is_some_and(|header| header.band == DragBand::Move);
+        if (band || matches!(props.mount, Mount::Viewport { .. } | Mount::Window { .. }))
+            && let Some(viewport) = os_window(props, core.memory.ctx(), core.id, &core.env)
+        {
+            self.window_os(viewport, props, core, style_min);
+            self.window_movable(viewport, core);
+        }
+        self.pane_drag(props, core);
+        if layer && !(matches!(props.mount, Mount::Viewport { .. }) && windows::mount_window(core.memory.ctx(), core.id)) {
+            self.window_keys(props, core, style_min);
+            self.window_drag(props, core, style_min);
+        }
+        self.window_placed(props, core);
+    }
+
     /// The measuring run of the regions in `self.room`, under the inputs `key`: what they took together, padding
     /// included. `content`: the size the body's content took in the run taken back before this one, recorded with it.
     fn measure_run<C: Container>(
