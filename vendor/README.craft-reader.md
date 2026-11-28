@@ -28,6 +28,7 @@ re-sync brings these PdfCraft changes:
 | #3378 | hayro-syntax | Patch 20: spaces or tabs between `stream` and its line break are accepted |
 | #3363 | hayro-syntax | A JP2 image in a color space the decoder refuses is drawn by its component count |
 | #3412 | hayro-interpret | Type 3 glyph bounding boxes are transformed to device space before shading bounds are intersected |
+| #4782, #5648 | hayro-syntax | Patch 48: a `JXLDecode` image filter draws JPEG XL images (first frame, 8-bit grey or RGB with alpha; refused past the document's byte and pixel limits). ISO 32000-2 names no JPEG XL filter yet, so the name is a placeholder. Tests: `filter::jxl::tests`, with a 731-byte lossless fixture (`src/filter/jxl_lossless.jxl`) |
 
 PdfCraft's vendored `vello_common` patch (clip-intersection performance) is not part of this
 reader snapshot.
