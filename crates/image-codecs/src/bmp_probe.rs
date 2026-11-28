@@ -66,7 +66,8 @@ pub fn dib_to_bmp(dib: &[u8]) -> Result<Vec<u8>, CodecError> {
 /// `BI_BITFIELDS` (with the usual colour masks when it gives none), so its alpha is kept as
 /// Windows programs mean it; arboard makes the same change. Bit fields then need the colour masks
 /// after the header too, where Windows puts a copy and the decoder skips them; a DIB without that
-/// copy gets it. Any other DIB comes back unchanged, as does one whose 12 extra bytes cannot be
+/// copy gets it, and an embedded or linked V5 profile after the header keeps its offset pointing at
+/// its bytes. Any other DIB comes back unchanged, as does one whose 12 extra bytes cannot be
 /// allocated.
 pub fn dib_layout(mut dib: Vec<u8>) -> Vec<u8> {
     let u32_at = |d: &[u8], at: usize| d.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
@@ -98,6 +99,9 @@ pub fn dib_layout(mut dib: Vec<u8>) -> Vec<u8> {
         Some(m) if bitfields && size <= dib.len() && !has_copy(&m) => Some(m),
         _ => None,
     };
+    // A V5 header's embedded or linked profile is found by its offset from the header start; one
+    // that lies wholly after the insertion point moves with the inserted masks.
+    let profile_at = insert.and_then(|_| moved_profile_offset(&dib, size));
     if insert.is_some() && dib.try_reserve(12).is_err() {
         return dib;
     }
@@ -111,8 +115,30 @@ pub fn dib_layout(mut dib: Vec<u8>) -> Vec<u8> {
     }
     if let Some(m) = insert {
         dib.splice(size..size, m);
+        if let Some(at) = profile_at {
+            put(&mut dib, 112, at);
+        }
     }
     dib
+}
+
+/// The `bV5ProfileData` value a V5 DIB needs once 12 bytes are inserted at `insert_at`, or `None`
+/// when it has no embedded or linked profile (`bV5CSType`), the profile's range is empty or outside
+/// the DIB, it starts before `insert_at` (so it does not move), or the new offset overflows.
+fn moved_profile_offset(dib: &[u8], insert_at: usize) -> Option<u32> {
+    const PROFILE_LINKED: u32 = u32::from_be_bytes(*b"LINK");
+    const PROFILE_EMBEDDED: u32 = u32::from_be_bytes(*b"MBED");
+    let u32_at = |at: usize| dib.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+    if u32_at(0)? < 124 || !matches!(u32_at(56)?, PROFILE_LINKED | PROFILE_EMBEDDED) {
+        return None;
+    }
+    let (offset, len) = (u32_at(112)?, u32_at(116)?);
+    let start = usize::try_from(offset).ok()?;
+    let end = start.checked_add(usize::try_from(len).ok()?)?;
+    if len == 0 || start < insert_at || end > dib.len() {
+        return None;
+    }
+    offset.checked_add(12)
 }
 
 /// Bytes of pixel rows (4-byte aligned stride) the info-header dimensions of `dib` call for, or
@@ -584,6 +610,62 @@ mod tests {
         // V5: the header's masks, a copy inserted by `dib_layout`, then the pixel.
         let bmp = dib_to_bmp(&dib_layout(one_pixel(124))).unwrap();
         assert_eq!(&crate::decode(&bmp).unwrap().to_rgba8()[..4], &[30, 20, 10, 128]);
+    }
+
+    /// 1x1 32-bit V5 DIB, BI_RGB with an alpha mask (so `dib_layout` inserts the mask copy), with
+    /// `profile` after the pixel and the given colour-space type and profile offset and size.
+    fn v5_with_profile(cs_type: &[u8; 4], profile: &[u8], offset: u32, len: u32) -> Vec<u8> {
+        let mut d = info(124, 32, 0, 0, [0, 0, 0, 0xFF00_0000], 0);
+        d[4..8].copy_from_slice(&1i32.to_le_bytes());
+        d[8..12].copy_from_slice(&1i32.to_le_bytes());
+        d[56..60].copy_from_slice(&u32::from_be_bytes(*cs_type).to_le_bytes());
+        d[112..116].copy_from_slice(&offset.to_le_bytes());
+        d[116..120].copy_from_slice(&len.to_le_bytes());
+        d.extend_from_slice(&[10, 20, 30, 128]);
+        d.extend_from_slice(profile);
+        d
+    }
+
+    #[test]
+    fn inserted_masks_keep_a_v5_profile_offset_on_its_bytes() {
+        let profile = b"synthetic profile bytes";
+        let len = profile.len() as u32;
+        for cs in [b"MBED", b"LINK"] {
+            let d = v5_with_profile(cs, profile, 128, len);
+            assert_eq!(&d[128..], profile);
+            let laid = dib_layout(d.clone());
+            assert!(laid.len() > d.len(), "the mask copy was inserted");
+            let at = dib_u32(&laid, 112).unwrap() as usize;
+            assert_eq!(laid.get(at..at + profile.len()), Some(profile.as_slice()), "{cs:?}");
+        }
+    }
+
+    #[test]
+    fn a_v5_profile_offset_that_does_not_move_is_left_alone() {
+        let profile = b"synthetic profile bytes";
+        let len = profile.len() as u32;
+        let cases = [
+            // Not a profile colour space: the field is not an offset.
+            v5_with_profile(b"sRGB", profile, 128, len),
+            // Empty, out-of-range and overflowing ranges.
+            v5_with_profile(b"MBED", profile, 128, 0),
+            v5_with_profile(b"MBED", profile, 128, len + 1),
+            v5_with_profile(b"MBED", profile, u32::MAX, len),
+            v5_with_profile(b"MBED", profile, 128, u32::MAX),
+            // A range starting inside the header, before the insertion point.
+            v5_with_profile(b"MBED", profile, 64, 8),
+        ];
+        for d in cases {
+            let laid = dib_layout(d.clone());
+            assert!(laid.len() > d.len(), "the mask copy was inserted");
+            assert_eq!(laid[112..120], d[112..120]);
+        }
+        // Nothing inserted (the DIB already has BI_BITFIELDS and its mask copy): nothing moves.
+        let mut d = v5_with_profile(b"MBED", profile, 140, len);
+        d[16..20].copy_from_slice(&3u32.to_le_bytes());
+        let masks = d[40..52].to_vec();
+        d.splice(124..124, masks);
+        assert_eq!(dib_layout(d.clone()), d);
     }
 
     #[test]
