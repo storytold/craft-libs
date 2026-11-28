@@ -526,6 +526,50 @@ fn ellipses_do_not_start_sentences() {
     }
 }
 
+/// #3725: the full stop of "e.g." or "i.e." (also written "eg." and "ie.") ends no sentence, so
+/// the word after it needs no capital, also before a closing quote. "IE." in capitals (the
+/// browser) still ends one, and so do a question mark after that full stop and a full stop after
+/// a closing quote, which isn't the abbreviation's own.
+#[test]
+fn the_full_stop_of_e_g_or_i_e_ends_no_sentence() {
+    let capitals = |text: &str| -> Vec<String> {
+        check_grammar(text)
+            .into_iter()
+            .filter(|i| i.message == "Capitalize the first word of a sentence")
+            .filter_map(|i| text.get(i.start..i.end).map(str::to_string))
+            .collect()
+    };
+    for text in [
+        "Any part of it (e.g. answers to questions) may be in another language.",
+        "Keep it short, i.e. one line.",
+        "E.g. answers come first.",
+        "Some forms, eg. this one, differ.",
+        "Abbreviations like \"i.e.\" need no capital after them.",
+    ] {
+        assert!(capitals(text).is_empty(), "{text}: {:?}", capitals(text));
+    }
+    for text in ["It works in Chrome but not IE. we need a fix.", "Should it be e.g.? we use both.", "The label says \"ie\". we kept it."] {
+        assert_eq!(capitals(text), ["we"], "{text}");
+    }
+}
+
+/// #3725: a web or e-mail address (`https://…`, `www.…`, `someone@example.org`) isn't the first
+/// word of a sentence, at the start of a paragraph or after a sentence end, in every language
+/// whose grammar asks for a capital there. An ordinary lower-case word there still gets the mark.
+#[test]
+fn an_address_is_not_the_first_word_of_a_sentence_in_any_language() {
+    for lang in [ProofLang::En, ProofLang::Hr, ProofLang::It, ProofLang::Pl, ProofLang::Pt, ProofLang::Ru, ProofLang::Tr] {
+        // Whether a grammar issue starts at byte `at` of `text`.
+        let marked = |text: &str, at: usize| check_grammar_in(text, lang).iter().any(|i| i.start == at);
+        assert!(marked("ccc ddd", 0) && marked("Aaa bbb. ccc ddd", 9), "{lang:?}: a lower-case sentence start is marked");
+        for address in ["https://example.org/page", "www.example.org", "someone@example.org"] {
+            assert!(!marked(address, 0), "{lang:?}: {address}");
+            let text = format!("Aaa bbb. {address}");
+            assert!(!marked(&text, 9), "{lang:?}: {text}");
+        }
+    }
+}
+
 /// #40: saving merges in words another process saved, and leaves out the ones just removed.
 #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
 #[test]

@@ -547,7 +547,7 @@ fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: 
             let Some(&(pa, pb)) = ws.get(k - 1) else { continue };
             ends_sentence(text.get(pb..a).unwrap_or(""), text.get(pa..pb).unwrap_or(""))
         };
-        if starts && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
+        if starts && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) && !crate::in_address(text, a, b) {
             v.push(issue(a, b, "Предложение начинается со строчной буквы".into(), vec![capitalize(w)]));
         }
     }
