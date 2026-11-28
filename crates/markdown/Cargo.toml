@@ -12,7 +12,8 @@ workspace = true
 
 [dependencies]
 craft-flow = { workspace = true }
-craft-html = { workspace = true }
+# `flow`: the HTML document reader, which an HTML block in Markdown hands its raw text to.
+craft-html = { workspace = true, features = ["flow"] }
 craft-wordmodel = { workspace = true }
 
 [dev-dependencies]
