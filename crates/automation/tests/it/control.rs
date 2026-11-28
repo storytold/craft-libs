@@ -128,10 +128,34 @@ fn an_unauthenticated_connection_is_closed_at_the_deadline_whatever_it_sends() {
     assert!(nothing_more_dispatched(&rx, server, &connection_ended, 1), "nothing was dispatched");
 }
 
-/// Whether the server closed the connection: the next read is the end of the stream, not a timeout or an error.
+/// Whether the server closed the connection: the next read is the end of the stream, or an error other than a timeout.
+/// A server that closes with input still unread makes the kernel send a reset, so the read fails with
+/// `ConnectionReset` or `ConnectionAborted` instead of returning the end of the stream (mostly on Windows).
 fn is_closed(reader: &mut impl BufRead) -> bool {
     let mut line = String::new();
-    matches!(reader.read_line(&mut line), Ok(0))
+    match reader.read_line(&mut line) {
+        Ok(read) => read == 0,
+        Err(e) => !matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+    }
+}
+
+/// A reader whose every read fails with the given error kind.
+struct Failing(std::io::ErrorKind);
+
+impl std::io::Read for Failing {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(self.0.into())
+    }
+}
+
+/// A reset or aborted connection counts as closed; a read timeout does not.
+#[trial]
+fn a_reset_connection_counts_as_closed() {
+    use std::io::ErrorKind::{ConnectionAborted, ConnectionReset, TimedOut, WouldBlock};
+    assert!(is_closed(&mut BufReader::new(Failing(ConnectionReset))), "a reset is a close");
+    assert!(is_closed(&mut BufReader::new(Failing(ConnectionAborted))), "an abort is a close");
+    assert!(!is_closed(&mut BufReader::new(Failing(TimedOut))), "a timeout is not a close");
+    assert!(!is_closed(&mut BufReader::new(Failing(WouldBlock))), "a timeout is not a close");
 }
 
 /// A server whose `ended` receiver gets `()` each time one of its connections has ended. Its clock stands still, so no
