@@ -355,6 +355,8 @@ pub use craft_silhouette_studio as silhouette_studio;
 pub use craft_sketch as sketch;
 #[cfg(feature = "smime")]
 pub use craft_smime as smime;
+#[cfg(feature = "snappy")]
+pub use craft_snappy as snappy;
 #[cfg(feature = "sniff")]
 pub use craft_sniff as sniff;
 #[cfg(feature = "sourcemap")]

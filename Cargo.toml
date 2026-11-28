@@ -271,6 +271,7 @@ craft-mcp-server = { path = "crates/mcp-server" }
 craft-epub = { path = "crates/epub" }
 craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }
+craft-snappy = { path = "crates/snappy" }
 craft-web-api = { path = "crates/web-api" }
 craft-window = { path = "crates/window" }
 # egui's colour types alone, for crates that convert to and from them without egui.

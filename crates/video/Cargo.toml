@@ -52,7 +52,7 @@ ffv1 = ["dep:craft-media"]
 # Uncompressed packed pictures (UYVY, YUYV, YVYU, v210, r210, R10k): unpacking and packing.
 rawvideo = []
 # Hap (Vidvox): decoder and encoder, with Snappy and chunked second stages.
-hap = []
+hap = ["dep:craft-snappy"]
 # Motion JPEG: a frame-level decoder and encoder over `craft-jpeg`.
 mjpeg = ["dep:craft-jpeg"]
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
@@ -92,6 +92,7 @@ threads = ["dep:rayon", "rav1e?/threading"]
 miniz_oxide = { workspace = true, optional = true }
 craft-media = { workspace = true, optional = true }
 craft-jpeg = { workspace = true, optional = true }
+craft-snappy = { workspace = true, optional = true }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
 
