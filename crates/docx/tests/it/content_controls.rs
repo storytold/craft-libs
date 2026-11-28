@@ -396,3 +396,44 @@ fn range_toc_without_control_stays_unwrapped_and_section_break_toc_control_hands
     let xml_sect = document_xml(&write(&d_sect).unwrap());
     assert!(xml_sect.contains("Chapter One") && xml_sect.contains("Section"), "{xml_sect}");
 }
+
+#[test]
+fn list_item_omits_empty_display_text_on_round_trip() {
+    let combo = sdt(
+        r#"<w:id w:val="41"/><w:comboBox><w:listItem w:value="Choose an item."/><w:listItem w:displayText="Option A" w:value="a"/></w:comboBox>"#,
+        &t("Choose an item."),
+    );
+    let dropdown = sdt(
+        r#"<w:id w:val="42"/><w:dropDownList><w:listItem w:value="Select one"/><w:listItem w:displayText="Option B" w:value="b"/></w:dropDownList>"#,
+        &t("Select one"),
+    );
+    let docx = package(&p(&format!("{combo}{dropdown}")));
+    let doc = read(&docx).unwrap();
+    let bytes = write(&doc).unwrap();
+    let xml = document_xml(&bytes);
+
+    assert!(!xml.contains(r#"w:displayText="""#), "empty w:displayText must be omitted: {xml}");
+    assert!(xml.contains(r#"<w:listItem w:value="Choose an item."/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:listItem w:displayText="Option A" w:value="a"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:listItem w:value="Select one"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:listItem w:displayText="Option B" w:value="b"/>"#), "{xml}");
+
+    let back = read(&bytes).unwrap();
+    assert_eq!(
+        by_id(&back, 41).kind,
+        ControlKind::ComboBox {
+            items: vec![
+                ListItem { display: String::new(), value: "Choose an item.".into() },
+                ListItem { display: "Option A".into(), value: "a".into() },
+            ],
+            last_value: String::new(),
+        }
+    );
+    assert_eq!(
+        by_id(&back, 42).kind,
+        ControlKind::DropDown {
+            items: vec![ListItem { display: String::new(), value: "Select one".into() }, ListItem { display: "Option B".into(), value: "b".into() },],
+            last_value: String::new(),
+        }
+    );
+}
