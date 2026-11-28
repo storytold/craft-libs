@@ -39,6 +39,7 @@ author, source and license. Library code and original assets are under the repos
 | `crates/font-subset/tests/data/{abeezee,abel,bbhbartle,librefranklin,orbitron,sarabun}/` (unmodified; each with its `OFL.txt`) | The ABeeZee, Abel, BBH, Libre Franklin, Orbitron and Sarabun Project Authors | [google/fonts@e7db6ca `ofl/`](https://github.com/google/fonts/tree/e7db6ca/ofl) | OFL-1.1 |
 | `crates/font-subset/tests/data/ubuntu/Ubuntu-Regular.ttf` (unmodified; with `LICENCE.txt`) | Canonical Ltd. (Dalton Maag) | [google/fonts@e7db6ca `ufl/ubuntu`](https://github.com/google/fonts/tree/e7db6ca/ufl/ubuntu) | Ubuntu-font-1.0 |
 | `crates/font-subset/tests/data/notosanscjk/NotoSansCJKsc-test.otf` (subset to the test strings; with `OFL.txt`) | The Noto Project Authors (Adobe, Google) | [notofonts/noto-cjk@f8d1575 `Sans/OTF/SimplifiedChinese`](https://github.com/notofonts/noto-cjk/tree/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese), via storytold/font-preview-service | OFL-1.1 |
+| `crates/theme/themes/dracula.json` (Dracula; the palette's hex values, assigned to theme seeds and pins by craft-libs contributors; the "Dracula" table only, not Alucard; dark mode only; no other file content taken) | Dracula Theme | [dracula/dracula-theme@8d33e54 `README.md`](https://github.com/dracula/dracula-theme/blob/8d33e5492b56740c4857c5ebe7c5d5ab4040caf1/README.md), "Color Palette (OSS)", Dracula table | MIT (`LICENSE` at that commit, "Copyright (c) 2023 Dracula Theme") |
 
 Original assets are covered by the repository licence.
 
