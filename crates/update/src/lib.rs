@@ -3,6 +3,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod app;
+pub mod catalog;
 pub mod desktop_entry;
 pub mod detect;
 pub mod distro;
@@ -88,11 +89,32 @@ impl From<&str> for CheckError {
     }
 }
 
-/// Checks for an update against GitHub releases for the given app.
+/// Checks for an update: defaults to the signed `getartcraft.com` catalog, falling back to
+/// GitHub releases when the catalog is unavailable, fails verification, is stale, or omits `app`.
 ///
-/// Returns an error when GitHub does not find the repository (renamed, deleted or private).
+/// Returns an error when the GitHub fallback does not find the repository (renamed, deleted or private).
 pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
+    let version = self_update::current_version(app, current_version).map(|v| v.to_string());
+    let effective_version = version.as_deref().unwrap_or(current_version);
+    match catalog::SignedCatalog::fetch(http) {
+        Ok(signed) => {
+            let prereleases = wants_prereleases(crate::version::parse(effective_version).as_ref());
+            if let Some(latest) = signed.latest_for(app, prereleases, now()) {
+                return Ok(offer_if_newer(latest, effective_version));
+            }
+        }
+        Err(why) => {
+            log::debug!("signed catalog unavailable ({why}); falling back to GitHub");
+        }
+    }
     check_releases_at(&format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo), app, http, current_version)
+}
+
+/// Returns `Some(release)` when [`version::offers_update`] says `current_version` should update to it.
+fn offer_if_newer(release: Release, current_version: &str) -> Option<Release> {
+    let running = crate::version::parse(current_version)?;
+    let rel_v = release.version.as_ref()?;
+    crate::version::offers_update(rel_v, &running).then_some(release)
 }
 
 /// [`check_for_update`] against the release list at `url` (a loopback server in tests).
@@ -112,13 +134,19 @@ pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
+/// Whether a copy running `running` also considers pre-releases: only a published pre-release
+/// build does, not a stable copy or a build from source.
+fn wants_prereleases(running: Option<&semver::Version>) -> bool {
+    running.is_some_and(|v| !crate::version::is_stable(v) && !crate::version::is_local_build(v))
+}
+
 /// The release in GitHub's release list `json` to offer a copy running `current_version`, if any:
 /// the latest published release, when [`version::offers_update`] says so. A copy running a published
 /// pre-release (`0.1.0-alpha.3`, `0.17.0-rc.1`) also considers pre-releases, so it is offered the next
 /// one; a stable copy and a build from source are offered stable releases only.
 fn offered_release(json: &str, repo: &str, current_version: &str) -> Result<Option<Release>, String> {
     let running = crate::version::parse(current_version);
-    let prereleases = running.as_ref().is_some_and(|v| !crate::version::is_stable(v) && !crate::version::is_local_build(v));
+    let prereleases = wants_prereleases(running.as_ref());
     let latest = crate::release::parse_github_release_list(json, repo, prereleases)?;
     Ok(latest
         .filter(|release| release.version.as_ref().zip(running.as_ref()).is_some_and(|(rel_v, cur_v)| crate::version::offers_update(rel_v, cur_v))))
@@ -165,6 +193,16 @@ mod offer_tests {
         // A release flagged as a pre-release on GitHub counts as one even when its tag has no label.
         let flagged = r#"[{"tag_name":"v0.2.0","prerelease":true,"draft":false,"assets":[]}]"#;
         assert_eq!(offered_from(flagged, "0.1.0-alpha.4"), Some("v0.2.0".into()));
+    }
+
+    #[trial]
+    fn only_a_published_prerelease_build_considers_prereleases() {
+        let wants = |running: &str| super::wants_prereleases(crate::version::parse(running).as_ref());
+        assert!(wants("0.1.0-alpha.3"));
+        assert!(!wants("0.0.9"));
+        assert!(!wants("0.0.8-dev"));
+        assert!(!wants("0.1.0-integration.20261120.a20dfd16"));
+        assert!(!super::wants_prereleases(None));
     }
 
     #[trial]

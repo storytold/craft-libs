@@ -899,7 +899,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         }
         // The gap under the pointer shows where an insertion lands; the part's state layer shows hover and focus.
         for &(at, rect) in &self.placed_gaps {
-            let hovered = cx.hover_pos(GAP.at(at as u64)).is_some();
+            let hovered = cx.part_if_declared(GAP.at(at as u64)).is_some_and(|result| result.hovered);
             if hovered {
                 let line = PaintShape::Path(vec![rect.center_top(), rect.center_bottom()]);
                 ui.draw().stroke(&line, StrokeWidth::Thick, style.insert);

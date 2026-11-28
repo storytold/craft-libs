@@ -376,6 +376,8 @@ pub struct MemoKey {
     /// The context of the view that takes the key: framework values whose writes the context counts (kept and saved
     /// bindings) feed that count.
     context: Option<egui::Context>,
+    /// An input the key cannot follow was fed (`changes_every_pass`).
+    every_pass: bool,
 }
 
 impl std::fmt::Debug for MemoKey {
@@ -419,7 +421,18 @@ impl MemoKey {
         if let Some(ctx) = &self.context {
             let pass = ctx.cumulative_pass_nr();
             self.write(&pass.to_le_bytes());
+            self.every_pass = true;
         }
+    }
+
+    /// Whether the key follows every input fed into it: none was fed through `changes_every_pass`.
+    pub(crate) const fn follows(&self) -> bool {
+        !self.every_pass
+    }
+
+    /// Takes the inputs `child` (from `child`) fed that the key cannot follow, once its hash is fed.
+    pub(crate) fn absorb(&mut self, child: &MemoKey) {
+        self.every_pass |= child.every_pass;
     }
 
     /// Feeds `bytes`.

@@ -99,7 +99,6 @@ fn story_marks() -> &'static TableMarks {
         locked: vec![[20, 20, 20]],
         transparent: vec![[240, 240, 240]],
         shifted: vec![([138, 111, 77], [132, 112, 82])],
-        web_shifted: None,
     })
 }
 

@@ -16,6 +16,10 @@
 //! TOC-derived durations, the pre-skip, and end trimming of the final page, so a player can seek
 //! to any 48 kHz sample.
 //!
+//! [`VorbisTiming`] does the same for Vorbis (Vorbis I §4.3.8 and §A.2): packet durations from the
+//! block sizes of the modes in the setup header ([`VorbisModes`]), a nonzero starting position,
+//! and end trimming of the final page.
+//!
 //! [`PageWriter`] writes the pages of a logical bitstream, and [`opus_tags`] and
 //! [`vorbis_comment`] build the comment headers of Ogg Opus and Ogg Vorbis.
 //!
@@ -32,8 +36,10 @@ use std::fmt;
 use std::io;
 
 pub use crate::source::{ByteSource, ReadSeekSource};
+pub use vorbis::{VorbisModes, VorbisTiming};
 pub use write::{PAGE_TARGET_BYTES, PAGE_TARGET_PACKETS, PageWriter, opus_tags, vorbis_comment};
 
+mod vorbis;
 mod write;
 
 /// Errors from reading an Ogg file.
@@ -1045,5 +1051,7 @@ pub use timing::{MAX_OPUS_GRANULE, OpusTiming, VorbisInfo, opus_packet_samples};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vorbis_tests;
 #[cfg(test)]
 mod write_tests;

@@ -193,13 +193,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// The pointer's position, in screen space, while it is over the collection.
-    fn hovered_pos(cx: &Cx<'_, C>) -> Option<Pos2> {
-        crate::runtime::pointer::frame_raw(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
+    /// The row under the pointer while it is over the collection and the row can be picked and shows: the row whose
+    /// `ROW` part contains it.
+    fn hovered_row(&self, cx: &Cx<'_, C>, layout: &C::ItemLayout) -> Option<usize> {
+        if !cx.core.response.hovered() {
+            return None;
+        }
+        self.row_under_pointer(&cx.core.ctx, cx.core.id).filter(|&row| self.source.enabled(row) && !self.source.is_section(row) && layout.shown(row))
     }
 
-    /// The row under `pos` (screen space) in the rows' placement `at`: the pointer-to-row mapping of `hover_lead`,
-    /// which `hover_lead`, the rest check and the drag-select step all call.
+    /// The row under `pos` (screen space) in the rows' placement `at`: the drag-select step maps the drag session's
+    /// pointer with it.
     pub(super) fn row_under(&self, layout: &C::ItemLayout, at: Placement, pos: Pos2) -> Option<usize> {
         let Placement { rect, offset, rtl } = at;
         let pos = self.xf.map_or(pos, |map| map.to_layer(pos));
@@ -218,13 +222,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// The lead follows a moving pointer over the rows; with `HoverLead::LeadAndSelection` the selection follows the
     /// lead the way it does for the arrow keys. A pass moves the pointer when it holds a move event: the pointer entering over a row moves the lead
     /// with no movement to measure, and a modifier change under a resting pointer leaves the lead where the keys put it.
-    pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement, hover: HoverLead) {
+    pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, hover: HoverLead) {
         let moved =
             crate::runtime::pointer::with_pass_raw(&cx.core.ctx, |pass| pass.events.iter().any(|event| matches!(event, PointerEvent::Moved { .. })));
         if !moved {
             return;
         }
-        let Some(row) = Self::hovered_pos(cx).and_then(|pos| self.row_under(layout, at, pos)) else { return };
+        let Some(row) = self.hovered_row(cx, layout) else { return };
         if self.lead.key.as_ref() != Some(&self.source.key(row)) {
             self.move_lead(row, LeadSource::Pointer);
             if hover == HoverLead::LeadAndSelection {
@@ -235,9 +239,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// The pointer resting on the lead row for the tooltip delay reports `CollectionEvent::Rested`, once per lead
     /// change. Motion inside the row does not restart the timer, as for a tooltip.
-    pub(super) fn rest_lead(&mut self, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
+    pub(super) fn rest_lead(&mut self, cx: &mut Cx<'_, C>, layout: &C::ItemLayout) {
         let lead = self.lead.key.clone();
-        let over = Self::hovered_pos(cx).and_then(|pos| self.row_under(layout, at, pos));
+        let over = self.hovered_row(cx, layout);
         let held = lead.is_some() && self.lead.rested != lead && over.is_some_and(|row| lead.as_ref() == Some(&self.source.key(row)));
         let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
         if crate::contract::overlay::dwell(&ctx, &mut *cx.core.memory, id, "rest", held, crate::contract::tooltip::DELAY)

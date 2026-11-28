@@ -2260,6 +2260,43 @@ fn a_host_handle_side_sets_the_drawn_handle_square() {
     assert!(large > small, "a larger side draws a larger square: {large} against {small}");
 }
 
+/// A host handle side that is zero, negative or not finite draws the theme's handle and keeps the theme's reach.
+#[trial]
+fn an_unusable_host_handle_side_uses_the_themes() {
+    let corner_side = |side: Option<f32>| {
+        let mut h = harness(BoxState::from_rect(RECT), |config| config.handle_side = side);
+        let corner = h.screen(Point::new(RECT.x1, RECT.y1));
+        h.fixture
+            .frame_shapes()
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Rect(square) if (square.rect.center() - corner).length() < 0.5 => Some(square.rect.width()),
+                _ => None,
+            })
+            .collect::<Vec<f32>>()
+    };
+    let theme = corner_side(None);
+    assert!(!theme.is_empty(), "the theme's corner handle is drawn");
+    // 3 points in from the bottom right corner on both axes: inside the theme's handle reach.
+    let near = Point::new(RECT.x1 - 3.0, RECT.y1 - 3.0);
+    for side in [0.0, -6.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(corner_side(Some(side)), theme, "a side of {side} draws the theme's corner handle");
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.rules = free_rules();
+            config.handle_side = Some(side);
+        });
+        hover(&mut h, near);
+        assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(2)), "a side of {side} keeps the theme's reach");
+        // Far outside the theme's reach: an infinite side must not widen the reach to the whole canvas.
+        let mut far = harness(BoxState::from_rect(RECT), |config| {
+            config.rules = free_rules();
+            config.handle_side = Some(side);
+        });
+        hover(&mut far, Point::new(RECT.x1 + 60.0, RECT.y1 + 60.0));
+        assert_ne!(far.host.borrow().hovered, Some(BoxPart::Corner(2)), "a side of {side} does not widen the reach");
+    }
+}
+
 /// A large host handle takes a press anywhere on its square, also past the theme's reach, and the press drags it.
 #[trial]
 fn a_press_just_inside_a_large_handles_edge_grabs_it() {

@@ -37,6 +37,7 @@ pub type ContextSource = Arc<dyn Fn(&CheckContext) -> Result<Option<Release>, Ch
 
 /// What a check runs for: the app, and the version the running copy reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CheckContext {
     /// The app the check is for.
     pub app: &'static App,

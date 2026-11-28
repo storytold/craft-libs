@@ -105,11 +105,24 @@ fn eight_bit_tiles_land_on_the_canvas_and_missing_tiles_hold_the_default_pixel()
     assert_eq!((p.width, p.height, p.rgba.len()), (300, 260, 300 * 260 * 4));
     assert_eq!(rgba_at(&p, 0, 0), [0, 0, 7, 255]);
     assert_eq!(rgba_at(&p, 255, 3), [255, 3, 7, 255]);
+    assert_eq!(rgba_at(&p, 255, 255), [255, 255, 7, 255]);
     assert_eq!(rgba_at(&p, 256, 0), [10, 20, 30, 40]);
     assert_eq!(rgba_at(&p, 0, 256), [10, 20, 30, 40]);
     assert_eq!(rgba_at(&p, 299, 259), [200, 100, 50, 128]);
     assert_eq!(rgba_at(&p, 256, 256), [200, 100, 50, 128]);
     assert_eq!(p.mask, None);
+}
+
+#[test]
+fn a_tile_one_decoded_byte_over_its_size_is_refused() {
+    let mut tile = solid(&[1, 2, 3, 4]);
+    tile.push(0);
+    let s = surface("Rgb", "U8", true, &[0; 4], &[(0, 0, &hash(&tile))]);
+    let file = bundle(256, 256, "Rgb", &[layer(&raster(&s), None)], &[&tile]);
+    assert!(matches!(
+        pcraft_layer_rgba(&file, &[0], &Limits::default()),
+        Err(craft_doc::Error::Malformed(message)) if message.contains("more than 262144 bytes")
+    ));
 }
 
 #[test]
