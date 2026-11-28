@@ -302,6 +302,80 @@ fn every_page_is_a_card_on_one_scrolling_page() {
     assert!(fixture.by_label("General").is_some() && fixture.by_label("Canvas").is_some(), "both cards show at once");
 }
 
+/// Two cards of twenty check boxes each, so the second card starts below a short window.
+struct Tall(Vec<(String, String)>, Vec<(String, String)>);
+
+impl Tall {
+    fn new() -> Self {
+        let rows = |page: &str| (1..=20).map(|n| (format!("{page}.{n}"), format!("{page} row {n}"))).collect();
+        Tall(rows("First"), rows("Second"))
+    }
+}
+
+impl PreferencesModel for Tall {
+    fn pages(&self) -> Vec<PageSpec<'_>> {
+        fn rows(rows: &[(String, String)]) -> Vec<RowSpec<'_>> {
+            rows.iter().map(|(key, label)| RowSpec::new(key, label, RowKind::Bool(true))).collect()
+        }
+        vec![PageSpec::new("first", "First", rows(&self.0)), PageSpec::new("second", "Second", rows(&self.1))]
+    }
+    fn set(&mut self, _: &str, _: PrefValue) {}
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+    fn reset_page(&mut self, _: &str) {}
+}
+
+impl PreferencesDraft for Tall {
+    fn differs(&self) -> bool {
+        false
+    }
+    fn apply(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    fn cancel(&mut self) {}
+}
+
+#[trial]
+fn naming_a_card_below_the_fold_scrolls_it_into_view() {
+    let pick: Rc<RefCell<Option<String>>> = Rc::default();
+    let mut state = PreferencesState::default();
+    let mut tall = Tall::new();
+    let mut fixture = Fixture::new({
+        let pick = pick.clone();
+        move |ui| {
+            if let Some(page) = pick.borrow_mut().take() {
+                state.selected = page;
+            }
+            let _ = PreferencesWindow::new(Bind::bound(&mut state)).layout(PreferencesLayout::Cards).embedded().show(ui, &mut tall);
+        }
+    });
+    let room = egui::vec2(700.0, 300.0);
+    fixture.room(room).settle();
+    // The title against the clip it was painted under, which is the body, not the search row above it.
+    let top = |fixture: &Fixture| fixture.texts().iter().find(|t| t.text == "Second").map(|t| (t.rect, t.clip));
+    let below = |(title, clip): (egui::Rect, egui::Rect)| title.top() >= clip.max.y;
+    let in_view = |(title, clip): (egui::Rect, egui::Rect)| clip.min.y <= title.top() && title.bottom() <= clip.max.y;
+    assert!(top(&fixture).is_none_or(below), "the Second card starts below the view");
+    *pick.borrow_mut() = Some("second".into());
+    fixture.settle();
+    // The glide to the card outlasts `settle`, so frames run until the title stops moving.
+    let (mut still, mut last) = (0, top(&fixture));
+    for _ in 0..600 {
+        fixture.frame(vec![]);
+        let now = top(&fixture);
+        still = if now == last { still + 1 } else { 0 };
+        last = now;
+        if still >= 10 {
+            break;
+        }
+    }
+    assert!(top(&fixture).is_some_and(in_view), "naming Second brings its card into view: {:?}", top(&fixture));
+}
+
 #[trial]
 fn a_short_choice_is_a_row_of_segments() {
     let mut fixture = fixture();

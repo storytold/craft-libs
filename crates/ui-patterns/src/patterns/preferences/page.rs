@@ -8,7 +8,7 @@ use super::rows::{RowsOut, ShownRow, reset_button, show_row};
 use super::search::{self, Listed};
 use super::window::PreferencesState;
 use super::words::PreferencesWords;
-use crate::contract::{Bind, NoValue, Outcome, Pad, Pattern, Props, Scroll, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Lazy, NoValue, Outcome, Pad, Pattern, Props, Scroll, Show as _, ShowContainer as _};
 use crate::display::{Shade, Text};
 use crate::form::FieldGroup;
 use crate::layout_components::{Row, Stack};
@@ -402,11 +402,9 @@ fn show_cards<H: PreferencesModel + ?Sized>(
     let jump = !state.selected.is_empty() && state.scrolled_to != state.selected && snap.shown.iter().any(|page| page.id == state.selected);
     Stack::new().fill().scroll(Scroll::vertical()).label(words.cards_label.clone()).show(ui, |ui, _| {
         for page in &snap.shown {
-            let top = ui.cursor().min;
+            // A contract scroll body ignores `scroll_to_rect`; a reveal marker at the card's top makes it glide there.
+            Lazy::new(("card", page.id.as_str()), 0.0).reveal(jump && page.id == state.selected).show(ui, |_| {});
             show_card(ui, host, page, snap.searching, words, units, out);
-            if jump && page.id == state.selected {
-                ui.scroll_to_rect(egui::Rect::from_min_size(top, egui::vec2(1.0, 1.0)), Some(egui::Align::TOP));
-            }
         }
     });
     if jump {
