@@ -16,7 +16,7 @@ pub enum Os {
 
 impl Os {
     /// The system this build runs on. Web builds count as Linux; with the `ui` feature,
-    /// [`Os::of_egui`] gives the browser's operating system.
+    /// `Os::of_egui` gives the browser's operating system.
     pub const fn current() -> Os {
         if cfg!(target_os = "macos") {
             Os::Mac
