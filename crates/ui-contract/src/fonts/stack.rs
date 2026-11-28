@@ -23,7 +23,10 @@
 //! craft face with the `mono` role (craft-fonts' monospace face) leads those families when the app
 //! embeds it, ahead of egui's Hack. The same way, a craft face with the `signature` role leads the
 //! [`FontRef::signature`] family, which every stack registers and which falls back to the
-//! proportional chain; no other family takes that face.
+//! proportional chain; no other family takes that face. A craft face with the `tab` role
+//! (`Embed::tab_face`, Noto Sans Condensed SemiBold) leads the [`TAB_TITLE`] family, scaled to the
+//! x-height of the semibold family's first face and followed by the semibold family's chain; the
+//! stack has that family only when the app embeds the face and does not use the OS's interface face.
 //! On the suite's egui fork, the other craft faces and installed text faces used as fallbacks sit
 //! on the row's baseline and rows grow to fit them by themselves; emoji and symbol faces stay
 //! centred.
@@ -64,6 +67,10 @@ use super::system::ui_face;
 /// headings): `Family::named(fonts::SEMIBOLD).weight(600)`. Without it, those roles draw with the
 /// proportional family.
 pub const SEMIBOLD: &str = "semibold";
+
+/// The family [`crate::style`] draws the `TabTitle` type role with (document tab titles in the semibold look), led by the
+/// craft face with the `tab` role. Without it, that role draws as the semibold roles do.
+pub const TAB_TITLE: &str = "tab-title";
 
 /// A font family the app uses, beyond what its own faces imply.
 #[derive(Clone, Debug)]

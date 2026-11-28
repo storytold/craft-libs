@@ -266,6 +266,9 @@ struct Node {
     focusable: bool,
     /// The node's expanded state this pass, `None` when it has none.
     expanded: Option<bool>,
+    /// The part of the owner that opens the popup whose state the node reports, when that part has no node of its own:
+    /// Expand and Collapse on the node go to the part instead of activating the owner.
+    toggle: Option<PartRef>,
 }
 
 #[derive(Default)]

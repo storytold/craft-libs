@@ -1,0 +1,474 @@
+//! Listing adapters and opening a device, trying the next adapter when one fails.
+
+use std::fmt;
+
+use wgpu::{Adapter, Features, Instance, Limits, Surface};
+
+use crate::adapter::{Candidate, avoided, log_choice};
+use crate::caps::Capabilities;
+use crate::health::DeviceHealth;
+use crate::preference::{Notice, Preference, Selection, asked_for, ranked, select};
+
+/// What the device is opened with.
+#[derive(Clone, Debug, Default)]
+pub struct Request<'a> {
+    pub label: Option<&'a str>,
+    /// Features the device must have. An adapter without them is skipped.
+    pub required_features: Features,
+    /// Features asked for when the adapter has them. Experimental features
+    /// (`Features::all_experimental_mask`) are left out here: the device descriptor does not
+    /// enable experimental features, and wgpu refuses a device that asks for one without that.
+    pub optional_features: Features,
+    /// The limits to ask for; `None` asks for the adapter's own limits. An adapter whose limits
+    /// are lower is skipped.
+    pub limits: Option<Limits>,
+}
+
+/// An opened device.
+#[derive(Debug)]
+pub struct Opened {
+    pub adapter: Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    /// The adapter as plain data.
+    pub candidate: Candidate,
+    /// What the device was opened with, as the `craft_gpu::DeviceCaps` it reports.
+    pub caps: Capabilities,
+    /// Watches the device for a loss and for uncaptured errors.
+    pub health: DeviceHealth,
+    /// What to tell the user about the choice.
+    pub notices: Vec<Notice>,
+}
+
+impl Opened {
+    /// The device's [`DeviceCaps`](craft_gpu::DeviceCaps) for a `craft-gpu` context
+    /// ([`device_caps`](crate::device_caps)).
+    pub fn device_caps(&self) -> craft_gpu::DeviceCaps {
+        self.caps.device_caps().clone()
+    }
+}
+
+/// Why no device could be opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenError {
+    /// No adapter is listed that can draw (to the surface, when there is one).
+    NoAdapter,
+    /// Every adapter tried failed to open a device; each failure is a [`Notice::DeviceFailed`].
+    NoDevice(Vec<Notice>),
+    /// The only adapters that can draw are ones [`choose`](crate::choose) never draws with,
+    /// because their driver can end the process; these are their names.
+    UnsafeDriver(Vec<String>),
+}
+
+impl fmt::Display for OpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpenError::NoAdapter => f.write_str("no graphics adapter is available"),
+            OpenError::NoDevice(notices) => {
+                f.write_str("no graphics adapter could be opened")?;
+                for n in notices {
+                    if let Notice::DeviceFailed { adapter, error } = n {
+                        write!(f, "; \"{adapter}\": {error}")?;
+                    }
+                }
+                Ok(())
+            }
+            OpenError::UnsafeDriver(names) => {
+                let names = names.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
+                write!(f, "the only graphics adapters that can draw ({names}) use a driver that can crash; update the graphics driver")
+            }
+        }
+    }
+}
+
+impl std::error::Error for OpenError {}
+
+/// Every adapter `instance` lists over its backends, as adapters and as plain data. `surface`
+/// marks the adapters that cannot draw to it as unusable. Native only: it blocks on wgpu's
+/// future, which on the web would wait on the thread that must resolve it. [`list_async`] works
+/// on both.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list(instance: &Instance, surface: Option<&Surface<'_>>) -> (Vec<Adapter>, Vec<Candidate>) {
+    pollster::block_on(list_async(instance, surface))
+}
+
+/// [`list`] as a future, for a `wasm32` web worker as well as native. In a browser, WebGPU offers
+/// one adapter for a power preference, and the list holds the high-performance one, which
+/// [`open_async`] opens for `Auto` and for a named adapter.
+pub async fn list_async(instance: &Instance, surface: Option<&Surface<'_>>) -> (Vec<Adapter>, Vec<Candidate>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+    #[cfg(target_arch = "wasm32")]
+    let adapters = browser_adapter(instance, surface, wgpu::PowerPreference::HighPerformance).await;
+    let candidates = adapters.iter().map(|a| Candidate::of(a, surface)).collect();
+    (adapters, candidates)
+}
+
+/// The adapter a browser offers for `power`, if any.
+#[cfg(target_arch = "wasm32")]
+async fn browser_adapter(instance: &Instance, surface: Option<&Surface<'_>>, power: wgpu::PowerPreference) -> Vec<Adapter> {
+    let options = wgpu::RequestAdapterOptions { power_preference: power, compatible_surface: surface, ..Default::default() };
+    instance.request_adapter(&options).await.into_iter().collect()
+}
+
+/// The adapter to draw with for `preference`, from adapters already listed, with the choice in the
+/// log. This fits egui-wgpu's `native_adapter_selector` for a window, which then opens the device
+/// itself; that selector takes a `String` error, so convert with `map_err(|e| e.to_string())`.
+/// With no usable adapter the error is [`OpenError::UnsafeDriver`] when only adapters that
+/// [`choose`](crate::choose) never draws with can draw, and [`OpenError::NoAdapter`] otherwise,
+/// with the listed adapters in the log.
+pub fn pick(adapters: &[Adapter], surface: Option<&Surface<'_>>, preference: &Preference) -> Result<(Adapter, Selection), OpenError> {
+    let candidates: Vec<Candidate> = adapters.iter().map(|a| Candidate::of(a, surface)).collect();
+    let Some(selection) = select(&candidates, preference) else {
+        return Err(unselected(&candidates));
+    };
+    log_choice(&candidates, selection.index, preference.power());
+    for notice in &selection.notices {
+        log::warn!("{notice}");
+    }
+    let adapter = adapters.get(selection.index).cloned().ok_or(OpenError::NoAdapter)?;
+    Ok((adapter, selection))
+}
+
+/// The error for `candidates` among which `select` found no adapter, with the list in the log
+/// when it is not [`OpenError::UnsafeDriver`].
+fn unselected(candidates: &[Candidate]) -> OpenError {
+    let left_out = left_out(candidates);
+    if !left_out.is_empty() {
+        return OpenError::UnsafeDriver(left_out);
+    }
+    let listed = candidates.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+    log::warn!("no usable graphics adapter among {}: {listed}", candidates.len());
+    OpenError::NoAdapter
+}
+
+/// Open a device for `preference`: the selected adapter first, then the others in [`ranked`]
+/// order, and last wgpu's fallback adapter (a software one) when none of those opened. An adapter
+/// without `request.required_features`, or whose device fails to open, adds a
+/// [`Notice::DeviceFailed`] and the next one is tried. Native only, like [`list`]; [`open_async`]
+/// works on both.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open(instance: &Instance, surface: Option<&Surface<'_>>, preference: &Preference, request: &Request<'_>) -> Result<Opened, OpenError> {
+    pollster::block_on(open_async(instance, surface, preference, request))
+}
+
+/// [`open`] as a future, for a `wasm32` web worker as well as native. On native it lists every
+/// adapter, as `open` does. In a browser, WebGPU offers one adapter for a power preference, so
+/// `open_async` asks for the adapter with [`Preference::power`]. A named adapter then gives the
+/// automatic choice with [`Notice::AdapterMissing`]. wgpu 30 does not pass the fallback-adapter
+/// option to the browser, so [`Preference::Software`] gives the browser's adapter with
+/// [`Notice::NoSoftwareAdapter`] unless that adapter is itself a software one.
+pub async fn open_async(
+    instance: &Instance,
+    surface: Option<&Surface<'_>>,
+    preference: &Preference,
+    request: &Request<'_>,
+) -> Result<Opened, OpenError> {
+    let (adapters, candidates) = adapters_for(instance, surface, preference).await;
+    // Whether drawing is in software depends on the adapter that opens, which `finish` knows.
+    let mut notices: Vec<Notice> =
+        select(&candidates, preference).map(|s| s.notices).unwrap_or_default().into_iter().filter(|n| *n != Notice::SoftwareOnly).collect();
+    let order = ranked(&candidates, preference);
+    if let Some(first) = order.first() {
+        log_choice(&candidates, *first, preference.power());
+    }
+    let mut tried: Vec<&Candidate> = Vec::new();
+    for index in order {
+        let (Some(adapter), Some(candidate)) = (adapters.get(index), candidates.get(index)) else {
+            continue;
+        };
+        tried.push(candidate);
+        match open_on(adapter, request).await {
+            Ok((device, queue)) => return Ok(finish(adapter.clone(), device, queue, candidate.clone(), preference, notices)),
+            Err(error) => {
+                log::warn!("graphics adapter {candidate} could not be opened: {error}");
+                notices.push(Notice::DeviceFailed { adapter: candidate.name.clone(), error });
+            }
+        }
+    }
+    // wgpu's fallback adapter, unless the loop above already tried it. In a browser the request
+    // below would ask for the same adapter again.
+    if cfg!(not(target_arch = "wasm32")) {
+        let options = wgpu::RequestAdapterOptions { force_fallback_adapter: true, compatible_surface: surface, ..Default::default() };
+        let fallback = instance.request_adapter(&options).await.ok().map(|a| (Candidate::of(&a, surface), a));
+        if let Some((candidate, adapter)) = fallback.filter(|(c, _)| !tried.contains(&c)) {
+            match open_on(&adapter, request).await {
+                Ok((device, queue)) => {
+                    log::info!("graphics adapter chosen: {candidate}");
+                    return Ok(finish(adapter, device, queue, candidate, preference, notices));
+                }
+                Err(error) => notices.push(Notice::DeviceFailed { adapter: candidate.name.clone(), error }),
+            }
+        }
+    }
+    if notices.iter().any(|n| matches!(n, Notice::DeviceFailed { .. })) {
+        return Err(OpenError::NoDevice(notices));
+    }
+    let left_out = left_out(&candidates);
+    if left_out.is_empty() { Err(OpenError::NoAdapter) } else { Err(OpenError::UnsafeDriver(left_out)) }
+}
+
+/// The names of the adapters that can draw but that [`choose`](crate::choose) never draws with.
+fn left_out(candidates: &[Candidate]) -> Vec<String> {
+    candidates.iter().enumerate().filter(|(i, c)| c.usable && avoided(candidates, *i)).map(|(_, c)| c.name.clone()).collect()
+}
+
+/// The adapters `open_async` chooses among: every listed one on native, and in a browser the one
+/// it offers for the preference's power.
+async fn adapters_for(instance: &Instance, surface: Option<&Surface<'_>>, preference: &Preference) -> (Vec<Adapter>, Vec<Candidate>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = preference;
+        list_async(instance, surface).await
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let adapters = browser_adapter(instance, surface, preference.power()).await;
+        let candidates = adapters.iter().map(|a| Candidate::of(a, surface)).collect();
+        (adapters, candidates)
+    }
+}
+
+fn finish(
+    adapter: Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    candidate: Candidate,
+    preference: &Preference,
+    mut notices: Vec<Notice>,
+) -> Opened {
+    let caps = Capabilities::of_device(&device);
+    // wgpu's fallback adapter can be a software one that the listing did not show.
+    if candidate.is_software() {
+        notices.retain(|n| *n != Notice::NoSoftwareAdapter);
+    }
+    if candidate.is_software() && !asked_for(preference, &candidate) {
+        notices.push(Notice::SoftwareOnly);
+    }
+    for notice in &notices {
+        log::warn!("{notice}");
+    }
+    log::info!("graphics device opened: {caps}");
+    let health = DeviceHealth::watch(&device);
+    Opened { adapter, device, queue, candidate, caps, health, notices }
+}
+
+/// Open a device on `adapter`, or say why it cannot be.
+async fn open_on(adapter: &Adapter, request: &Request<'_>) -> Result<(wgpu::Device, wgpu::Queue), String> {
+    let has = adapter.features();
+    if !has.contains(request.required_features) {
+        return Err(format!("it lacks the features {:?}", request.required_features - has));
+    }
+    let required_limits = request.limits.clone().unwrap_or_else(|| adapter.limits());
+    let desc = wgpu::DeviceDescriptor {
+        label: request.label,
+        required_features: request.required_features | (request.optional_features & has & !Features::all_experimental_mask()),
+        required_limits,
+        ..Default::default()
+    };
+    adapter.request_device(&desc).await.map_err(|e| e.to_string())
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use crate::preference::AdapterKey;
+
+    /// An instance whose only adapter is wgpu's noop one, which opens devices without a GPU. wgpu
+    /// 30 lists it as a software adapter whatever `NoopBackendOptions::device_type` says.
+    fn noop(features: Option<Features>) -> Instance {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::NOOP;
+        desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, features, ..Default::default() };
+        Instance::new(desc)
+    }
+
+    #[test]
+    fn a_device_opens_with_the_optional_features_the_adapter_has() {
+        let instance = noop(Some(Features::TEXTURE_FORMAT_NV12 | Features::TIMESTAMP_QUERY));
+        let request = Request { optional_features: Features::TEXTURE_FORMAT_NV12 | Features::SHADER_F16, ..Default::default() };
+        let opened = open(&instance, None, &Preference::Software, &request).unwrap();
+        assert!(opened.caps.nv12(), "{}", opened.caps);
+        assert!(!opened.caps.shader_f16() && !opened.caps.timestamps(), "only the features asked for: {}", opened.caps);
+        assert!(opened.notices.is_empty(), "{:?}", opened.notices);
+        assert!(opened.health.is_ok());
+        // the craft-gpu caps name only the features the device was opened with
+        let caps = opened.device_caps();
+        assert_eq!(caps.features, ["TEXTURE_FORMAT_NV12"]);
+        assert_eq!(&caps, opened.caps.device_caps());
+        assert_eq!(caps, crate::device_caps(&opened.device));
+        assert_eq!(caps.max_texture_dimension_2d, opened.device.limits().max_texture_dimension_2d);
+        assert!(caps.software && caps.vendor_id == opened.candidate.vendor, "{caps:?}");
+        assert_eq!(opened.health.device_status(), Ok(()));
+    }
+
+    #[test]
+    fn open_async_opens_as_open_does() {
+        let instance = noop(Some(Features::TEXTURE_FORMAT_P010));
+        let request = Request { optional_features: Features::TEXTURE_FORMAT_P010 | Features::SHADER_F16, ..Default::default() };
+        let opened = pollster::block_on(open_async(&instance, None, &Preference::Auto, &request)).unwrap();
+        let blocking = open(&instance, None, &Preference::Auto, &request).unwrap();
+        assert!(opened.caps.p010() && !opened.caps.shader_f16(), "{}", opened.caps);
+        assert_eq!(opened.caps, blocking.caps);
+        assert_eq!(opened.notices, vec![Notice::SoftwareOnly]);
+        assert_eq!(opened.notices, blocking.notices);
+        let (adapters, candidates) = pollster::block_on(list_async(&instance, None));
+        assert_eq!((adapters.len(), candidates), (1, list(&instance, None).1));
+        // the same errors
+        let missing = Request { required_features: Features::SHADER_F16, ..Default::default() };
+        let err = pollster::block_on(open_async(&instance, None, &Preference::Auto, &missing)).unwrap_err();
+        assert!(matches!(&err, OpenError::NoDevice(n) if n.len() == 1), "{err}");
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::NOOP;
+        let none = Instance::new(desc);
+        assert_eq!(pollster::block_on(open_async(&none, None, &Preference::Auto, &Request::default())).unwrap_err(), OpenError::NoAdapter);
+    }
+
+    #[test]
+    fn a_software_device_drops_the_no_software_notice() {
+        let instance = noop(None);
+        let opened = open(&instance, None, &Preference::Software, &Request::default()).unwrap();
+        assert!(opened.candidate.is_software());
+        // as when the listing showed no software adapter and wgpu's fallback adapter opened
+        let notices = vec![Notice::NoSoftwareAdapter];
+        let again = finish(opened.adapter, opened.device, opened.queue, opened.candidate, &Preference::Software, notices);
+        assert!(again.notices.is_empty(), "{:?}", again.notices);
+    }
+
+    #[test]
+    fn an_optional_experimental_feature_does_not_stop_the_device_opening() {
+        let instance = noop(Some(Features::EXPERIMENTAL_RAY_QUERY | Features::TEXTURE_FORMAT_NV12));
+        let request = Request { optional_features: Features::EXPERIMENTAL_RAY_QUERY | Features::TEXTURE_FORMAT_NV12, ..Default::default() };
+        let opened = open(&instance, None, &Preference::Software, &request).unwrap();
+        assert!(opened.caps.nv12(), "{}", opened.caps);
+        assert!(!opened.device.features().contains(Features::EXPERIMENTAL_RAY_QUERY));
+        // a required one still fails as before
+        let required = Request { required_features: Features::EXPERIMENTAL_RAY_QUERY, ..Default::default() };
+        assert!(matches!(open(&instance, None, &Preference::Software, &required), Err(OpenError::NoDevice(_))));
+    }
+
+    #[test]
+    fn an_adapter_without_a_required_feature_is_reported() {
+        let instance = noop(Some(Features::empty()));
+        let request = Request { required_features: Features::SHADER_F16, ..Default::default() };
+        let err = open(&instance, None, &Preference::Auto, &request).unwrap_err();
+        let OpenError::NoDevice(notices) = &err else { panic!("{err}") };
+        assert!(notices.iter().any(|n| matches!(n, Notice::DeviceFailed { error, .. } if error.contains("SHADER_F16"))), "{notices:?}");
+        assert!(err.to_string().starts_with("no graphics adapter could be opened"), "{err}");
+    }
+
+    #[test]
+    fn an_adapter_below_the_requested_limits_is_reported() {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::NOOP;
+        desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, limits: Some(Limits::default()), ..Default::default() };
+        let instance = Instance::new(desc);
+        let over = Limits::default().max_texture_dimension_2d + 1;
+        let request = Request { limits: Some(Limits { max_texture_dimension_2d: over, ..Limits::default() }), ..Default::default() };
+        let err = open(&instance, None, &Preference::Software, &request).unwrap_err();
+        let OpenError::NoDevice(notices) = &err else { panic!("{err}") };
+        assert!(
+            notices.iter().any(|n| matches!(n, Notice::DeviceFailed { error, .. }
+                if error.contains("max_texture_dimension_2d"))),
+            "{notices:?}"
+        );
+        // limits within the adapter's still open
+        let within = Request { limits: Some(Limits::downlevel_defaults()), ..Default::default() };
+        assert!(open(&instance, None, &Preference::Software, &within).is_ok());
+    }
+
+    #[test]
+    fn a_software_adapter_is_reported_unless_it_was_asked_for() {
+        let cpu = noop(None);
+        let opened = open(&cpu, None, &Preference::Auto, &Request::default()).unwrap();
+        assert!(opened.caps.software());
+        assert_eq!(opened.notices, vec![Notice::SoftwareOnly]);
+        let asked = open(&cpu, None, &Preference::Software, &Request::default()).unwrap();
+        assert!(asked.notices.is_empty(), "{:?}", asked.notices);
+        // the software adapter picked by name is what was asked for
+        let named = open(&cpu, None, &Preference::Adapter(AdapterKey::of(&asked.candidate)), &Request::default()).unwrap();
+        assert!(named.notices.is_empty(), "{:?}", named.notices);
+        // a named adapter that is gone: the automatic choice, with both notices
+        let gone =
+            AdapterKey { name: "gone".into(), backend: "vulkan".into(), vendor: 0x10de, device: 1, pci_bus_id: String::new(), driver: String::new() };
+        let opened = open(&cpu, None, &Preference::Adapter(gone.clone()), &Request::default()).unwrap();
+        assert_eq!(opened.notices, vec![Notice::AdapterMissing(gone), Notice::SoftwareOnly]);
+    }
+
+    #[test]
+    fn no_adapter_is_an_error() {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::NOOP;
+        let instance = Instance::new(desc);
+        assert_eq!(open(&instance, None, &Preference::Auto, &Request::default()).unwrap_err(), OpenError::NoAdapter);
+        assert_eq!(OpenError::NoAdapter.to_string(), "no graphics adapter is available");
+        assert_eq!(
+            OpenError::UnsafeDriver(vec!["Intel(R) UHD Graphics 630".into()]).to_string(),
+            "the only graphics adapters that can draw (\"Intel(R) UHD Graphics 630\") use a driver that can crash; update the graphics driver"
+        );
+        assert_eq!(pick(&[], None, &Preference::Auto).unwrap_err(), OpenError::NoAdapter);
+    }
+
+    #[test]
+    fn pick_says_when_only_a_driver_that_can_crash_can_draw() {
+        let vulkan_only: Vec<Candidate> = crate::adapter::tests::uhd_630().into_iter().take(1).collect();
+        assert_eq!(select(&vulkan_only, &Preference::Auto), None);
+        assert_eq!(unselected(&vulkan_only), OpenError::UnsafeDriver(vec!["Intel(R) UHD Graphics 630".into()]));
+        assert_eq!(unselected(&[]), OpenError::NoAdapter);
+    }
+
+    #[test]
+    fn a_zero_timeout_leaves_a_healthy_device_healthy() {
+        let opened = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
+        let everything = opened.queue.submit([]);
+        assert!(!opened.health.wait_timeout(&opened.device, everything.clone(), std::time::Duration::ZERO));
+        assert!(opened.health.is_ok(), "{:?}", opened.health.fault());
+        assert!(opened.health.wait_timeout(&opened.device, everything, std::time::Duration::from_secs(5)));
+        // an index from another device's queue is one this device never issued
+        let other = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
+        other.queue.submit([]);
+        let index = other.queue.submit([]);
+        assert!(!opened.health.wait_timeout(&opened.device, index, std::time::Duration::from_secs(5)));
+        assert!(opened.health.is_ok(), "{:?}", opened.health.fault());
+    }
+
+    #[test]
+    fn waits_run_after_an_out_of_memory_error() {
+        use crate::health::{Fault, OUT_OF_MEMORY};
+        let opened = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
+        let health = opened.health.clone();
+        health.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        let index = opened.queue.submit([]);
+        assert!(health.wait(&opened.device, index.clone()), "{health:?}");
+        assert!(health.wait_timeout(&opened.device, index.clone(), std::time::Duration::from_secs(5)), "{health:?}");
+        health.clear_out_of_memory(health.out_of_memory_count());
+        assert!(health.is_ok(), "{health:?}");
+        // any other error still stops them
+        health.mark(Fault::Error("Validation Error".into()));
+        assert!(!health.wait(&opened.device, index));
+    }
+
+    #[test]
+    fn a_lost_device_is_seen_by_its_health() {
+        let opened = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
+        let health = opened.health.clone();
+        let index = opened.queue.submit([]);
+        opened.device.destroy();
+        health.probe(&opened.device);
+        assert!(health.fault().is_some_and(|f| f.is_lost()), "{health:?}");
+        assert!(!health.is_ok());
+        assert!(matches!(health.device_status(), Err(craft_gpu::GpuFault::DeviceLost(_))), "{health:?}");
+        // a later wait does not touch the lost device
+        assert!(!health.wait(&opened.device, index));
+    }
+
+    #[test]
+    fn pick_returns_the_selected_adapter() {
+        let instance = noop(None);
+        let (adapters, candidates) = list(&instance, None);
+        assert_eq!(candidates.len(), 1);
+        let (adapter, selection) = pick(&adapters, None, &Preference::Auto).unwrap();
+        assert_eq!(selection.index, 0);
+        assert_eq!(Candidate::of(&adapter, None), candidates[0]);
+    }
+}

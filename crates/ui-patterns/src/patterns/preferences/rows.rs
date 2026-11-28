@@ -104,12 +104,14 @@ pub(super) fn step_for(range: &RangeInclusive<f64>, decimals: u8) -> f64 {
     if decimals == 0 || range.end() - range.start() >= 10.0 { 1.0 } else { 10f64.powi(-i32::from(decimals)) }
 }
 
-/// A number field over `value`. A counted `unit` wins over `unit_text`, which is for quantities with no `UnitKind`.
+/// A number field over `value` that reads the spellings of `unit` and shows its symbol after the number, or else
+/// `unit_text`. A counted `unit` wins over `unit_text`, which is for quantities with no `UnitKind`.
 fn number(units: &Units, label: &Label, value: f64, unit: Option<UnitKind>, unit_text: Option<&Label>, decimals: usize) -> NumberField<'static> {
     let field = NumberField::new(label.clone(), Bind::given(Some(value))).codec(NumberCodec::new(units.reader(unit), decimals));
-    match unit_text {
-        Some(text) if unit.is_none() => field.unit(text.clone()),
-        _ => field,
+    match (unit, unit_text) {
+        (Some(kind), _) => field.unit_kind(kind),
+        (None, Some(text)) => field.unit(text.clone()),
+        (None, None) => field,
     }
 }
 

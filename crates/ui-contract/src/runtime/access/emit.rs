@@ -49,6 +49,9 @@ pub(crate) struct Own<'a> {
     /// Parts of the component open its popups: their sub-nodes report the expanded state and serve Expand and
     /// Collapse, so the component's own node does not.
     pub popups_by_part: bool,
+    /// The one part that opens the component's popup when that part has no node of its own (a corner mark): Expand
+    /// and Collapse on the component's node go to it instead of activating the component.
+    pub toggle: Option<PartRef>,
     /// The component's horizontal axis keeps its left-to-right order under a right-to-left interface.
     pub ltr_axis: bool,
 }
@@ -158,7 +161,14 @@ fn write_position(spec: &mut NodeSpec, position: Option<SetPosition>, level: Opt
 }
 
 /// The actions the interaction and the numeric facts declare.
-fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, context_menu: bool, numeric: Option<&Numeric>) {
+fn declare_actions(
+    spec: &mut NodeSpec,
+    focusable: bool,
+    clickable: bool,
+    context_menu: bool,
+    numeric: Option<&Numeric>,
+    variable_steps: Option<(bool, bool)>,
+) {
     // A read-only value offers no action that would change it.
     let numeric = numeric.filter(|_| !spec.read_only);
     if focusable {
@@ -170,17 +180,22 @@ fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, contex
     if context_menu {
         spec.actions.push(NodeAction::ContextMenu);
     }
-    if let Some(numeric) = numeric.filter(|numeric| numeric.step.is_some()) {
+    if let Some(numeric) = numeric {
         // A step that cannot move the value is not offered: no Increment at the range's end, unless the value wraps.
         let stuck = |at_end: bool| at_end && !numeric.wraps;
-        if !stuck(numeric.value.is_some_and(|value| value >= *numeric.range.end())) {
+        let (increment, decrement) = variable_steps.unwrap_or_else(|| {
+            let has_step = numeric.step.is_some();
+            (
+                has_step && !stuck(numeric.value.is_some_and(|value| value >= *numeric.range.end())),
+                has_step && !stuck(numeric.value.is_some_and(|value| value <= *numeric.range.start())),
+            )
+        });
+        if increment {
             spec.actions.push(NodeAction::Increment);
         }
-        if !stuck(numeric.value.is_some_and(|value| value <= *numeric.range.start())) {
+        if decrement {
             spec.actions.push(NodeAction::Decrement);
         }
-    }
-    if numeric.is_some() {
         spec.actions.push(NodeAction::SetValue);
     }
 }
@@ -305,7 +320,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
     if let Some(expanded) = expanded {
         spec.actions.push(if expanded { NodeAction::Collapse } else { NodeAction::Expand });
     }
-    declare_actions(&mut spec, own.focusable, own.clickable, own.context_menu, numeric);
+    declare_actions(&mut spec, own.focusable, own.clickable, own.context_menu, numeric, access.variable_steps);
     declare_scroll_actions(&mut spec, (own.scrolls.0 || access.pans.0, own.scrolls.1 || access.pans.1));
     custom_actions(&mut spec, &access.custom_actions);
     write_node(ctx, own.id, &spec);
@@ -330,7 +345,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
         true,
     );
     keys::register_node(ctx, own.id, own.id, None, own.focusable);
-    keys::register_expanded(ctx, own.id, expanded);
+    keys::register_expanded(ctx, own.id, expanded, own.toggle);
     scope::register(
         ctx,
         scope::ScopeNode {
@@ -401,7 +416,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.sort = node.sort;
     spec.sortable = node.sortable;
     write_states(&mut spec, flags, None, decl.enabled, false);
-    declare_actions(&mut spec, decl.focusable, decl.clickable, false, numeric);
+    declare_actions(&mut spec, decl.focusable, decl.clickable, false, numeric, None);
     if node.steps && numeric.is_none() {
         spec.actions.extend([NodeAction::Increment, NodeAction::Decrement]);
     }
@@ -424,7 +439,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
         false,
     );
     keys::register_node(ctx, id, decl.owner, Some(node.part), decl.focusable);
-    keys::register_expanded(ctx, id, expanded);
+    keys::register_expanded(ctx, id, expanded, None);
     if decl.active {
         adapter::set_focus(ctx, id);
     }

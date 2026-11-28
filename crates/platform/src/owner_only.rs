@@ -4,12 +4,14 @@
 //! a new folder at a drive root, `C:\Users\Public` or `C:\ProgramData` let every signed-in user
 //! read what is created in them. `restrict_to_owner` replaces the whole list with the current
 //! user and SYSTEM only, makes that user the owner, and checks the result. `create_private_dir`
-//! does the same for a new folder whose list the files created in it inherit, so a file can be
-//! private from the moment it exists. `read_with_sddl` reads a file and its security descriptor
+//! creates a folder with that owner and list from the start, which the files created in it
+//! inherit, so a file can be private from the moment it exists. `read_with_sddl` reads a file and its security descriptor
 //! through one handle. [`foreign_access`] reads the descriptor in SDDL form, which names accounts
 //! by SID and so reads the same in every Windows language, and says why another user could have
 //! written or could read the file. They run the tools Windows ships rather than calling the
-//! security API directly, which would need `unsafe`.
+//! security API directly, which would need `unsafe`. A run of a tool that takes longer than
+//! `TOOL_LIMIT` (10 s) is ended, and the function fails with an error of kind
+//! [`std::io::ErrorKind::TimedOut`].
 
 /// Why the file whose security descriptor is `sddl` (`O:` owner and `D:` access list, in SDDL or
 /// as `read_with_sddl` writes it) can't be trusted as user `me`'s own: it is owned by someone else, it has no
@@ -21,6 +23,18 @@
 /// file over. `restrict_to_owner` never grants it, so the app's own file always passes; a file
 /// that inherited it from a user's folder is refused.
 pub fn foreign_access(sddl: &str, me: &str) -> Option<String> {
+    foreign(sddl, me, false)
+}
+
+/// [`foreign_access`] for a folder's descriptor: an inherit-only entry (`IO`) counts too, since
+/// every file and folder created in the folder gets it.
+#[cfg(any(test, windows))]
+fn foreign_folder_access(sddl: &str, me: &str) -> Option<String> {
+    foreign(sddl, me, true)
+}
+
+/// [`foreign_access`], counting inherit-only entries when `inherit_only` is set.
+fn foreign(sddl: &str, me: &str, inherit_only: bool) -> Option<String> {
     let me = me.trim();
     let owner = section(sddl, "O:");
     match owner {
@@ -41,7 +55,7 @@ pub fn foreign_access(sddl: &str, me: &str) -> Option<String> {
         let (Some(kind), Some(flags)) = (parts.first(), parts.get(1)) else { continue };
         // Deny entries take access away, and inherit-only entries apply to children, not the file.
         let allows = matches!(*kind, "A" | "OA" | "XA" | "ZA");
-        if !allows || flags.contains("IO") {
+        if !allows || (flags.contains("IO") && !inherit_only) {
             continue;
         }
         // An entry that grants access but names no account can't be shown to be the user's.
@@ -146,11 +160,129 @@ fn system_tool(relative: &str) -> std::process::Command {
     command
 }
 
+/// How long one run of a tool may take before it is ended. Each tool finishes in a second or two.
+/// On some computers a new process is left suspended (security software holding it), and without
+/// a limit the caller would wait on it for as long as it stays that way.
+#[cfg(windows)]
+pub const TOOL_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How often [`run_until`] checks whether the tool has exited.
+#[cfg(any(test, windows))]
+const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// How many more checks [`run_until`] makes for a tool it has ended to exit before it stops
+/// waiting on it.
+#[cfg(any(test, windows))]
+const EXIT_POLLS: u32 = 50;
+
+/// How a run of [`run_until`] ended.
+#[cfg(any(test, windows))]
+enum Ran {
+    /// The tool exited by itself: its status and output, and how writing its standard input went.
+    Exited(std::process::Output, std::io::Result<()>),
+    /// The time was up first and the tool was ended. `exited` is whether it was then seen to exit.
+    Ended { exited: bool },
+}
+
+/// Start `command` with its standard input, output and error piped, hand its standard input to
+/// `feed` on a thread of its own, and wait for it to exit. Between checks, `expired` gets what
+/// the tool has written to its standard output so far; when it answers `true` first, the tool is
+/// ended ([`std::process::Child::kill`]). Standard output and error are read on threads of their
+/// own, so a tool that writes more than a pipe holds is not stopped by it.
+#[cfg(any(test, windows))]
+fn run_until(
+    mut command: std::process::Command,
+    feed: impl FnOnce(std::process::ChildStdin) -> std::io::Result<()> + Send + 'static,
+    mut expired: impl FnMut(&[u8]) -> bool,
+) -> std::io::Result<Ran> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let fed = child.stdin.take().map(|stdin| std::thread::spawn(move || feed(stdin)));
+    let (chunks, received) = std::sync::mpsc::channel::<Vec<u8>>();
+    if let Some(mut out) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = out.read(&mut buf) {
+                if chunks.send(buf.get(..n).unwrap_or_default().to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    let errors = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut text = Vec::new();
+            let _ = err.read_to_end(&mut text);
+            text
+        })
+    });
+    let mut stdout = Vec::new();
+    loop {
+        stdout.extend(received.try_iter().flatten());
+        if let Some(status) = child.try_wait()? {
+            // The pipes close when the tool exits, which ends both readers.
+            stdout.extend(received.iter().flatten());
+            let stderr = errors.and_then(|e| e.join().ok()).unwrap_or_default();
+            let sent = match fed.map(std::thread::JoinHandle::join) {
+                Some(Ok(sent)) => sent,
+                Some(Err(_)) => Err(std::io::Error::other("the thread writing the standard input stopped")),
+                None => Err(std::io::Error::other("the standard input could not be opened")),
+            };
+            return Ok(Ran::Exited(std::process::Output { status, stdout, stderr }, sent));
+        }
+        if expired(&stdout) {
+            let _ = child.kill();
+            let mut exited = false;
+            for _ in 0..EXIT_POLLS {
+                if child.try_wait().ok().flatten().is_some() {
+                    exited = true;
+                    break;
+                }
+                std::thread::sleep(POLL);
+            }
+            return Ok(Ran::Ended { exited });
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+/// Run `command`, with nothing on its standard input, for at most [`TOOL_LIMIT`]: its status and
+/// output, or an error of kind [`std::io::ErrorKind::TimedOut`] when it was ended.
+#[cfg(windows)]
+fn run(command: std::process::Command) -> std::io::Result<std::process::Output> {
+    let deadline = std::time::Instant::now() + TOOL_LIMIT;
+    let program = tool_name(&command);
+    let close = |stdin: std::process::ChildStdin| {
+        drop(stdin);
+        Ok(())
+    };
+    match run_until(command, close, |_| std::time::Instant::now() >= deadline)? {
+        Ran::Exited(out, _) => Ok(out),
+        Ran::Ended { .. } => Err(timed_out(&program)),
+    }
+}
+
+/// The file name of the program `command` starts, for messages.
+#[cfg(windows)]
+fn tool_name(command: &std::process::Command) -> String {
+    let program = std::path::Path::new(command.get_program());
+    program.file_name().unwrap_or(program.as_os_str()).to_string_lossy().into_owned()
+}
+
+/// The error for a run of `program` that [`run_until`] ended.
+#[cfg(windows)]
+fn timed_out(program: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{program} did not finish within {} s and was ended", TOOL_LIMIT.as_secs()))
+}
+
 /// The current user's SID (`whoami /user`). It starts a process, so a caller that needs it for
 /// several steps reads it once and passes it to each.
 #[cfg(windows)]
 pub fn current_user_sid() -> std::io::Result<String> {
-    let out = system_tool(WHOAMI).args(["/user", "/fo", "csv", "/nh"]).output()?;
+    let mut whoami = system_tool(WHOAMI);
+    whoami.args(["/user", "/fo", "csv", "/nh"]);
+    let out = run(whoami)?;
     if !out.status.success() {
         return Err(std::io::Error::other("whoami /user failed"));
     }
@@ -177,32 +309,177 @@ fn sid_from_whoami(text: &str) -> Option<String> {
 /// replace it, while setting the owner needs the Full control it grants (a folder may give Modify).
 #[cfg(windows)]
 pub fn restrict_to_owner(path: &std::path::Path, me: &str) -> std::io::Result<()> {
-    set_access_list(path, me, Kind::File)?;
+    set_access_list(path, me)?;
     icacls(path, &["/setowner".into(), format!("*{me}")])?;
     still_foreign(&sddl_of(path)?, me)
 }
 
-/// Create the folder `dir`, which must not exist yet, and give it an access list of user `me` (as
-/// for [`restrict_to_owner`]) and SYSTEM only, which every file created in it inherits; then make
-/// that user its owner and check the result as [`restrict_to_owner`] does. A file created in it is
-/// private from the moment it exists. Restricting a file after creating it leaves a window in which another user
-/// whom the parent folder lets read it can open a handle, and Windows checks access only when a
-/// handle is opened, so a later change of the list doesn't revoke it. A handle on the folder
-/// itself, opened during the folder's own window, gives no access to the files created in it
-/// later. The folder is removed again when it can't be restricted.
+/// Create the folder `dir`, which must not exist yet and whose parent must, with user `me` (as for
+/// [`restrict_to_owner`]) as its owner and an access list of that user and SYSTEM only, which every
+/// file created in it inherits, given to Windows in the call that creates the folder. The folder
+/// never has its parent's access list, and a file created in it is private from the moment it
+/// exists. The folder is created beside `dir` under a name of its own
+/// (`.<name>.<process id>.<count>.tmp`) and then moved to `dir`, which fails when `dir` exists.
+/// Then check its descriptor, inherit-only entries included. An existing `dir` is an error of kind
+/// [`std::io::ErrorKind::AlreadyExists`] and a missing parent one of kind
+/// [`std::io::ErrorKind::NotFound`]; the folder is removed again when the check fails.
+///
+/// PowerShell is ended when it takes longer than [`TOOL_LIMIT`], and the call fails with an error
+/// of kind [`std::io::ErrorKind::TimedOut`]; the folder under its own name is then removed once
+/// PowerShell has exited. A folder PowerShell had already moved to `dir` stays there, with the
+/// access list it was created with: this call can't tell it from a folder another process put at
+/// `dir` since, so it doesn't remove what is there.
 #[cfg(windows)]
 pub fn create_private_dir(dir: &std::path::Path, me: &str) -> std::io::Result<()> {
-    std::fs::create_dir(dir)?;
-    fn restrict(dir: &std::path::Path, me: &str) -> std::io::Result<()> {
-        set_access_list(dir, me, Kind::Folder)?;
-        icacls(dir, &["/setowner".into(), format!("*{me}")])?;
-        still_foreign(&sddl_of(dir)?, me)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    /// Numbers the staged folders of this process.
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    // No double quotes: the command line would strip them. `Directory.CreateDirectory` also creates
+    // a missing parent and returns an existing folder as it is, hence the checks before it.
+    // `Directory.Move` doesn't replace an existing folder (`std::fs::rename` does, when it is
+    // empty).
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        if (Test-Path -LiteralPath $env:CRAFT_ACL_PATH) { exit 3 }; \
+        if (-not [IO.Directory]::Exists([IO.Path]::GetDirectoryName($env:CRAFT_ACL_PATH))) { exit 4 }; \
+        if (Test-Path -LiteralPath $env:CRAFT_ACL_STAGED) { exit 5 }; \
+        $s = New-Object Security.AccessControl.DirectorySecurity; \
+        $s.SetSecurityDescriptorSddlForm('O:' + $env:CRAFT_ACL_USER + 'D:P(A;OICI;FA;;;' + $env:CRAFT_ACL_USER + ')(A;OICI;FA;;;SY)'); \
+        [void][IO.Directory]::CreateDirectory($env:CRAFT_ACL_STAGED, $s); \
+        try { [IO.Directory]::Move($env:CRAFT_ACL_STAGED, $env:CRAFT_ACL_PATH) } \
+        catch { [IO.Directory]::Delete($env:CRAFT_ACL_STAGED); if (Test-Path -LiteralPath $env:CRAFT_ACL_PATH) { exit 3 }; throw }";
+    // A relative `dir` such as `private` has no parent in its text; the script needs one.
+    let dir = &std::path::absolute(dir)?;
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let staged = dir.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
+    let mut powershell = system_tool(POWERSHELL);
+    powershell
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("CRAFT_ACL_PATH", dir)
+        .env("CRAFT_ACL_STAGED", &staged)
+        .env("CRAFT_ACL_USER", me);
+    let deadline = std::time::Instant::now() + TOOL_LIMIT;
+    let close = |stdin: std::process::ChildStdin| {
+        drop(stdin);
+        Ok(())
+    };
+    let out = match run_until(powershell, close, |_| std::time::Instant::now() >= deadline)? {
+        Ran::Exited(out, _) => out,
+        Ran::Ended { exited } => {
+            if exited {
+                let _ = std::fs::remove_dir(&staged);
+            }
+            return Err(timed_out("powershell.exe"));
+        }
+    };
+    match out.status.code() {
+        Some(3) => return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "the folder already exists")),
+        Some(4) => return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "the folder's parent does not exist")),
+        _ if !out.status.success() => {
+            return Err(std::io::Error::other(format!(
+                "PowerShell could not create the folder for its owner only: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        _ => {}
     }
-    let restricted = restrict(dir, me);
-    if restricted.is_err() {
+    let checked = sddl_of(dir).and_then(|sddl| match foreign_folder_access(&sddl, me) {
+        None => Ok(()),
+        Some(problem) => Err(std::io::Error::other(format!("the folder could not be restricted to its owner: {problem}"))),
+    });
+    if checked.is_err() {
         let _ = std::fs::remove_dir(dir);
     }
-    restricted
+    checked
+}
+
+/// Create the file `path`, which must not exist yet, with user `me` (as for [`restrict_to_owner`])
+/// as its owner and an access list of that user and SYSTEM only, given to Windows in the call that
+/// creates the file, so the file never has its folder's access list, and write `contents` through
+/// that handle, opened unshared. The file is created beside `path` under a name of its own
+/// (`.<name>.<process id>.<count>.tmp`) and takes the name `path` only once `contents` are
+/// written, so `path` never holds a partly written file. Then check the file's descriptor as
+/// [`restrict_to_owner`] does. An existing `path` is an error of kind
+/// [`std::io::ErrorKind::AlreadyExists`] and is left as it is. A file that was created but could
+/// not be written or checked is removed again. `contents` reach PowerShell through its standard
+/// input, never as script text or an environment variable.
+///
+/// PowerShell is ended when it takes longer than [`TOOL_LIMIT`], and the call fails with an error
+/// of kind [`std::io::ErrorKind::TimedOut`]. The file under its own name is then removed. If
+/// PowerShell is not seen to exit after being ended, that file may stay, and a file PowerShell had
+/// already moved to `path` stays there: this call can't tell it from a file another process put at
+/// `path` since. Either still has the access list given when it was created.
+#[cfg(windows)]
+pub fn create_private_file(path: &std::path::Path, me: &str, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let deadline = std::time::Instant::now() + TOOL_LIMIT;
+    let contents = contents.to_vec();
+    create_private_file_until(path, me, move |mut stdin| stdin.write_all(&contents), |_| std::time::Instant::now() >= deadline)
+}
+
+/// [`create_private_file`], with `feed` writing the contents to PowerShell's standard input and
+/// `expired` saying when to end it, as [`run_until`] takes them.
+#[cfg(windows)]
+fn create_private_file_until(
+    path: &std::path::Path,
+    me: &str,
+    feed: impl FnOnce(std::process::ChildStdin) -> std::io::Result<()> + Send + 'static,
+    expired: impl FnMut(&[u8]) -> bool,
+) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    /// The exit code the script ends with when the file already exists.
+    const EXISTS: i32 = 3;
+    /// Numbers the staged files of this process.
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    // No double quotes: the command line would strip them. -2147024816 and -2147024713 are the
+    // HRESULTs of ERROR_FILE_EXISTS and ERROR_ALREADY_EXISTS. `File.Move` fails when the
+    // destination exists.
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        if (Test-Path -LiteralPath $env:CRAFT_ACL_PATH) { exit 3 }; \
+        $s = New-Object Security.AccessControl.FileSecurity; \
+        $s.SetSecurityDescriptorSddlForm('O:' + $env:CRAFT_ACL_USER + 'D:P(A;;FA;;;' + $env:CRAFT_ACL_USER + ')(A;;FA;;;SY)'); \
+        $fs = New-Object IO.FileStream -ArgumentList @($env:CRAFT_ACL_STAGED, [IO.FileMode]::CreateNew, \
+        [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $s); \
+        try { [Console]::OpenStandardInput().CopyTo($fs); $fs.Flush($true); $fs.Dispose() } \
+        catch { $fs.Dispose(); [IO.File]::Delete($env:CRAFT_ACL_STAGED); throw }; \
+        try { [IO.File]::Move($env:CRAFT_ACL_STAGED, $env:CRAFT_ACL_PATH) } \
+        catch { [IO.File]::Delete($env:CRAFT_ACL_STAGED); $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }; \
+        if ($e.HResult -eq -2147024816 -or $e.HResult -eq -2147024713) { exit 3 }; throw }";
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let staged = path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
+    let mut powershell = system_tool(POWERSHELL);
+    powershell
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("CRAFT_ACL_PATH", path)
+        .env("CRAFT_ACL_STAGED", &staged)
+        .env("CRAFT_ACL_USER", me);
+    // A script that stops before reading (the file exists) closes the pipe; its exit code says why.
+    let ran = run_until(powershell, feed, expired);
+    // The staged name is this call's own, so removing it never removes another process's file.
+    // PowerShell holds the staged file open unshared until it exits.
+    let (out, sent) = match ran? {
+        Ran::Exited(out, sent) => (out, sent),
+        Ran::Ended { exited } => {
+            if exited {
+                let _ = std::fs::remove_file(&staged);
+            }
+            return Err(timed_out("powershell.exe"));
+        }
+    };
+    if out.status.code() == Some(EXISTS) {
+        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "the file already exists"));
+    }
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&staged);
+        return Err(std::io::Error::other(format!(
+            "PowerShell could not create the file for its owner only: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let checked = sent.and_then(|()| sddl_of(path)).and_then(|sddl| still_foreign(&sddl, me));
+    if checked.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    checked
 }
 
 /// `Err` naming the problem when the descriptor read back after restricting still isn't `me`'s
@@ -215,37 +492,18 @@ fn still_foreign(sddl: &str, me: &str) -> std::io::Result<()> {
     }
 }
 
-/// What [`set_access_list`] restricts: a file, or a folder whose entries the files and folders
-/// created in it inherit.
+/// Set file `path`'s access list to Full control for `me` and SYSTEM and nothing else, protected
+/// from inheritance. Only the list is written, not the owner. `me` and the path reach PowerShell
+/// through environment variables, never as script text.
 #[cfg(windows)]
-#[derive(Clone, Copy)]
-enum Kind {
-    File,
-    Folder,
-}
-
-/// Set `path`'s access list to Full control for `me` and SYSTEM and nothing else, protected from
-/// inheritance; on a folder, what is created in it inherits the two entries. Only the list is
-/// written, not the owner. `me` and the path reach PowerShell through environment variables, never
-/// as script text.
-#[cfg(windows)]
-fn set_access_list(path: &std::path::Path, me: &str, kind: Kind) -> std::io::Result<()> {
+fn set_access_list(path: &std::path::Path, me: &str) -> std::io::Result<()> {
     // No double quotes: the command line would strip them.
-    const FILE: &str = "$s = New-Object Security.AccessControl.FileSecurity; \
+    const SCRIPT: &str = "$s = New-Object Security.AccessControl.FileSecurity; \
         $s.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;' + $env:CRAFT_ACL_USER + ')(A;;FA;;;SY)', 'Access'); \
         [IO.File]::SetAccessControl($env:CRAFT_ACL_PATH, $s)";
-    const FOLDER: &str = "$s = New-Object Security.AccessControl.DirectorySecurity; \
-        $s.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;' + $env:CRAFT_ACL_USER + ')(A;OICI;FA;;;SY)', 'Access'); \
-        [IO.Directory]::SetAccessControl($env:CRAFT_ACL_PATH, $s)";
-    let script = match kind {
-        Kind::File => FILE,
-        Kind::Folder => FOLDER,
-    };
-    let out = system_tool(POWERSHELL)
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .env("CRAFT_ACL_PATH", path)
-        .env("CRAFT_ACL_USER", me)
-        .output()?;
+    let mut powershell = system_tool(POWERSHELL);
+    powershell.args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT]).env("CRAFT_ACL_PATH", path).env("CRAFT_ACL_USER", me);
+    let out = run(powershell)?;
     if out.status.success() {
         Ok(())
     } else {
@@ -255,7 +513,9 @@ fn set_access_list(path: &std::path::Path, me: &str, kind: Kind) -> std::io::Res
 
 #[cfg(windows)]
 fn icacls(path: &std::path::Path, args: &[String]) -> std::io::Result<()> {
-    let out = system_tool(ICACLS).arg(path).args(args).output()?;
+    let mut icacls = system_tool(ICACLS);
+    icacls.arg(path).args(args);
+    let out = run(icacls)?;
     if out.status.success() {
         Ok(())
     } else {
@@ -294,27 +554,30 @@ pub fn read_with_sddl(path: &std::path::Path, max: u64) -> std::io::Result<(Stri
     );
     // Bounded so the script's `[int]` and buffer stay small; a token file is far below this.
     let max = max.min(1 << 20);
-    let out = system_tool(POWERSHELL)
-        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
-        .env("CRAFT_ACL_PATH", path)
-        .env("CRAFT_ACL_MAX", max.to_string())
-        .output()?;
+    let mut powershell = system_tool(POWERSHELL);
+    powershell.args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT]).env("CRAFT_ACL_PATH", path).env("CRAFT_ACL_MAX", max.to_string());
+    let out = run(powershell)?;
     let read = if out.status.success() { sddl_and_bytes(&String::from_utf8_lossy(&out.stdout)) } else { None };
     read.ok_or_else(|| std::io::Error::other("PowerShell could not read the file with its owner and access list"))
 }
 
 /// The security descriptor of `path` as [`read_with_sddl`] writes it, read by name without opening
 /// the file's contents, so it works on a file that is open for writing (an app restricts its
-/// token file before writing the token through the handle it created).
+/// token file before writing the token through the handle it created). A folder is read as a
+/// folder, so its inherit-only entries are included (`IO`); a file's reading leaves them out.
 #[cfg(windows)]
 pub fn sddl_of(path: &std::path::Path) -> std::io::Result<String> {
     const SCRIPT: &str = concat!(
         // Stop: a failed read (a missing file) must end the script with an error, not print `O:`.
-        "$ErrorActionPreference = 'Stop';         $raw = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList @([IO.File]::GetAccessControl($env:CRAFT_ACL_PATH).GetSecurityDescriptorBinaryForm(), 0); ",
+        "$ErrorActionPreference = 'Stop'; $p = $env:CRAFT_ACL_PATH; \
+        if ([IO.Directory]::Exists($p)) { $sec = [IO.Directory]::GetAccessControl($p) } else { $sec = [IO.File]::GetAccessControl($p) }; \
+        $raw = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList @($sec.GetSecurityDescriptorBinaryForm(), 0); ",
         describe_raw!(),
         "[Console]::Out.Write($sddl + [char]10)"
     );
-    let out = system_tool(POWERSHELL).args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT]).env("CRAFT_ACL_PATH", path).output()?;
+    let mut powershell = system_tool(POWERSHELL);
+    powershell.args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT]).env("CRAFT_ACL_PATH", path);
+    let out = run(powershell)?;
     let read = if out.status.success() { sddl_and_bytes(&String::from_utf8_lossy(&out.stdout)) } else { None };
     read.map(|(sddl, _)| sddl).ok_or_else(|| std::io::Error::other("PowerShell could not read the file's owner and access list"))
 }
@@ -410,6 +673,15 @@ $n = [CraftProbe.Console]::GetConsoleProcessList($ids, 256)
         assert!(foreign_access("D:(A;;FA;;;SY)", ME).unwrap().contains("owner"));
     }
 
+    /// An inherit-only entry doesn't apply to a file, but does to what's created in a folder.
+    #[test]
+    fn an_inherit_only_entry_counts_for_a_folder_only() {
+        let sddl = format!("O:{ME}D:(A;;FA;;;{ME})(A;IO;FR;;;BU)");
+        assert_eq!(foreign_access(&sddl, ME), None, "{sddl}");
+        assert!(foreign_folder_access(&sddl, ME).is_some_and(|p| p.contains("BU")), "{sddl}");
+        assert_eq!(foreign_folder_access(&format!("O:{ME}D:(A;;FA;;;{ME})(A;IO;FA;;;SY)"), ME), None);
+    }
+
     /// A conditional entry can hold a `:` in a string; the access list doesn't end there, so the
     /// entry after it is still checked.
     #[test]
@@ -492,6 +764,167 @@ $n = [CraftProbe.Console]::GetConsoleProcessList($ids, 256)
         assert_eq!(foreign_access(&sddl, &me), None, "{sddl}");
         // The name is taken: the folder isn't reused.
         assert!(create_private_dir(&private, &user()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder's inherit-only entries are read, and the folder check counts them: every file
+    /// created in the folder would get them.
+    #[cfg(windows)]
+    #[test]
+    fn a_folders_inherit_only_entries_are_read_and_refused() {
+        let dir = std::env::temp_dir().join(format!("craft-owner-only-inherit-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)(IO)R").output().unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let sddl = sddl_of(&dir).unwrap();
+        let users = sddl
+            .split('(')
+            .filter_map(|ace| ace.split(')').next())
+            .find(|ace| ace.split(';').nth(1).is_some_and(|flags| flags.contains("IO")) && ace.ends_with(";S-1-5-32-545"));
+        let users = users.unwrap_or_else(|| panic!("the inherit-only entry for Users is read: {sddl}"));
+        // The folder also inherits the temp folder's entries (Administrators on a CI runner), which the check reports
+        // first, so it is asked about the Users entry alone.
+        let me = current_user_sid().unwrap();
+        let only_users = format!("O:{}D:({users})", section(&sddl, "O:").unwrap());
+        assert!(foreign_folder_access(&only_users, &me).is_some_and(|p| p.contains("S-1-5-32-545")), "{sddl}");
+        assert_eq!(foreign_access(&only_users, &me), None, "a file's check skips the inherit-only entry: {sddl}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `create_private_dir` gives the folder its owner and list in the call that creates it, so in
+    /// a folder that lets Users read what's created in it, no step leaves the new folder with that
+    /// entry: the folder is moved to its name only after it was created with its own list. An
+    /// existing name and a missing parent are refused.
+    #[cfg(windows)]
+    #[test]
+    fn a_private_folder_has_its_list_from_the_start() {
+        let dir = std::env::temp_dir().join(format!("craft-owner-only-private-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let me = current_user_sid().unwrap();
+        let private = dir.join("staging");
+        let made = create_private_dir(&private, &user());
+        assert!(made.is_ok(), "{made:?}");
+        let folder = sddl_of(&private).unwrap();
+        assert_eq!((section(&folder, "O:"), foreign_folder_access(&folder, &me)), (Some(me.as_str()), None), "{folder}");
+        assert!(!folder.contains(";S-1-5-32-545)") && !folder.contains(";BU)"), "Users must not inherit read access: {folder}");
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["staging"], "no folder is left under its own name");
+        let again = create_private_dir(&private, &user()).unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists, "{again}");
+        let orphan = create_private_dir(&dir.join("missing").join("staging"), &user()).unwrap_err();
+        assert_eq!(orphan.kind(), std::io::ErrorKind::NotFound, "{orphan}");
+        assert!(!dir.join("missing").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file created by `create_private_file` in a folder that lets Users read what's in it is the
+    /// user's alone as soon as it exists, with nothing written to it yet; one created with contents
+    /// holds them, and an existing file is refused and left as it is.
+    #[cfg(windows)]
+    #[test]
+    fn a_private_file_is_private_from_the_start() {
+        let dir = std::env::temp_dir().join(format!("craft-owner-only-private-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let me = current_user_sid().unwrap();
+        let empty = dir.join("empty.token");
+        create_private_file(&empty, &user(), b"").unwrap();
+        let sddl = sddl_of(&empty).unwrap();
+        assert!(!sddl.contains(";BU)") && !sddl.contains(";S-1-5-32-545)"), "Users must not inherit read access: {sddl}");
+        assert_eq!((section(&sddl, "O:"), foreign_access(&sddl, &me)), (Some(me.as_str()), None), "{sddl}");
+        assert_eq!(std::fs::read(&empty).unwrap(), b"");
+        let file = dir.join("ctl.token");
+        create_private_file(&file, &user(), b"secret\n").unwrap();
+        let sddl = sddl_of(&file).unwrap();
+        assert_eq!((section(&sddl, "O:"), foreign_access(&sddl, &me)), (Some(me.as_str()), None), "{sddl}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"secret\n");
+        let again = create_private_file(&file, &user(), b"other\n").unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists, "{again}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"secret\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A command that writes `ready` to its standard output and then reads its standard input until
+    /// it closes.
+    fn waiting_reader() -> std::process::Command {
+        #[cfg(windows)]
+        let command = {
+            let mut powershell = system_tool(POWERSHELL);
+            powershell.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::Out.Write('ready'); [Console]::Out.Flush(); $null = [Console]::In.ReadToEnd()",
+            ]);
+            powershell
+        };
+        #[cfg(not(windows))]
+        let command = {
+            let mut sh = std::process::Command::new("sh");
+            sh.args(["-c", "printf ready; cat >/dev/null"]);
+            sh
+        };
+        command
+    }
+
+    /// A tool still running when the time is up is ended and exits. The time is up once the tool
+    /// has said it is waiting (a handshake, not a clock).
+    /// The same tool, given its input, exits by itself and nothing ends it.
+    #[test]
+    fn a_tool_that_does_not_finish_in_time_is_ended() {
+        let (keep, kept) = std::sync::mpsc::channel();
+        // The standard input stays open, so the tool waits until it is ended.
+        let hold = move |stdin: std::process::ChildStdin| keep.send(stdin).map_err(std::io::Error::other);
+        match run_until(waiting_reader(), hold, |out| out == b"ready").unwrap() {
+            Ran::Ended { exited } => assert!(exited, "the tool was ended but is still running"),
+            Ran::Exited(out, _) => panic!("the tool exited by itself: {out:?}"),
+        }
+        drop(kept);
+        let close = |stdin: std::process::ChildStdin| {
+            drop(stdin);
+            Ok(())
+        };
+        match run_until(waiting_reader(), close, |_| false).unwrap() {
+            Ran::Exited(out, sent) => {
+                assert!(out.status.success(), "{out:?}");
+                assert_eq!(out.stdout, b"ready");
+                sent.unwrap();
+            }
+            Ran::Ended { .. } => panic!("the tool was ended"),
+        }
+    }
+
+    /// PowerShell that has created the file but not written it when the time is up is ended, the
+    /// call fails as timed out, and the file it created is removed; nothing took the name. A file
+    /// that was at the name before is another's, and it is left as it is whenever the time runs out.
+    #[cfg(windows)]
+    #[test]
+    fn a_private_file_whose_create_does_not_finish_in_time_is_removed() {
+        let dir = std::env::temp_dir().join(format!("craft-owner-only-limit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("ctl.token");
+        let entries = || std::fs::read_dir(&dir).unwrap().count();
+        let (keep, kept) = std::sync::mpsc::channel();
+        let hold = move |stdin: std::process::ChildStdin| keep.send(stdin).map_err(std::io::Error::other);
+        // The time is up once the script has created its file and waits for the contents.
+        let late = create_private_file_until(&file, &user(), hold, |_| entries() > 0).unwrap_err();
+        drop(kept);
+        assert_eq!(late.kind(), std::io::ErrorKind::TimedOut, "{late}");
+        assert_eq!(entries(), 0, "the file PowerShell created is removed");
+        std::fs::write(&file, b"other\n").unwrap();
+        let (keep, kept) = std::sync::mpsc::channel();
+        let hold = move |stdin: std::process::ChildStdin| keep.send(stdin).map_err(std::io::Error::other);
+        let refused = create_private_file_until(&file, &user(), hold, |_| true).unwrap_err();
+        drop(kept);
+        assert!(matches!(refused.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::AlreadyExists), "{refused}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"other\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
