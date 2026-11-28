@@ -4,6 +4,7 @@
 //! plates rendered from a PDF, coverage and a color preview read from the plates, and process
 //! color conversion through craft-cms. See the README.
 
+pub mod blending;
 pub mod cms;
 pub mod composite;
 pub mod coverage;
@@ -16,6 +17,7 @@ pub mod output;
 pub mod pdfx1a;
 pub mod plates;
 
+pub use blending::{BlendingFrom, IntentUse, PageBlending, page_blending, pages_blending};
 pub use cms::{CmsConversion, ProfileError};
 pub use coverage::{Above, Coverage, InkStats, MAX_REGIONS, Region, Stats};
 pub use ink::{Alternate, Ink, InkColor, InkId, InkSet, Overprint, Process, Spot, normalize_name, to_pdf_color};
