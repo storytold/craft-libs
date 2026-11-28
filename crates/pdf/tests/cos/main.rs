@@ -8,6 +8,7 @@ mod efopen;
 mod encryption;
 mod file_identifier;
 mod generations;
+mod objstm_members;
 mod oracle;
 mod proptests;
 mod serialize_format;

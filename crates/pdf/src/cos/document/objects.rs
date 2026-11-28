@@ -116,9 +116,10 @@ impl Document {
     /// Objects of the file that could not be read, lowest number first, as lines such as
     /// "object 11 0 could not be read: syntax error at byte 512: ...". [`Self::get`] reads each
     /// as null (ISO 32000-2 §7.3.10), so a document with one opens, but what it held is lost:
-    /// unlike [`Self::repair_log`], nothing was repaired. Lists the objects read so far, by this
-    /// document, its clones or a scan of it, that have not since been edited; past 100, a last
-    /// line says there were more. Opening again, authenticating or rebuilding the index starts
+    /// unlike [`Self::repair_log`], nothing was repaired. The exception is a member its object
+    /// stream can't supply that a plain body elsewhere in the file supplies instead: its line
+    /// says that body was read. Lists the objects read so far, by this document, its clones or a
+    /// scan of it, that have not since been edited; past 100, a last line says there were more. Opening again, authenticating or rebuilding the index starts
     /// the list afresh, as it does the object cache.
     pub fn unreadable_objects(&self) -> Vec<String> {
         let Ok(notes) = self.object_notes.lock() else { return Vec::new() };
@@ -781,14 +782,46 @@ impl Document {
                         CosError::MissingObject(num)
                     })
             }
-            Some(XrefEntry::InStream { stream, index }) => {
-                let stm = self.objstm(stream)?;
-                // The member at the entry's position, else wherever the stream lists `num`.
-                let at = usize::try_from(index).ok().and_then(|i| stm.index.get(i)).copied().flatten().filter(|(n, _)| *n == num);
-                let (_, off) = at.or_else(|| stm.index.iter().flatten().find(|(n, _)| *n == num).copied()).ok_or(CosError::MissingObject(num))?;
-                Lexer::new(&stm.data, off).object()
-            }
+            Some(XrefEntry::InStream { stream, index }) => match self.member(num, stream, index) {
+                Err(e) if !matches!(e, CosError::Poisoned) => self.member_body(num, stream, &e).ok_or(e),
+                read => read,
+            },
         }
+    }
+
+    /// Member `num` of object stream `stream`: the one at the entry's position `index`, else
+    /// wherever the stream lists `num`.
+    fn member(&self, num: u32, stream: u32, index: u32) -> Result<Object, CosError> {
+        let stm = self.objstm(stream)?;
+        let at = usize::try_from(index).ok().and_then(|i| stm.index.get(i)).copied().flatten().filter(|(n, _)| *n == num);
+        let (_, off) = at.or_else(|| stm.index.iter().flatten().find(|(n, _)| *n == num).copied()).ok_or(CosError::MissingObject(num))?;
+        Lexer::new(&stm.data, off).object()
+    }
+
+    /// A member its object stream can't supply (`why`: the stream is damaged, doesn't list it, or
+    /// its text there doesn't parse), read from a plain `num 0 obj` body elsewhere in the file, as
+    /// a reader that rebuilds the cross-reference data by scanning the file's objects would (ISO
+    /// 32000-2 Annex C.4; a member's generation is 0, §7.5.7). Found by the file's own header scans
+    /// (`located`, [`Self::scan_for`]), and listed in [`Self::unreadable_objects`] with what was
+    /// read instead.
+    /// A stream this document has edited or freed, or that a saved revision frees, keeps its
+    /// members out, as [`Self::objstm`] keeps out the stream's own header.
+    fn member_body(&self, num: u32, stream: u32, why: &CosError) -> Option<Object> {
+        if self.overlay.contains_key(&stream) || matches!(self.xref_entry(stream), Some(XrefEntry::Free { .. })) {
+            return None;
+        }
+        let resolve = |r: ObjRef| self.stream_length(r);
+        let located = self.located.get(&num).and_then(|(o, _)| usize::try_from(*o).ok()).and_then(|off| {
+            match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
+                Ok((id, o)) if id.num == num => Some((id, o)),
+                _ => None,
+            }
+        });
+        let (id, o) = located.or_else(|| self.scan_for(num)).filter(|(id, _)| id.generation == 0)?;
+        self.note_unreadable(num, || {
+            format!("object stream {stream} can't supply it, so its own `{num} 0 obj` body in the file was read instead ({why})")
+        });
+        Some(self.decrypted(id, o))
     }
 
     pub(super) fn objstm(&self, num: u32) -> Result<Arc<ObjStm>, CosError> {
