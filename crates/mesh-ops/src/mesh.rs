@@ -110,34 +110,69 @@ impl Mesh {
             .collect()
     }
 
-    /// Edges where the UV layout splits: two triangles meet there in 3D but not in UV space, per material in `0..materials.len().max(1)`
+    /// Edges where the UV layout splits: two triangles meet there in 3D but not in UV space, per material in `0..materials.len().max(1)`.
+    /// An edge between two vertices at one position is not listed, and a triangle with two corners at one position
+    /// connects its two other edges in UV space, as the corners of a pole row do.
     pub fn uv_seam_edges(&self) -> Vec<Vec<(u32, u32)>> {
         // Signed zero denotes the same position on either side of an imported seam
         let bits = |position: Vec3| position.to_array().map(|coordinate| if coordinate == 0.0 { 0 } else { coordinate.to_bits() });
         let mut seams = vec![Vec::new(); self.materials.len().max(1)];
         // Match across materials before grouping the lines for texture-set visibility
         let mut sides: std::collections::HashMap<EdgePositions, Vec<(u32, u32, usize)>> = std::collections::HashMap::new();
+        // A triangle with two corners at one position joins its two edges to the third corner in UV space
+        let mut joins: std::collections::HashMap<EdgePositions, Vec<[(u32, u32); 2]>> = std::collections::HashMap::new();
+        let canonical = |from: u32, to: u32, from_bits: [u32; 3], to_bits: [u32; 3]| {
+            if from_bits <= to_bits { ((from_bits, to_bits), (from, to)) } else { ((to_bits, from_bits), (to, from)) }
+        };
         for material in 0..seams.len() {
             for triangle in self.triangles_of(material) {
                 let Some(corners) = self.indices.get(triangle * 3..triangle * 3 + 3) else { continue };
+                let Some(corner_bits) =
+                    corners.iter().map(|&corner| self.positions.get(corner as usize).map(|p| bits(*p))).collect::<Option<Vec<_>>>()
+                else {
+                    continue;
+                };
 
-                for (from, to) in [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])] {
-                    let (Some(from_position), Some(to_position)) = (self.positions.get(from as usize), self.positions.get(to as usize)) else {
+                for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+                    // An edge between two vertices at one position has no length to draw
+                    if corner_bits[a] == corner_bits[b] {
+                        let c = 3 - a - b;
+                        if corner_bits[c] != corner_bits[a] {
+                            let (edge, first) = canonical(corners[a], corners[c], corner_bits[a], corner_bits[c]);
+                            let (_, second) = canonical(corners[b], corners[c], corner_bits[b], corner_bits[c]);
+                            joins.entry(edge).or_default().push([first, second]);
+                        }
                         continue;
-                    };
-
-                    let (from_bits, to_bits) = (bits(*from_position), bits(*to_position));
-                    let (edge, pair) = if from_bits <= to_bits { ((from_bits, to_bits), (from, to)) } else { ((to_bits, from_bits), (to, from)) };
+                    }
+                    let (edge, pair) = canonical(corners[a], corners[b], corner_bits[a], corner_bits[b]);
                     sides.entry(edge).or_default().push((pair.0, pair.1, material));
                 }
             }
         }
 
         let uv = |index: u32| self.uvs.get(index as usize).copied();
-        for pairs in sides.into_values() {
-            let Some(&(first_from, first_to, _)) = pairs.first() else { continue };
+        for (edge, pairs) in sides {
+            // Group the UV layouts of this edge, joining the layouts a collapsed triangle connects
+            let mut layouts = Vec::new();
+            for &(from, to, _) in &pairs {
+                if !layouts.contains(&(uv(from), uv(to))) {
+                    layouts.push((uv(from), uv(to)));
+                }
+            }
+            let mut group: Vec<usize> = (0..layouts.len()).collect();
+            for [first, second] in joins.get(&edge).into_iter().flatten() {
+                let find = |(from, to): (u32, u32)| layouts.iter().position(|layout| *layout == (uv(from), uv(to)));
+                if let (Some(first), Some(second)) = (find(*first), find(*second)) {
+                    let (kept, merged) = (group[first], group[second]);
+                    for g in &mut group {
+                        if *g == merged {
+                            *g = kept;
+                        }
+                    }
+                }
+            }
 
-            if pairs.iter().any(|&(from, to, _)| (uv(from), uv(to)) != (uv(first_from), uv(first_to))) {
+            if group.iter().any(|&g| g != group[0]) {
                 for (from, to, material) in pairs {
                     if let Some(edges) = seams.get_mut(material) {
                         edges.push((from.min(to), from.max(to)));
@@ -562,6 +597,19 @@ mod tests {
         mesh.indices[3] = 4;
         assert_eq!(mesh.positions[0], mesh.positions[4]);
         assert_eq!(mesh.uv_seam_edges(), vec![vec![(0, 2), (2, 4)]]);
+    }
+
+    #[test]
+    fn uv_seams_skip_edges_between_vertices_at_one_position() {
+        let (segments, rings) = (3, 2);
+        let mesh = crate::primitives::sphere(1.0, segments, rings);
+        let seams = mesh.uv_seam_edges();
+        assert!(
+            seams[0].iter().all(|&(from, to)| mesh.positions[from as usize] != mesh.positions[to as usize]),
+            "zero-length seam edges at a pole: {seams:?}"
+        );
+        // Only the meridian where u = 0 meets u = 1 is a seam: columns 0 and 3, with the collapsed pole triangles
+        assert_eq!(seams, vec![vec![(0, 4), (2, 7), (3, 7), (4, 8), (4, 9), (7, 11)]]);
     }
 
     #[test]
