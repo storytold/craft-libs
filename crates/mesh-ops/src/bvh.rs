@@ -93,8 +93,13 @@ impl Bvh {
         let mut order: Vec<u32> = (0..tris.len() as u32).collect();
         let centroids: Vec<Vec3> = tris.iter().map(|t| (t[0] + t[1] + t[2]) / 3.0).collect();
 
-        let mut nodes = vec![Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: 0, count: tris.len() as u32 }];
-        let mut stack = vec![0usize];
+        // No triangles: no nodes, not a root whose count of 0 would read as an inner node.
+        let mut nodes = Vec::new();
+        let mut stack = Vec::new();
+        if !tris.is_empty() {
+            nodes.push(Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: 0, count: tris.len() as u32 });
+            stack.push(0usize);
+        }
 
         while let Some(node_index) = stack.pop() {
             let Node { first, count, .. } = nodes[node_index];
@@ -259,7 +264,12 @@ impl Bvh {
         let e2 = t[2] - t[0];
         let p = d.cross(e2);
         let det = e1.dot(p);
-        if det.abs() < 1e-12 {
+        // det = d · (e2 × e1): parallel when it is small next to |d| times twice the area, so
+        // the test follows the triangle's scale. Zero-area triangles are never hit. The squares
+        // are taken in f64, where they neither overflow nor underflow for finite f32 input.
+        let n2 = e1.as_dvec3().cross(e2.as_dvec3()).length_squared();
+        // |det| below 1e-12 of |d| times twice the area (squared on both sides).
+        if n2 == 0.0 || f64::from(det) * f64::from(det) <= 1e-24 * n2 * d.as_dvec3().length_squared() {
             return None;
         }
         let inv = 1.0 / det;
@@ -409,6 +419,11 @@ impl Bvh {
 fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
     let [a, b, c] = *t;
     let (ab, ac, ap) = (b - a, c - a, p - a);
+    // Checked before the Voronoi regions, whose early returns would give a finite point; in f64,
+    // where the cross product of tiny edges does not underflow.
+    if ab.as_dvec3().cross(ac.as_dvec3()) == glam::DVec3::ZERO {
+        return (Vec3::NAN, 0.0, 0.0);
+    }
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
         return (a, 0.0, 0.0);
@@ -545,6 +560,48 @@ mod tests {
         assert!(!found.is_empty() && found.len() <= 8, "{found:?}");
         let empty = Bvh::new(&Mesh::default());
         assert!(empty.closest(Vec3::ZERO, Vec3::X, 1.0).is_none());
+        assert_eq!(empty.nodes().len(), 0);
+        assert!(empty.nearest(Vec3::ZERO, f32::MAX, &|_| true).is_none());
+        let mut found = 0;
+        empty.query_box(Vec3::splat(-1.0), Vec3::splat(1.0), |_| found += 1);
+        assert_eq!(found, 0);
+    }
+
+    #[test]
+    fn rays_hit_tiny_triangles() {
+        let s = 1e-7;
+        let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(0.0, s, 0.0)], indices: vec![0, 1, 2], ..Mesh::default() };
+        let bvh = Bvh::new(&mesh);
+        let hit = bvh.closest(Vec3::new(s * 0.25, s * 0.25, 1.0), Vec3::NEG_Z, 10.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-6, "{}", hit.t);
+        assert!(bvh.occluded(Vec3::new(s * 0.25, s * 0.25, 1.0), Vec3::NEG_Z, 10.0));
+        let s = 1e10;
+        let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(0.0, s, 0.0)], indices: vec![0, 1, 2], ..Mesh::default() };
+        let hit = Bvh::new(&mesh).closest(Vec3::new(s * 0.25, s * 0.25, 1.0), Vec3::NEG_Z, 10.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-6, "{}", hit.t);
+    }
+
+    #[test]
+    fn degenerate_triangles_are_never_nearest() {
+        // Collinear corners: the points lie in vertex and edge regions of this triangle.
+        let line = [Vec3::ZERO, Vec3::X, Vec3::X * 2.0];
+        for p in [Vec3::new(-1.0, 0.5, 0.0), Vec3::new(1.0, 0.5, 0.0), Vec3::new(3.0, 0.5, 0.0)] {
+            let (q, ..) = closest_on_triangle(p, &line);
+            assert!(!q.is_finite(), "{p} -> {q}");
+        }
+        let mesh = Mesh { positions: line.to_vec(), indices: vec![0, 1, 2], ..Mesh::default() };
+        assert!(Bvh::new(&mesh).nearest(Vec3::new(-1.0, 0.5, 0.0), f32::MAX, &|_| true).is_none());
+        // A tiny triangle that is not degenerate is still found.
+        let tiny = [Vec3::ZERO, Vec3::new(1e-23, 0.0, 0.0), Vec3::new(0.0, 1e-23, 0.0)];
+        assert_eq!(closest_on_triangle(Vec3::new(-1.0, -1.0, 0.0), &tiny).0, Vec3::ZERO);
+    }
+
+    #[test]
+    fn grazing_rays_still_hit() {
+        let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y], indices: vec![0, 1, 2], ..Mesh::default() };
+        let d = Vec3::new(1.0, 0.0, -1e-7).normalize();
+        let hit = Bvh::new(&mesh).closest(Vec3::new(0.25, 0.25, 1e-8), d, 10.0).unwrap();
+        assert!((hit.t - 0.1).abs() < 1e-3, "{}", hit.t);
     }
 
     #[test]
