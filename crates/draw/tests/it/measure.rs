@@ -2,11 +2,12 @@
 
 use craft_behavior::kurbo::{self, Point, Rect};
 use craft_behavior::{Axis, CancelReason, CanvasView, EditEvent};
-use craft_draw::ui::measure::{MIN_LINE, RulerLine, RulerOverlay, RulerTool, box_distances};
+use craft_draw::ui::measure::{MIN_LINE, RulerBar, RulerLine, RulerOverlay, RulerTool, box_distances};
+use craft_ui::bars::{Bar, BarKind};
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
-use craft_ui::testing::{ToolFixture, trial};
+use craft_ui::testing::{Fixture, Room, ToolFixture, trial};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -454,4 +455,42 @@ fn a_read_only_ruler_paints_and_takes_no_press() {
     fixture.press_at(end).move_to(end + egui::vec2(20.0, 0.0)).move_to(to).release_at(to);
     let new = (*line.borrow()).expect("the tool drew a line");
     assert!(new.start.distance(ruler.end) < 1e-3, "the tool's new line starts at the press on the drawn end: {new:?}");
+}
+
+/// Each readout caption the Ruler bar painted for `line` (`X` to `L2`), with its visual rect and the clip it was
+/// painted under.
+fn ruler_bar_captions(line: Option<RulerLine>) -> Vec<(String, egui::Rect, egui::Rect)> {
+    let mut fixture = Fixture::new(move |ui| {
+        let mut use_scale = false;
+        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            let _ = RulerBar::new(line, Bind::bound(&mut use_scale)).show(ui);
+        });
+    });
+    fixture.in_room(Room::Window).settle();
+    let captions = ["X", "Y", "W", "H", "A", "L1", "L2"];
+    fixture
+        .frame_clipped_shapes()
+        .into_iter()
+        .filter_map(|(clip, shape)| match shape {
+            egui::Shape::Text(text) if captions.contains(&text.galley.text()) => {
+                Some((text.galley.text().to_owned(), text.visual_bounding_rect(), clip))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A readout with no value keeps its caption whole: with no line every value is blank, and with a line but no
+/// protractor L2 is (storytold/photocraft#16339). A blank value used to measure no height, so the field, and the
+/// caption clipped to it, lost the lower half of the line.
+#[trial]
+fn ruler_bar_captions_show_whole_when_a_value_is_blank() {
+    let plain = RulerLine::new(Point::new(10.0, 20.0), Point::new(110.0, 70.0));
+    for (case, line) in [("no line", None), ("no protractor", Some(plain)), ("protractor", Some(plain.with_protractor(Point::new(60.0, 90.0))))] {
+        let captions = ruler_bar_captions(line);
+        assert_eq!(captions.len(), 7, "{case}: every caption is painted: {captions:?}");
+        for (caption, rect, clip) in captions {
+            assert!(clip.contains_rect(rect), "{case}: caption {caption} at {rect:?} is cut by its clip {clip:?}");
+        }
+    }
 }

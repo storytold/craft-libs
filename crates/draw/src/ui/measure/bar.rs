@@ -120,9 +120,15 @@ impl<'a> RulerBar<'a> {
     }
 }
 
-/// One readout: a caption above a tabular value, named `name` for AccessKit.
+/// What a blank readout shows: one figure space, a digit's width of nothing. An empty text measures no height, and the
+/// field, with its caption, would take the height of its value: the caption's lower half would be cut.
+const BLANK: &str = "\u{2007}";
+
+/// One readout: a caption above a tabular value, named `name` for AccessKit. A blank value keeps a line's height
+/// ([`BLANK`]); the field's AccessKit value stays empty.
 fn readout(ui: &mut Ui, salt: &'static str, name: Label, value: String) {
-    Field::new(name).id_salt(salt).value(value.clone()).show(ui, |ui, _| {
-        Text::new(value.clone()).role(TypeRole::Mono).show(ui);
+    let shown = if value.is_empty() { BLANK.to_owned() } else { value.clone() };
+    Field::new(name).id_salt(salt).value(value).show(ui, |ui, _| {
+        Text::new(shown.clone()).role(TypeRole::Mono).show(ui);
     });
 }
