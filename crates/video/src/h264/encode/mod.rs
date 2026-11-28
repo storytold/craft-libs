@@ -225,6 +225,113 @@ impl EncoderConfig {
             writer: format!("craft-h264enc {}", env!("CARGO_PKG_VERSION")),
         }
     }
+
+    /// The level_idc (41 = level 4.1) of the stream an encoder built from this configuration writes,
+    /// after the checks of [`Encoder::new`]: a configuration it rejects (an invalid size or frame rate,
+    /// or a picture size, frame rate or bitrate past level 6.2) gets the same error here. A requested
+    /// [`EncoderConfig::level`] below the needed level is raised to it. [`Encoder::new`] can still
+    /// fail when it cannot start its worker threads.
+    pub fn level_idc(&self) -> Result<u8, Error> {
+        Ok(self.plan()?.level)
+    }
+
+    /// Validate the configuration and derive the picture size in macroblocks, the rate limits and the level.
+    fn plan(&self) -> Result<Plan, Error> {
+        if self.width == 0
+            || self.height == 0
+            || !self.width.is_multiple_of(2)
+            || !self.height.is_multiple_of(2)
+            || self.width > 16384
+            || self.height > 16384
+        {
+            return Err(Error::InvalidDimensions(self.width, self.height));
+        }
+        if self.fps_num == 0 || self.fps_den == 0 {
+            return Err(Error::InvalidFrameRate(self.fps_num, self.fps_den));
+        }
+        if self.bframes > 3 {
+            return Err(Error::InvalidConfig("bframes must be 0..=3".into()));
+        }
+        if !(8..=10).contains(&self.bit_depth) {
+            return Err(Error::InvalidConfig(format!("bit depth {} is not supported (8 to 10)", self.bit_depth)));
+        }
+        if self.bit_depth > 8 && self.profile != Profile::High10 {
+            return Err(Error::InvalidConfig(format!("bit depth {} needs the High 10 profile", self.bit_depth)));
+        }
+        let mbw = self.width.div_ceil(16) as usize;
+        let mbh = self.height.div_ceil(16) as usize;
+        let fps = self.fps_num as f64 / self.fps_den as f64;
+        let max_refs = if self.intra_only {
+            0
+        } else if self.bframes > 0 && self.profile != Profile::Baseline {
+            2
+        } else {
+            1
+        };
+        // QPY may go down to -QpBdOffset at higher bit depths.
+        let qp_min = -(Depth::new(self.bit_depth).qp_offset as f32);
+        if let Pass::Second(st) = &self.pass {
+            let invalid =
+                st.frames.is_empty() || !st.fps.is_finite() || st.fps <= 0.0 || st.frames.iter().any(|f| !f.qscale.is_finite() || f.qscale <= 0.0);
+            if invalid {
+                return Err(Error::InvalidConfig(
+                    "second pass needs non-empty first-pass statistics with a positive fps and valid frame qscales".into(),
+                ));
+            }
+            if (st.fps - fps).abs() > fps.max(1.0) * 1e-9 {
+                return Err(Error::InvalidConfig("second-pass frame rate must match the first pass".into()));
+            }
+        }
+        match self.rate {
+            RateControl::Crf(crf) if !crf.is_finite() => {
+                return Err(Error::InvalidConfig("CRF must be finite".into()));
+            }
+            RateControl::Cbr { kbps: 0 } => {
+                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
+            }
+            RateControl::Vbr { target_kbps: 0, .. } => {
+                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
+            }
+            RateControl::Vbr { target_kbps, max_kbps } if max_kbps == 0 || max_kbps < target_kbps => {
+                return Err(Error::InvalidConfig("VBR maximum bitrate must be at least the non-zero target bitrate".into()));
+            }
+            _ => {}
+        }
+        let (kbps_for_level, vbv) = match (&self.rate, &self.pass) {
+            (RateControl::Qp(_), _) => (None, (None, None)),
+            (RateControl::Crf(c), _) => (Some(crf_level_kbps(*c, qp_min, mbw, mbh, fps)), (None, None)),
+            (RateControl::Cbr { kbps }, Pass::First) => (Some(*kbps), (None, None)),
+            (RateControl::Cbr { kbps }, _) => (Some(*kbps), (Some(*kbps), Some(*kbps))),
+            (RateControl::Vbr { max_kbps, .. }, Pass::First) => (Some(*max_kbps), (None, None)),
+            (RateControl::Vbr { max_kbps, .. }, _) => {
+                let buffer =
+                    max_kbps.checked_mul(2).ok_or_else(|| Error::InvalidConfig("VBR buffer rate exceeds the supported integer range".into()))?;
+                (Some(*max_kbps), (Some(*max_kbps), Some(buffer)))
+            }
+        };
+        // cpbBrVclFactor / 1000 (Table A-2): MaxBR scales by 1.25 for High and 3 for High 10.
+        let br_factor = match self.profile {
+            Profile::Baseline | Profile::Main => 1000,
+            Profile::High => 1250,
+            Profile::High10 => 3000,
+        };
+        let auto = nal::pick_level(mbw as u32, mbh as u32, fps, max_refs as u32, kbps_for_level, br_factor)
+            .ok_or_else(|| Error::InvalidConfig("configuration exceeds H.264 level 6.2 limits".into()))?;
+        let level = self.level.map_or(auto, |l| nal::level_at_least(l, auto));
+        Ok(Plan { mbw, mbh, fps, max_refs, qp_min, vbv, level })
+    }
+}
+
+/// What [`EncoderConfig::plan`] derives from a valid configuration.
+struct Plan {
+    mbw: usize,
+    mbh: usize,
+    fps: f64,
+    max_refs: usize,
+    qp_min: f32,
+    /// VBV maximum rate and buffer size, in kbit/s and kbit.
+    vbv: (Option<u32>, Option<u32>),
+    level: u8,
 }
 
 /// A planar 4:2:0 8-bit input picture of the configured size.
@@ -419,35 +526,12 @@ impl<P: Pixel> Core<P> {
     }
 
     fn new_with_extra_motion_search_starts(mut cfg: EncoderConfig, extra_motion_search_starts: bool) -> Result<Self, Error> {
-        if cfg.width == 0
-            || cfg.height == 0
-            || !cfg.width.is_multiple_of(2)
-            || !cfg.height.is_multiple_of(2)
-            || cfg.width > 16384
-            || cfg.height > 16384
-        {
-            return Err(Error::InvalidDimensions(cfg.width, cfg.height));
-        }
-        if cfg.fps_num == 0 || cfg.fps_den == 0 {
-            return Err(Error::InvalidFrameRate(cfg.fps_num, cfg.fps_den));
-        }
-        if cfg.bframes > 3 {
-            return Err(Error::InvalidConfig("bframes must be 0..=3".into()));
-        }
-        if !(8..=10).contains(&cfg.bit_depth) {
-            return Err(Error::InvalidConfig(format!("bit depth {} is not supported (8 to 10)", cfg.bit_depth)));
-        }
-        if cfg.bit_depth > 8 && cfg.profile != Profile::High10 {
-            return Err(Error::InvalidConfig(format!("bit depth {} needs the High 10 profile", cfg.bit_depth)));
-        }
+        let Plan { mbw, mbh, fps, max_refs, qp_min, vbv, level } = cfg.plan()?;
         if cfg.profile == Profile::Baseline || cfg.intra_only {
             cfg.bframes = 0;
         }
         cfg.keyint = if cfg.intra_only { 1 } else { cfg.keyint.max(1) };
         let depth = Depth::new(cfg.bit_depth);
-        let mbw = cfg.width.div_ceil(16) as usize;
-        let mbh = cfg.height.div_ceil(16) as usize;
-        let fps = cfg.fps_num as f64 / cfg.fps_den as f64;
         let cabac = cfg.profile != Profile::Baseline;
         let high = cfg.profile.high();
         let params = match cfg.preset {
@@ -512,71 +596,14 @@ impl<P: Pixel> Core<P> {
                 depth,
             },
         };
-        let max_refs = if cfg.intra_only {
-            0
-        } else if cfg.bframes > 0 {
-            2
-        } else {
-            1
+        let rc_kind = match (&cfg.rate, &cfg.pass) {
+            (RateControl::Qp(q), _) => RcKind::Qp((*q).min(51)),
+            (RateControl::Crf(c), _) => RcKind::Crf(c.clamp(qp_min, 51.0)),
+            (RateControl::Cbr { kbps: target_kbps } | RateControl::Vbr { target_kbps, .. }, Pass::Second(st)) => {
+                ratecontrol::RateControl::plan_two_pass(st, *target_kbps)
+            }
+            (RateControl::Cbr { kbps: target_kbps } | RateControl::Vbr { target_kbps, .. }, _) => RcKind::Abr { kbps: *target_kbps },
         };
-        // QPY may go down to -QpBdOffset at higher bit depths.
-        let qp_min = -(depth.qp_offset as f32);
-        if let Pass::Second(st) = &cfg.pass {
-            let invalid =
-                st.frames.is_empty() || !st.fps.is_finite() || st.fps <= 0.0 || st.frames.iter().any(|f| !f.qscale.is_finite() || f.qscale <= 0.0);
-            if invalid {
-                return Err(Error::InvalidConfig(
-                    "second pass needs non-empty first-pass statistics with a positive fps and valid frame qscales".into(),
-                ));
-            }
-            if (st.fps - fps).abs() > fps.max(1.0) * 1e-9 {
-                return Err(Error::InvalidConfig("second-pass frame rate must match the first pass".into()));
-            }
-        }
-        match cfg.rate {
-            RateControl::Crf(crf) if !crf.is_finite() => {
-                return Err(Error::InvalidConfig("CRF must be finite".into()));
-            }
-            RateControl::Cbr { kbps: 0 } => {
-                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
-            }
-            RateControl::Vbr { target_kbps: 0, .. } => {
-                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
-            }
-            RateControl::Vbr { target_kbps, max_kbps } if max_kbps == 0 || max_kbps < target_kbps => {
-                return Err(Error::InvalidConfig("VBR maximum bitrate must be at least the non-zero target bitrate".into()));
-            }
-            _ => {}
-        }
-        let (kbps_for_level, rc_kind, vbv) = match (&cfg.rate, &cfg.pass) {
-            (RateControl::Qp(q), _) => (None, RcKind::Qp((*q).min(51)), (None, None)),
-            (RateControl::Crf(c), _) => (Some(crf_level_kbps(*c, qp_min, mbw, mbh, fps)), RcKind::Crf(c.clamp(qp_min, 51.0)), (None, None)),
-            (RateControl::Cbr { kbps }, Pass::Second(st)) => {
-                (Some(*kbps), ratecontrol::RateControl::plan_two_pass(st, *kbps), (Some(*kbps), Some(*kbps)))
-            }
-            (RateControl::Cbr { kbps }, Pass::First) => (Some(*kbps), RcKind::Abr { kbps: *kbps }, (None, None)),
-            (RateControl::Cbr { kbps }, Pass::Single) => (Some(*kbps), RcKind::Abr { kbps: *kbps }, (Some(*kbps), Some(*kbps))),
-            (RateControl::Vbr { target_kbps, max_kbps }, Pass::Second(st)) => {
-                let buffer =
-                    max_kbps.checked_mul(2).ok_or_else(|| Error::InvalidConfig("VBR buffer rate exceeds the supported integer range".into()))?;
-                (Some(*max_kbps), ratecontrol::RateControl::plan_two_pass(st, *target_kbps), (Some(*max_kbps), Some(buffer)))
-            }
-            (RateControl::Vbr { target_kbps, max_kbps }, Pass::First) => (Some(*max_kbps), RcKind::Abr { kbps: *target_kbps }, (None, None)),
-            (RateControl::Vbr { target_kbps, max_kbps }, Pass::Single) => {
-                let buffer =
-                    max_kbps.checked_mul(2).ok_or_else(|| Error::InvalidConfig("VBR buffer rate exceeds the supported integer range".into()))?;
-                (Some(*max_kbps), RcKind::Abr { kbps: *target_kbps }, (Some(*max_kbps), Some(buffer)))
-            }
-        };
-        // cpbBrVclFactor / 1000 (Table A-2): MaxBR scales by 1.25 for High and 3 for High 10.
-        let br_factor = match cfg.profile {
-            Profile::Baseline | Profile::Main => 1000,
-            Profile::High => 1250,
-            Profile::High10 => 3000,
-        };
-        let auto = nal::pick_level(mbw as u32, mbh as u32, fps, max_refs as u32, kbps_for_level, br_factor)
-            .ok_or_else(|| Error::InvalidConfig("configuration exceeds H.264 level 6.2 limits".into()))?;
-        let level = cfg.level.map_or(auto, |l| nal::level_at_least(l, auto));
         let (profile_idc, constraint) = match cfg.profile {
             Profile::Baseline => (66u8, 0xC0u8), // constraint_set0 + set1 => Constrained Baseline
             Profile::Main => (77, 0x40),
@@ -1342,6 +1369,34 @@ fn jobs_stride_c(mbw: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn level_idc_is_the_level_the_encoder_signals() {
+        let mut raised = EncoderConfig::new(1920, 1080, 30, 1);
+        raised.level = Some(30);
+        let mut kept = EncoderConfig::new(1280, 720, 30, 1);
+        kept.level = Some(51);
+        let mut bitrate = EncoderConfig::new(1920, 1080, 30, 1);
+        bitrate.rate = RateControl::Cbr { kbps: 40_000 };
+        for cfg in [EncoderConfig::new(320, 240, 30, 1), EncoderConfig::new(3840, 2160, 60, 1), raised, kept, bitrate] {
+            let level = cfg.level_idc().unwrap();
+            let params = Encoder::new(cfg).unwrap().codec_params();
+            assert_eq!(level, craft_media::isobmff::AvcConfig::parse(&params.extradata).unwrap().level);
+        }
+    }
+
+    #[test]
+    fn level_idc_rejects_what_the_encoder_rejects() {
+        let mut deep = EncoderConfig::new(320, 240, 30, 1);
+        deep.bit_depth = 10;
+        let odd = EncoderConfig::new(321, 240, 30, 1);
+        let no_rate = EncoderConfig::new(320, 240, 0, 1);
+        let past_level = EncoderConfig::new(7680, 4320, 300, 1);
+        for cfg in [odd, no_rate, past_level, deep] {
+            let check = cfg.level_idc().unwrap_err().to_string();
+            assert_eq!(check, Encoder::new(cfg).err().unwrap().to_string());
+        }
+    }
 
     fn grey(w: usize, h: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         (vec![128; w * h], vec![128; w * h / 4], vec![128; w * h / 4])
