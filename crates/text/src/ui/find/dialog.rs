@@ -814,5 +814,13 @@ fn special_entries(words: &FindLabels, replacing: bool, wildcards: bool) -> Vec<
         (true, false) => REPLACE_CODES.iter().collect(),
         (true, true) => std::iter::once(&FIND_EXPRESSION).chain(REPLACE_CODES.iter()).collect(),
     };
-    table.into_iter().map(|(name, code)| Entry::new(*code, words.special_item.fill(&[("name", name(words)), ("code", *code)]))).collect()
+    table
+        .into_iter()
+        .map(|(name, code)| {
+            // `&` starts a menu mnemonic, so double any literal ampersands (`^&` -> `^&&`) in the label while keeping
+            // the raw token as the picked value.
+            let label = words.special_item.fill(&[("name", &name(words).replace('&', "&&")), ("code", &code.replace('&', "&&"))]);
+            Entry::new(*code, label)
+        })
+        .collect()
 }
