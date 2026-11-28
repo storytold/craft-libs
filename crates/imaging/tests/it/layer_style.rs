@@ -161,6 +161,25 @@ fn page_rig(kind: EffectKind, params: Option<StyleParams>) -> (Fixture, Rc<RefCe
     rig_of(host(draft, vec![spec]))
 }
 
+#[trial]
+fn color_overlay_has_a_titled_group_for_its_controls() {
+    let (mut fixture, host) = page_rig(EffectKind::ColorOverlay, None);
+    let heading = one(&fixture, Role::HEADING, "Color");
+    let group = one(&fixture, Role::GROUP, "Color");
+    let blend = one(&fixture, Role::COMBO_BOX, "Blend Mode");
+    let swatch = one(&fixture, Role::COLOR_WELL, "Color");
+    let opacity = one(&fixture, Role::SLIDER, "Opacity");
+    let tree = fixture.tree();
+    for child in [heading, blend, swatch, opacity] {
+        let ancestors = std::iter::successors(tree.parent_of_key(child.node), |node| tree.parent_of_key(*node));
+        assert!(ancestors.into_iter().any(|node| node == group.node), "{child:?} belongs to the Color group");
+    }
+
+    focus(&mut fixture, &opacity);
+    fixture.key(Key::ArrowLeft, Modifiers::NONE).idle(2);
+    assert_eq!(host.borrow().draft.style.effect(EffectId(1)).and_then(|effect| effect.params.number("opacity")), Some(99.0));
+}
+
 /// A page shows the spec's defaults for keys the instance lacks without writing them; editing one field writes only
 /// that key.
 #[trial]

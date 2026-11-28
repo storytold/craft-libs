@@ -16,6 +16,7 @@ use craft_ui::patterns::presets::{PresetPicker, PresetSource, PresetState};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
 use craft_ui::runtime::requests::ColorRequest;
+use craft_ui::sections::{HeaderStrength, Section};
 use craft_ui::text::NumberField;
 use craft_ui::value_drag::AngleDial;
 use egui::Ui;
@@ -24,7 +25,8 @@ use super::blending::BlendingOp;
 use super::contour::{ContourAction, ContourField, ContourKey, ContourRequest, ContourSampler, contour_source};
 use super::labels::LayerStyleWords;
 use crate::layer_style::{
-    Contour, EffectField, EffectId, EffectInstance, EffectSpec, FieldKind, FieldUnit, LayerStyle, LayerStyleDraft, StyleParams, StyleValue,
+    Contour, EffectField, EffectId, EffectInstance, EffectKind, EffectSpec, FieldKind, FieldUnit, LayerStyle, LayerStyleDraft, StyleParams,
+    StyleValue,
 };
 
 /// The angle field shows whole degrees.
@@ -137,8 +139,15 @@ pub(super) fn effect_page(ui: &mut Ui, input: &PageInput<'_>) -> PageOutput {
             return;
         }
         let shown = input.instance.params.over(&input.spec.defaults);
-        for field in &input.spec.fields {
-            field_row(ui, input, field, &shown, &mut out);
+        let mut fields = |ui: &mut Ui| {
+            for field in &input.spec.fields {
+                field_row(ui, input, field, &shown, &mut out);
+            }
+        };
+        if input.instance.kind == EffectKind::ColorOverlay {
+            Section::fixed(input.words.color.clone()).strength(HeaderStrength::Caption).show(ui, |ui, _| fields(ui));
+        } else {
+            fields(ui);
         }
         Row::new().fill_width().align(RowAlign::End).wrap(true).show(ui, |ui, _| {
             if clicked(&Button::new(input.words.reset_to_default.clone()).id_salt("reset").show(ui)) {
