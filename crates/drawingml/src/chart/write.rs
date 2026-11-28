@@ -1513,6 +1513,61 @@ mod tests {
         c.cat_reversed = false;
         assert!(!crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap().cat_reversed);
     }
+
+    #[test]
+    fn review_6096417042_percent_defaults_survive_rebuild_without_masking_source_general() {
+        // Original two-axis percent chart: only the optional source/axis format differs.
+        // No authored source format means the model's 0% default; authored General means
+        // a numeric axis. An explicitly unlinked custom axis remains authoritative too.
+        for (source_format, axis_format, expected) in [(None, None, "50%"), (Some("General"), None, "0.5"), (Some("General"), Some("0.0%"), "50.0%")] {
+            let source = source_format.map(|f| format!("<c:formatCode>{f}</c:formatCode>")).unwrap_or_default();
+            let axis = axis_format.map(|f| format!(r#"<c:numFmt formatCode="{f}" sourceLinked="0"/>"#)).unwrap_or_default();
+            let mut plot = String::new();
+            let mut axes = String::new();
+            for (name, category, value, pos) in [("Primary", 1, 2, "l"), ("Secondary", 3, 4, "r")] {
+                let index = category / 2;
+                plot.push_str(&format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/><c:ser><c:idx val="{index}"/><c:order val="{index}"/><c:tx><c:v>{name}</c:v></c:tx><c:cat><c:strLit><c:pt idx="0"><c:v>x</c:v></c:pt></c:strLit></c:cat><c:val><c:numRef><c:f>{name}!B2</c:f><c:numCache>{source}<c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:dLbls><c:showVal val="1"/></c:dLbls><c:axId val="{category}"/><c:axId val="{value}"/></c:barChart>"#));
+                axes.push_str(&format!(r#"<c:catAx><c:axId val="{category}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="{value}"/></c:catAx><c:valAx><c:axId val="{value}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="{pos}"/>{axis}<c:crossAx val="{category}"/></c:valAx>"#));
+            }
+            let xml = format!(r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>{plot}{axes}</c:plotArea></c:chart></c:chartSpace>"#);
+            let mut chart = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!(chart.kind, ChartType::PercentColumn);
+            assert_eq!(chart.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
+            for secondary in [false, true] {
+                assert_eq!(chart.axis_label(secondary, 0.5), expected);
+            }
+            assert!(super::chart_xml(&chart).1, "unchanged source still retains its raw part");
+            let data_labels: Vec<_> = chart.series.iter().map(|s| chart.data_label(s, 0.5)).collect();
+            chart.title = Some("Only the title was edited".into());
+            let (written, kept) = super::chart_xml(&chart);
+            assert!(!kept, "the title edit really exercises the writer");
+            let back = crate::chart::read::read_chart_xml(&written).unwrap();
+            for secondary in [false, true] {
+                assert_eq!(back.axis_label(secondary, 0.5), expected, "source={source_format:?}, authored axis={axis_format:?}, secondary={secondary}");
+            }
+            assert_eq!(back.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
+            assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>());
+            assert_eq!(back.series.iter().map(|s| back.data_label(s, 0.5)).collect::<Vec<_>>(), data_labels, "do not change effective data labels while repairing the axis default");
+            let root = crate::xmlx::parse(&written).unwrap();
+            let pa = root.path(&[craft_xml::Local("chart"), craft_xml::Local("plotArea")]).unwrap();
+            for ax in pa.children(craft_xml::Local("valAx")) {
+                let fmt = ax.child(craft_xml::Local("numFmt")).unwrap();
+                assert_eq!(fmt.attr_local("sourceLinked"), Some("0"), "axis intent must not be linked to a generated General cache");
+                assert_eq!(fmt.attr_local("formatCode"), Some(axis_format.or(source_format).unwrap_or("0%")));
+            }
+            // Cache and label synthesis remain unchanged; genuine source General is still
+            // honored by the reader, while an axis default no longer points at synthetic General.
+            for group in pa.children(craft_xml::Local("barChart")) {
+                let cache = group.child(craft_xml::Local("ser")).unwrap().find(craft_xml::Local("numCache")).unwrap();
+                assert_eq!(cache.child(craft_xml::Local("formatCode")).unwrap().deep_text(), "General");
+            }
+        }
+        // The ordinary non-percent default keeps the pre-existing source-linked General.
+        let chart = Chart { series: vec![Series { values: vec![Some(0.5)], ..Default::default() }], ..Default::default() };
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&chart).0).unwrap();
+        assert_eq!(back.axis_label(false, 0.5), "0.5");
+    }
+
 }
 
 #[cfg(test)]

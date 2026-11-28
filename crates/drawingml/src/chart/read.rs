@@ -3548,4 +3548,98 @@ mod tests {
             assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
         }
     }
+
+
+    #[test]
+    fn review_6096417042_unresolved_numeric_formats_follow_the_value_axis_role() {
+        for kind in ["scatterChart", "bubbleChart"] {
+            let size = if kind == "bubbleChart" { r#"<c:bubbleSize><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:bubbleSize>"# } else { "" };
+            let group = format!(r#"<c:{kind}><c:ser><c:tx><c:v>Overlay</c:v></c:tx><c:xVal><c:numLit><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:formatCode>0%</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numLit></c:yVal>{size}</c:ser><c:axId val="10"/><c:axId val="20"/></c:{kind}>"#);
+            let x = review_6095656137_axis("valAx", 10, 20, "b", 12, "");
+            let y = review_6095656137_axis("valAx", 20, 10, "r", 90, r#"<c:numFmt formatCode="0.000" sourceLinked="true"/>"#);
+            let duplicate_y = review_6095656137_axis("valAx", 20, 10, "r", 70, "");
+            let cat = review_6095656137_axis("catAx", 999, 10, "b", 1, "");
+            let anchor = review_6095656137_axis("valAx", 10, 999, "l", 50, r#"<c:numFmt formatCode="0.00" sourceLinked="true"/>"#);
+            // The Y element is ambiguous, but its numeric role still has one real
+            // horizontal reciprocal X partner. The unused vertical X-ID alias must
+            // not redefine that role when it is last in the global ID map.
+            for axes in [format!("{anchor}{cat}{x}{y}{duplicate_y}"), format!("{x}{y}{duplicate_y}{cat}{anchor}")] {
+                let xml = metadata_chart(&format!("{group}{axes}"));
+                let current = read_chart_xml(xml.as_bytes()).unwrap();
+                let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+                let old = read_chart(&root, MAX_CHART_POINTS, 10).unwrap();
+                assert_eq!(current.y_format.as_deref(), Some("0.00"), "{kind}: Y data cannot supply the unused X-ID anchor");
+                assert_eq!(current.axis_label(false, 0.5), "0.50");
+                assert_eq!(current.series[0].values, [Some(0.5)]);
+                assert_eq!(current.series[0].x_values, [Some(30.0)]);
+                assert_eq!(current.series[0].secondary_axis, old.series[0].secondary_axis, "this format fix does not change ambiguous-series classification");
+                assert_eq!((current.y_max, current.y2_max), (old.y_max, old.y2_max));
+                if current.series[0].secondary_axis {
+                    assert_eq!(current.y2_format.as_deref(), Some("0%"), "the unresolved Y numeric role remains eligible");
+                }
+                assert_eq!(old.y_format.as_deref(), Some("0%"));
+                let mut old = old;
+                old.raw = Some(xml);
+                let old: Chart = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+                let (written, kept) = crate::chart::write::chart_xml(&old);
+                assert!(kept, "exact interpretation10 native projection is unchanged");
+                assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+            }
+            // Without a horizontal reciprocal partner there is no new role evidence:
+            // retain the established ID fallback, rather than inventing an owner.
+            let xml = metadata_chart(&format!("{group}{y}{duplicate_y}{cat}{anchor}"));
+            let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+            let current = read_chart_xml(xml.as_bytes()).unwrap();
+            let old = read_chart(&root, MAX_CHART_POINTS, 10).unwrap();
+            assert_eq!(current.y_format, old.y_format);
+            assert_eq!(current.y_format.as_deref(), Some("0%"));
+        }
+        // A category/bar value axis can legitimately be horizontal, and missing
+        // reciprocal crossAx entries retain its ordinary numeric-ID fallback.
+        let group = review_6095656137_group(10, 20, "Horizontal", "0%").replace(r#"barDir val="col""#, r#"barDir val="bar""#);
+        let cat = r#"<c:catAx><c:axId val="10"/><c:axPos val="l"/></c:catAx>"#;
+        let val = r#"<c:valAx><c:axId val="20"/><c:axPos val="b"/><c:numFmt formatCode="0.00" sourceLinked="true"/></c:valAx>"#;
+        let current = read_chart_xml(metadata_chart(&format!("{group}{cat}{val}")).as_bytes()).unwrap();
+        assert_eq!(current.y_format.as_deref(), Some("0%"));
+        assert_eq!(current.axis_label(false, 0.5), "50%");
+    }
+
+    #[test]
+    fn review_6096417042_axis_formats_only_use_retained_series_prefixes() {
+        let ser = |i: usize, code: &str| format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:tx><c:v>S{i}</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache><c:formatCode>{code}</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#);
+        let cat = review_6095656137_axis("catAx", 10, 20, "b", 1, "");
+        let val = review_6095656137_axis("valAx", 20, 10, "l", 1, r#"<c:numFmt formatCode="0.000" sourceLinked="true"/>"#);
+        for usable in [999, 1000] {
+            let sers = (0..1001).map(|i| ser(i, if i == usable { "0%" } else { "" })).collect::<String>();
+            let group = format!(r#"<c:barChart><c:barDir val="col"/>{sers}<c:axId val="10"/><c:axId val="20"/></c:barChart>"#);
+            let xml = metadata_chart(&format!("{group}{cat}{val}"));
+            let current = read_chart_xml(xml.as_bytes()).unwrap();
+            let expected = if usable == 999 { "0%" } else { "0.000" };
+            assert_eq!(current.y_format.as_deref(), Some(expected), "usable source position{}", usable + 1);
+            assert_eq!(current.series.len(), 1000);
+            assert_eq!(current.series.last().unwrap().name, "S999");
+            assert!(current.series.iter().all(|s| s.values == [Some(0.5)] && !s.secondary_axis));
+            // Exhausting one retained prefix must not stop the search at the group
+            // boundary: a retained cache in a later group on the same axis is valid.
+            let later = review_6095656137_group(10, 20, "Later", "0.00");
+            let later = read_chart_xml(metadata_chart(&format!("{group}{later}{cat}{val}")).as_bytes()).unwrap();
+            assert_eq!(later.y_format.as_deref(), Some(if usable == 999 { "0%" } else { "0.00" }));
+            assert_eq!(later.series.len(), 1001);
+            assert_eq!(later.series.last().unwrap().name, "Later");
+            // The published decoder chose the out-of-prefix source format. Keep
+            // that historical model and its raw native-save identity exactly.
+            let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+            for version in 0..=10 {
+                let mut old = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
+                if version == 10 {
+                    assert_eq!(old.y_format.as_deref(), Some("0%"));
+                }
+                old.raw = Some(xml.clone());
+                let old: Chart = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+                let (written, kept) = crate::chart::write::chart_xml(&old);
+                assert!(kept, "old{version} native model must retain its raw chart");
+                assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+            }
+        }
+    }
 }
