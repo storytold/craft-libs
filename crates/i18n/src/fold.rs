@@ -226,6 +226,19 @@ fn prefix_links(n: &[u8]) -> Vec<usize> {
     links
 }
 
+// Each step of `Folded::matches` through the haystack on this thread: one per byte read and one
+// per failure link followed.
+#[cfg(test)]
+std::thread_local! {
+    static SEARCH_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn count_search_step() {
+    #[cfg(test)]
+    SEARCH_STEPS.with(|steps| steps.set(steps.get().saturating_add(1)));
+}
+
 /// Folded text and where each part came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Folded {
@@ -296,7 +309,9 @@ impl Folded {
                 return Some(0..0);
             }
             while let Some(&b) = hay.get(at) {
+                count_search_step();
                 while k > 0 && n[k] != b {
+                    count_search_step();
                     k = links[k - 1];
                 }
                 if n[k] == b {
@@ -330,10 +345,15 @@ mod tests {
         let haystack = format!("{}a", "a\u{301}".repeat(100_000));
         let needle = format!("{}a", "a\u{301}".repeat(50_000));
         let folded = f.fold(&haystack);
-        let start = std::time::Instant::now();
-        let found = folded.find(&f.fold(&needle));
+        let folded_needle = f.fold(&needle);
+        SEARCH_STEPS.with(|steps| steps.set(0));
+        let found = folded.find(&folded_needle);
         assert_eq!(found, Some(haystack.len() - needle.len()..haystack.len()));
-        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+        // One pass reads each haystack byte once and follows at most as many links as it read
+        // bytes; searching again from each turned-down occurrence rereads the needle each time.
+        let steps = SEARCH_STEPS.with(std::cell::Cell::get);
+        let bound = 2 * folded.as_str().len();
+        assert!(steps <= bound, "{steps} search steps for a {}-byte haystack", folded.as_str().len());
     }
     #[test]
     fn source_ranges_round_trip() {
