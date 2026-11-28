@@ -219,6 +219,13 @@ fn viewport_size(e: &BytesStart<'_>) -> Option<(f64, f64)> {
     };
     Some((px(b"width")?, px(b"height")?))
 }
+/// Whether a radius's unit is one SVG defines (`%` is handled apart). `em` and `ex` count,
+/// although `length` reads them as `px`.
+fn radius_unit_is_known(raw: &str) -> bool {
+    let s = raw.trim();
+    let cut = s.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'))).unwrap_or(s.len());
+    matches!(s[cut..].trim(), "" | "px" | "mm" | "cm" | "in" | "pt" | "pc" | "em" | "ex")
+}
 /// A `rect`'s corner radii, and whether a percentage radius could not be resolved for want of
 /// a viewport, in which case the corners stay square. A percentage is of the root viewport's
 /// width (`rx`) or height (`ry`), also inside a nested `svg`.
@@ -228,14 +235,18 @@ fn corner_radii(e: &BytesStart<'_>, w: f64, h: f64, viewport: Option<(f64, f64)>
         let raw = attr(e, name)?;
         let r = match raw.trim().strip_suffix('%') {
             Some(pct) => {
-                let pct = pct.trim().parse::<f64>().ok().filter(|p| p.is_finite())?;
+                // A negative percentage is invalid like any negative radius, whether or not
+                // there is a viewport to resolve it against.
+                let pct = pct.trim().parse::<f64>().ok().filter(|p| p.is_finite() && *p >= 0.)?;
                 let Some(of) = of else {
                     unresolved = true;
                     return None;
                 };
                 pct / 100. * of
             }
-            None => length(&raw)?,
+            // An unknown unit makes the radius invalid; `length` would read its number.
+            None if radius_unit_is_known(&raw) => length(&raw)?,
+            None => return None,
         };
         (r >= 0.).then_some(r)
     };
@@ -503,6 +514,11 @@ mod tests {
         assert_eq!(radii(r#"<rect width="40" height="20" rx="30" ry="30"/>"#), (20., 10.));
         // A percentage is of the viewport's width (rx) or height (ry).
         assert_eq!(radii(r#"<rect width="40" height="20" rx="5%" ry="10%"/>"#), (10., 10.));
+        // A negative percentage, or an unknown unit, is invalid and takes the other radius.
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="3oops" ry="5"/>"#), (5., 5.));
+        let d = import(r#"<svg><rect width="40" height="20" rx="-5%" ry="2"/></svg>"#).unwrap();
+        assert!(matches!(d.shapes[0].primitive, Primitive::Rect { rx: 2., ry: 2., .. }));
+        assert_eq!(d.skipped.get(&Skipped::RoundedCorners), None);
         // Either radius 0 means square corners.
         assert_eq!(radii(r#"<rect width="40" height="20" rx="0" ry="5"/>"#), (0., 0.));
         assert_eq!(radii(r#"<rect width="40" height="20" rx="1" ry="0"/>"#), (0., 0.));
