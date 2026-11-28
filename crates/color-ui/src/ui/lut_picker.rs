@@ -84,6 +84,11 @@ pub struct LutPickerOutput {
     /// app embeds the LUT and sets the choice to [`LutChoice::Loaded`]. The choice itself does not
     /// change until the app does. A cancelled picker reports nothing.
     pub loaded: Option<Result<LutFile, LutError>>,
+    /// The picked file's bytes as they were read, on the pass [`loaded`](Self::loaded) answers,
+    /// so the app can hand its own reader the file itself rather than a re-written copy of the
+    /// parse (which loses lines the parse folds, `LUT_3D_INPUT_RANGE` into the domain). `None`
+    /// when the file could not be read.
+    pub loaded_bytes: Option<Arc<Vec<u8>>>,
 }
 
 impl Outcome for LutPickerOutput {
@@ -144,13 +149,13 @@ struct LutState {
     load: Load,
 }
 
-/// A parsed file as a job result.
+/// A parsed file as a job result, with the bytes it was parsed from when they could be read.
 #[derive(Clone)]
-struct Parsed(Arc<Result<LutFile, LutError>>);
+struct Parsed(Arc<Result<LutFile, LutError>>, Option<Arc<Vec<u8>>>);
 
 impl Default for Parsed {
     fn default() -> Self {
-        Parsed(Arc::new(Err(LutError(String::new()))))
+        Parsed(Arc::new(Err(LutError(String::new()))), None)
     }
 }
 
@@ -177,13 +182,14 @@ pub struct LutPicker<'a> {
     #[prop(into)]
     folder: Option<PathBuf>,
     loaded: Option<Result<LutFile, LutError>>,
+    loaded_bytes: Option<Arc<Vec<u8>>>,
     load_asked: bool,
 }
 
 impl<'a> LutPicker<'a> {
     /// A picker over `value`.
     pub fn new(value: Bind<'a, LutChoice>) -> Self {
-        LutPicker { common: Common::new(), value, folder: None, loaded: None, load_asked: false }
+        LutPicker { common: Common::new(), value, folder: None, loaded: None, loaded_bytes: None, load_asked: false }
     }
 
     fn entries(words: &LutWords, current: Option<&LutChoice>, files: &FolderFiles) -> Vec<Entry<Row>> {
@@ -292,24 +298,24 @@ impl Component for LutPicker<'_> {
                     let reader = Arc::clone(&host);
                     let done = match cx.pending(("lut-load", id.0), move || {
                         Job::new(move |_, _| {
-                            let parsed = match source {
-                                Source::Path(path) => reader
-                                    .files()
-                                    .read(&path)
-                                    .map_err(|e| LutError(e.to_string()))
-                                    .and_then(|bytes| craft_cms::lutfile::parse(&file_name(&path), &bytes)),
-                                Source::Contents(name, bytes) => craft_cms::lutfile::parse(&name, &bytes),
+                            let (name, bytes) = match source {
+                                Source::Path(path) => {
+                                    (file_name(&path), reader.files().read(&path).map(Arc::new).map_err(|e| LutError(e.to_string())))
+                                }
+                                Source::Contents(name, bytes) => (name, Ok(bytes)),
                             };
-                            Ok::<_, ()>(Parsed(Arc::new(parsed)))
+                            let parsed = bytes.as_ref().map_err(Clone::clone).and_then(|bytes| craft_cms::lutfile::parse(&name, bytes));
+                            Ok::<_, ()>(Parsed(Arc::new(parsed), bytes.ok()))
                         })
                     }) {
-                        Pending::Ready(parsed) => Some((*parsed.0).clone()),
-                        Pending::Failed(()) | Pending::Lost => Some(Err(LutError(String::new()))),
+                        Pending::Ready(parsed) => Some(((*parsed.0).clone(), parsed.1.clone())),
+                        Pending::Failed(()) | Pending::Lost => Some((Err(LutError(String::new())), None)),
                         _ => None,
                     };
-                    if let Some(result) = done {
+                    if let Some((result, bytes)) = done {
                         state.load = Load::Idle;
                         self.loaded = Some(result);
+                        self.loaded_bytes = bytes;
                     }
                 }
             }
@@ -353,7 +359,7 @@ impl Component for LutPicker<'_> {
             let request = PickRequest::open(PICK_PURPOSE).title(title).filter("3D LUT", &["cube", "3dl", "look"]);
             cx.memory::<LutState>().load = Load::Picking(host.files().pick(request));
         }
-        LutPickerOutput { edit: cx.edit_response(), loaded: self.loaded }
+        LutPickerOutput { edit: cx.edit_response(), loaded: self.loaded, loaded_bytes: self.loaded_bytes }
     }
 }
 
