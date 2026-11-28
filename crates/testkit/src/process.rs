@@ -563,6 +563,48 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "started");
     }
 
+    /// On Windows, a descendant still running when a successful run returns ends when `run` closes
+    /// the job.
+    #[cfg(windows)]
+    #[test]
+    fn a_successful_run_ends_the_descendants_left_in_the_job() {
+        use std::path::PathBuf;
+
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let directory = std::env::temp_dir().join(format!("craft-testkit-process-windows-job-close-{}-{nanos:x}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let ready = directory.join("ready");
+        let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        // The child starts the descendant, waits until it has written the ready file, prints its
+        // process id and exits while the descendant sleeps.
+        let script = r#"
+$descendant = @'
+[IO.File]::WriteAllText($env:CRAFT_TEST_PROCESS_READY, 'ready')
+Start-Sleep -Seconds 1000
+'@
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($descendant))
+$started = Start-Process -FilePath $env:CRAFT_TEST_PROCESS_POWERSHELL -ArgumentList '-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$encoded -WindowStyle Hidden -PassThru
+while (-not [IO.File]::Exists($env:CRAFT_TEST_PROCESS_READY)) { [Threading.Thread]::Yield() | Out-Null }
+$started.Id
+"#;
+        let mut command = Command::new(&powershell);
+        command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]);
+        command.env("CRAFT_TEST_PROCESS_READY", &ready);
+        command.env("CRAFT_TEST_PROCESS_POWERSHELL", &powershell);
+        let got = run(command, LIMITS, &mut Observed::default());
+        let _ = std::fs::remove_dir_all(&directory);
+        let out = got.unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+        // The process's exit, or its absence, ends the wait. A descendant still running after 60
+        // seconds is stopped here and fails the test.
+        let check = format!(
+            "$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; if ($null -eq $p -or $p.WaitForExit(60000)) {{ exit 0 }}; Stop-Process -Id {pid} -Force; exit 1"
+        );
+        let gone = Command::new(&powershell).args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &check]).status().unwrap();
+        assert!(gone.success(), "descendant {pid} was still running after the successful run returned");
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_descendants_release_the_output_pipes_after_abort() {
