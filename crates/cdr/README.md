@@ -131,7 +131,7 @@ by their chunk ids, opens it: the header gives where the master index starts, th
 layer and group records give their instruction counts. A page's record also gives where its
 end-page instruction starts, and a group's record gives where the instruction after its end-group
 instruction starts and the edges of its curves. The record of a page with a size holds the edges of its curves, or
-of the page when it has none. The header's bounds and instruction count are not written.
+of the page when it has none. The header repeats the first page's edges and instruction count.
 `PROVENANCE.md`'s "Written fields" table lists every field the `.cmx` writer sets.
 
 ## Writing

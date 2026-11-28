@@ -1078,6 +1078,35 @@ fn the_index_and_the_records_give_where_everything_is() {
     assert_eq!(groups, [(0, 3), (1, 7)]);
 }
 
+#[test]
+fn the_header_repeats_the_first_pages_edges_and_instruction_count() {
+    let plain = |x: f64| Object::Shape(Box::new(Shape::new(square(x, 0.0, 10.0), Matrix::IDENTITY, Some(Color::Gray(0.5)), None)));
+    let pages = vec![
+        Page { size: Some((200.0, 100.0)), layers: vec![layer("Front", vec![plain(0.0), plain(20.0)]), layer("Back", vec![plain(5.0)])] },
+        Page { size: Some((300.0, 100.0)), layers: vec![layer("Only", vec![plain(1.0)])] },
+    ];
+    let b = write_cmx(&drawing(pages)).unwrap().bytes;
+    let cont = 12 + 8;
+    let chunk = page_index(&b)[0][0];
+    let page = chunk + 8;
+    // Begin page's field 1: the page number, the flags, the edges, the end offset, the layer count
+    // and the instruction count.
+    let fields = field_starts(&b, page + 4, page + instruction_size(&b, page, page + u32_at(&b, chunk + 4)));
+    assert_eq!(fields[0].0, 1);
+    let f1 = fields[0].1;
+    assert_eq!(&b[cont + 96..cont + 112], &b[f1 + 6..f1 + 22]);
+    // The curves of the first page reach from 0 to 30 pt across and 0 to 10 pt down.
+    let edges: Vec<i32> = (0..4).map(|i| i32::from_le_bytes(b[cont + 96 + 4 * i..cont + 100 + 4 * i].try_into().unwrap())).collect();
+    let unit = |pt: f64| (pt * 0.0254 / 72.0 / 1e-7).round() as i32;
+    assert_eq!(edges, [0, unit(10.0), unit(30.0), 0]);
+    // Begin and end page, two begin and end layers and three curves.
+    assert_eq!(u32_at(&b, cont + 112), 9);
+    assert_eq!(u32_at(&b, f1 + 28), 9);
+    // A drawing without pages leaves them 0.
+    let b = write_cmx(&drawing(Vec::new())).unwrap().bytes;
+    assert!(b[cont + 96..cont + 116].iter().all(|v| *v == 0));
+}
+
 /// The page index of a written file of two pages, each entry's page chunk, layer table, picture
 /// and reference list, checked through the header and the master index.
 fn page_index(b: &[u8]) -> Vec<[usize; 4]> {

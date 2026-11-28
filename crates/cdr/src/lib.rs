@@ -153,8 +153,8 @@ pub fn read_cmx(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
 /// page, layer and group records give their instruction counts. A page's record also gives where
 /// its end-page instruction starts, and a group's record gives where the instruction after its
 /// end-group instruction starts and the edges of its curves. The record of a page with a size holds the edges of
-/// its curves, or of the page when it has none. The header's bounds and instruction count are not
-/// written.
+/// its curves, or of the page when it has none. The header repeats the first page's edges and
+/// instruction count.
 pub fn write_cmx(drawing: &Drawing, limits: Limits) -> Result<Written, Error> {
     cmx_write::write(drawing, limits)
 }

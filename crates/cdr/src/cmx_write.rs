@@ -131,20 +131,20 @@ pub fn write(drawing: &Drawing, limits: crate::Limits) -> Result<Written, Error>
         Ok(())
     };
     // The header's index offset is set once the index is placed.
-    add(chunk(b"cont", &cont(0))?)?;
+    add(chunk(b"cont", &cont(0, PageHead::default()))?)?;
     // Each page chunk and its reference list, with where they start in the file and the start and
     // name of each of the page's layers.
     let mut pages = Vec::new();
     let mut page = |w: &mut Writer, n: usize, size: Option<(f64, f64)>, layers: &[Layer]| -> Result<(), Error> {
         let at = w.file_bytes;
-        let (c, written) = w.page(n, size, layers)?;
+        let (c, written, head) = w.page(n, size, layers)?;
         add(c)?;
         let refs = w.file_bytes;
         let r = chunk(b"rlst", &reference_list(written.len()))?;
         w.check_bytes(r.len())?;
         w.file_bytes += r.len();
         add(r)?;
-        pages.push(PageAt { at, refs, layers: written });
+        pages.push(PageAt { at, refs, layers: written, head });
         Ok(())
     };
     for (n, p) in drawing.pages.iter().enumerate() {
@@ -181,7 +181,7 @@ pub fn write(drawing: &Drawing, limits: crate::Limits) -> Result<Written, Error>
     if total > w.limits.input {
         return Err(Error::Limit("input size"));
     }
-    children[0] = chunk(b"cont", &cont(ixmr))?;
+    children[0] = chunk(b"cont", &cont(ixmr, pages.first().map(|p| p.head).unwrap_or_default()))?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(total).map_err(|_| Error::Limit("file size"))?;
     bytes.extend(b"RIFF");
@@ -222,8 +222,9 @@ fn chunk(id: &[u8; 4], body: &[u8]) -> Result<Vec<u8>, Error> {
 /// The header (R54): the coordinate size digit `4` at byte 52 and the unit in meters at bytes 64
 /// to 72. Bytes 48 and 54 hold the digit `2`, as in the sample files. Bytes 84 to 96 hold the file
 /// offset of the master index `ixmr`, then 0xFFFFFFFF for the information list and for the
-/// picture of the drawing, which the file does not hold (R77); the rest are zeros.
-fn cont(ixmr: u32) -> Vec<u8> {
+/// picture of the drawing, which the file does not hold (R77). Bytes 96 to 116 hold the edges and
+/// the instruction count of `first`, the first page's begin-page record (R77); the rest are zeros.
+fn cont(ixmr: u32, first: PageHead) -> Vec<u8> {
     let mut c = vec![0u8; 180];
     c[48] = b'2';
     c[52] = b'4';
@@ -231,7 +232,19 @@ fn cont(ixmr: u32) -> Vec<u8> {
     c[64..72].copy_from_slice(&UNIT_METERS.to_le_bytes());
     c[84..88].copy_from_slice(&ixmr.to_le_bytes());
     c[88..96].fill(0xFF);
+    for (i, v) in first.edges.iter().enumerate() {
+        c[96 + 4 * i..100 + 4 * i].copy_from_slice(&v.to_le_bytes());
+    }
+    c[112..116].copy_from_slice(&first.instructions.to_le_bytes());
     c
+}
+
+/// What a page's begin-page record holds that the header repeats: its left, top, right and bottom
+/// edges and its instruction count, begin and end page included.
+#[derive(Clone, Copy, Default)]
+struct PageHead {
+    edges: [i32; 4],
+    instructions: u32,
 }
 
 /// Where a layer's begin-layer instruction starts in the file, and the layer's 8-bit name.
@@ -243,6 +256,8 @@ struct PageAt {
     /// The page's reference list `rlst`.
     refs: usize,
     layers: Vec<LayerAt>,
+    /// What the header repeats of its begin-page record.
+    head: PageHead,
 }
 
 /// A page's reference list (R77): a u16 count of its layers, then for each layer from 1 the u16
@@ -733,9 +748,10 @@ impl Writer {
     }
 
     /// A `page` chunk: begin page `n` (from 0), its shown layers back to front, end the page (R60),
-    /// with the file offset of each layer's begin-layer instruction and the layer's 8-bit name.
-    /// The chunk starts at the file offset [`Writer::file_bytes`] gives.
-    fn page(&mut self, n: usize, size: Option<(f64, f64)>, layers: &[Layer]) -> Result<(Vec<u8>, Vec<LayerAt>), Error> {
+    /// with the file offset of each layer's begin-layer instruction and the layer's 8-bit name, and
+    /// what the header repeats of the begin-page record. The chunk starts at the file offset
+    /// [`Writer::file_bytes`] gives.
+    fn page(&mut self, n: usize, size: Option<(f64, f64)>, layers: &[Layer]) -> Result<(Vec<u8>, Vec<LayerAt>, PageHead), Error> {
         let mut out = Vec::new();
         self.bounds = None;
         self.instructions = 1;
@@ -803,7 +819,7 @@ impl Writer {
         self.check_bytes(c.len())?;
         let layers = starts.into_iter().map(|(at, name)| (base.saturating_add(at), name)).collect();
         self.file_bytes += c.len();
-        Ok((c, layers))
+        Ok((c, layers, PageHead { edges: page_edges(size, bounds)?, instructions: tail.instructions }))
     }
 
     /// An [`Error::Limit`] when the file would be longer than the input size of the limits with
@@ -1164,29 +1180,15 @@ fn begin_page(n: usize, size: Option<(f64, f64)>, bounds: Option<[i32; 4]>, tail
     let mut d = number.to_le_bytes().to_vec();
     d.extend(0u32.to_le_bytes());
     let mut list = Vec::new();
-    let mut size_field = None;
-    let mut edges = [0i32; 4];
-    if let Some((w, h)) = size {
-        // A negative or NaN side counts as 0.
-        let (wu, hu) = (width_units(w)?, width_units(h)?);
-        // A side that rounds to nothing would make the reader drop the page's whole size.
-        if wu == 0 || hu == 0 {
-            return Err(Error::Limit("page size"));
+    let edges = page_edges(size, bounds)?;
+    let size_field = match size {
+        Some((w, h)) => {
+            let mut s = width_units(w)?.to_le_bytes().to_vec();
+            s.extend(width_units(h)?.to_le_bytes());
+            Some(s)
         }
-        edges = match bounds {
-            Some([x0, y0, x1, y1]) => [x0, y1, x1, y0],
-            None => {
-                // The page around its center; an odd size keeps its extra unit on the left and
-                // bottom, where the edge reaches -2^31.
-                let edge = |v: i64| i32::try_from(v).map_err(|_| Error::Limit("page size"));
-                let (w, h) = (i64::from(wu), i64::from(hu));
-                [edge(w / 2 - w)?, edge(h / 2)?, edge(w / 2)?, edge(h / 2 - h)?]
-            }
-        };
-        let mut s = wu.to_le_bytes().to_vec();
-        s.extend(hu.to_le_bytes());
-        size_field = Some(s);
-    }
+        None => None,
+    };
     for v in edges {
         d.extend(v.to_le_bytes());
     }
@@ -1198,6 +1200,28 @@ fn begin_page(n: usize, size: Option<(f64, f64)>, bounds: Option<[i32; 4]>, tail
         list.push(field(4, &s).ok_or(Error::Limit("page size"))?);
     }
     Ok(instr(BEGIN_PAGE, &fields(&list)))
+}
+
+/// The left, top, right and bottom edges begin page holds for a page of `size` whose art reaches
+/// `bounds`, as [`begin_page`] describes. A page side that rounds to 0 is an [`Error::Limit`].
+fn page_edges(size: Option<(f64, f64)>, bounds: Option<[i32; 4]>) -> Result<[i32; 4], Error> {
+    let Some((w, h)) = size else { return Ok([0; 4]) };
+    // A negative or NaN side counts as 0.
+    let (wu, hu) = (width_units(w)?, width_units(h)?);
+    // A side that rounds to nothing would make the reader drop the page's whole size.
+    if wu == 0 || hu == 0 {
+        return Err(Error::Limit("page size"));
+    }
+    Ok(match bounds {
+        Some([x0, y0, x1, y1]) => [x0, y1, x1, y0],
+        None => {
+            // The page around its center; an odd size keeps its extra unit on the left and
+            // bottom, where the edge reaches -2^31.
+            let edge = |v: i64| i32::try_from(v).map_err(|_| Error::Limit("page size"));
+            let (w, h) = (i64::from(wu), i64::from(hu));
+            [edge(w / 2 - w)?, edge(h / 2)?, edge(w / 2)?, edge(h / 2 - h)?]
+        }
+    })
 }
 
 /// `c` as a Windows-1252 byte, or `?` when the code page has no byte for it.
