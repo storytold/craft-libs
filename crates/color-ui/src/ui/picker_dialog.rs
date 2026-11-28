@@ -21,7 +21,7 @@ use craft_ui::contract::{
     Bind, CanvasGesture, CollectionEvent, Entry, FooterSlot, Gap, Sampler as _, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft_ui::dialog::{
-    ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
+    Alert, ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
 use craft_ui::layout::{CellAlign, GridFit};
 use craft_ui::layout_components::{Grid, Stack};
@@ -35,13 +35,14 @@ use craft_ui::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::tabs::{Tab, TabKind, TabStrip};
+use craft_ui::text::TextWords;
 use egui::{Context, Id, Ui};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::picker::TWO_COLUMNS;
-use super::{ColorPicker, ColorPickerLayout, ColorWarning, Gamut, PickedColor, ScreenPickGesture, SwatchPalette};
+use super::{ColorPicker, ColorPickerLayout, ColorWarning, Gamut, HeldInput, PickedColor, ScreenPickGesture, SwatchPalette};
 use crate::{AreaMode, CmykModel, not_web_safe, web_safe};
 
 type StandardColors = (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>);
@@ -250,6 +251,8 @@ pub struct ColorPickerDialog {
     memory: ColorPickerMemory,
     pending_swatch: Option<PickedColor>,
     pending_screen: Option<ScreenPickGesture>,
+    /// Input the picker held to its range in the last pass, with the title and scope that word its alert.
+    pending_alert: Option<(Label, HeldInput, Env)>,
     requests: HostRequests,
     sampling: bool,
     sample: Option<Srgba>,
@@ -406,6 +409,7 @@ impl ColorPickerDialog {
             memory: ColorPickerMemory::default(),
             pending_swatch: None,
             pending_screen: None,
+            pending_alert: None,
             requests: HostRequests::new(),
             sampling: false,
             sample: None,
@@ -583,6 +587,41 @@ impl ColorPickerDialog {
         self.pending_screen.take()
     }
 
+    /// The alert for input the picker held to its range and replaced with the closest value, once, titled like the
+    /// dialog: "A number between 000000 and ffffff is required. Closest value inserted." for the hex field, "An integer
+    /// between 0 and 255 is required. Closest value inserted." for a channel field (its range, without the unit). The
+    /// host opens it over the picker.
+    pub fn take_range_alert(&mut self) -> Option<Alert<'static>> {
+        let (title, message) = self.range_alert_words()?;
+        self.pending_alert = None;
+        Some(Alert::new(title, message))
+    }
+
+    /// The title and message of the range alert the dialog holds.
+    fn range_alert_words(&self) -> Option<(Label, Label)> {
+        let (title, held, env) = self.pending_alert.as_ref()?;
+        let words = env.words::<TextWords>();
+        let message = match held {
+            HeldInput::Hex => Label::from(words.range_number.fill(&[("low", "000000"), ("high", "ffffff")])),
+            HeldInput::Number(alert) => {
+                let units = env.units();
+                let low = units.number(*alert.range.start(), alert.decimals.clone());
+                let high = units.number(*alert.range.end(), alert.decimals.clone());
+                let sentence = if alert.whole { &words.range_integer } else { &words.range_number };
+                Label::from(sentence.fill(&[("low", low.as_str()), ("high", high.as_str())]))
+            }
+        };
+        Some((title.clone(), message))
+    }
+
+    /// The held alert's title and message as text, taken once, for the tests.
+    #[cfg(test)]
+    pub(crate) fn take_alert_text(&mut self) -> Option<(String, String)> {
+        let (title, message) = self.range_alert_words()?;
+        self.pending_alert = None;
+        Some((title.as_str().to_owned(), message.as_str().to_owned()))
+    }
+
     /// What the dialog asks of the host (the canvas eyedropper) and the host's answers.
     pub fn requests(&mut self) -> &mut HostRequests {
         &mut self.requests
@@ -754,7 +793,20 @@ impl StackDialog for ColorPickerDialog {
         // Word's Colors dialog.
         let place = if full { ButtonPlace::Body } else { ButtonPlace::Side };
         let Self {
-            current, opening, compare, memory, screen_busy, sample, pending_screen, open, layout, standard, swatches: view, working_rgb, ..
+            current,
+            opening,
+            compare,
+            memory,
+            screen_busy,
+            sample,
+            pending_screen,
+            pending_alert,
+            open,
+            layout,
+            standard,
+            swatches: view,
+            working_rgb,
+            ..
         } = self;
         let working_rgb = working_rgb.as_deref().map(|model| model as &dyn ColorModel);
         let mut held: Mixed<PickedColor> = current.map_or(Mixed::Mixed, Mixed::Same);
@@ -815,8 +867,12 @@ impl StackDialog for ColorPickerDialog {
                 if let Some(compare) = compare_with {
                     picker = picker.compare(compare);
                 }
-                if let Some(gesture) = picker.show(ui).screen_pick {
+                let out = picker.show(ui);
+                if let Some(gesture) = out.screen_pick {
                     *pending_screen = Some(gesture);
+                }
+                if let Some(held) = out.held {
+                    *pending_alert = Some((title.clone(), held, Env::of(ui)));
                 }
             });
         self.current = held.same().copied();

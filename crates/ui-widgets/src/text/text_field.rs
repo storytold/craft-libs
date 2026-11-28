@@ -93,6 +93,9 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// length (`size.length.field`).
     #[style_key]
     width_chars: Option<u16>,
+    /// Where a commit whose parse held the typed number to the codec's range writes that number
+    /// ([`held_into`](Self::held_into)).
+    held: Option<&'a mut Option<f64>>,
 }
 
 impl<'a> TextField<'a, PlainText> {
@@ -142,8 +145,18 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             caret: None,
             max_lines: None,
             width_chars: None,
+            held: None,
         }
         .label(label)
+    }
+
+    /// Writes into `out`, in the pass the draft commits, the number typed when the codec held it to its range
+    /// ([`ParseNote::held`](craft_behavior::ParseNote::held)): the host shows the reference's "Closest value inserted"
+    /// alert. `out` is left alone in every other pass.
+    #[must_use]
+    pub fn held_into(mut self, out: &'a mut Option<f64>) -> Self {
+        self.held = Some(out);
+        self
     }
 
     /// Shown while the text is empty.
@@ -514,6 +527,11 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     /// pass was moved in the field, as one the app wrote differs before it.
     fn finish(mut self, mut cx: Cx<'_, Self>) -> EditResponse<C::Value> {
         let response = cx.edit_response();
+        if let Some(out) = self.held.as_mut()
+            && let Some(held) = cx.text(&text_part::<C::Value>()).and_then(|outcome| outcome.committed).and_then(|note| note.held)
+        {
+            **out = Some(held);
+        }
         if let (Some(bind), Some(at)) = (self.caret.as_mut(), response.caret) {
             let before = bind.reborrow().read(&mut cx);
             if before != Some(Mixed::Same(at)) {

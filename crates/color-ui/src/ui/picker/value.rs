@@ -32,6 +32,18 @@ impl Rules<'_> {
     }
 }
 
+/// `values` with every hue at the end of a full turn (360° in a 0° to 360° channel) set to 0°.
+fn hue_wrapped(values: &ModelValues, model: &dyn ColorModel) -> ModelValues {
+    let mut values = *values;
+    for (channel, value) in model.channels().iter().zip(values.values.iter_mut()) {
+        let full_turn = channel.unit == "°" && channel.min == 0.0 && channel.max == 360.0;
+        if full_turn && *value >= channel.max {
+            *value = channel.min;
+        }
+    }
+    values
+}
+
 impl PickedColor {
     /// The colour in `model`: the kept values while they are of `model` and still give the colour's 8-bit sRGB (greys
     /// keep their hue, black its hue and saturation, a typed Lab colour outside sRGB its values), otherwise converted.
@@ -43,8 +55,10 @@ impl PickedColor {
     }
 
     /// The colour `values` of `model` give, with this alpha, through the rules. The values stay with the colour while
-    /// the rules left it alone.
+    /// the rules left it alone. A hue at the top of its range (360°) is kept as 0°, the same red, as the reference
+    /// image editor's Color Picker shows it, typed or at the slider's top end.
     pub(super) fn with_values(&self, values: &ModelValues, model: &dyn ColorModel, rules: &Rules<'_>) -> PickedColor {
+        let values = &hue_wrapped(values, model);
         let made = model.to_srgb(&values.values).with_alpha(self.color.a);
         let color = rules.apply(made);
         PickedColor { color, model: color.same_rgb8(made).then_some(*values) }
