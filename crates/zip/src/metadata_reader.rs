@@ -29,6 +29,12 @@ impl Indexing {
     }
 }
 
+impl<R> MetadataReader<R> {
+    pub(crate) fn into_inner(self) -> R {
+        self.inner
+    }
+}
+
 impl<R: Read + Seek> MetadataReader<R> {
     /// Limit indexing to the last `metadata_bytes` bytes and at most twice that many bytes read.
     pub fn new(mut inner: R, metadata_bytes: u64) -> io::Result<(Self, Indexing)> {

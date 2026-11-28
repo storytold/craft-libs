@@ -68,7 +68,7 @@ does), so the decoder doesn't need to know.
   rayon task directly into the output planes.
 - Robustness: every size field is validated before allocation, codewords longer than 56 bits are
   rejected, and arithmetic is overflow-safe. Mutated streams return `Err`, never panic (see
-  [`tests/prores/fuzz_hostile.rs`](../../tests/prores/fuzz_hostile.rs)).
+  [`tests/it/prores/fuzz_hostile.rs`](../../tests/it/prores/fuzz_hostile.rs)).
 
 ## Encoder
 
@@ -101,7 +101,7 @@ Every alpha difference is followed by a run code, including a final singleton
 (RDD 36:2022 §5.3.3, Tables 12–14). Omitting the final run produces a truncated
 alpha payload: FFmpeg may accept it, while macOS native HD decoding fails with AVFoundation `-11821` / underlying `-12137`.
 
-The encoder tests check exact singleton codewords at 8 and 16 bits, run-length
+The encoder tests read the alpha runs back with a spec reader: final singletons at 8 and 16 bits, run-length
 boundaries through 2048 and split runs, final-value bit alignments, and complete
 encoded slices for both profiles and all four slice widths.
 

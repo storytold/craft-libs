@@ -100,7 +100,7 @@ impl Fill {
             Fill::Gradient(g) => g.stops.get(g.stops.len() / 2).map_or(Rgb::BLACK, |s| s.color),
         }
     }
-    /// Finite, in range: at most [`MAX_STOPS`] stops, in order, positions and transparencies
+    /// Finite, in range: at most `MAX_STOPS` stops, in order, positions and transparencies
     /// 0–100%, angles 0–360°. A gradient with one stop is that stop's solid colour; with none,
     /// no fill (`None`).
     pub fn sanitized(&self) -> Option<Fill> {

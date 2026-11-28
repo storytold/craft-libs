@@ -1,8 +1,6 @@
 //! Generic region segment parsing and decoding (7.4.6, 6.2).
 
-use super::{
-    AdaptiveTemplatePixel, RegionBitmap, RegionSegmentInfo, Template, parse_region_segment_info,
-};
+use super::{AdaptiveTemplatePixel, RegionBitmap, RegionSegmentInfo, Template, parse_region_segment_info};
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
 use crate::bitmap::{Bitmap, WORD_BITS, WORD_SHIFT, Word};
@@ -10,31 +8,16 @@ use crate::error::{ParseError, RegionError, Result, TemplateError, bail};
 use crate::reader::Reader;
 
 /// Generic region decoding procedure (6.2).
-pub(crate) fn decode(
-    header: &GenericRegionHeader<'_>,
-    ctx: &mut ScratchBuffers,
-) -> Result<RegionBitmap> {
-    let mut bitmap = Bitmap::new_with(
-        header.region_info.width,
-        header.region_info.height,
-        header.region_info.x_location,
-        header.region_info.y_location,
-        false,
-    )?;
+pub(crate) fn decode(header: &GenericRegionHeader<'_>, ctx: &mut ScratchBuffers) -> Result<RegionBitmap> {
+    let mut bitmap =
+        Bitmap::new_with(header.region_info.width, header.region_info.height, header.region_info.x_location, header.region_info.y_location, false)?;
 
     decode_into(header, &mut bitmap, ctx)?;
 
-    Ok(RegionBitmap {
-        bitmap,
-        combination_operator: header.region_info.combination_operator,
-    })
+    Ok(RegionBitmap { bitmap, combination_operator: header.region_info.combination_operator })
 }
 
-pub(crate) fn decode_into(
-    header: &GenericRegionHeader<'_>,
-    bitmap: &mut Bitmap,
-    ctx: &mut ScratchBuffers,
-) -> Result<()> {
+pub(crate) fn decode_into(header: &GenericRegionHeader<'_>, bitmap: &mut Bitmap, ctx: &mut ScratchBuffers) -> Result<()> {
     let data = header.data;
 
     if header.mmr {
@@ -43,20 +26,10 @@ pub(crate) fn decode_into(
     } else {
         let mut decoder = ArithmeticDecoder::new(data);
         ctx.contexts.clear();
-        ctx.contexts.resize(
-            1 << header.template.context_bits(),
-            ArithmeticDecoderContext::default(),
-        );
+        ctx.contexts.resize(1 << header.template.context_bits(), ArithmeticDecoderContext::default());
 
         // "6.2.5 Decoding using a template and arithmetic coding"
-        decode_bitmap_arithmetic_coding(
-            bitmap,
-            &mut decoder,
-            &mut ctx.contexts,
-            header.template,
-            header.tpgdon,
-            &header.adaptive_template_pixels,
-        )?;
+        decode_bitmap_arithmetic_coding(bitmap, &mut decoder, &mut ctx.contexts, header.template, header.tpgdon, &header.adaptive_template_pixels)?;
     }
 
     Ok(())
@@ -74,21 +47,15 @@ pub(crate) struct GenericRegionHeader<'a> {
 }
 
 /// Parse a generic region segment header (7.4.6.1).
-pub(crate) fn parse<'a>(
-    reader: &mut Reader<'a>,
-    had_unknown_length: bool,
-) -> Result<GenericRegionHeader<'a>> {
+pub(crate) fn parse<'a>(reader: &mut Reader<'a>, had_unknown_length: bool) -> Result<GenericRegionHeader<'a>> {
     let mut region_info = parse_region_segment_info(reader)?;
     let flags = reader.read_byte().ok_or(ParseError::UnexpectedEof)?;
     let mmr = flags & 0x01 != 0;
     let template = Template::from_byte(flags >> 1);
     let tpgdon = flags & 0x08 != 0;
     let ext_template = flags & 0x10 != 0;
-    let adaptive_template_pixels = if mmr {
-        [AdaptiveTemplatePixel::default(); 4]
-    } else {
-        parse_adaptive_template_pixels(reader, template, ext_template)?
-    };
+    let adaptive_template_pixels =
+        if mmr { [AdaptiveTemplatePixel::default(); 4] } else { parse_adaptive_template_pixels(reader, template, ext_template)? };
     let mut data = reader.tail().ok_or(ParseError::UnexpectedEof)?;
 
     // "As a special case, as noted in 7.2.7, an immediate generic region segment
@@ -109,14 +76,7 @@ pub(crate) fn parse<'a>(
         data = head;
     }
 
-    Ok(GenericRegionHeader {
-        region_info,
-        mmr,
-        template,
-        tpgdon,
-        adaptive_template_pixels,
-        data,
-    })
+    Ok(GenericRegionHeader { region_info, mmr, template, tpgdon, adaptive_template_pixels, data })
 }
 
 /// Parse adaptive template pixel positions (7.4.6.3).
@@ -185,14 +145,7 @@ pub(crate) fn decode_bitmap_mmr(bitmap: &mut Bitmap, data: &[u8]) -> Result<usiz
 
     impl<'a> BitmapDecoder<'a> {
         fn new(bitmap: &'a mut Bitmap) -> Self {
-            Self {
-                bitmap,
-                x: 0,
-                y: 0,
-                row_start: 0,
-                buf: 0,
-                buf_len: 0,
-            }
+            Self { bitmap, x: 0, y: 0, row_start: 0, buf: 0, buf_len: 0 }
         }
 
         #[inline]
@@ -252,8 +205,7 @@ pub(crate) fn decode_bitmap_mmr(bitmap: &mut Bitmap, data: &[u8]) -> Result<usiz
             let last_full = end / WORD_BYTES;
 
             for b in start..(first_full * WORD_BYTES).min(end) {
-                self.bitmap.data[row_start + b / WORD_BYTES] |=
-                    BYTE_MASKS[b % WORD_BYTES] & white_mask;
+                self.bitmap.data[row_start + b / WORD_BYTES] |= BYTE_MASKS[b % WORD_BYTES] & white_mask;
             }
 
             if last_full > first_full {
@@ -261,8 +213,7 @@ pub(crate) fn decode_bitmap_mmr(bitmap: &mut Bitmap, data: &[u8]) -> Result<usiz
             }
 
             for b in (first_full.max(last_full) * WORD_BYTES)..end {
-                self.bitmap.data[row_start + b / WORD_BYTES] |=
-                    BYTE_MASKS[b % WORD_BYTES] & white_mask;
+                self.bitmap.data[row_start + b / WORD_BYTES] |= BYTE_MASKS[b % WORD_BYTES] & white_mask;
             }
 
             self.x = end_x;
@@ -311,8 +262,7 @@ pub(crate) fn decode_bitmap_mmr(bitmap: &mut Bitmap, data: &[u8]) -> Result<usiz
     // hayro-ccitt already aligns to the byte boundary before returning, so
     // nothing else to do here.
     let mut context = hayro_ccitt::DecoderContext::new(settings);
-    Ok(hayro_ccitt::decode(data, &mut decoder, &mut context)
-        .map_err(|_| RegionError::InvalidMmrData)?)
+    Ok(hayro_ccitt::decode(data, &mut decoder, &mut context).map_err(|_| RegionError::InvalidMmrData)?)
 }
 
 // I'm not sure why, but I was getting very weird codegen (with bad performance)
@@ -347,9 +297,7 @@ macro_rules! decode_loop {
                 if y > 0 {
                     let stride = bitmap.stride as usize;
                     let src = (y as usize - 1) * stride;
-                    bitmap
-                        .data
-                        .copy_within(src..src + stride, y as usize * stride);
+                    bitmap.data.copy_within(src..src + stride, y as usize * stride);
                 }
             } else {
                 // "d) If LTP = 0 then, from left to right, decode each pixel of the
@@ -390,81 +338,33 @@ pub(crate) fn decode_bitmap_arithmetic_coding(
 
     if ctx_gatherer.use_default_at {
         match template {
-            Template::Template0 => decode_loop!(
-                bitmap,
-                decoder,
-                contexts,
-                &mut ctx_gatherer,
-                tpgdon,
-                sltp_context,
-                ContextGatherer::gather_template0_default
-            ),
-            Template::Template1 => decode_loop!(
-                bitmap,
-                decoder,
-                contexts,
-                &mut ctx_gatherer,
-                tpgdon,
-                sltp_context,
-                ContextGatherer::gather_template1_default
-            ),
-            Template::Template2 => decode_loop!(
-                bitmap,
-                decoder,
-                contexts,
-                &mut ctx_gatherer,
-                tpgdon,
-                sltp_context,
-                ContextGatherer::gather_template2_default
-            ),
-            Template::Template3 => decode_loop!(
-                bitmap,
-                decoder,
-                contexts,
-                &mut ctx_gatherer,
-                tpgdon,
-                sltp_context,
-                ContextGatherer::gather_template3_default
-            ),
+            Template::Template0 => {
+                decode_loop!(bitmap, decoder, contexts, &mut ctx_gatherer, tpgdon, sltp_context, ContextGatherer::gather_template0_default)
+            }
+            Template::Template1 => {
+                decode_loop!(bitmap, decoder, contexts, &mut ctx_gatherer, tpgdon, sltp_context, ContextGatherer::gather_template1_default)
+            }
+            Template::Template2 => {
+                decode_loop!(bitmap, decoder, contexts, &mut ctx_gatherer, tpgdon, sltp_context, ContextGatherer::gather_template2_default)
+            }
+            Template::Template3 => {
+                decode_loop!(bitmap, decoder, contexts, &mut ctx_gatherer, tpgdon, sltp_context, ContextGatherer::gather_template3_default)
+            }
         }
     } else {
         match template {
-            Template::Template0 => decode_loop!(
-                bitmap,
-                decoder,
-                contexts,
-                &mut ctx_gatherer,
-                tpgdon,
-                sltp_context,
-                ContextGatherer::gather_template0_custom
-            ),
-            Template::Template1 => decode_loop!(
-                bitmap,
-                decoder,
-                contexts,
-                &mut ctx_gatherer,
-                tpgdon,
-                sltp_context,
-                ContextGatherer::gather_template1_custom
-            ),
-            Template::Template2 => decode_loop!(
-                bitmap,
-                decoder,
-                contexts,
-                &mut ctx_gatherer,
-                tpgdon,
-                sltp_context,
-                ContextGatherer::gather_template2_custom
-            ),
-            Template::Template3 => decode_loop!(
-                bitmap,
-                decoder,
-                contexts,
-                &mut ctx_gatherer,
-                tpgdon,
-                sltp_context,
-                ContextGatherer::gather_template3_custom
-            ),
+            Template::Template0 => {
+                decode_loop!(bitmap, decoder, contexts, &mut ctx_gatherer, tpgdon, sltp_context, ContextGatherer::gather_template0_custom)
+            }
+            Template::Template1 => {
+                decode_loop!(bitmap, decoder, contexts, &mut ctx_gatherer, tpgdon, sltp_context, ContextGatherer::gather_template1_custom)
+            }
+            Template::Template2 => {
+                decode_loop!(bitmap, decoder, contexts, &mut ctx_gatherer, tpgdon, sltp_context, ContextGatherer::gather_template2_custom)
+            }
+            Template::Template3 => {
+                decode_loop!(bitmap, decoder, contexts, &mut ctx_gatherer, tpgdon, sltp_context, ContextGatherer::gather_template3_custom)
+            }
         }
     }
 
@@ -508,18 +408,7 @@ impl<'a> ContextGatherer<'a> {
                 }
             }
         };
-        Self {
-            template,
-            at_pixels,
-            use_default_at,
-            max_right,
-            cur_y: 0,
-            buf_m2: 0,
-            buf_m1: 0,
-            buf_cur: 0,
-            cur_x: 0,
-            ctx: 0,
-        }
+        Self { template, at_pixels, use_default_at, max_right, cur_y: 0, buf_m2: 0, buf_m1: 0, buf_cur: 0, cur_x: 0, ctx: 0 }
     }
 
     const SHIFT_MASK_T0: u16 = 0b0110_0011_1100_1110;
@@ -536,26 +425,14 @@ impl<'a> ContextGatherer<'a> {
         self.cur_y = y;
         self.cur_x = 0;
 
-        self.buf_m2 = if y >= 2 {
-            Self::load_word(bitmap, y - 2, 0)
-        } else {
-            0
-        };
-        self.buf_m1 = if y >= 1 {
-            Self::load_word(bitmap, y - 1, 0)
-        } else {
-            0
-        };
+        self.buf_m2 = if y >= 2 { Self::load_word(bitmap, y - 2, 0) } else { 0 };
+        self.buf_m1 = if y >= 1 { Self::load_word(bitmap, y - 1, 0) } else { 0 };
         self.buf_cur = 0;
 
         // Start initializing the contexts. Note that this won't load all initial
         // pixels yet, those will only be loaded after our first call to `gather`.
         // See 6.2.5.3 for the pixel positions.
-        self.ctx = if self.use_default_at {
-            self.init_context_default()
-        } else {
-            self.init_context_custom()
-        };
+        self.ctx = if self.use_default_at { self.init_context_default() } else { self.init_context_custom() };
     }
 
     #[inline]
@@ -563,15 +440,12 @@ impl<'a> ContextGatherer<'a> {
         match self.template {
             Template::Template0 => {
                 let m2 = Self::get_buf_pixel(self.buf_m2, 0);
-                let m1 = (Self::get_buf_pixel(self.buf_m1, 0) << 1)
-                    | Self::get_buf_pixel(self.buf_m1, 1);
+                let m1 = (Self::get_buf_pixel(self.buf_m1, 0) << 1) | Self::get_buf_pixel(self.buf_m1, 1);
                 (m2 << 12) | (m1 << 5)
             }
             Template::Template1 => {
-                let m2 = (Self::get_buf_pixel(self.buf_m2, 0) << 1)
-                    | Self::get_buf_pixel(self.buf_m2, 1);
-                let m1 = (Self::get_buf_pixel(self.buf_m1, 0) << 1)
-                    | Self::get_buf_pixel(self.buf_m1, 1);
+                let m2 = (Self::get_buf_pixel(self.buf_m2, 0) << 1) | Self::get_buf_pixel(self.buf_m2, 1);
+                let m1 = (Self::get_buf_pixel(self.buf_m1, 0) << 1) | Self::get_buf_pixel(self.buf_m1, 1);
                 (m2 << 9) | (m1 << 4)
             }
             Template::Template2 => {
@@ -604,14 +478,9 @@ impl<'a> ContextGatherer<'a> {
                     | (Self::get_buf_pixel(self.buf_m1, 2) << 3)
             }
             Template::Template2 => {
-                (Self::get_buf_pixel(self.buf_m2, 0) << 7)
-                    | (Self::get_buf_pixel(self.buf_m1, 0) << 3)
-                    | (Self::get_buf_pixel(self.buf_m1, 1) << 2)
+                (Self::get_buf_pixel(self.buf_m2, 0) << 7) | (Self::get_buf_pixel(self.buf_m1, 0) << 3) | (Self::get_buf_pixel(self.buf_m1, 1) << 2)
             }
-            Template::Template3 => {
-                (Self::get_buf_pixel(self.buf_m1, 0) << 5)
-                    | (Self::get_buf_pixel(self.buf_m1, 1) << 4)
-            }
+            Template::Template3 => (Self::get_buf_pixel(self.buf_m1, 0) << 5) | (Self::get_buf_pixel(self.buf_m1, 1) << 4),
         }
     }
 
@@ -631,11 +500,7 @@ impl<'a> ContextGatherer<'a> {
 
     #[inline]
     pub(crate) fn get_buf_pixel(buf: Word, pos: u32) -> u16 {
-        if pos < WORD_BITS {
-            ((buf >> (WORD_SHIFT - pos)) & 1) as u16
-        } else {
-            0
-        }
+        if pos < WORD_BITS { ((buf >> (WORD_SHIFT - pos)) & 1) as u16 } else { 0 }
     }
 
     #[inline(always)]
@@ -643,16 +508,8 @@ impl<'a> ContextGatherer<'a> {
         if x + self.max_right >= self.cur_x + WORD_BITS {
             let new_start = x.saturating_sub(4);
             self.cur_x = new_start;
-            self.buf_m2 = if self.cur_y >= 2 {
-                Self::load_word(bitmap, self.cur_y - 2, new_start)
-            } else {
-                0
-            };
-            self.buf_m1 = if self.cur_y >= 1 {
-                Self::load_word(bitmap, self.cur_y - 1, new_start)
-            } else {
-                0
-            };
+            self.buf_m2 = if self.cur_y >= 2 { Self::load_word(bitmap, self.cur_y - 2, new_start) } else { 0 };
+            self.buf_m1 = if self.cur_y >= 1 { Self::load_word(bitmap, self.cur_y - 1, new_start) } else { 0 };
             self.buf_cur = Self::load_word(bitmap, self.cur_y, new_start);
         }
     }
@@ -688,11 +545,7 @@ impl<'a> ContextGatherer<'a> {
         let new_pixels = (Self::get_buf_pixel(self.buf_m2, bx + 2) << 9)
             | (Self::get_buf_pixel(self.buf_m1, bx + 2) << 4)
             | Self::get_buf_pixel(self.buf_cur, bx.wrapping_sub(1))
-            | ((bitmap.get_pixel(
-                (xi + self.at_pixels[0].x as i32) as u32,
-                (yi + self.at_pixels[0].y as i32) as u32,
-            ) as u16)
-                << 3);
+            | ((bitmap.get_pixel((xi + self.at_pixels[0].x as i32) as u32, (yi + self.at_pixels[0].y as i32) as u32) as u16) << 3);
 
         self.ctx = ((self.ctx << 1) & Self::SHIFT_MASK_T1) | new_pixels;
         self.ctx
@@ -707,11 +560,7 @@ impl<'a> ContextGatherer<'a> {
         let new_pixels = (Self::get_buf_pixel(self.buf_m2, bx + 1) << 7)
             | (Self::get_buf_pixel(self.buf_m1, bx + 1) << 3)
             | Self::get_buf_pixel(self.buf_cur, bx.wrapping_sub(1))
-            | ((bitmap.get_pixel(
-                (xi + self.at_pixels[0].x as i32) as u32,
-                (yi + self.at_pixels[0].y as i32) as u32,
-            ) as u16)
-                << 2);
+            | ((bitmap.get_pixel((xi + self.at_pixels[0].x as i32) as u32, (yi + self.at_pixels[0].y as i32) as u32) as u16) << 2);
 
         self.ctx = ((self.ctx << 1) & Self::SHIFT_MASK_T2) | new_pixels;
         self.ctx
@@ -725,11 +574,7 @@ impl<'a> ContextGatherer<'a> {
 
         let new_pixels = (Self::get_buf_pixel(self.buf_m1, bx + 1) << 5)
             | Self::get_buf_pixel(self.buf_cur, bx.wrapping_sub(1))
-            | ((bitmap.get_pixel(
-                (xi + self.at_pixels[0].x as i32) as u32,
-                (yi + self.at_pixels[0].y as i32) as u32,
-            ) as u16)
-                << 4);
+            | ((bitmap.get_pixel((xi + self.at_pixels[0].x as i32) as u32, (yi + self.at_pixels[0].y as i32) as u32) as u16) << 4);
 
         self.ctx = ((self.ctx << 1) & Self::SHIFT_MASK_T3) | new_pixels;
         self.ctx
@@ -771,8 +616,7 @@ impl<'a> ContextGatherer<'a> {
     #[inline(always)]
     pub(crate) fn gather_template3_default(&mut self, _bitmap: &Bitmap, x: u32) -> u16 {
         let bx = x - self.cur_x;
-        let new_pixels = (Self::get_buf_pixel(self.buf_m1, bx + 2) << 4)
-            | Self::get_buf_pixel(self.buf_cur, bx.wrapping_sub(1));
+        let new_pixels = (Self::get_buf_pixel(self.buf_m1, bx + 2) << 4) | Self::get_buf_pixel(self.buf_cur, bx.wrapping_sub(1));
 
         self.ctx = ((self.ctx << 1) & Self::SHIFT_MASK_T3_DEFAULT) | new_pixels;
         self.ctx

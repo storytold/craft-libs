@@ -16,7 +16,9 @@ pub const MAX_POLLS: u32 = 1000;
 /// What a completed run produced.
 #[derive(Debug)]
 pub struct Completed {
+    /// The terminal state the job reached.
     pub state: JobState,
+    /// Every event the polls reported, in order.
     pub events: Vec<Event>,
 }
 

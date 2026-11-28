@@ -5,7 +5,7 @@ use std::io::Write;
 use crate::chunk::{AepFile, Body, Chunk};
 use crate::error::AepError;
 
-/// Deepest tree [`write`] accepts (a hand-built tree may be deeper than any parsed one).
+/// Deepest tree [`fn@write`] accepts (a hand-built tree may be deeper than any parsed one).
 const MAX_WRITE_DEPTH: usize = 256;
 
 /// Serialises `file`: `RIFX`, the recomputed container size, `Egg!`, the chunks and the trailer.
@@ -39,10 +39,10 @@ pub fn write(file: &AepFile<'_>) -> Result<Vec<u8>, AepError> {
     Ok(out)
 }
 
-/// Like [`write`], into any writer.
+/// Like [`fn@write`], into any writer.
 ///
 /// # Errors
-/// A size or depth error of [`write`] becomes `ErrorKind::InvalidData`; otherwise I/O errors.
+/// A size or depth error of [`fn@write`] becomes `ErrorKind::InvalidData`; otherwise I/O errors.
 pub fn write_to(file: &AepFile<'_>, w: &mut impl Write) -> std::io::Result<()> {
     let bytes = write(file).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     w.write_all(&bytes)

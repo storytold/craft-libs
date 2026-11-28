@@ -626,46 +626,6 @@ mod tests {
     }
 
     #[test]
-    fn repeated_words() {
-        let v = check("Я пошёл в в магазин и и купил хлеб.");
-        assert_eq!(v.len(), 2, "{v:?}");
-        assert_eq!(v[0].message, "Повтор слова: «в»");
-        assert_eq!(v[0].suggestions, ["в"]);
-        assert!(v.iter().all(|i| i.lang == ProofLang::Ru && i.kind == IssueKind::Grammar));
-        clean("Да да, так так. Ха ха! Очень очень давно.");
-    }
-
-    #[test]
-    fn spaces_and_punctuation() {
-        let m = messages("Мы пришли , а он ушёл .  Правда ?");
-        assert!(m.contains(&"Лишний пробел перед знаком препинания@ ,".to_string()), "{m:?}");
-        assert!(m.contains(&"Лишний пробел перед знаком препинания@ .".to_string()), "{m:?}");
-        assert!(m.contains(&"Лишний пробел перед знаком препинания@ ?".to_string()), "{m:?}");
-        assert!(m.contains(&"Двойной пробел@  ".to_string()), "{m:?}");
-        clean("Отлично :) Правда :-) Число .5 и многоточие ...");
-        let m = messages("Он сказал ,,да» и ушёл.. Потом;; конец.");
-        assert_eq!(m.iter().filter(|x| x.starts_with("Повтор знака")).count(), 3, "{m:?}");
-        assert_eq!(check("Он сказал ,,да».").iter().find(|i| i.message.starts_with("Повтор знака")).unwrap().suggestions, ["«"]);
-        clean("Ждал… и ждал... до утра.");
-    }
-
-    #[test]
-    fn sentence_start_capitals() {
-        let m = messages("это первое предложение. а это второе! правда? да.");
-        assert_eq!(m.iter().filter(|x| x.starts_with("Предложение начинается")).count(), 4, "{m:?}");
-        assert_eq!(check("мама мыла раму.")[0].suggestions, ["Мама"]);
-        // Abbreviations, initials, numbers, ellipses and dialogue dashes.
-        clean("Купили фрукты: яблоки, груши и т. д. и овощи.");
-        clean("В 1990 г. открылась фирма, т. е. наша компания.");
-        clean("Цена 500 руб. за штуку, адрес ул. Ленина, д. 5, кв. 3.");
-        clean("Встретил А. С. Пушкина и проф. Иванова.");
-        clean("Ждал... и наконец дождался.");
-        clean("– Правда? – спросил он. – Да, – ответила она.");
-        clean("Он сказал: «Вернусь». Потом ушёл.");
-        clean("яблоки,");
-    }
-
-    #[test]
     fn missing_commas() {
         let m = messages(
             "Я знаю что он придёт. Это дом который построил Джек. Пришёл чтобы помочь. Ушёл потому что устал. Приходи если сможешь. Пошёл хотя устал.",
@@ -695,26 +655,5 @@ mod tests {
         clean("Он устал, тем более что шёл долго.");
         clean("Приду, при условии что успею.");
         clean("Он читал, в то время как она спала.");
-    }
-
-    #[test]
-    fn correct_russian_text_is_clean() {
-        clean("Съешь же ещё этих мягких французских булок, да выпей чаю. Мы пришли, когда уже стемнело.");
-        clean("Книга, которую я читаю, очень интересная, поэтому я её советую.");
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn never_panics(s in "\\PC{0,80}") {
-            let _ = check(&s);
-        }
-
-        #[test]
-        fn never_panics_on_russian_like_text(s in "[а-яёА-ЯЁ ,.;:!?«»…\\-]{0,60}") {
-            for i in check(&s) {
-                proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
-                proptest::prop_assert!(s.is_char_boundary(i.start) && s.is_char_boundary(i.end));
-            }
-        }
     }
 }

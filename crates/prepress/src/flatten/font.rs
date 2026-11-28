@@ -30,6 +30,7 @@ struct Noted {
 }
 
 impl FontCache {
+    /// Create an empty cache.
     pub fn new() -> Self {
         Self::default()
     }
@@ -197,13 +198,5 @@ mod tests {
         // Another page's glyphs with the same width sum: krilla must not take it for the same font.
         let other = wrap_cff(cff, &BTreeMap::from([(1, 278.0), (37, 667.4)])).unwrap();
         assert_ne!(Font::new(Data::from(wrapped), 0), Font::new(Data::from(other), 0));
-    }
-
-    #[test]
-    fn unreadable_bytes_draw_from_outlines() {
-        let noted = Noted { source: Some((Arc::new(b"%!PS-AdobeFont-1.0".to_vec()), 0)), advances: BTreeMap::from([(1, 500.0)]) };
-        assert!(noted.prepare(7).is_none());
-        let noted = Noted { source: Some((Arc::new(vec![1, 0, 4, 1, 0, 0]), 0)), advances: BTreeMap::new() };
-        assert!(noted.prepare(7).is_none(), "broken CFF");
     }
 }

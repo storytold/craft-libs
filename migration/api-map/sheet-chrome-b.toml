@@ -1,0 +1,287 @@
+# API map of the "Sheet: outline, charts, statistics, error tag" family: old path to new path and setter renames.
+
+family = "Sheet: outline, charts, statistics, error tag"
+new_module = "craft_table::ui"
+
+[[type]]
+name = "OutlineGroup"
+old = "craft_table::ui::outline::OutlineGroup"
+new = "craft_table::ui::outline::OutlineGroup"
+status = "same"
+
+[[type]]
+name = "OutlineAxis"
+old = "craft_table::ui::outline::OutlineAxis"
+new = "craft_table::ui::outline::OutlineAxis"
+status = "same"
+
+[[type]]
+name = "OutlineAction"
+old = "craft_table::ui::outline::OutlineAction"
+new = "craft_table::ui::outline::OutlineAction"
+status = "same"
+
+[[type]]
+name = "OutlineBand"
+old = "craft_table::ui::outline::OutlineBand"
+new = "craft_table::ui::outline::OutlineBand"
+status = "same"
+note = "A `Component` shown with `show_at(ui, OutlineBand::area(&geometry))`; the buttons are parts in one roving group. `new(label, rows, columns, geometry)` takes the accessible name instead of an id salt."
+
+[[type]]
+name = "OutlineBandOutput"
+old = "craft_table::ui::outline::OutlineBandOutput"
+new = "craft_table::ui::outline::OutlineBandOutput"
+status = "same"
+note = "`response` and `actions` as before; the type is `#[non_exhaustive]` and an `Outcome`."
+
+[[type]]
+name = "OutlineBandLabels"
+old = "craft_table::ui::outline::OutlineBandLabels"
+new = ""
+status = "removed"
+note = "`OutlineBandWords`: a `words!` struct whose rows are templates; the ids are the same."
+
+[[type]]
+name = "OutlineBandWords"
+old = ""
+new = "craft_table::ui::outline::OutlineBandWords"
+status = "replaced"
+note = "Replaces `OutlineBandLabels`; read through the env, no `labels(..)` setter."
+
+[[type]]
+name = "OutlineBandStyle"
+old = ""
+new = "craft_table::ui::outline::OutlineBandStyle"
+status = "replaced"
+note = "The band's own `ComponentStyle`; replaces the outline entries of `SheetStyle`."
+
+[[type]]
+name = "SheetStyle"
+old = "craft_table::ui::style::SheetStyle"
+new = ""
+status = "removed"
+note = "Each component has its own style built from the theme tokens: `OutlineBandStyle`, `ErrorTagStyle`, `SelectionStatsStyle`; the grid, field list, condition and slicer sizes are in their components' styles."
+
+[[type]]
+name = "ErrorTag"
+old = "craft_table::ui::error_tag::ErrorTag"
+new = "craft_table::ui::error_tag::ErrorTag"
+status = "same"
+note = "A `Component`: an icon face that opens a `Menu`. It takes no cell and no geometry; the grid places it (`CellGrid::error_tag`). `new(problem, fixes)` with `fixes: &[Label]`."
+
+[[type]]
+name = "ErrorTagResponse"
+old = "craft_table::ui::error_tag::ErrorTagResponse"
+new = ""
+status = "removed"
+note = "`ErrorTagOutput`: `response` is no longer an `Option` (the grid decides whether the tag shows)."
+
+[[type]]
+name = "ErrorTagOutput"
+old = ""
+new = "craft_table::ui::error_tag::ErrorTagOutput"
+status = "replaced"
+note = "Replaces `ErrorTagResponse`; `response` and `fix`."
+
+[[type]]
+name = "ErrorTagLabels"
+old = "craft_table::ui::error_tag::ErrorTagLabels"
+new = ""
+status = "removed"
+note = "`ErrorTagWords`; the id is the same."
+
+[[type]]
+name = "ErrorTagWords"
+old = ""
+new = "craft_table::ui::error_tag::ErrorTagWords"
+status = "replaced"
+note = "Replaces `ErrorTagLabels`."
+
+[[type]]
+name = "ErrorTagStyle"
+old = ""
+new = "craft_table::ui::error_tag::ErrorTagStyle"
+status = "replaced"
+note = "The tag's own `ComponentStyle`."
+
+[[type]]
+name = "ChartPrimitive"
+old = "craft_table::ui::chart::ChartPrimitive"
+new = "craft_table::ui::chart::ChartPrimitive"
+status = "same"
+note = "Colours are `DataColor` (text: `Option<StyleColor>`, `None` for the surface's ink); `Text` loses `size`, its size is the body or strong body role. Built with `ChartPrimitive::rect/line/polygon/wedge/circle/text` and the `filled`, `stroked`, `rounded`, `dashed`, `bold`, `anchored`, `inked` and `rotated` modifiers (the variants are `#[non_exhaustive]`). Lines and outlines paint nothing until `Draw` has a data-colour stroke."
+
+[[type]]
+name = "HAlign"
+old = "craft_table::ui::chart::HAlign"
+new = "craft_table::ui::chart::HAlign"
+status = "same"
+
+[[type]]
+name = "VAlign"
+old = "craft_table::ui::chart::VAlign"
+new = "craft_table::ui::chart::VAlign"
+status = "same"
+
+[[type]]
+name = "SelectionStats"
+old = "craft_table::ui::stats::SelectionStats"
+new = "craft_table::ui::stats::SelectionStats"
+status = "same"
+
+[[type]]
+name = "StatsShown"
+old = "craft_table::ui::stats::StatsShown"
+new = "craft_table::ui::stats::StatsShown"
+status = "same"
+note = "Bound with `Bind::bound(&mut shown)`; the readout's menu edits it through the binding."
+
+[[type]]
+name = "StatPart"
+old = "craft_table::ui::stats::StatPart"
+new = "craft_table::ui::stats::StatPart"
+status = "same"
+
+[[type]]
+name = "SelectionStatsReadout"
+old = "craft_table::ui::stats::SelectionStatsReadout"
+new = "craft_table::ui::stats::SelectionStatsReadout"
+status = "same"
+note = "A `Component`, one Tab stop; `new(label, parts, Bind<StatsShown>)`. The output is `SelectionStatsOutput`."
+
+[[type]]
+name = "SelectionStatsOutput"
+old = ""
+new = "craft_table::ui::stats::SelectionStatsOutput"
+status = "replaced"
+note = "Replaces the bare `Response`: `response` and the value a click copied."
+
+[[type]]
+name = "SelectionStatsReadoutStyle"
+old = ""
+new = "craft_table::ui::stats::SelectionStatsReadoutStyle"
+status = "replaced"
+note = "The readout's own `ComponentStyle`."
+
+[[type]]
+name = "StatsLabels"
+old = "craft_table::ui::stats::StatsLabels"
+new = ""
+status = "removed"
+note = "`StatsWords`; the ids are the same, and the six statistic rows are templates with `{v}`."
+
+[[type]]
+name = "StatsWords"
+old = ""
+new = "craft_table::ui::stats::StatsWords"
+status = "replaced"
+note = "Replaces `StatsLabels`; `stats_parts` takes `&StatsWords`."
+
+[[type]]
+name = "stories"
+old = "craft_table::ui::stories"
+new = ""
+status = "removed"
+note = "Stories register themselves with `#[story]`; there is no `ui::stories()`."
+
+[[type]]
+name = "WORDS"
+old = "craft_table::ui::WORDS"
+new = ""
+status = "removed"
+note = "Words register themselves with `words!`; there is no `ui::WORDS`."
+
+[[setter]]
+type = "OutlineBand"
+old = "new(id_salt, rows, columns, geometry)"
+new = "new(label, rows, columns, geometry)"
+note = "The label is the accessible name of the bands."
+
+[[setter]]
+type = "OutlineBand"
+old = "labels(OutlineBandLabels)"
+new = ""
+note = "Removed: words come from the env."
+
+[[setter]]
+type = "OutlineBand"
+old = "thickness(levels, zoom, style)"
+new = "outline::bands((levels, 0), true, zoom, lane, slack).x"
+note = "Removed: `outline::bands` gives both bands; `lane` is the lane size and `slack` the room after the last lane from the caller's style."
+
+[[setter]]
+type = "OutlineBand"
+old = "bands((rows, columns), headings, zoom, style)"
+new = "outline::bands((rows, columns), headings, zoom, lane, slack)"
+note = "Removed from the type; a free function that takes the lane and slack sizes instead of `&SheetStyle`."
+
+[[setter]]
+type = "OutlineBand"
+old = "show(ui)"
+new = "show_at(ui, OutlineBand::area(&geometry))"
+note = "The bands show over the rect the grid reserves."
+
+[[setter]]
+type = "ErrorTag"
+old = "new(id_salt, cell, geometry, problem, fixes)"
+new = "new(problem, fixes)"
+note = "The tag has no cell and no geometry; the grid places it beside the cell."
+
+[[setter]]
+type = "ErrorTag"
+old = "rect(style)"
+new = ""
+note = "Removed: placement is the grid's."
+
+[[setter]]
+type = "ErrorTag"
+old = "labels(ErrorTagLabels)"
+new = ""
+note = "Removed: words come from the env."
+
+[[setter]]
+type = "SelectionStatsReadout"
+old = "new(id_salt, parts, &mut shown)"
+new = "new(label, parts, Bind::bound(&mut shown))"
+
+[[setter]]
+type = "SelectionStatsReadout"
+old = "labels(StatsLabels)"
+new = ""
+note = "Removed: words come from the env."
+
+[[setter]]
+type = "stats_parts"
+old = "stats_parts(stats, shown, &StatsLabels, format)"
+new = "stats_parts(stats, shown, &StatsWords, format)"
+
+[[setter]]
+type = "paint_chart"
+old = "paint_chart(painter, origin, primitives, zoom)"
+new = "paint_chart(draw, origin, primitives, zoom)"
+note = "Paints through the `Draw` of a component's `paint`."
+
+[[setter]]
+type = "OutlineGroup"
+old = "OutlineGroup { start, end, level, collapsed, summary_before }"
+new = "OutlineGroup::new(start, end, level).collapsed(collapsed).summary_before(before)"
+note = "The type is `#[non_exhaustive]`."
+
+[[setter]]
+type = "OutlineAxis"
+old = "OutlineAxis { levels, groups }"
+new = "OutlineAxis::new(levels, groups)"
+note = "The type is `#[non_exhaustive]`."
+
+[[setter]]
+type = "SelectionStats"
+old = "SelectionStats { count, numeric, sum, min, max }"
+new = "SelectionStats::new(count, numeric, sum, min, max)"
+note = "The type is `#[non_exhaustive]`."
+
+[[setter]]
+type = "StatPart"
+old = "StatPart { text, value }"
+new = "StatPart::new(text, value)"
+note = "The type is `#[non_exhaustive]`."

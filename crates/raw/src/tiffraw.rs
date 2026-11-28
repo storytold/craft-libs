@@ -344,7 +344,9 @@ fn decode_chunk(
             unpack_chunk(src, order, packing, cw, ch, cpp, bits, float, 1)
         }
         comp::JPEG => {
-            let f = ljpeg::decode(src, n.saturating_mul(2).max(1 << 16))?;
+            // A frame may hold at most twice the tile's samples, with no floor: a 65,536-sample floor let each of
+            // many tiny tiles decode (and keep) a frame far larger than the tile budget counts (storytold/lightcraft#4024)
+            let f = ljpeg::decode(src, n.saturating_mul(2))?;
             if f.data.len() < n {
                 // Some writers encode edge tiles smaller than nominal: accept a frame that covers the rows inside the image.
                 if f.data.is_empty() || f.data.len() % (cw * cpp) != 0 || f.data.len() / (cw * cpp) < vh {
@@ -353,6 +355,8 @@ fn decode_chunk(
             }
             let mut v = f.data;
             v.resize(n, 0);
+            // a larger frame's surplus is not kept: the tile holds what the decode budget counts for it
+            v.shrink_to_fit();
             Ok(ChunkPx::U16(v))
         }
         #[cfg(feature = "dng")]
@@ -1136,6 +1140,21 @@ mod budget_tests {
             let err = read_image_in(mode, &data, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).unwrap_err();
             assert!(matches!(&err, RawError::Corrupt(m) if m.contains("8000 bytes of image data")), "{err:?}");
         }
+    }
+
+    /// storytold/lightcraft#4024: 1,024 tiles of 2×2 all pointing at one 8 KB lossless JPEG of 128×128×4 samples. Each
+    /// reference brings enough bytes for both `check_image` bounds, but a tile may not decode a frame of 65,536
+    /// samples: with a 65,536-sample floor on the decode limit each tile held about 128 KB that the grouping
+    /// counted as 8 bytes (134 MB for a 4,096-sample image; 34 GB for the same grid at 1024×1024).
+    #[test]
+    fn tiny_tiles_with_a_large_frame_are_refused() {
+        let tile = ljpeg::encode(&vec![300u16; 128 * 128 * 4], 128, 128, 4, 12, 1, 0);
+        let info = ImageInfo { bits_per_sample: vec![12], byte_counts: vec![tile.len() as u64; 1024], ..aliased(64, 64, 2, 0) };
+        assert!(read_image(&tile, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).is_err());
+        // a frame of the tile's own size still decodes
+        let fits = ljpeg::encode(&[300u16; 4], 2, 2, 1, 12, 1, 0);
+        let info = ImageInfo { bits_per_sample: vec![12], byte_counts: vec![fits.len() as u64; 4], ..aliased(4, 4, 2, 0) };
+        assert_eq!(read_image(&fits, &info, ByteOrder::Little, Packing::Msb, &Limits::default()), Ok(RawData::U16(vec![300; 4 * 4])));
     }
 
     /// storytold/lightcraft#2554: tiled decoders decode the grid in groups of at most a quarter of the image (1 Mi samples at

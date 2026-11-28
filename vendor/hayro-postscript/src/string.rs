@@ -188,6 +188,21 @@ mod tests {
     }
 
     #[test]
+    fn literal_octal_overflow_keeps_the_low_eight_bits() {
+        assert_eq!(decode_literal(b"(\\737)").unwrap(), b"\xDF");
+        assert_eq!(decode_literal(b"(\\400\\777)").unwrap(), b"\x00\xFF");
+        assert_eq!(decode_literal(b"(\\1234)").unwrap(), b"S4");
+    }
+
+    #[test]
+    fn literal_octal_short_escape_stops_at_a_non_octal_byte() {
+        assert_eq!(
+            decode_literal(b"(\\36a\\3z\\0089)").unwrap(),
+            b"\x1ea\x03z\x0089"
+        );
+    }
+
+    #[test]
     fn literal_line_continuation_lf() {
         assert_eq!(decode_literal(b"(Hi \\\nthere)").unwrap(), b"Hi there");
     }

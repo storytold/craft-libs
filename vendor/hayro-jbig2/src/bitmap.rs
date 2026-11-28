@@ -121,13 +121,7 @@ impl Bitmap {
     }
 
     /// Create a new bitmap with full configuration.
-    pub(crate) fn new_with(
-        width: u32,
-        height: u32,
-        x_location: u32,
-        y_location: u32,
-        default_pixel: bool,
-    ) -> Result<Self> {
+    pub(crate) fn new_with(width: u32, height: u32, x_location: u32, y_location: u32, default_pixel: bool) -> Result<Self> {
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
             bail!(OverflowError::BitmapLimit);
         }
@@ -139,14 +133,7 @@ impl Bitmap {
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
         let data = vec![default_word; stride as usize * height as usize];
-        let mut bitmap = Self {
-            width,
-            height,
-            stride,
-            data,
-            x_location,
-            y_location,
-        };
+        let mut bitmap = Self { width, height, stride, data, x_location, y_location };
         if default_pixel {
             bitmap.clear_padding();
         }
@@ -172,12 +159,7 @@ impl Bitmap {
         }
     }
 
-    pub(crate) fn reinitialize(
-        &mut self,
-        width: u32,
-        height: u32,
-        default_pixel: bool,
-    ) -> Result<()> {
+    pub(crate) fn reinitialize(&mut self, width: u32, height: u32, default_pixel: bool) -> Result<()> {
         check_page_size(width, height)?;
 
         let stride = width.div_ceil(WORD_BITS);
@@ -188,8 +170,7 @@ impl Bitmap {
         self.x_location = 0;
         self.y_location = 0;
         self.data.clear();
-        self.data
-            .resize(stride as usize * height as usize, default_word);
+        self.data.resize(stride as usize * height as usize, default_word);
         if default_pixel {
             self.clear_padding();
         }
@@ -274,11 +255,7 @@ impl Bitmap {
                 let bit_start = px_start - word_start_x;
                 let bit_end = px_end - word_start_x;
 
-                let mask: Word = if bit_end == WORD_BITS {
-                    !0 >> bit_start
-                } else {
-                    (!0 >> bit_start) & !(!0 >> bit_end)
-                };
+                let mask: Word = if bit_end == WORD_BITS { !0 >> bit_start } else { (!0 >> bit_start) & !(!0 >> bit_end) };
 
                 let src_x_for_range = src_x_start + (px_start - dest_x_start);
                 let src_word_idx = src_x_for_range / WORD_BITS;
@@ -287,11 +264,8 @@ impl Bitmap {
                 let src_word1 = other.get_word(src_y, src_word_idx);
                 let src_word2 = other.get_word(src_y, src_word_idx + 1);
 
-                let src_raw = if src_bit_offset == 0 {
-                    src_word1
-                } else {
-                    (src_word1 << src_bit_offset) | (src_word2 >> (WORD_BITS - src_bit_offset))
-                };
+                let src_raw =
+                    if src_bit_offset == 0 { src_word1 } else { (src_word1 << src_bit_offset) | (src_word2 >> (WORD_BITS - src_bit_offset)) };
                 let src_aligned = src_raw >> bit_start;
 
                 let dest_idx = (dest_y * self.stride + word_idx) as usize;
@@ -367,25 +341,10 @@ mod pdfcraft_limit_tests {
     #[test]
     fn a_bitmap_past_its_bounds_is_refused_by_a_limit() {
         let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
-        assert_eq!(
-            Bitmap::new(MAX_DIMENSION + 1, 1).map(|_| ()),
-            limit,
-            "a side"
-        );
-        assert_eq!(
-            Bitmap::new(1, MAX_DIMENSION + 1).map(|_| ()),
-            limit,
-            "the other"
-        );
+        assert_eq!(Bitmap::new(MAX_DIMENSION + 1, 1).map(|_| ()), limit, "a side");
+        assert_eq!(Bitmap::new(1, MAX_DIMENSION + 1).map(|_| ()), limit, "the other");
         // 2^28 + 2^14 pixels, each side within its bound.
-        assert_eq!(
-            Bitmap::new(1 << 14, (1 << 14) + 1).map(|_| ()),
-            limit,
-            "the pixels"
-        );
-        assert!(
-            Bitmap::new(1 << 14, 1 << 14).is_ok(),
-            "2^28 pixels are within it"
-        );
+        assert_eq!(Bitmap::new(1 << 14, (1 << 14) + 1).map(|_| ()), limit, "the pixels");
+        assert!(Bitmap::new(1 << 14, 1 << 14).is_ok(), "2^28 pixels are within it");
     }
 }

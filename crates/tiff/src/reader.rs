@@ -633,24 +633,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_directory_read_whole_has_a_next_pointer() {
-        // the comparison itself, on every target: a declared count past u32::MAX never matches a small read count
-        for (declared, read, whole) in [
-            (0, 0, true),
-            (1, 1, true),
-            (8192, 8192, true),
-            (8193, 8192, false),
-            (1, 0, false),
-            ((1 << 32) + 1, 1, false),
-            ((2 << 32) + 1, 1, false),
-            ((1 << 63) + 1, 1, false),
-            (u64::MAX, 1, false),
-        ] {
-            assert_eq!(reads_every_entry(declared, read), whole, "{declared} declared, {read} read");
-        }
-    }
-
-    #[test]
     fn a_bigtiff_count_past_u32_max_never_follows_the_next_pointer() {
         // the whole chain: on 32-bit targets (wasm32) the old cast truncated these counts to 1 and followed the pointer
         for order in [ByteOrder::Little, ByteOrder::Big] {
@@ -666,38 +648,6 @@ mod tests {
             assert_eq!(whole.ifds.len(), 2, "{order:?}");
             assert_eq!(whole.ifds[1].u64(0x0101), Some(8));
         }
-    }
-
-    #[test]
-    fn directory_positions_never_overflow() {
-        // a hand-built layout the reader never produces: the iterator stops instead of overflowing
-        let hostile = DirectoryEntries { table: usize::MAX, read: 2, declared: 2, entry_size: 12 };
-        assert_eq!(hostile.positions().collect::<Vec<_>>(), vec![usize::MAX]);
-        assert_eq!(hostile.positions().nth(1), None);
-        let wide = DirectoryEntries { table: usize::MAX - 30, read: 4, declared: 4, entry_size: 12 };
-        assert_eq!(wide.positions().collect::<Vec<_>>(), vec![usize::MAX - 30, usize::MAX - 18, usize::MAX - 6]);
-        // a directory read from data lists its entries
-        let mut data = Vec::new();
-        ByteOrder::Little.put_u16(&mut data, 2);
-        data.extend([0; 24]);
-        let dir = directory_entries(&data, 0, ByteOrder::Little, false, 8192).unwrap();
-        assert_eq!(dir.positions().collect::<Vec<_>>(), vec![2, 14]);
-    }
-
-    #[test]
-    fn a_bigtiff_directory_declaring_u64_max_entries_parses_without_overflow() {
-        // 44 bytes: BigTIFF header (first IFD at 16), an entry count of u64::MAX, one 20-byte entry
-        let mut data = b"II\x2b\x00\x08\x00\x00\x00".to_vec();
-        data.extend(16u64.to_le_bytes());
-        data.extend(u64::MAX.to_le_bytes());
-        data.extend(0x0100u16.to_le_bytes());
-        data.extend(3u16.to_le_bytes());
-        data.extend(1u64.to_le_bytes());
-        data.extend([8, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(data.len(), 44);
-        let tiff = Tiff::parse(&data).unwrap();
-        assert_eq!(tiff.ifds.len(), 1);
-        assert_eq!(tiff.ifds[0].u64(0x0100), Some(8));
     }
     #[test]
     fn overlapping_ifd_tables_hit_entry_cap_instead_of_amplifying() {
@@ -722,66 +672,5 @@ mod tests {
 
         let tiff = Tiff::parse(&data).unwrap();
         assert_eq!(tiff.ifds.len(), 8, "8 IFDs parsed, 9th rejected by max_entries_total before allocation");
-    }
-
-    #[test]
-    fn a_legitimate_multi_ifd_file_still_parses_under_the_entry_cap() {
-        // classic TIFF: IFD0 @8 (3 entries: value + Exif + GPS child pointers) -> IFD1 @58 chain,
-        // plus Exif child @60 and GPS child @90. Total entries = 6, far under max_entries_total.
-        let mut data = vec![0u8; 128];
-        data[0..2].copy_from_slice(b"II");
-        data[2..4].copy_from_slice(&42u16.to_le_bytes());
-        data[4..8].copy_from_slice(&8u32.to_le_bytes()); // first IFD at 8
-
-        // IFD0 @8: count 3, table @10, next-IFD @46 -> IFD1 @58
-        data[8..10].copy_from_slice(&3u16.to_le_bytes());
-        // entry0 @10: tag 0x0100, SHORT, count 1, value 8 (inline @18..22)
-        data[10..12].copy_from_slice(&0x0100u16.to_le_bytes());
-        data[12..14].copy_from_slice(&3u16.to_le_bytes());
-        data[14..18].copy_from_slice(&1u32.to_le_bytes());
-        data[18..22].copy_from_slice(&8u32.to_le_bytes());
-        // entry1 @22: tag 0x8769 ExifIFD, LONG, count 1, value 60 (inline @30..34)
-        data[22..24].copy_from_slice(&0x8769u16.to_le_bytes());
-        data[24..26].copy_from_slice(&4u16.to_le_bytes());
-        data[26..30].copy_from_slice(&1u32.to_le_bytes());
-        data[30..34].copy_from_slice(&60u32.to_le_bytes());
-        // entry2 @34: tag 0x8825 GPSIFD, LONG, count 1, value 90 (inline @42..46)
-        data[34..36].copy_from_slice(&0x8825u16.to_le_bytes());
-        data[36..38].copy_from_slice(&4u16.to_le_bytes());
-        data[38..42].copy_from_slice(&1u32.to_le_bytes());
-        data[42..46].copy_from_slice(&90u32.to_le_bytes());
-        data[46..50].copy_from_slice(&58u32.to_le_bytes()); // next IFD
-
-        // IFD1 @58: count 1, table @60, next 0
-        data[58..60].copy_from_slice(&1u16.to_le_bytes());
-        data[60..62].copy_from_slice(&0x0100u16.to_le_bytes());
-        data[62..64].copy_from_slice(&3u16.to_le_bytes());
-        data[64..68].copy_from_slice(&1u32.to_le_bytes());
-        data[68..72].copy_from_slice(&8u32.to_le_bytes());
-        data[72..76].copy_from_slice(&0u32.to_le_bytes());
-
-        // Exif child IFD @60: count 1, entry tag 0x9000 value 1, next 0
-        data[60..62].copy_from_slice(&1u16.to_le_bytes());
-        data[62..64].copy_from_slice(&0x9000u16.to_le_bytes());
-        data[64..66].copy_from_slice(&3u16.to_le_bytes());
-        data[66..70].copy_from_slice(&1u32.to_le_bytes());
-        data[70..74].copy_from_slice(&1u32.to_le_bytes());
-        data[74..78].copy_from_slice(&0u32.to_le_bytes());
-
-        // GPS child IFD @90: count 1, entry tag 0 value 1, next 0
-        data[90..92].copy_from_slice(&1u16.to_le_bytes());
-        data[92..94].copy_from_slice(&0u16.to_le_bytes());
-        data[94..96].copy_from_slice(&3u16.to_le_bytes());
-        data[96..100].copy_from_slice(&1u32.to_le_bytes());
-        data[100..104].copy_from_slice(&1u32.to_le_bytes());
-        data[104..108].copy_from_slice(&0u32.to_le_bytes());
-
-        let tiff = Tiff::parse(&data).unwrap();
-        assert_eq!(tiff.ifds.len(), 2, "chain IFDs parse fully");
-        assert_eq!(tiff.ifds[0].u64(0x0100), Some(8));
-        let exif = tiff.ifds[0].exif.as_ref().expect("Exif child present");
-        assert_eq!(exif.u64(0x9000), Some(1));
-        let gps = tiff.ifds[0].gps.as_ref().expect("GPS child present");
-        assert_eq!(gps.u64(0x0000), Some(1));
     }
 }

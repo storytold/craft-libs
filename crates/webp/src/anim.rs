@@ -1,6 +1,6 @@
 //! Animated WebP writing: the `VP8X`, `ANIM` and `ANMF` chunks around frames another encoder
 //! made ([`animation`]), and, with feature `vp8`, whole lossy animations from RGBA frames through
-//! `craft-video`'s VP8 encoder ([`lossy_animation`]).
+//! `craft-video`'s VP8 encoder (`lossy_animation`).
 
 use crate::{Error, MAX_CANVAS, MAX_VP8_DIMENSION, chunk};
 

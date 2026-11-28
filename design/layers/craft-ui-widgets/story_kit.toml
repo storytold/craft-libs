@@ -1,0 +1,5 @@
+config_version = 1
+
+[[module]]
+path = "story_kit"
+outside = true

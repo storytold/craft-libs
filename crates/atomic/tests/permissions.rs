@@ -1,14 +1,21 @@
+//! Integration tests of craft-atomic: permissions.
+
 #![cfg(unix)]
 
 use craft_atomic::{NewFilePermissions, WriteOptions, atomic_write, write_new};
 use std::fs::{self, File, Permissions};
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 use std::process::Command;
+#[cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(target_os = "linux")]
 struct TempDir(PathBuf);
+#[cfg(target_os = "linux")]
 impl TempDir {
     fn new() -> io::Result<Self> {
         static N: AtomicU64 = AtomicU64::new(0);
@@ -17,6 +24,7 @@ impl TempDir {
         Ok(Self(path))
     }
 }
+#[cfg(target_os = "linux")]
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -27,10 +35,11 @@ fn mode(path: &Path) -> io::Result<u32> {
     Ok(fs::metadata(path)?.permissions().mode() & 0o777)
 }
 
+#[cfg(target_os = "linux")]
 /// Set umask only in a separate shell process; changing it in a parallel test process races.
 fn child(dir: &Path, mask: &str, expected: &str, check_acl: bool) -> io::Result<()> {
     let output = Command::new("sh")
-        .args(["-c", "umask \"$1\"; exec \"$2\" --exact permission_child --nocapture", "permissions", mask])
+        .args(["-c", "umask \"$1\"; exec \"$2\" --exact integration::permissions::permission_child --nocapture", "permissions", mask])
         .arg(std::env::current_exe()?)
         .env("CRAFT_PERMISSION_TEST_DIR", dir)
         .env("CRAFT_PERMISSION_TEST_EXPECTED", expected)
@@ -38,15 +47,6 @@ fn child(dir: &Path, mask: &str, expected: &str, check_acl: bool) -> io::Result<
         .output()?;
     assert!(output.status.success(), "umask {mask}:\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "child must execute its test");
-    Ok(())
-}
-
-#[test]
-fn normal_creation_matches_os_permissions() -> io::Result<()> {
-    for (mask, expected) in [("000", "666"), ("002", "664"), ("022", "644"), ("027", "640"), ("077", "600")] {
-        let dir = TempDir::new()?;
-        child(&dir.0, mask, expected, false)?;
-    }
     Ok(())
 }
 

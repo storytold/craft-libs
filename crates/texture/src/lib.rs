@@ -34,11 +34,15 @@
 //! [`normal`] makes tangent-space normal maps from a height plane, and [`packing`] packs
 //! occlusion, roughness and metallic into one RGBA image. Both read a [`ScalarSource`] one row at
 //! a time, so a tiled surface is read in place instead of copied into a float plane.
+//!
+//! [`mip`] builds mip chains with a box filter and samples them at the level of detail of a
+//! footprint, with nearest or linear filtering between levels.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(any(feature = "dds", test))]
 pub mod dds;
+pub mod mip;
 
 use std::sync::Arc;
 
@@ -48,6 +52,7 @@ use rayon::prelude::*;
 pub mod normal;
 pub mod packing;
 mod source;
+pub mod texture_set;
 #[cfg(test)]
 mod tiled_tests;
 
@@ -1124,7 +1129,7 @@ mod tests {
         let cases = [
             (0.3, 0.7, [true, false], [1.473_799_7, -0.072_800_055, 0.645_000_2, 0.733_799_8]),
             (0.3, 0.7, [false, true], [1.473_799_7, -0.072_800_055, 0.645_000_2, 0.733_799_8]),
-            (1.2, -0.4, [true, false], [-1.722_999_5, 0.127_000_57, 0.089_999_32, 1.939_999_3]),
+            (1.2, -0.4, [true, false], [-1.722_999_5, 0.127_000_57, 0.089_999_32_f32, 1.939_999_3]),
             (1.2, -0.4, [false, true], [-1.057_000_3, -1.094, 0.756_000_1, 2.606_000_2]),
             (-0.15, 1.1, [true, false], [2.051, -1.76, 0.090_000_15, 1.311_000_1]),
             (-0.15, 1.1, [false, true], [-1.834_000_6, 0.015_999_317, 0.608_000_5, 2.458_000_7]),

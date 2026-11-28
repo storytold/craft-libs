@@ -305,6 +305,30 @@ fn listed_header_fields_survive_a_round_trip() {
     assert_eq!(decode(&out).unwrap().meta.text, img.meta.text);
 }
 
+/// Eight-bit rows retain every sample and have zero padding to a four-byte boundary.
+#[test]
+fn eight_bit_rows_keep_samples_and_zero_word_padding() {
+    for layout in [ChannelLayout::Gray, ChannelLayout::Rgb, ChannelLayout::Rgba] {
+        for width in 1..=5 {
+            let row_len = width as usize * layout.channels();
+            let raw: Vec<u8> = (0..row_len * 3).map(|i| (i as u8).wrapping_mul(37)).collect();
+            let img = Image::from_u8(width, 3, layout, raw.clone()).unwrap();
+            let mut expected = Vec::new();
+            for row in raw.chunks_exact(row_len) {
+                expected.extend_from_slice(row);
+                expected.extend(std::iter::repeat_n(0, (4 - row_len % 4) % 4));
+            }
+            for choice in [None, Some(DpxBits::Bits8)] {
+                let out = encode(&img, Format::Dpx, &opts(choice)).unwrap();
+                let offset = be32_at(&out, 4) as usize;
+                assert_eq!(be32_at(&out, 16) as usize, out.len());
+                assert_eq!(&out[offset..], expected, "{layout:?} width {width}, {choice:?}");
+                assert_eq!(decode(&out).unwrap().data(), img.data());
+            }
+        }
+    }
+}
+
 #[test]
 fn chosen_bit_depth_sets_the_header_and_packing() {
     let img = Image::from_u16(5, 2, ChannelLayout::Rgb, &(0..30u16).map(|i| i * 2000).collect::<Vec<_>>()).unwrap();
@@ -524,4 +548,19 @@ fn any_image_saves_as_ten_bit_cineon() {
     assert!(fidelity_warnings(&wide, Format::Cineon).contains(&FidelityWarning::AlphaDiscarded));
     let gray8 = Image::from_u8(2, 1, ChannelLayout::Gray, vec![0, 255]).unwrap();
     assert_eq!(cineon_written(&encode(&gray8, Format::Cineon, &EncodeOptions::default()).unwrap()), (1, 2, 1, vec![0, 1023]));
+}
+
+/// Allocation limits describe decoded U16 pixels, even when the stored codes use fewer bits.
+#[test]
+fn widened_samples_obey_the_exact_decoded_pixel_budget() {
+    let frames = [Fixture::new(50, 10, 1, 5, 3).bytes(), Fixture::new(50, 12, 1, 5, 3).bytes(), cineon_bytes(3, 5, 3, &cineon_codes(45))];
+    for bytes in frames {
+        let options = |max_alloc| DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..Default::default() };
+        let budget = 5 * 3 * 3 * 2;
+        assert!(decode_with(&bytes, &options(budget)).is_ok(), "the exact U16 pixel budget accepts the frame");
+        assert!(
+            matches!(decode_with(&bytes, &options(budget - 1)), Err(CodecError::LimitExceeded(_))),
+            "one byte below the decoded size rejects the frame"
+        );
+    }
 }

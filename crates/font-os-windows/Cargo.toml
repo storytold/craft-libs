@@ -1,0 +1,35 @@
+[package]
+name = "craft-font-os-windows"
+description = "The Win32 calls craft-font-store needs to make its fonts available to every app of the user on Windows: the HKCU font registry, AddFontResourceW and RemoveFontResourceW, and the WM_FONTCHANGE broadcast. Empty on other systems."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6.1"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Not `workspace = true`: the workspace forbids `unsafe`, and `forbid` can't be lifted for one
+# crate. Loading a font into the running session needs `AddFontResourceW`, which the Windows
+# crates offer only as an unsafe call, so this crate copies the workspace lints with
+# `unsafe_code = "deny"`, and allows it only on the functions that make those calls (AGENTS.md).
+# Keep these tables in step with `[workspace.lints]` in the root Cargo.toml.
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
+
+[lints.cargo]
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"

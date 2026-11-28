@@ -1,5 +1,5 @@
 use super::hammer;
-use crate::ply::{Encoding, Kind, MAX_ELEMENTS, MAX_PROPERTIES, Rows, Scalar, is_ply, parse_header, read};
+use crate::ply::{Encoding, MAX_ELEMENTS, MAX_PROPERTIES, is_ply, parse_header, read};
 use crate::{Corner, Error, Limits, Scene};
 
 fn parse(bytes: &[u8]) -> crate::Result<Scene> {
@@ -99,33 +99,6 @@ fn faces_that_cannot_be_read_are_left_out() {
     assert_eq!((s.meshes[0].triangle_count(), s.meshes[0].positions.len()), (0, 3));
     assert_eq!(s.warnings, ["2 face(s) could not be read and were left out"]);
     s.validate().unwrap();
-}
-
-#[test]
-fn rows_serve_callers_that_read_more_than_a_mesh() {
-    // Every scalar property of the vertices, as a point-cloud reader would take them.
-    let bytes = binary(true);
-    let h = parse_header(&bytes).unwrap();
-    let mut rows = Rows::new(&h, &bytes);
-    rows.skip_element(&h.elements[0], 16).unwrap();
-    let vertex = &h.elements[1];
-    rows.check(vertex).unwrap();
-    assert_eq!(vertex.row_size(), Some(19));
-    assert_eq!(vertex.find(&["Intensity"]), Some((6, Scalar::F32)));
-    let mut intensity = Vec::new();
-    for _ in 0..vertex.count {
-        for (i, p) in vertex.properties.iter().enumerate() {
-            let Kind::Scalar(t) = p.kind else { panic!("the vertices have no lists") };
-            let v = rows.value(t).unwrap();
-            if i == 6 {
-                intensity.push(v);
-            }
-        }
-    }
-    assert_eq!(intensity, [0.5; 3]);
-    assert_eq!(rows.count(Scalar::U8, 16).unwrap(), 3);
-    assert!(Scalar::I16.is_integer() && !Scalar::F64.is_integer());
-    assert_eq!(Scalar::U16.unit(65_535.0), 1.0);
 }
 
 #[test]

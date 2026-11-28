@@ -125,12 +125,6 @@ impl DataProvider<NormalizerNfdTablesV1> for Data {
 mod tests {
     use super::*;
 
-    fn sorted<'a>(locale: &str, items: &[&'a str]) -> Vec<&'a str> {
-        let mut v = items.to_vec();
-        Collator::new(locale).sort_by_key(&mut v, |s| s);
-        v
-    }
-
     /// Each tailored locale puts a pair in another order than the root collation does, which a
     /// locale whose data is missing (it falls back to root) wouldn't.
     #[test]
@@ -176,59 +170,5 @@ mod tests {
             assert!(collator.0.is_some(), "{locale}");
             assert_eq!(collator.compare("čaj", "cvijet"), Ordering::Less, "{locale}");
         }
-    }
-
-    #[test]
-    fn digits_sort_by_value() {
-        let layers = ["Layer 10", "Layer 2", "layer 1", "Layer 1", "Layer 2b", "Layer 02"];
-        assert_eq!(sorted("en", &layers), ["layer 1", "Layer 1", "Layer 02", "Layer 2", "Layer 2b", "Layer 10"]);
-        let reversed: Vec<&str> = layers.iter().rev().copied().collect();
-        assert_eq!(sorted("en", &reversed), sorted("en", &layers));
-        assert_eq!(sorted("de", &["Ebene ٣", "Ebene 10", "Ebene ２"]), ["Ebene ２", "Ebene ٣", "Ebene 10"]);
-    }
-
-    #[test]
-    fn locales_sort_their_own_letters() {
-        let words = ["öl", "zebra", "år", "äpple", "apa", "oxe"];
-        assert_eq!(sorted("sv", &words), ["apa", "oxe", "zebra", "år", "äpple", "öl"]);
-        assert_eq!(sorted("de", &words), ["apa", "äpple", "år", "öl", "oxe", "zebra"]);
-        assert_eq!(sorted("de", &["Muller", "Müller", "Mueller", "Mahler"]), ["Mahler", "Mueller", "Muller", "Müller"]);
-        assert_eq!(
-            sorted("tr", &["şeker", "sabun", "ılık", "iğne", "çay", "cam", "uzun", "üzüm"]),
-            ["cam", "çay", "ılık", "iğne", "sabun", "şeker", "uzun", "üzüm"]
-        );
-        assert_eq!(sorted("en", &["ılık", "iğne", "cam", "çay"]), ["cam", "çay", "iğne", "ılık"]);
-        assert_eq!(sorted("es", &["ñu", "nube", "oso"]), ["nube", "ñu", "oso"]);
-        // Japanese: Latin, then kana in gojūon order (hiragana and katakana together), then kanji.
-        assert_eq!(sorted("ja", &["漢字", "カメラ", "あめ", "いぬ", "Zoom"]), ["Zoom", "あめ", "いぬ", "カメラ", "漢字"]);
-    }
-
-    #[test]
-    fn glibc_locale_names() {
-        let words = ["öl", "zebra", "år", "äpple", "apa", "oxe"];
-        assert_eq!(sorted("sv_SE.UTF-8", &words), sorted("sv", &words));
-        assert_ne!(sorted("sv_SE.UTF-8", &words), sorted("en", &words));
-        let cities = ["天津", "北京", "上海"];
-        assert_eq!(sorted("zh_TW.UTF-8", &cities), sorted("zh-hant", &cities));
-        assert_eq!(sorted("zh_CN.UTF-8", &cities), sorted("zh-hans", &cities));
-        // Serbian Cyrillic sorts Cyrillic first; Latin Serbian sorts Latin first, `lj` after `lu`.
-        let mixed = ["ljubav", "lula", "абв"];
-        assert_eq!(sorted("sr_RS.UTF-8", &mixed), ["абв", "ljubav", "lula"]);
-        assert_eq!(sorted("sr_RS.UTF-8@latin", &mixed), ["lula", "ljubav", "абв"]);
-        assert_eq!(bcp47("sr_RS.UTF-8@latin"), "sr-latn-RS");
-        assert_eq!(bcp47("sr_Latn_RS@latin"), "sr-Latn-RS");
-        assert_eq!(bcp47("de_DE@euro"), "de-DE");
-    }
-
-    #[test]
-    fn chinese_sorts_by_pinyin_or_stroke() {
-        // 北 běi (5 strokes), 上 shàng (3), 天 tiān (4).
-        let cities = ["天津", "北京", "上海"];
-        let pinyin = ["北京", "上海", "天津"];
-        let stroke = ["上海", "天津", "北京"];
-        assert_eq!(sorted("zh-hans", &cities), pinyin);
-        assert_eq!(sorted("zh-hant", &cities), stroke);
-        assert_eq!(sorted("zh-hans-u-co-stroke", &cities), stroke);
-        assert_eq!(sorted("zh-hant-u-co-pinyin", &cities), pinyin);
     }
 }

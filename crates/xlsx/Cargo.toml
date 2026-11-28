@@ -22,4 +22,5 @@ craft-xml = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 craft-xlsx = { path = ".", features = ["test-support"] }

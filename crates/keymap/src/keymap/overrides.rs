@@ -37,22 +37,27 @@ impl PartialEq for Overrides {
 impl Eq for Overrides {}
 
 impl Overrides {
+    /// An empty set of overrides.
     pub const fn new() -> Overrides {
         Overrides { map: BTreeMap::new(), notes: Vec::new() }
     }
 
+    /// The binding texts stored for the command key `key`, if any.
     pub fn get(&self, key: &str) -> Option<&[String]> {
         self.map.get(key).map(Vec::as_slice)
     }
 
+    /// Every entry as (command key, binding texts), in key order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &[String])> {
         self.map.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
     }
 
+    /// The number of commands with an entry.
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
+    /// Whether no command has an entry.
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
@@ -72,6 +77,7 @@ impl Overrides {
         fits
     }
 
+    /// Removes the entry for `key`, so the command gets its defaults again.
     pub fn remove(&mut self, key: &str) -> Option<Vec<String>> {
         self.map.remove(key)
     }
@@ -125,10 +131,12 @@ pub mod list {
 
     use super::{Item, Overrides};
 
+    /// Writes the overrides as a list of entries (`command`, `keys`).
     pub fn serialize<S: Serializer>(overrides: &Overrides, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(overrides.map.iter().map(|(command, keys)| Item { command, keys }))
     }
 
+    /// Reads overrides from the list form, or from the map form.
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Overrides, D::Error> {
         Overrides::deserialize(deserializer)
     }

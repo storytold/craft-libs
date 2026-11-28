@@ -13,6 +13,8 @@ workspace = true
 [features]
 # HTML documents: read into and written from the craft-flow model and a craft-wordmodel Document.
 flow = ["dep:craft-codepage", "dep:craft-flow", "dep:craft-math", "dep:craft-mime", "dep:craft-wordmodel", "dep:encoding_rs"]
+# Standalone portable HTML document writer.
+standalone = ["dep:craft-mime"]
 
 [dependencies]
 craft-codepage = { workspace = true, optional = true }

@@ -1,0 +1,17 @@
+{
+ "packages": [
+  {
+   "name": "craft-ui",
+   "features": {},
+   "dependencies": [],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/ui/src/lib.rs"
+    }
+   ]
+  }
+ ]
+}

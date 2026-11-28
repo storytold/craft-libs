@@ -1,0 +1,17 @@
+config_version = 1
+
+[[exception]]
+name = "stack-story-stage-allocate"
+kind = "marker"
+rule = "contract/allocate"
+path = "crates/ui-widgets/src/layout_components/stories.rs"
+reason = "The story gives the stack a fixed stage box to show fill-height sizing."
+count = 1
+
+[[exception]]
+name = "stack-story-stage-size"
+kind = "marker"
+rule = "literal-size/vec2"
+path = "crates/ui-widgets/src/layout_components/stories.rs"
+reason = "The story gives the stack a fixed stage box to show fill-height sizing."
+count = 1

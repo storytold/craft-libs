@@ -29,6 +29,7 @@
 pub mod cms;
 pub mod der;
 mod ec512;
+pub mod inspection;
 pub mod keys;
 pub mod pkcs12;
 pub mod revocation;

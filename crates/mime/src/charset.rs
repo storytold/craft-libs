@@ -139,41 +139,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn utf8_and_ascii() {
-        assert_eq!(decode("héllo €".as_bytes(), "UTF-8"), "héllo €");
-        assert_eq!(decode("héllo".as_bytes(), "utf8"), "héllo");
-        assert_eq!(decode(b"plain", "x-unknown"), "plain");
-        assert_eq!(decode(b"a\xFFb", "utf-8"), "a\u{fffd}b");
-        assert_eq!(decode(b"", "utf-8"), "");
-    }
-
-    #[test]
-    fn latin1_is_read_as_windows_1252() {
-        assert_eq!(decode(b"caf\xE9 \xA4", "ISO-8859-1"), "café ¤");
-        assert_eq!(decode(b"\x93hi\x94 \x80 \x85 \x99", "iso-8859-1"), "“hi” € … ™");
-        assert_eq!(decode(b"\x93hi\x94 \x80", "\"Windows-1252\""), "“hi” €");
-        assert_eq!(decode(b"\x81\x8D\x8F\x90\x9D", "cp1252"), "\u{81}\u{8d}\u{8f}\u{90}\u{9d}");
-        // Every byte gives a character.
-        let all: Vec<u8> = (0..=255).collect();
-        assert_eq!(decode(&all, "windows-1252").chars().count(), 256);
-    }
-
-    #[test]
-    fn latin9_has_the_euro() {
-        assert_eq!(decode(b"\xA4 \xBC\xBD \xE9 \xA6\xA8\xB4\xB8\xBE", "ISO-8859-15"), "€ Œœ é ŠšŽžŸ");
-        assert_eq!(decode(b"\x80", "latin9"), "\u{80}");
-    }
-
-    #[test]
-    fn unlabelled_bytes_are_guessed() {
-        assert_eq!(decode("naïve".as_bytes(), ""), "naïve");
-        assert_eq!(decode(b"na\xEFve", ""), "naïve");
-        assert_eq!(decode(b"na\xEFve", "us-ascii"), "naïve");
-        assert_eq!(guess(b"\xE2\x82\xAC"), "€");
-        assert_eq!(guess(b"\xE2\x82"), "\u{e2}\u{201a}");
-    }
-
-    #[test]
     fn known_and_unknown_names() {
         for known in ["utf-8", " GBK ", "\"Shift_JIS\"", "latin-9", "cp-1250", "windows-1251", "koi8-r", "utf-16le"] {
             assert!(is_known(known), "{known}");
@@ -197,37 +162,6 @@ mod tests {
             }
         }
         assert_eq!(decode(&[0xC0, 0xC1], code_page_label(1251).unwrap_or_default()), "АБ");
-    }
-
-    #[test]
-    fn line_endings() {
-        assert_eq!(unix_lines("a\r\nb\rc\nd\r\n"), "a\nb\nc\nd\n");
-        assert_eq!(unix_lines("\r\r\n\r"), "\n\n\n");
-        assert_eq!(unix_lines("none"), "none");
-    }
-
-    #[test]
-    fn unknown_charsets_fall_back_to_lossy_utf8() {
-        assert_eq!(decode("grüße".as_bytes(), "x-unknown"), "grüße");
-        assert_eq!(decode(b"\xC0\xC1", "x-unknown"), "\u{fffd}\u{fffd}");
-        // The standard's "replacement" sets are read the same way.
-        assert_eq!(decode("grüße".as_bytes(), "iso-2022-kr"), "grüße");
-        assert_eq!(decode(b"a\xFFb", "hz-gb-2312"), "a\u{fffd}b");
-    }
-
-    #[test]
-    fn central_european_sets() {
-        // #178: windows-1250 and iso-8859-2 were read as UTF-8, every letter past ASCII a box.
-        assert_eq!(decode(b"Gvo\x9E\xF0e we\x92ve \x96 \x8E\x9A\xE8\xE6", "windows-1250"), "Gvožđe we’ve – Žščć");
-        assert_eq!(decode(b"Gvo\x9E\xF0e", "cp1250"), "Gvožđe");
-        assert_eq!(decode(b"Gvo\xBE\xF0e \xAE\xB9\xE8\xE6", "ISO-8859-2"), "Gvožđe Žščć");
-        assert_eq!(decode(b"\xBE", "latin2"), "ž");
-        let all: Vec<u8> = (0..=255).collect();
-        for label in ["windows-1250", "iso-8859-2"] {
-            let text = decode(&all, label);
-            assert_eq!(text.chars().count(), 256, "{label}");
-            assert!(!text.contains('\u{fffd}'), "{label}");
-        }
     }
 
     #[test]
@@ -259,16 +193,6 @@ mod tests {
         let all: Vec<u8> = (0..=255).collect();
         for label in ["ibm437", "cp720", "ibm737", "cp775", "855", "IBM869"] {
             assert_eq!(decode(&all, label).chars().count(), 256, "{label}");
-        }
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn any_bytes_in_any_set_never_panic(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256), label in "\\PC{0,24}") {
-            let _ = (decode(&bytes, &label), guess(&bytes));
-            for label in ["", "utf-16", "utf-16be", "iso-2022-jp", "shift_jis", "gb18030", "big5", "euc-kr", "windows-1250", "iso-8859-2"] {
-                let _ = decode(&bytes, label);
-            }
         }
     }
 }

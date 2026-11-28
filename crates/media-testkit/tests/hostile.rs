@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use craft_media_testkit::hostile::hammer;
+use craft_media_testkit::hostile::{divisor, hammer};
 
 /// Set only in the child processes of `run_child`: the value names what `child_hammer` does.
 const CHILD_VARIABLE: &str = "CRAFT_MEDIA_TESTKIT_HOSTILE_CHILD";
@@ -60,10 +60,11 @@ fn a_bad_multiplier_names_the_variable() {
 
 #[test]
 fn a_panic_keeps_its_message() {
-    let payload = std::panic::catch_unwind(|| hammer("demo", &[9, 8, 7, 6], 0, |d| assert!(d.len() != 2, "boom at {}", d.len()))).unwrap_err();
+    // Truncation to 0 runs under any CRAFT_HOSTILE_DIVISOR.
+    let payload = std::panic::catch_unwind(|| hammer("demo", &[9, 8, 7, 6], 0, |d| assert!(!d.is_empty(), "boom at {}", d.len()))).unwrap_err();
     let message = payload.downcast_ref::<String>().cloned().unwrap_or_default();
-    assert!(message.starts_with("demo: truncation to 2 (len 2): the parser panicked: "), "{message}");
-    assert!(message.contains("boom at 2"), "{message}");
+    assert!(message.starts_with("demo: truncation to 0 (len 0): the parser panicked: "), "{message}");
+    assert!(message.contains("boom at 0"), "{message}");
 }
 
 #[test]
@@ -74,8 +75,8 @@ fn every_truncation_of_a_large_seed_runs() {
     hammer("large", &seed, 0, move |d| {
         record.lock().unwrap().insert(d.len());
     });
-    // The seed and its 8,192 truncations.
-    assert_eq!(lengths.lock().unwrap().len(), 8_193);
+    // The seed and its 8,192 truncations, every N-th of them under CRAFT_HOSTILE_DIVISOR=N.
+    assert_eq!(lengths.lock().unwrap().len(), 1 + 8_192usize.div_ceil(divisor()));
 }
 
 #[test]

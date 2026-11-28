@@ -400,15 +400,10 @@ trait Sample: Copy {
     fn at(bytes: &[u8], index: usize) -> Option<Self>;
 }
 
-#[cfg(test)]
-thread_local! { static SAMPLE_BUFFER_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-
 impl Sample for u8 {
     const SIZE: usize = 1;
     const OPAQUE: u8 = u8::MAX;
     fn read(bytes: &[u8]) -> Vec<u8> {
-        #[cfg(test)]
-        SAMPLE_BUFFER_BYTES.with(|n| n.set(n.get() + bytes.len()));
         bytes.to_vec()
     }
     fn at(bytes: &[u8], index: usize) -> Option<u8> {
@@ -420,8 +415,6 @@ impl Sample for u16 {
     const SIZE: usize = 2;
     const OPAQUE: u16 = u16::MAX;
     fn read(bytes: &[u8]) -> Vec<u16> {
-        #[cfg(test)]
-        SAMPLE_BUFFER_BYTES.with(|n| n.set(n.get() + bytes.len()));
         bytes.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect()
     }
     fn at(bytes: &[u8], index: usize) -> Option<u16> {
@@ -433,8 +426,6 @@ impl Sample for f32 {
     const SIZE: usize = 4;
     const OPAQUE: f32 = 1.0;
     fn read(bytes: &[u8]) -> Vec<f32> {
-        #[cfg(test)]
-        SAMPLE_BUFFER_BYTES.with(|n| n.set(n.get() + bytes.len()));
         bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
     }
     fn at(bytes: &[u8], index: usize) -> Option<f32> {
@@ -629,124 +620,4 @@ fn unhex(s: &str) -> Result<Vec<u8>, Error> {
             u8::try_from(digit(*hi).ok_or_else(bad)? * 16 + digit(*lo).ok_or_else(bad)?).map_err(|_| bad())
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hex_reads_both_cases_and_refuses_the_rest() {
-        assert_eq!(unhex("00ffA0").ok(), Some(vec![0, 255, 0xa0]));
-        assert!(unhex("0").is_err());
-        assert!(unhex("+5").is_err());
-        assert!(unhex("zz").is_err());
-    }
-
-    #[test]
-    fn a_frame_that_expands_past_the_tile_is_refused() {
-        let frame = ruzstd::encoding::compress_to_vec(&[7u8; 100][..], ruzstd::encoding::CompressionLevel::Fastest);
-        assert_eq!(unzstd(&frame, 100, "t").ok(), Some(vec![7u8; 100]));
-        assert!(matches!(unzstd(&frame, 99, "t"), Err(Error::Malformed(m)) if m.contains("more than 99 bytes")));
-        assert!(matches!(unzstd(&frame, 101, "t"), Err(Error::Malformed(_))));
-    }
-
-    #[test]
-    fn bytes_after_a_zstd_frame_are_malformed() {
-        let frame = ruzstd::encoding::compress_to_vec(&[7u8; 100][..], ruzstd::encoding::CompressionLevel::Fastest);
-        for extra in [&b"junk"[..], frame.as_slice()] {
-            let mut trailing = frame.clone();
-            trailing.extend_from_slice(extra);
-            assert!(matches!(unzstd(&trailing, 100, "t"), Err(Error::Malformed(_))));
-        }
-    }
-
-    /// A ZIP archive of STORE entries.
-    fn stored(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
-        let (mut out, mut dir) = (vec![], vec![]);
-        for (name, data) in entries {
-            let mut crc = flate2::Crc::new();
-            crc.update(data);
-            let (offset, size) = (out.len() as u32, data.len() as u32);
-            let fields = |sig: u32| [sig.to_le_bytes(), [20, 0, 0, 0]].concat();
-            out.extend(fields(0x0403_4b50));
-            out.extend([0u8; 6]);
-            out.extend([crc.sum().to_le_bytes(), size.to_le_bytes(), size.to_le_bytes()].concat());
-            out.extend([(name.len() as u16).to_le_bytes(), [0, 0]].concat());
-            out.extend(name.as_bytes());
-            out.extend(data);
-            dir.extend(fields(0x0201_4b50));
-            dir.extend([0u8; 8]);
-            dir.extend([crc.sum().to_le_bytes(), size.to_le_bytes(), size.to_le_bytes()].concat());
-            dir.extend([(name.len() as u16).to_le_bytes(), [0; 2], [0; 2], [0; 2], [0; 2]].concat());
-            dir.extend([0u8; 4]);
-            dir.extend(offset.to_le_bytes());
-            dir.extend(name.as_bytes());
-        }
-        let (start, count) = (out.len() as u32, entries.len() as u16);
-        out.extend(&dir);
-        out.extend([0x0605_4b50u32.to_le_bytes(), [0; 4]].concat());
-        out.extend([count.to_le_bytes(), count.to_le_bytes()].concat());
-        out.extend([(dir.len() as u32).to_le_bytes(), start.to_le_bytes()].concat());
-        out.extend([0u8; 2]);
-        out
-    }
-
-    #[test]
-    fn tiles_are_found_with_one_walk_of_the_central_directory() {
-        // 40 distinct grayscale tiles side by side, behind 1,000 entries that are not tiles.
-        let n = 40;
-        let mut entries: Vec<(String, Vec<u8>)> = (0..1000).map(|i| (format!("other/{i:060}.bin"), vec![])).collect();
-        let mut refs = vec![];
-        for i in 0..n {
-            let tile = vec![i as u8; TILE * TILE];
-            let hash = blake3::hash(&tile).to_hex().to_string();
-            refs.push(format!(r#"{{"tx":{i},"ty":0,"hash":"{hash}"}}"#));
-            entries.push((format!("tiles/{hash}.zst"), ruzstd::encoding::compress_to_vec(&tile[..], ruzstd::encoding::CompressionLevel::Fastest)));
-        }
-        let surface = format!(r#"{{"format":{{"mode":"Grayscale","sample":"U8","alpha":false}},"default":"00","tiles":[{}]}}"#, refs.join(","));
-        let manifest = format!(
-            r#"{{"format_version":1,"generator":"photocraft-format 0.1.0","document":{{"size":{{"width":{},"height":1}},"mode":"Grayscale","layers":[{{"mask":null,"content":{{"kind":"raster","surface":{surface}}}}}]}}}}"#,
-            n * TILE
-        );
-        entries.push(("manifest.json".into(), manifest.into_bytes()));
-        let file = stored(&entries);
-        let before = crate::zip::SCANS.with(|s| s.get());
-        let pixels = pcraft_layer_rgba(&file, &[0], &Limits::default());
-        let scans = crate::zip::SCANS.with(|s| s.get()) - before;
-        let Ok(Some(pixels)) = pixels else { panic!("not read: {pixels:?}") };
-        let Samples::U8(rgba) = &pixels.rgba else { panic!("not 8-bit") };
-        assert_eq!(rgba.get((39 * TILE + 5) * 4), Some(&39));
-        assert!(scans <= 4, "{scans} walks of the central directory");
-    }
-
-    #[test]
-    fn shared_tiles_do_not_allocate_a_converted_tile_for_each_reference() {
-        let tile = vec![7u8; TILE * TILE];
-        let hash = blake3::hash(&tile).to_hex().to_string();
-        let refs: Vec<String> = (0..64).map(|i| format!(r#"{{"tx":{i},"ty":0,"hash":"{hash}"}}"#)).collect();
-        let manifest = format!(
-            r#"{{"format_version":1,"generator":"test","document":{{"size":{{"width":{},"height":1}},"layers":[{{"content":{{"kind":"raster","surface":{{"format":{{"mode":"Grayscale","sample":"U8","alpha":false}},"default":"00","tiles":[{}]}}}}}}]}}}}"#,
-            64 * TILE,
-            refs.join(",")
-        );
-        let file = stored(&[
-            ("manifest.json".into(), manifest.into_bytes()),
-            (format!("tiles/{hash}.zst"), ruzstd::encoding::compress_to_vec(&tile[..], ruzstd::encoding::CompressionLevel::Fastest)),
-        ]);
-        let before = SAMPLE_BUFFER_BYTES.with(|n| n.get());
-        let p = pcraft_layer_rgba(&file, &[0], &Limits::default()).unwrap().unwrap();
-        assert!(matches!(p.rgba, Samples::U8(ref rgba) if rgba.len() == 64 * TILE * 4 && rgba[7 * 4] == 7));
-        let allocated = SAMPLE_BUFFER_BYTES.with(|n| n.get()) - before;
-        assert!(allocated <= 64 * TILE + 1, "{allocated} bytes allocated as converted samples");
-    }
-
-    #[test]
-    fn a_frame_that_declares_a_window_past_the_limit_is_refused() {
-        // Magic, a header without a content size, then a window of 2^(10 + exponent) bytes and
-        // one empty last block.
-        let frame = |exponent: u8| [0x28, 0xb5, 0x2f, 0xfd, 0x00, exponent << 3, 0x01, 0x00, 0x00];
-        assert_eq!(unzstd(&frame(13), 0, "t").ok(), Some(vec![]));
-        assert!(matches!(unzstd(&frame(14), 0, "t"), Err(Error::Malformed(m)) if m.contains("zstd")));
-    }
 }

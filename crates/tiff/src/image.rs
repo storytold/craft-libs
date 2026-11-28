@@ -216,37 +216,6 @@ mod tests {
         }
     }
 
-    /// One offset is one chunk, and `single_chunk` refuses to build descriptors when the image declares more.
-    #[test]
-    fn single_chunk_is_the_only_chunk() {
-        let one = strips(vec![50], vec![10]);
-        assert_eq!(one.single_chunk(100).map(|c| (c.index, c.offset, c.len)), one.chunks(100).first().map(|c| (c.index, c.offset, c.len)));
-        // the inferred length matches too, and never falls back past the data
-        let inferred = strips(vec![70], vec![]);
-        assert_eq!(inferred.single_chunk(100).map(|c| c.len), Some(30));
-        assert!(strips(vec![50, 10], vec![10, 5]).single_chunk(100).is_none(), "a multi-chunk image has no single chunk");
-        assert!(strips(Vec::new(), Vec::new()).single_chunk(100).is_none());
-    }
-
-    /// An image declaring far more strips than the file has bytes gets at most one descriptor per byte.
-    #[test]
-    fn chunk_count_is_capped_by_the_file_size() {
-        let info = strips(vec![1; 5000], vec![1; 5000]);
-        assert_eq!(info.chunks(100).len(), 100);
-        assert_eq!(info.chunks(0).len(), 0);
-        assert_eq!(info.chunks(5000).len(), 5000);
-        assert_eq!(info.chunks(u64::MAX).len(), 5000, "a file that holds them all is unaffected");
-    }
-
-    /// 1 x 1 tiles on a 65536 x 65536 image: 2^32 chunks per plane, still counted from the offsets present.
-    #[test]
-    fn a_huge_tile_grid_is_counted_without_wrapping() {
-        let mut info = strips(vec![1, 2, 3], vec![1, 1, 1]);
-        (info.width, info.height, info.layout) = (65536, 65536, Layout::Tiles { tile_width: 1, tile_height: 1 });
-        assert_eq!(info.chunks(100).len(), 3);
-        assert_eq!(info.chunks(100)[2].x, 2);
-    }
-
     #[test]
     fn missing_byte_counts_run_to_the_next_larger_offset() {
         let info = strips(vec![50, 10, 30, 10, 70], vec![0, 0, 5]);

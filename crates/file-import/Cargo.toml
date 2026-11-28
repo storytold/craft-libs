@@ -18,5 +18,8 @@ kurbo = { workspace = true }
 thiserror = { workspace = true }
 vectorcraft-geom = { workspace = true }
 
+[dev-dependencies]
+craft-image-codecs = { workspace = true }
+
 [lints]
 workspace = true

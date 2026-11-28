@@ -162,13 +162,13 @@ pub fn opus_quality(reference: &[f32], test: &[f32], channels: usize, rate: u32)
     100.0 * (1.0 - 0.5 * (1.0 + err).ln() / 1.13f64.ln())
 }
 
-/// ffmpeg (see `crate::testkit::oracle`); `None` after printing `SKIPPED`.
+/// ffmpeg (see `crate::integration::codecs::testkit::oracle`); `None` after printing `SKIPPED`.
 pub fn ffmpeg() -> Option<PathBuf> {
-    crate::testkit::ffmpeg_or_skip("opus oracle")
+    crate::integration::codecs::testkit::ffmpeg_or_skip("opus oracle")
 }
 
 pub fn fixtures() -> PathBuf {
-    crate::testkit::fixtures_dir("opus/oracle")
+    crate::integration::codecs::testkit::fixtures_dir("opus/oracle")
 }
 
 /// Minimal Ogg demuxer: returns (packets, last granule position).

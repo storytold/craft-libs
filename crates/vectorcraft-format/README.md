@@ -109,14 +109,12 @@ Size limits on the JSON and on decompression stay with each reader.
 
 ## Testing
 
-`cargo test -p craft-vectorcraft-format` runs `tests/envelope.rs`, which compares files written
-through `File` and `Tail` with JSON written out by hand in VectorCraft's layout (compact and
-pretty, version 4 with data after the JSON, version 2 under the former name), reads them back,
-and checks `split_tail`, `marker_at`, `sniff` on plain, gzip and truncated gzip input, the limits
-`Entries` and `Image::bytes` put on the bytes copied, members of the wrong shape or repeated, the
-array form, the format and version checks of `File::read` and `Contents::read`, and the base64
-vectors of RFC 4648. The doctests check that the public structs and `ReadError` cannot be built or
-matched exhaustively from another crate.
+`cargo test -p craft-vectorcraft-format` runs `tests/envelope.rs`, which reads back files written
+through `File` and `Tail` (compact and pretty, version 4 with data after the JSON, version 2
+under the former name) and checks `split_tail`, `sniff` on plain, gzip and truncated gzip input,
+the limits `Entries` and `Image::bytes` put on the bytes copied, the array form, and the format
+and version checks of `File::read` and `Contents::read`. A unit test in `src/base64.rs` checks the
+base64 vectors of RFC 4648.
 
 `.github/workflows/vectorcraft-format.yml` runs fmt, clippy and the tests on Linux and Windows,
 and a `wasm32-unknown-unknown` check.

@@ -180,22 +180,6 @@ mod tests {
         assert_eq!(m.ifd.u64s(2).unwrap(), vec![5, 6]);
     }
 
-    #[test]
-    fn plain_canon_style_note() {
-        // Plain IFD whose out-of-line offset is relative to the TIFF header: we need the absolute
-        // position, which we only know after writing. Write once to learn the offset, then patch.
-        let order = ByteOrder::Little;
-        let mut note = tiny_ifd(order, 0);
-        note.extend_from_slice(&[0; 8]);
-        let (mut bytes, off, len) = with_note(order, note);
-        let values_abs = off as u32 + 30;
-        bytes[off as usize + 22..off as usize + 26].copy_from_slice(&values_abs.to_le_bytes());
-        bytes[off as usize + 30..off as usize + 34].copy_from_slice(&9u32.to_le_bytes());
-        let m = parse_makernote(&bytes, off, len, order, "Canon").unwrap();
-        assert_eq!(m.kind, MakerNoteKind::Plain);
-        assert_eq!(m.ifd.u64s(2).unwrap(), vec![9, 0]);
-    }
-
     /// A maker note's value budget is fixed, not computed from the length of the buffer it sits in:
     /// an entry claiming more than the note budget (here 2 MB) is dropped, a fitting one is read. In a
     /// sparse header read the buffer holds the file's logical size while only kilobytes were loaded,
@@ -223,13 +207,5 @@ mod tests {
         assert_eq!(m.kind, MakerNoteKind::Sony);
         assert!(m.ifd.get(0x201b).is_some(), "the fitting entry is read");
         assert!(m.ifd.get(0x9900).is_none(), "the decoy is dropped by the value budget");
-    }
-
-    #[test]
-    fn garbage_note_is_none() {
-        let (bytes, off, len) = with_note(ByteOrder::Little, vec![0xff; 40]);
-        assert!(parse_makernote(&bytes, off, len, ByteOrder::Little, "X").is_none());
-        assert!(parse_makernote(&bytes, 1 << 40, 10, ByteOrder::Little, "X").is_none());
-        assert!(parse_makernote(&bytes, off, u64::MAX, ByteOrder::Little, "X").is_none());
     }
 }

@@ -1,0 +1,81 @@
+# API map of the "Channels panel" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Channels panel"
+new_module = "craft_imaging::ui::channels"
+
+[[type]]
+name = "ChannelsPanel"
+old = "craft_imaging::ui::channels::ChannelsPanel"
+new = "craft_imaging::ui::channels::ChannelsPanel"
+status = "replaced"
+note = "A pattern on a `Stack`: a `List` of layer-form rows over the app's `ChannelRow`s and a `FooterBar`. `ChannelsPanel::new(&rows)`; the thumbnails, the size and the rename request are props."
+
+[[type]]
+name = "ChannelsLabels"
+old = "craft_imaging::ui::channels::ChannelsLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "ChannelsWords"
+old = ""
+new = "craft_imaging::ui::channels::ChannelsWords"
+status = "replaced"
+note = "Ids move from `channels.*` to `channelsPanel.*`."
+
+[[type]]
+name = "ChannelsStyle"
+old = "craft_imaging::ui::channels::ChannelsStyle"
+new = ""
+status = "removed"
+note = "Sizes come from `ThumbSize` and the row form."
+
+[[type]]
+name = "ChannelsCommand"
+old = "craft_imaging::ui::channels::ChannelsCommand"
+new = ""
+status = "removed"
+
+[[type]]
+name = "ChannelsCommands"
+old = ""
+new = "craft_imaging::ui::channels::ChannelsCommands"
+status = "replaced"
+note = "A `CommandSet`; the overlay colours and opacities are commands of it (`overlay_color`, `overlay_opacity`)."
+
+[[type]]
+name = "ChannelsEvent"
+old = "craft_imaging::ui::channels::ChannelsEvent"
+new = "craft_imaging::ui::channels::ChannelsEvent"
+status = "same"
+note = "`Visibility` carries a `craft_ui::contract::SweepStep<K>` (`Flip` and `Restore`; Alt is ignored); `Reorder` carries a `ReorderMove`; `Footer` carries the modifiers; `Command` carries a `ChannelsCommands`."
+
+[[type]]
+name = "ChannelsOutput"
+old = "craft_imaging::ui::channels::ChannelsOutput"
+new = "craft_imaging::ui::channels::ChannelsOutput"
+status = "same"
+note = "Now an `Outcome`."
+
+[[type]]
+name = "ChannelRow"
+old = "craft_imaging::ui::channels::ChannelRow"
+new = "craft_imaging::ui::channels::ChannelRow"
+status = "same"
+note = "Unchanged."
+
+[[type]]
+name = "ChannelKind"
+old = "craft_imaging::ui::channels::ChannelKind"
+new = "craft_imaging::ui::channels::ChannelKind"
+status = "same"
+note = "Unchanged."
+
+[[type]]
+name = "ChannelsFooterButton"
+old = "craft_imaging::ui::channels::ChannelsFooterButton"
+new = "craft_imaging::ui::channels::ChannelsFooterButton"
+status = "same"
+note = "Unchanged."
+

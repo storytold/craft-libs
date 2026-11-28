@@ -26,10 +26,14 @@ const BUILTIN_FORMATS: [(u32, &str); 36] = [
     (20, "h:mm"),
     (21, "h:mm:ss"),
     (22, "m/d/yyyy h:mm"),
-    (37, "#,##0 ;(#,##0)"),
-    (38, "#,##0 ;[Red](#,##0)"),
-    (39, "#,##0.00;(#,##0.00)"),
-    (40, "#,##0.00;[Red](#,##0.00)"),
+    // 37 to 40 are the codes Excel reports for these ids, not the ECMA-376 Part 1 18.8.30 text
+    // (`#,##0 ;(#,##0)`, `#,##0.00;(#,##0.00)` and their [Red] forms). Excel pads a positive number
+    // by the width of a closing parenthesis (`_)`). It writes neither a numFmt nor a FORMAT record
+    // for them, so these codes are what a file Excel saved means.
+    (37, "#,##0_);(#,##0)"),
+    (38, "#,##0_);[Red](#,##0)"),
+    (39, "#,##0.00_);(#,##0.00)"),
+    (40, "#,##0.00_);[Red](#,##0.00)"),
     (41, "_(* #,##0_);_(* \\(#,##0\\);_(* \"-\"_);_(@_)"),
     (42, "_(\"$\"* #,##0_);_(\"$\"* \\(#,##0\\);_(\"$\"* \"-\"_);_(@_)"),
     (43, "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)"),
@@ -84,6 +88,17 @@ mod tests {
             }
         }
         assert_eq!(builtin_format_id("yyyy"), None);
+    }
+
+    #[test]
+    fn formats_37_to_40_are_the_codes_excel_reports() {
+        let codes = ["#,##0_);(#,##0)", "#,##0_);[Red](#,##0)", "#,##0.00_);(#,##0.00)", "#,##0.00_);[Red](#,##0.00)"];
+        for (id, code) in (37..=40).zip(codes) {
+            assert_eq!(builtin_format(id), Some(code), "{id}");
+            assert_eq!(builtin_format_id(code), Some(id), "{id}");
+        }
+        // The 18.8.30 text is not a built-in, so it is written as a custom format.
+        assert_eq!(builtin_format_id("#,##0.00;(#,##0.00)"), None);
     }
 
     #[test]

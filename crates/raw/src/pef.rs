@@ -27,6 +27,7 @@ const CROP_ORIGIN: u16 = 0x0038;
 const CROP_SIZE: u16 = 0x0039;
 const BLACK_POINT: u16 = 0x0200;
 const WB_LEVELS: u16 = 0x0201;
+const KELVIN_WB: u16 = 0x0221;
 const HUFFMAN: u16 = 0x0220;
 
 /// Parse the maker-note Huffman table.
@@ -120,6 +121,24 @@ fn dark_trimmed(d: &[u16], w: usize, h: usize, black: Option<f64>, white: f32) -
     let (left, width) = edges(w, &col_mean);
     let (top, height) = edges(h, &row_mean);
     Rect::new(left, top, width, height)
+}
+
+/// The Kelvin presets of maker note `0x0221` (tag number and layout from `exiftool -v3` run as a black-box tool on
+/// the files, then checked against the files' own bytes): a `u16`, then 8-byte entries of four `u16`, the first
+/// the temperature as `53190 - K`, then 0, then the red and blue multipliers in units of 8192 (green 1). The first
+/// entry is the daylight white (5205 K) and the rest run from 2500 K up. `None` unless they make a curve.
+fn kelvin_presets(mn: Option<&makernote::MakerNote>) -> Option<crate::kelvin::KelvinPresets> {
+    let mn = mn?;
+    let craft_tiff::Value::Undefined(b) = mn.ifd.value(KELVIN_WB)? else { return None };
+    let words: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| mn.order.u16(*c)).collect();
+    let points = words
+        .get(1..)?
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|e| e[0] != 0 && e[0] < 53190 && e[2] != 0 && e[3] != 0)
+        .map(|e| ((53190 - u32::from(e[0])) as f32, [f32::from(e[2]), 8192.0, f32::from(e[3])]));
+    crate::kelvin::KelvinPresets::from_unordered(points)
 }
 
 /// Whether every strip or tile of a one-sample-per-pixel image holds exactly the bytes that its rows need when
@@ -235,7 +254,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         active_area: active,
         crop: Rect::new(0, 0, active.width, active.height),
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: kelvin_presets(mn.as_ref()), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
         linearization_table: None,
@@ -254,6 +273,32 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kelvin_presets_from_maker_note_0221() {
+        use craft_tiff::{IfdBuilder, TiffWriter, Value};
+        // a u16, then entries of (53190 - K, 0, red * 8192, blue * 8192): daylight first, then 2500 K upward
+        let entry = |k: u32, r: f64, b: f64| [(53190 - k) as u16, 0, (r * 8192.0) as u16, (b * 8192.0) as u16];
+        let mut words = vec![0u16];
+        for e in [entry(5205, 1.83, 1.16), entry(2500, 1.06, 2.32), entry(3330, 1.4, 1.9), entry(4550, 1.7, 1.45), entry(6500, 2.0, 1.05)] {
+            words.extend(e);
+        }
+        let note = |words: &[u16]| {
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_be_bytes()).collect();
+            let ifd = IfdBuilder::new().with(KELVIN_WB, Value::Undefined(bytes));
+            let file = TiffWriter::new(ByteOrder::Big, false).write(&[ifd]).unwrap();
+            let ifd = Tiff::parse(&file).unwrap().ifds.remove(0);
+            makernote::MakerNote { kind: makernote::MakerNoteKind::Plain, order: ByteOrder::Big, base: 0, ifd }
+        };
+        let p = kelvin_presets(Some(&note(&words))).unwrap();
+        let kelvins: Vec<f32> = p.points().iter().map(|p| p.0).collect();
+        assert_eq!(kelvins, [2500.0, 3330.0, 4550.0, 5205.0, 6500.0]);
+        let daylight = p.points()[3].1;
+        assert!((daylight[0] - 1.83).abs() < 1e-3 && (daylight[2] - 1.16).abs() < 1e-3, "{daylight:?}");
+        // no tag, or too few usable entries: none
+        assert!(kelvin_presets(None).is_none());
+        assert!(kelvin_presets(Some(&note(&words[..9]))).is_none());
+    }
 
     /// Our own prefix code for categories 0..=14: lengths 2,2,3,3,4,5,..., codes assigned canonically.
     fn test_table() -> (Vec<u8>, Vec<(u16, u8)>) {

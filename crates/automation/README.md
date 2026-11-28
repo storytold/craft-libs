@@ -1,0 +1,25 @@
+# craft-automation
+
+Drive a running Craft app from tests, agents and the CLI, and record and play actions. The control channel, its transport, screenshots, the profiler and the trace are desktop only; `actions`, `ui::actions` and the agent settings build on every target, the browser included.
+
+Features: `ui` (the egui parts), `agents` (agents in the open window: the launcher's switch, the connection file, the link host and the Agents page; desktop), `screen-testing` (stories and the integration binary; turns on both).
+
+| Module | What it gives the app |
+| --- | --- |
+| `actions` | Recorded actions (every target): `ActionList` of `Action`s and `ActionStep`s, `ActionsFile`, playback with `ActionPlayer` and `ActionRunner` under a `PlaybackBudget`, and `Recording`. The app keeps the command table. |
+| `ui::actions` | `ActionsPanel` (every target): sets, actions and steps as a tree, include and dialog cells, rename (`start_rename`), drag to move, Button Mode, the footer and the menus (`ActionsPanelCommands`, `ActionsMenuFacts` and `panel_rows`, which leaves out the rows the host has no command for). It runs nothing; it reports `ActionsEvent`s. `ActionsPanelState` holds its view state. `ActionsWords` holds its words. |
+| `agents` | AI agents in the open window. Every target: `AgentSettings` (Control Port, the folders agents may open from and save to, `WhenAppClosed`, Allow Agent Control) and `agents_allowed`. Desktop, feature `agents`: `AgentSwitch`, the ArtCraft Launcher's switch for the app behind the suite's `AI-MCP` flag, watched on a thread; the connection file (`Connection`, `write_connection`, `read_connection`, `remove_stale_connection`, `probe`) that the app's `<id>-cli mcp` finds the open window by; the CLI's live client (`Live`, `LiveConfig`, `Route`). All of these are `craft_control::agents`, re-exported, so apps without the shared UI library use the same code. With `ui`: `AgentLink`, the link host that starts, moves, stops and retries the agents' control server to match the settings and publishes the connection file. |
+| `ui::agents` | `AgentsPage` (desktop, features `agents` and `ui`): the Agents page of Preferences, a custom page over the agent settings in the Preferences draft, with the link's status; the folder rows are `PathSetting`s. `AgentsWords` holds its words. |
+| `args` | `ControlOptions`: the `--control <PORT>`, `--control-token`, `--control-token-file` values and their `<APP>_CONTROL_*` environment fallbacks, checked the way the apps' command lines report them (usage errors exit 2). |
+| `security` | Tokens (`generate_token`, `validate_token`, `server_token`, `client_token`), the authentication handshake (`ServerHandshake`: the challenge handshake, which never sends the token, or the one-frame `auth {token}`), bounded line reads, connection and request limits. |
+| `protocol` | The JSON-lines wire format: one `{"id", "method", "params"}` request per line, one `{"id", "ok", "result" | "error"}` reply per line; `Params` validators that name the bad parameter. |
+| `control` | `ControlRequest`, `Reply`, `Dispatch` and `ControlChannel`: the UI-thread side that drains requests between frames, replies after injected input or a background job settles, and admits screenshots. The app supplies the method table. |
+| `synthetic` | `Click`, `Move`, `Drag`, `Wheel`, `KeyPress` and `Release`: the validated parameters of `ui.click`, `ui.move`, `ui.drag` (a press, moves in even steps and the release, from one request), `ui.wheel` (`unit: "points"` or `"lines"`), `ui.key` and `ui.release`, each point a screen point, a document point or a `control` target, and `input_method`'s `ui.ime` `{preedit, cursor}` and `{commit}` forms, queued through `WindowHost::inject_*` one step per pass. |
+| `access` | Named controls over the window's access tree (`ui` feature): `Target` (`{name, role?, within?, index?}`, found in reading order), `describe`, and `access_method`, which answers `ui.find` from the tree `ControlChannel::poll_input` has the host keep. |
+| `server` | `listen` (bind a port) and `serve` (a listener bound earlier): the loopback TCP server that authenticates each connection and forwards requests to the channel, until its `Listening` is dropped. |
+| `client` | `ControlClient`: connect, authenticate, call (a screenshot is `call("ui.screenshot", ..)`); for integration tests and CLIs. |
+| `screenshot` | `Captures`: the bounded, cancellable screenshot queue over `WindowHost::screenshot`, with settling, geometry epochs, retries and the PNG reply. |
+| `profiler` | `FrameStages` and `SlowFrames`: where a frame's time went, the slow ones kept for the control channel's `perf` output and one log line a second. |
+| `trace` | `FrameTrace`: every frame of a gesture (a brush stroke, a drag) as a row, a percentile summary per gesture, optional CSV. |
+
+The app owns its methods (`engine.execute`, `ui.inspect`, `ui.set`, …): `ControlChannel::next_request` hands it each request and `ControlChannel::settle` takes the `Reply`. The library owns everything a method table does not: deadlines, dispatch accounting, waiters, the screenshot budget, injected input and the transport.

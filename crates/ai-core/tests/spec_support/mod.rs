@@ -24,19 +24,6 @@ pub fn queue() -> Value {
     })
 }
 
-pub fn direct() -> Value {
-    json!({
-        "spec_version": 1, "id": "plain-images", "label": "Plain Images",
-        "base": "http://127.0.0.1:8080",
-        "models": [{"id": "m", "label": "M", "capability": "image.generate",
-                    "accepts": {"prompt": 1}, "requires": ["prompt"]}],
-        "flow": {"kind": "request_response",
-            "call": {"method": "POST", "path": "/images",
-                     "body": {"model": "{model}", "prompt": "{prompt}"}},
-            "result": {"at": "/data/0/b64_json", "as": "base64", "media_type": "image/png"}}
-    })
-}
-
 /// Replaces the value at `pointer`, or adds it when the parent object lacks that key.
 pub fn set(mut v: Value, pointer: &str, to: Value) -> Value {
     let (parent, key) = pointer.rsplit_once('/').unwrap_or(("", pointer));

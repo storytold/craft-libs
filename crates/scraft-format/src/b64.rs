@@ -37,7 +37,12 @@ fn value(c: u8) -> Option<u32> {
 /// Decodes padded (or unpadded) standard base64. `None` for malformed input or a result larger
 /// than [`MAX_DECODED_BYTES`].
 pub fn decode(text: &str) -> Option<Vec<u8>> {
-    if text.bytes().filter(|c| !c.is_ascii_whitespace()).count() > MAX_DECODED_BYTES.div_ceil(3).saturating_mul(4) {
+    decode_capped(text, MAX_DECODED_BYTES)
+}
+
+/// [`decode`] with the output capped at `max` bytes.
+fn decode_capped(text: &str, max: usize) -> Option<Vec<u8>> {
+    if text.bytes().filter(|c| !c.is_ascii_whitespace()).count() > max.div_ceil(3).saturating_mul(4) {
         return None;
     }
     let syms: Vec<u8> = text.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
@@ -46,7 +51,7 @@ pub fn decode(text: &str) -> Option<Vec<u8>> {
         return None;
     }
     let decoded_len = body.len() / 4 * 3 + body.len() % 4 * 3 / 4;
-    if decoded_len > MAX_DECODED_BYTES {
+    if decoded_len > max {
         return None;
     }
     let mut out = Vec::with_capacity(decoded_len);
@@ -99,16 +104,17 @@ mod tests {
             encoded
         }
 
-        // Build valid base64 directly instead of encoding a 64 MiB allocation on every case.
-        // This keeps the same decoded-size boundary checks while making the workspace gate much
-        // faster and using less temporary memory.
-        let exact = encoded_zero_bytes(MAX_DECODED_BYTES);
-        assert_eq!(decode(&exact).map(|bytes| bytes.len()), Some(MAX_DECODED_BYTES), "padded boundary");
-        assert_eq!(decode(exact.trim_end_matches('=')).map(|bytes| bytes.len()), Some(MAX_DECODED_BYTES), "unpadded boundary");
-
-        let too_large = encoded_zero_bytes(MAX_DECODED_BYTES + 1);
-        assert!(decode(&too_large).is_none(), "padded over boundary");
-        let spaced = format!("{}\n {}", &too_large[..8], &too_large[8..]);
-        assert!(decode(&spaced).is_none(), "whitespace over boundary");
+        // The boundary at a cap of every remainder mod 3; nightly also at the real 64 MiB cap.
+        let full = craft_testkit::hostile::divisor() == 1;
+        let caps = [97, 98, 99].into_iter().chain(full.then_some(MAX_DECODED_BYTES));
+        for max in caps {
+            let exact = encoded_zero_bytes(max);
+            assert_eq!(decode_capped(&exact, max).map(|bytes| bytes.len()), Some(max), "padded boundary at {max}");
+            let too_large = encoded_zero_bytes(max + 1);
+            assert!(decode_capped(&too_large, max).is_none(), "padded over boundary at {max}");
+            assert_eq!(decode_capped(exact.trim_end_matches('='), max).map(|bytes| bytes.len()), Some(max), "unpadded boundary at {max}");
+            let spaced = format!("{}\n {}", &too_large[..8], &too_large[8..]);
+            assert!(decode_capped(&spaced, max).is_none(), "whitespace over boundary at {max}");
+        }
     }
 }

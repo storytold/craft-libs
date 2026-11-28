@@ -4,6 +4,8 @@
 
 use craft_fonts_build::{EmbeddedFace, ServedFace};
 
+/// The faces the build script embedded.
 pub static CRAFT_FONTS: &[EmbeddedFace] = include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
 
+/// The faces the build script wrote for serving.
 pub static CRAFT_FONTS_SERVED: &[ServedFace] = include!(concat!(env!("OUT_DIR"), "/craft_fonts_served.rs"));

@@ -9,13 +9,17 @@
 //!   Folder don't go through rfd at all on macOS: see [`crate::macos`].
 //! - Windows: the dialog runs on a thread rfd starts when the worker first polls the future.
 //! - Linux and the BSDs: the desktop portal (zenity as a fallback) works when the worker polls the
-//!   future; rfd's optional GTK3 backend runs on rfd's own GTK thread.
+//!   future; rfd's optional GTK3 backend runs on rfd's own GTK thread. A portal that cannot show
+//!   its dialog answers "nothing picked" at once, which reads like a cancel; [`timed`] tells the
+//!   two apart by how long the dialog was open.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::task::{Context, Poll, Wake, Waker};
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+use std::time::{Duration, Instant};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -24,12 +28,26 @@ use crate::{Answer, FileDialog, Kind, Message, MessageButtons, MessageLevel, Mes
 type Pending = Pin<Box<dyn Future<Output = Answer> + Send>>;
 
 /// What [`crate::Dialogs`] keeps while a dialog is on screen: on macOS, the free-standing panel to
-/// raise. Other platforms have none.
-pub(crate) type Shown = Option<Panel>;
-#[cfg(target_os = "macos")]
-pub(crate) use crate::macos::Panel;
-#[cfg(not(target_os = "macos"))]
-pub(crate) type Panel = std::convert::Infallible;
+/// raise; on Linux and the BSDs, the cancel of a portal Save in flight.
+#[derive(Default)]
+pub(crate) struct Shown {
+    /// The free-standing Open or Folder panel.
+    #[cfg(target_os = "macos")]
+    pub(crate) panel: Option<crate::macos::Panel>,
+    /// Stops the portal Save this dialog is.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+    pub(crate) cancel: Option<crate::portal::Cancel>,
+}
+
+impl Shown {
+    /// Closes the portal Save this dialog is; other dialogs cannot be closed from outside.
+    pub(crate) fn cancel_save(&mut self) {
+        #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
+    }
+}
 
 pub(crate) fn show<W: HasWindowHandle + HasDisplayHandle>(request: Request, parent: Option<&W>, reply: Reply) -> Shown {
     // rfd quietly drops a parent whose handles it can't get; the checks below need to know.
@@ -38,27 +56,27 @@ pub(crate) fn show<W: HasWindowHandle + HasDisplayHandle>(request: Request, pare
         Request::File(dialog) => show_file(dialog, parent, reply),
         Request::Message(message) => {
             show_message(message, parent, reply);
-            None
+            Shown::default()
         }
     }
 }
 
 fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Option<&W>, reply: Reply) -> Shown {
     #[cfg(target_os = "macos")]
-    let parent = match d.kind {
-        Kind::Open { .. } | Kind::Folder => return crate::macos::show_panel(&d, reply),
+    let (parent, reply) = match d.kind {
+        Kind::Open { .. } | Kind::Folder => return Shown { panel: crate::macos::show_panel(&d, reply) },
         Kind::Save => match crate::macos::sheet_parent(parent) {
-            Ok(parent) => Some(parent),
+            Ok(parent) => match crate::macos::show_save_sheet(&d, parent, reply) {
+                Ok(()) => return Shown::default(),
+                Err(reply) => (Some(parent), reply),
+            },
             Err(why) => {
                 reply.send(Answer::Unavailable(why));
-                return None;
+                return Shown::default();
             }
         },
     };
     let mut dialog = rfd::AsyncFileDialog::new();
-    if let Some(parent) = parent {
-        dialog = dialog.set_parent(parent);
-    }
     if let Some(title) = &d.title {
         dialog = dialog.set_title(title);
     }
@@ -71,10 +89,51 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
     if let Some(name) = &d.file_name {
         dialog = dialog.set_file_name(name);
     }
+    // The same dialog without a parent: a dialog that closed at once is asked again with it.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+    let bare = dialog.clone();
+    if let Some(parent) = parent {
+        dialog = dialog.set_parent(parent);
+    }
     // The worker first, so a dialog once shown always has somewhere to answer.
-    let worker = worker(reply)?;
+    let Some(worker) = worker(reply) else { return Shown::default() };
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+    let (pending, shown): (Pending, Shown) = match d.kind {
+        // The portal's own Save dialog, which reports the file type picked; rfd's when the portal
+        // can't show it.
+        Kind::Save => {
+            let parent_id = crate::portal::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
+            let request = crate::portal::SaveRequest::new(&d, parent_id);
+            let cancel = crate::portal::Cancel::default();
+            let shown = Shown { cancel: Some(cancel.clone()) };
+            let pending: Pending = Box::pin(async move {
+                match crate::portal::save_as(request, &cancel) {
+                    crate::portal::SaveOutcome::Saved(path, filter) => Answer::Saved { path, filter },
+                    crate::portal::SaveOutcome::Cancelled => Answer::Cancelled,
+                    crate::portal::SaveOutcome::Unavailable(why) => Answer::Unavailable(why),
+                    crate::portal::SaveOutcome::UseRfd(why) => {
+                        log::info!("portal save dialog unavailable ({why}), using rfd");
+                        retried(dialog, bare, Kind::Save).await
+                    }
+                }
+            });
+            (pending, shown)
+        }
+        kind => (retried(dialog, bare, kind), Shown::default()),
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd")))]
+    let (pending, shown) = (rfd_pick(dialog, d.kind), Shown::default());
+    // The worker can't be gone: it waits for this. If it were, its reply answers Unavailable.
+    let _ = worker.send(pending);
+    shown
+}
+
+/// rfd's dialog of `kind`, as an answer. On macOS creating the future shows the dialog, so this
+/// runs where the dialog is to show.
+fn rfd_pick(dialog: rfd::AsyncFileDialog, kind: Kind) -> Pending {
     let one = |file: Option<rfd::FileHandle>| file.map_or(Answer::Cancelled, |f| Answer::Paths(vec![f.path().to_path_buf()]));
-    let pending: Pending = match d.kind {
+    let saved = |file: Option<rfd::FileHandle>| file.map_or(Answer::Cancelled, |f| Answer::Saved { path: f.path().to_path_buf(), filter: None });
+    match kind {
         Kind::Open { multiple: false } => {
             let picked = dialog.pick_file();
             Box::pin(async move { one(picked.await) })
@@ -94,12 +153,39 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
         }
         Kind::Save => {
             let picked = dialog.save_file();
-            Box::pin(async move { one(picked.await) })
+            Box::pin(async move { saved(picked.await) })
         }
-    };
-    // The worker can't be gone: it waits for this. If it were, its reply answers Unavailable.
-    let _ = worker.send(pending);
-    None
+    }
+}
+
+/// rfd's dialog of `kind` on `dialog`, [`timed`], asked again on `bare` (no parent) when it
+/// closed at once.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+fn retried(dialog: rfd::AsyncFileDialog, bare: rfd::AsyncFileDialog, kind: Kind) -> Pending {
+    let start = Instant::now();
+    Box::pin(timed(rfd_pick(dialog, kind), move || rfd_pick(bare, kind), move || start.elapsed()))
+}
+
+/// The answer of a pick, told apart from a dialog that never showed: an empty answer within
+/// [`TOO_QUICK`](crate::portal::TOO_QUICK) is a portal that failed to show its dialog (#2999), not
+/// a user's cancel, so the pick is asked once more through `again` (the dialog without a parent,
+/// which some portals refuse). Empty at once again answers [`Answer::Unavailable`]. A slow empty
+/// answer is the user's cancel. `now` reads a monotonic clock.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+pub(crate) async fn timed<F, G>(pick: F, again: impl FnOnce() -> G, now: impl Fn() -> Duration) -> Answer
+where
+    F: Future<Output = Answer>,
+    G: Future<Output = Answer>,
+{
+    let at_once = |answer: &Answer, since: Duration| matches!(answer, Answer::Cancelled) && now().saturating_sub(since) < crate::portal::TOO_QUICK;
+    let start = now();
+    let answer = pick.await;
+    if !at_once(&answer, start) {
+        return answer;
+    }
+    let start = now();
+    let answer = again().await;
+    if at_once(&answer, start) { Answer::Unavailable(crate::portal::CLOSED_AT_ONCE.into()) } else { answer }
 }
 
 fn show_message<W: HasWindowHandle + HasDisplayHandle>(m: Message, parent: Option<&W>, reply: Reply) {

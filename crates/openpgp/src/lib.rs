@@ -101,7 +101,19 @@ pub(crate) fn guard<T>(f: impl FnOnce() -> T) -> Option<T> {
 /// [`Outcome::Verified`] only when the signature covers all of it ([`Coverage::whole`]); one
 /// that covers part of it is at best [`Outcome::Valid`] with [`NotVerified::partly_signed`].
 pub fn verify(original: &[u8], from: &str, keys: &KeyRing, now: u64, verified: impl Fn(&Fingerprint, &str) -> bool) -> Option<Checked> {
-    if original.len() > MAX_MESSAGE {
+    verify_within(original, MAX_MESSAGE, from, keys, now, verified)
+}
+
+/// [`verify`] for messages of at most `max` bytes.
+fn verify_within(
+    original: &[u8],
+    max: usize,
+    from: &str,
+    keys: &KeyRing,
+    now: u64,
+    verified: impl Fn(&Fingerprint, &str) -> bool,
+) -> Option<Checked> {
+    if original.len() > max {
         return looks_signed(original).then(|| Checked { outcome: Outcome::cant(CantCheck::TooLarge), coverage: Coverage::default() });
     }
     let cx = check::Context {

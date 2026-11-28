@@ -6,8 +6,9 @@
 //! that reads one request from standard input and writes one reply to standard output. A file that
 //! kills the worker then costs that one open or save, and every other open drawing stays safe.
 //!
-//! Without a worker [`decode`] and [`encode_as`] refuse rather than run the conversion in the
-//! calling process, because the third-party code is the part that can end a process.
+//! Without a worker [`decode`], [`encode_as`], [`encode_noted`] and [`encode_kept_noted`] refuse
+//! rather than run the conversion in the calling process, because the third-party code is the part
+//! that can end a process.
 //! [`allow_in_process`] is the explicit exception, for input the caller knows is trusted (tests, or
 //! bytes this process produced itself). There's no memory limit on the worker yet: that takes
 //! per-platform system calls, which `unsafe_code = "forbid"` keeps out of this crate.
@@ -62,7 +63,9 @@ pub fn use_worker(program: PathBuf, args: Vec<OsString>) {
 }
 
 /// Use a copy of this program as the worker, started with [`WORKER_ARG`]. If its path can't be
-/// found, the reader and writer stay in this process.
+/// found, the worker setting does not change. When no worker was set before, [`decode`],
+/// [`encode_as`], [`encode_noted`] and [`encode_kept_noted`] then refuse unless
+/// [`allow_in_process`] was called.
 pub fn use_own_worker() {
     match std::env::current_exe() {
         Ok(program) => use_worker(program, vec![WORKER_ARG.into()]),
@@ -70,7 +73,8 @@ pub fn use_own_worker() {
     }
 }
 
-/// Let [`decode`] and [`encode_as`] run the conversion in this process when no worker is set.
+/// Let [`decode`], [`encode_as`], [`encode_noted`] and [`encode_kept_noted`] run the conversion in
+/// this process when no worker is set.
 ///
 /// This opts out of the isolation the crate exists for: the third-party code allocates from sizes
 /// a hostile file declares, and a failed allocation ends the process. Call it for input the caller

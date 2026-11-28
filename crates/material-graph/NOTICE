@@ -1,0 +1,8 @@
+craft-material-graph
+Derived from MaterialCraft by PiJellyPin and contributors (https://github.com/PiJellyPin/MaterialCraft, not
+storytold/materialcraft): copied and adapted, not a dependency.
+Adapted for the original TextureCraft SPP importer by xilefenko with subsequent contributions from vangel76.
+The original notice also covers the PNG encoder copy in TextureCraft's original project reader.
+Extracted into craft-libs from TextureCraft at 22a37c29e98d8e6fc8c5e611e22f0ab95b83243d.
+
+Dual licensed under the Apache License 2.0 or the MIT License, at your option.

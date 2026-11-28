@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-platform"
 version.workspace = true
 edition.workspace = true
@@ -12,13 +13,39 @@ workspace = true
 
 [features]
 default = []
-dialogs = []
-appearance = ["dep:zbus", "dep:futures-lite", "dep:async-channel", "dep:async-io", "dep:async-process"]
-browser = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys"]
-egui = ["dep:egui"]
+# `appearance`: also Windows' UI settings and macOS' accessibility display setting (reduced motion).
+appearance = ["dep:zbus", "dep:futures-lite", "dep:async-channel", "dep:async-io", "dep:async-process", "dep:web-sys", "dep:windows", "dep:objc2-app-kit"]
+# `browser`: downloads, and the file picker and save through `rfd`.
+browser = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys", "dep:rfd", "dep:wasm-bindgen-futures"]
+# `SystemReader::report_contrast` and `report_reduced_motion`: preferences a test sets in place of an OS source.
+testing = ["appearance"]
+# Moving the system pointer (a scrub's screen-edge wrap).
+pointer = ["dep:core-graphics"]
+# `usage`: the process's memory use.
+usage = ["dep:sysinfo"]
+# Screen capture for the screen colour picker (`craft_platform::screen`).
+screen = ["dep:zbus", "zbus?/blocking-api", "dep:futures-lite", "dep:async-io", "dep:x11rb", "dep:core-graphics2", "dep:xcap"]
+# `clipboard`: the clipboard handle with size limits, the synthetic-input fence, the paste probe, `EventClipboard` and `MemoryClipboard`; no system crates.
+clipboard = []
+# `clipboard-system`: `SystemClipboard` over the OS: arboard, and the formats on offer asked of Windows, macOS, Wayland and X11.
+clipboard-system = ["clipboard", "dep:arboard", "dep:clipboard-win", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:wl-clipboard-rs", "dep:x11rb"]
+# `open::apple_events`: Apple Events requests (macOS).
+apple-events = ["dep:fmv-macos-events"]
 
 [dependencies]
-egui = { workspace = true, optional = true }
+craft-theme = { workspace = true }
+log = "0.4"
+web-time = "1.1"
+craft-atomic = { workspace = true }
+craft-docpath = { workspace = true }
+craft-host = { workspace = true }
+craft-i18n = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Version eframe already pulls in; image data only (no default features beyond it).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"], optional = true }
 
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
@@ -26,12 +53,38 @@ futures-lite = { version = "2", optional = true }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 async-process = { version = "2", optional = true }
+x11rb = { version = "0.13", default-features = false, features = ["image", "randr"], optional = true }
+
+# Wayland's offer list; the version arboard (feature `wayland-data-control`) already locks.
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))))'.dependencies]
+wl-clipboard-rs = { version = "0.9", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The versions arboard already pulls in. `objc2-app-kit`: the pasteboard's formats and RTF, and `appearance`'s reduced-motion setting
+# (`NSWorkspace`, `NSAccessibility`); `objc2-foundation`: the RTF and PNG bytes (`NSData`).
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSWorkspace", "NSAccessibility"], optional = true }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSEnumerator", "NSData"], optional = true }
+# Apple Events behind a safe API, pinned exactly: review the diff before bumping.
+fmv-macos-events = { version = "=0.1.0", optional = true }
+core-graphics = { version = "0.23", optional = true }
+core-graphics2 = { version = "=0.6.1", default-features = false, features = ["display", "window", "link"], optional = true }
+
+# Linux reads `/proc`; elsewhere `sysinfo` gives the system's available memory (MIT).
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win = { version = "5.3.1", features = ["std"], optional = true }
+# The system's reduced-motion setting (`UISettings`).
+windows = { version = "0.62", features = ["UI_ViewManagement"], optional = true }
+xcap = { version = "=0.9.8", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
-web-sys = { version = "0.3", features = ["Window", "Document", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Node", "Element"], optional = true }
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Node", "Element", "MediaQueryList"], optional = true }
+rfd = { version = "0.17.2", default-features = false, optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
-wasm-bindgen-futures = "0.4"

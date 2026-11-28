@@ -158,12 +158,30 @@ impl PDict {
         self.0.borrow_mut().map.insert(k, (key, v));
     }
 
+    pub fn put_ret(&self, key: Obj, v: Obj) -> (Key, Option<(Obj, Obj)>) {
+        let k = key.key();
+        let old = self.0.borrow_mut().map.insert(k.clone(), (key, v));
+        (k, old)
+    }
+
     pub fn put_name(&self, n: &[u8], v: Obj) {
         self.put(Obj::Name(name(n), false), v);
     }
 
     pub fn remove(&self, k: &Key) {
         self.0.borrow_mut().map.remove(k);
+    }
+
+    pub fn remove_ret(&self, k: &Key) -> Option<(Obj, Obj)> {
+        self.0.borrow_mut().map.remove(k)
+    }
+
+    pub fn restore_entry(&self, k: Key, old: Option<(Obj, Obj)>) {
+        let mut inner = self.0.borrow_mut();
+        match old {
+            Some(entry) => inner.map.insert(k, entry),
+            None => inner.map.remove(&k),
+        };
     }
 
     pub fn len(&self) -> usize {

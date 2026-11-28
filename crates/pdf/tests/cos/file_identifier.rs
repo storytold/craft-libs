@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::testkit::Pdf;
+use super::testkit::Pdf;
 use craft_pdf::cos::{Algorithm, Document, NewEncryption, Object, PdfString, SaveOptions, write_full, write_incremental};
 
 const ID_HEX: &str = "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]";
@@ -261,7 +261,7 @@ fn separate_fresh_processes_get_different_identifiers() {
         let path = std::env::temp_dir().join(format!("craft-pdf-id-probe-{}-{name}.pdf", std::process::id()));
         let out = std::process::Command::new(&exe)
             // The test binary holds every `cos` test module, so the child test is named by its path.
-            .args(["--exact", "file_identifier::stand_in_for_a_fresh_process", "--nocapture", "--"])
+            .args(["--exact", "integration::cos::file_identifier::stand_in_for_a_fresh_process", "--nocapture", "--"])
             .env(ID_PROBE, &path)
             .output()
             .expect("run this test's own binary as a child");

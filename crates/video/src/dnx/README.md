@@ -70,7 +70,7 @@ first frame header to label the stream.
   12-bit coefficient domain is ¼ of the orthonormal DCT, as Table 14's 13-bit IDCT input range
   for 12-bit samples implies) and 1 otherwise.
 - Robustness: every offset and size is validated, run lengths past coefficient 63 are rejected,
-  and corrupted or truncated streams return `Err` without panicking ([`roundtrip.rs`](../../tests/dnx/roundtrip.rs)).
+  and corrupted or truncated streams return `Err` without panicking ([`fuzz_hostile.rs`](../../tests/it/dnx/fuzz_hostile.rs)).
 
 ### Where we follow ffmpeg rather than the letter of the standard
 
@@ -111,7 +111,7 @@ the prose of §7.3.1.2; we follow the prose (normative text takes precedence).
 
 ## Accuracy (vs ffmpeg as an external oracle)
 
-[`oracle_decode.rs`](../../tests/dnx/oracle_decode.rs) decodes 22 fixtures made by ffmpeg's VC-3 encoder: CIDs 1235, 1237,
+[`oracle_decode.rs`](../../tests/it/dnx/oracle_decode.rs) decodes 22 fixtures made by ffmpeg's VC-3 encoder: CIDs 1235, 1237,
 1238, 1241, 1242, 1243, 1244, 1250, 1251, 1252, 1253, 1258, 1259 and DNxHR LB/SQ/HQ/HQX/444
 (Y′CbCr and RGB), with testsrc2, mandelbrot and heavy noise, at 1920×1080, 1280×720, 960×720,
 1440×1080 (thin raster, interlaced), 1000×562, 640×360, 256×120 and 3840×2160. Compared with
@@ -122,7 +122,7 @@ decoder evaluates the exact IDCT of equation 8.3, so decode is **not bit-exact, 
 precision** of ffmpeg. (ffmpeg wraps rather than clips 10-bit reconstructions that overflow
 1023, so the noise fixtures keep their samples inside 24…231 before encoding.)
 
-[`oracle_encode.rs`](../../tests/dnx/oracle_encode.rs) encodes 1920×1080 frames with every profile and writes them into a
+[`oracle_encode.rs`](../../tests/it/dnx/oracle_encode.rs) encodes 1920×1080 frames with every profile and writes them into a
 minimal test-only MOV. ffmpeg decodes them with `-xerror`, without errors, and agrees with our
 decoder within ±2 (90–99% identical). Luma PSNR against the source: HQ 58.8 dB (mandelbrot) and
 66.3 dB (testsrc2), SQ 57.5 dB, LB 56.1 dB, HQX 10-bit 67.5 dB, HQX 12-bit 80.2 dB, 444 10-bit

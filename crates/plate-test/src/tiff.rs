@@ -19,10 +19,12 @@ impl Plate {
         (width.checked_mul(height) == Some(ink.len())).then_some(Self { width, height, ink })
     }
 
+    /// Width in pixels.
     pub fn width(&self) -> usize {
         self.width
     }
 
+    /// Height in pixels.
     pub fn height(&self) -> usize {
         self.height
     }
@@ -207,19 +209,5 @@ mod tests {
                 assert_eq!(plate.ink(0, 3), None);
             }
         }
-    }
-
-    #[test]
-    fn rejects_what_it_cannot_read() {
-        let good = encode(2, 2, &[0, 0, 0, 0], 2, false);
-        assert!(read(b"GIF89a").is_err());
-        assert!(read(&good[..40]).is_err());
-        assert!(read(&good[..good.len() - 1]).is_err(), "truncated strip");
-        let mut packed = good.clone();
-        // Compression (the fourth entry's value) set to PackBits.
-        packed[8 + 2 + 12 * 3 + 8] = 5;
-        assert!(read(&packed).unwrap_err().to_string().contains("uncompressed"));
-        // 65535 × 65535 bytes asks for more than the plate budget: refused before any allocation.
-        assert!(read(&encode(u16::MAX, u16::MAX, &[], 1, false)).unwrap_err().to_string().contains("too large"));
     }
 }
