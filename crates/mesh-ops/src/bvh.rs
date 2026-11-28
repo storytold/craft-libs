@@ -423,29 +423,41 @@ impl Bvh {
     /// index): a [`Hit`] with the distance in `t` and the barycentrics of vertices 1 and 2.
     pub fn nearest(&self, p: Vec3, max_dist: f32, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
         let root = self.nodes.first().filter(|_| !self.tris.is_empty() && p.is_finite())?;
-        let pa = Vec3A::from(p);
-        let box_d2 = |n: &Node| (n.lo - pa).max(pa - n.hi).max(Vec3A::ZERO).length_squared();
+        // Squared distances are taken in f64: past about 1.8e19 they overflow f32.
+        let pd = p.as_dvec3();
+        let box_d2 = |n: &Node| (n.lo.as_dvec3() - pd).max(pd - n.hi.as_dvec3()).max(DVec3::ZERO).length_squared();
+        // The stack keeps f32 box distances, rounded down so no node is skipped early.
+        let down = |d2: f64| {
+            let d = d2.sqrt();
+            let mut t = d as f32;
+            if f64::from(t) > d {
+                t = t.next_down();
+            }
+            t
+        };
+        let max_dist = f64::from(max_dist);
         let (mut best_d2, mut best) = (max_dist * max_dist, None);
         let mut stack = Stack::default();
-        stack.push((0, box_d2(root)));
-        while let Some((ni, d2)) = stack.pop() {
-            let Some(n) = self.nodes.get(ni as usize).filter(|_| d2 <= best_d2) else { continue };
+        stack.push((0, down(box_d2(root))));
+        while let Some((ni, d)) = stack.pop() {
+            let Some(n) = self.nodes.get(ni as usize).filter(|_| f64::from(d) * f64::from(d) <= best_d2) else { continue };
             if n.count > 0 {
                 for i in n.first as usize..(n.first as usize + n.count as usize).min(self.tris.len()) {
                     let (Some(tri), Some(&orig)) = (self.tris.get(i), self.order.get(i)) else { continue };
                     if !filter(orig) {
                         continue;
                     }
-                    let (q, u, v) = closest_on_triangle(p, tri);
-                    let dd = (q - p).length_squared();
+                    let corners = [tri[0].as_dvec3(), tri[1].as_dvec3(), tri[2].as_dvec3()];
+                    let (q, u, v) = closest_on_triangle(pd, corners);
+                    let dd = (q - pd).length_squared();
                     if dd < best_d2 {
                         best_d2 = dd;
-                        best = Some(Hit { t: dd.sqrt(), tri: orig, u, v });
+                        best = Some(Hit { t: dd.sqrt() as f32, tri: orig, u: u as f32, v: v as f32 });
                     }
                 }
             } else {
                 // Push the farther child first so the nearer one is searched first.
-                let child = |c: u32| self.nodes.get(c as usize).map(|n| (c, box_d2(n)));
+                let child = |c: u32| self.nodes.get(c as usize).map(|n| (c, down(box_d2(n))));
                 let (Some(l), Some(r)) = (child(n.first), child(n.first + 1)) else { continue };
                 let (near, far) = if l.1 <= r.1 { (l, r) } else { (r, l) };
                 stack.push(far);
@@ -486,15 +498,9 @@ impl Bvh {
 
 /// The point of triangle `t` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
 /// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5). Degenerate triangles give
-/// a non-finite distance and are never nearest.
-fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
-    // The region tests multiply four coordinates, which overflows f32 for finite inputs past
-    // about 1e9, so the whole test runs in f64.
-    let (q, v, w) = closest_on_triangle_f64(p.as_dvec3(), [t[0].as_dvec3(), t[1].as_dvec3(), t[2].as_dvec3()]);
-    (q.as_vec3(), v as f32, w as f32)
-}
-
-fn closest_on_triangle_f64(p: DVec3, t: [DVec3; 3]) -> (DVec3, f64, f64) {
+/// a non-finite distance and are never nearest. The region tests multiply four coordinates,
+/// which overflows f32 for finite inputs past about 1e9, so the test runs in f64.
+fn closest_on_triangle(p: DVec3, t: [DVec3; 3]) -> (DVec3, f64, f64) {
     let [a, b, c] = t;
     let (ab, ac, ap) = (b - a, c - a, p - a);
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
@@ -558,6 +564,14 @@ mod tests {
     }
 
     #[test]
+    fn nearest_point_finds_distances_whose_square_overflows_f32() {
+        let bvh = review_triangle([Vec3::ZERO, Vec3::X, Vec3::Y]);
+        let hit = bvh.nearest(Vec3::new(0.25, 0.25, 1e20), 2e20, &|_| true).unwrap();
+        assert!((hit.t / 1e20 - 1.0).abs() < 1e-6, "t = {}", hit.t);
+        assert!(bvh.nearest(Vec3::new(0.25, 0.25, 1e20), 9e19, &|_| true).is_none());
+    }
+
+    #[test]
     fn slab_distances_that_overflow_f32_still_enter_the_box() {
         // lo.z - o.z is -4e38, past f32::MAX, while the hit distance 1e38 fits.
         let z = 2.0e38_f32;
@@ -603,7 +617,7 @@ mod tests {
             let brute = (0..m.triangle_count())
                 .map(|t| {
                     let [a, b, c] = m.tri(t).unwrap().map(|i| m.positions[i]);
-                    (closest_on_triangle(p, &[a, b, c]).0 - p).length()
+                    (closest_on_triangle(p.as_dvec3(), [a.as_dvec3(), b.as_dvec3(), c.as_dvec3()]).0 - p.as_dvec3()).length() as f32
                 })
                 .fold(f32::MAX, f32::min);
             assert!((hit.t - brute).abs() < 1e-5, "{} vs {brute}", hit.t);

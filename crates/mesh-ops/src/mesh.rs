@@ -377,7 +377,7 @@ impl Mesh {
     /// Each triangle split into four at its edge midpoints (shared edges share their midpoint);
     /// attributes are interpolated and submesh ranges keep their triangles.
     pub fn subdivided(&self) -> Mesh {
-        let mut m = Mesh { indices: Vec::with_capacity(self.indices.len() * 4), ..self.clone() };
+        let mut m = Mesh { indices: Vec::with_capacity(self.indices.len() * 4), diagonals: Vec::new(), ..self.clone() };
         let has = |len: usize| len == self.positions.len();
         let (has_n, has_t, has_uv, has_c) = (has(self.normals.len()), has(self.tangents.len()), has(self.uvs.len()), has(self.colors.len()));
         let mut mids = std::collections::HashMap::new();
@@ -401,13 +401,19 @@ impl Mesh {
                 (m.positions.len() - 1) as u32
             })
         };
-        for t in self.indices.as_chunks::<3>().0 {
+        for (ti, t) in self.indices.as_chunks::<3>().0.iter().enumerate() {
             if t.iter().any(|&i| i as usize >= self.positions.len()) {
                 continue;
             }
             let (a, b, c) = (t[0], t[1], t[2]);
             let (ab, bc, ca) = (mid(&mut m, a, b), mid(&mut m, b, c), mid(&mut m, c, a));
             m.indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
+            if !self.diagonals.is_empty() {
+                // The halves of a parent diagonal stay diagonals; the new inner edges are real.
+                let d = self.diagonals.get(ti).copied().unwrap_or(0);
+                let bit = |i: u8| d >> i & 1;
+                m.diagonals.extend_from_slice(&[bit(0) | bit(2) << 2, bit(0) | bit(1) << 1, bit(1) << 1 | bit(2) << 2, 0]);
+            }
         }
         for s in &mut m.submeshes {
             s.start *= 4;
@@ -530,6 +536,15 @@ mod tests {
         a.append(&m);
         assert_eq!(a.diagonals, vec![0, 0b100, 0b001]);
         assert_eq!(crate::primitives::plane(1.0, 2).wire_edges()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
+    }
+
+    #[test]
+    fn subdivision_keeps_polygon_diagonals_on_their_halves() {
+        let plane = crate::primitives::plane(2.0, 1);
+        let s = plane.subdivided();
+        assert_eq!(s.diagonals.len(), s.triangle_count());
+        // 8 halves of the quad's sides and 6 new inner edges; the diagonal's two halves are hidden.
+        assert_eq!(s.wire_edges()[0].len(), 14);
     }
 
     #[test]
