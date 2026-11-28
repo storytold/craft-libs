@@ -560,7 +560,7 @@ fn paired_straight_quotes(text: &str) -> std::collections::HashSet<usize> {
         if c == '\'' {
             let next_word = chars.peek().is_some_and(|(_, c)| c.is_alphanumeric());
             if !prev_word && next_word {
-                open = Some(offset);
+                open.get_or_insert(offset);
             } else if prev_word
                 && !next_word
                 && let Some(start) = open.take()
@@ -856,6 +856,9 @@ mod language_token_tests {
         let quoted_nl = "'T-profiel'";
         assert_eq!(words_for(quoted_nl, |_| dutch), [(1, quoted_nl.len() - 1)]);
         assert_eq!(words_for("'T-profiel met letters'", |_| dutch)[0], (1, "T-profiel".len() + 1));
+        let name_in_quote = "'Welkom in 's-Hertogenbosch'";
+        let name_start = name_in_quote.find("'s-").unwrap();
+        assert_eq!(words_for(name_in_quote, |_| dutch).last().copied(), Some((name_start, name_in_quote.len() - 1)));
         let curved_nl = "‘’s-Hertogenbosch’";
         assert_eq!(words_for(curved_nl, |_| dutch), [('‘'.len_utf8(), curved_nl.len() - '’'.len_utf8())]);
 
