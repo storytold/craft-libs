@@ -57,8 +57,8 @@
     "surface.shadow": "#00000000",
     "surface.sunken": "#ffffff",
     "text.disabled": "#808080",
-    "text.faint": "#808080",
-    "text.muted": "#404040",
+    "text.faint": "#4b4b4b",
+    "text.muted": "#3c3c3c",
     "text.normal": "#000000",
     "text.on_selected": "{text.on_accent}",
     "text.on_strong": "#000000"

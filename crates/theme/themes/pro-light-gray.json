@@ -35,8 +35,8 @@
     "surface.panel": "#b8b8b8",
     "surface.shadow": "#00000046",
     "surface.sunken": "#d6d6d6",
-    "text.faint": "#606060",
-    "text.muted": "#343434",
+    "text.faint": "#3d3d3d",
+    "text.muted": "#2e2e2e",
     "text.normal": "#141414",
     "text.on_accent": "#ffffff"
   }

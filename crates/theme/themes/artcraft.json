@@ -34,7 +34,7 @@
     "surface.canvas": "#d6d6d6",
     "surface.panel": "#f0f0f0",
     "surface.sunken": "#ffffff",
-    "text.faint": "#787878",
+    "text.faint": "#585858",
     "text.muted": "#404040",
     "text.normal": "#141414",
     "text.on_accent": "#ffffff"
@@ -55,8 +55,8 @@
     "surface.canvas": "#282828",
     "surface.panel": "#535353",
     "surface.sunken": "#454545",
-    "text.faint": "#a0a0a0",
-    "text.muted": "#d4d4d4",
+    "text.faint": "#c8c8c8",
+    "text.muted": "#dfdfdf",
     "text.normal": "#eeeeee",
     "text.on_accent": "#ffffff"
   },

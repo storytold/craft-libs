@@ -87,7 +87,7 @@
     "surface.shadow": "#0000006e",
     "surface.sunken": "#40404b",
     "text.faint": "#bebece",
-    "text.muted": "#d4d4e0",
+    "text.muted": "#d5d5e0",
     "text.normal": "#eeeef6",
     "text.on_accent": "#ffffff"
   }
