@@ -30,6 +30,18 @@ fn rules() -> CurveRules {
 
 // The model: drags, arrow keys and the fields all move points through `move_to`.
 
+/// A fractional gap ask rounds up to the next whole level: bounds, clamp and stored input all
+/// stay on whole levels, and the asked distance is still kept or exceeded.
+#[trial]
+fn a_fractional_gap_ask_still_moves_in_whole_levels() {
+    let asking = || CurveRules::new(255.0, 16).min_gap(2.5);
+    let mut points = vec![[0.0, 0.0], [8.0, 8.0], [16.0, 16.0]];
+    assert!(asking().move_to(&mut points, 1, [0.0, 8.0]), "a move past the gap is held short of it");
+    let input = points[1][0];
+    assert_eq!(input, input.round(), "the point is held on a whole level, not on a fractional input: {input}");
+    assert!(input >= 2.5 && 16.0 - input >= 2.5, "and the asked distance holds on both sides: {input}");
+}
+
 #[trial]
 fn an_inner_point_move_keeps_four_levels_from_neighbours_that_far_off() {
     let mut points = FOUR.to_vec();

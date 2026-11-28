@@ -292,7 +292,8 @@ impl CurveRules {
     }
 
     /// The same rules, but a moved point keeps `gap` input levels (at least 1.0) between it and
-    /// a neighbour that is already at least that far off.
+    /// a neighbour that is already at least that far off. A fractional `gap` rounds up to the
+    /// next whole level, so bounds and moves stay on whole levels.
     pub const fn min_gap(mut self, gap: f32) -> CurveRules {
         self.min_gap = gap.max(1.0);
         self
@@ -337,7 +338,8 @@ impl CurveRules {
     /// fields, as the point fields of [`CurveEditor`](super::CurveEditor) do.
     pub fn input_bounds(&self, points: &[[f32; 2]], i: usize) -> (f32, f32) {
         let Some(old) = points.get(i).copied() else { return (0.0, self.levels) };
-        let keep = |gap: f32| if gap >= self.min_gap { self.min_gap } else { 1.0 };
+        let ask = self.min_gap.max(1.0).round();
+        let keep = |near: f32| if near >= self.min_gap { ask } else { 1.0 };
         let lo = i.checked_sub(1).and_then(|j| points.get(j)).map_or(0.0, |p| p[0] + keep(old[0] - p[0]));
         let hi = points.get(i + 1).map_or(self.levels, |p| p[0] - keep(p[0] - old[0]));
         (lo, hi.max(lo))
