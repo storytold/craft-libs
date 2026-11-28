@@ -15,9 +15,12 @@
 //!   comments, the packet wrapper and padding — is copied unchanged.
 //!
 //! The written properties go into one new `rdf:Description` (declaring its own namespaces, so
-//! the existing prefix bindings never matter) just before `</rdf:RDF>`. A description left empty
-//! by the removals is dropped, so repeated saves don't accumulate. The result is checked by
-//! parsing it again: every written property must read back as in the fresh packet.
+//! the existing prefix bindings never matter) just before `</rdf:RDF>`. Names listed in
+//! [`MergeRules::onto_first`] are the exception: they are written onto the first description,
+//! because some readers treat that description as the whole packet and ignore a later one.
+//! Attribute-form properties are written only through that list. A description left empty by the
+//! removals is dropped, so repeated saves don't accumulate. The result is checked by parsing it
+//! again: every written property must read back as in the fresh packet.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -33,6 +36,10 @@ pub struct MergeRules<'a> {
     pub owned: &'a [&'a str],
     /// Replaced only when the fresh packet states them; otherwise the existing value stays.
     pub owned_if_present: &'a [&'a str],
+    /// Owned names written onto the first `rdf:Description` instead of a new one. Empty keeps
+    /// every written property in that new description. Attribute-form properties are written
+    /// only when listed here.
+    pub onto_first: &'a [&'a str],
     /// Namespaces beyond the standard ones that the names above use, as for [`crate::parse_xmp_with`].
     pub namespaces: &'a [XmpNamespace<'a>],
 }
@@ -211,6 +218,85 @@ fn line_start(s: &str, start: usize) -> usize {
     i
 }
 
+fn push_attr(tag: &mut String, raw: &str, value: &str) {
+    tag.push_str("\n    ");
+    tag.push_str(raw);
+    tag.push_str("=\"");
+    tag.push_str(&value.replace('"', "&quot;"));
+    tag.push('"');
+}
+
+/// Where the first description's end tag starts. A self-closing description has no end tag.
+fn close_at(desc: &Desc) -> usize {
+    if desc.empty {
+        return desc.tag_end;
+    }
+    let close_len = desc.raw_name.len().saturating_add(3);
+    desc.end.saturating_sub(close_len)
+}
+
+/// Edits that put the chosen fresh properties onto `first` (attributes on its start tag,
+/// elements just before its end tag).
+fn place_on_first(
+    fresh: &str,
+    first: &Desc,
+    fresh_desc: &Desc,
+    remove: impl Fn(&str) -> bool,
+    on_first: impl Fn(&str) -> bool,
+) -> Result<Vec<(usize, usize, String)>, XmpError> {
+    let mut edits = Vec::new();
+    let mut tag = format!("<{}", first.raw_name);
+    let mut seen_raw = HashSet::new();
+    for attr in first.attrs.iter().filter(|attr| is_meta_attr(&attr.name) || !remove(&attr.name)) {
+        push_attr(&mut tag, &attr.raw, &attr.value);
+        seen_raw.insert(attr.raw.clone());
+    }
+    let mut added_xmlns = false;
+    for attr in fresh_desc.attrs.iter().filter(|attr| attr.raw.starts_with("xmlns:") && attr.raw != "xmlns:rdf") {
+        if seen_raw.contains(&attr.raw) {
+            continue;
+        }
+        push_attr(&mut tag, &attr.raw, &attr.value);
+        seen_raw.insert(attr.raw.clone());
+        added_xmlns = true;
+    }
+    let mut added_value = false;
+    for attr in fresh_desc.attrs.iter().filter(|attr| on_first(&attr.name)) {
+        if seen_raw.contains(&attr.raw) {
+            continue;
+        }
+        push_attr(&mut tag, &attr.raw, &attr.value);
+        seen_raw.insert(attr.raw.clone());
+        added_value = true;
+    }
+    let mut children = String::new();
+    for prop in fresh_desc.props.iter().filter(|prop| on_first(&prop.name)) {
+        let text = fresh.get(prop.start..prop.end).ok_or_else(|| XmpError::Xml("bad property span".into()))?;
+        children.push_str("\n   ");
+        children.push_str(text);
+    }
+    let removed_attr = first.attrs.iter().any(|attr| !is_meta_attr(&attr.name) && remove(&attr.name));
+    let expand = first.empty && !children.is_empty();
+    if removed_attr || added_xmlns || added_value || expand {
+        if expand {
+            tag.push('>');
+            tag.push_str(&children);
+            tag.push_str("\n  </");
+            tag.push_str(&first.raw_name);
+            tag.push('>');
+        } else if first.empty {
+            tag.push_str("/>");
+        } else {
+            tag.push('>');
+        }
+        edits.push((first.tag_start, first.tag_end, tag));
+    }
+    if !first.empty && !children.is_empty() {
+        edits.push((close_at(first), close_at(first), children));
+    }
+    Ok(edits)
+}
+
 /// Merge `fresh` (a packet as [`crate::write_xmp_with`] writes it) into `existing` following
 /// `rules` (see the module docs). Fails — and the caller must not overwrite `existing` blindly —
 /// when `existing` isn't a well-formed XMP packet.
@@ -226,45 +312,80 @@ pub fn merge_xmp(existing: &str, fresh: &str, rules: MergeRules) -> Result<Strin
     }
     let new = scan(fresh, rules.namespaces)?;
     let fresh_desc = new.descs.first().ok_or_else(|| XmpError::Xml("the new packet has no rdf:Description".into()))?;
-    let fresh_names: BTreeSet<&str> = fresh_desc.props.iter().map(|p| p.name.as_str()).collect();
-    let remove = |name: &str| listed(rules.owned, name) || (listed(rules.owned_if_present, name) && fresh_names.contains(name));
     let write = |name: &str| listed(rules.owned, name) || listed(rules.owned_if_present, name);
+    let on_first = |name: &str| write(name) && listed(rules.onto_first, name);
+    let mut fresh_names: BTreeSet<&str> = fresh_desc.props.iter().map(|prop| prop.name.as_str()).collect();
+    for attr in &fresh_desc.attrs {
+        if is_meta_attr(&attr.name) {
+            continue;
+        }
+        if on_first(&attr.name) {
+            fresh_names.insert(attr.name.as_str());
+        }
+    }
+    let remove = |name: &str| listed(rules.owned, name) || (listed(rules.owned_if_present, name) && fresh_names.contains(name));
+    let writing_first = !ex.descs.is_empty()
+        && (fresh_desc.attrs.iter().any(|attr| on_first(&attr.name)) || fresh_desc.props.iter().any(|prop| on_first(&prop.name)));
 
     // edits on `old`: (start, end, replacement), applied back to front
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for d in &ex.descs {
-        let gone_attrs: Vec<&Attr> = d.attrs.iter().filter(|a| !is_meta_attr(&a.name) && remove(&a.name)).collect();
-        let gone_props: Vec<&Prop> = d.props.iter().filter(|p| remove(&p.name)).collect();
+    for (index, desc) in ex.descs.iter().enumerate() {
+        let gone_attrs: Vec<&Attr> = desc.attrs.iter().filter(|attr| !is_meta_attr(&attr.name) && remove(&attr.name)).collect();
+        let gone_props: Vec<&Prop> = desc.props.iter().filter(|prop| remove(&prop.name)).collect();
         if gone_attrs.is_empty() && gone_props.is_empty() {
             continue;
         }
-        let attrs_left = d.attrs.iter().any(|a| !is_meta_attr(&a.name) && !remove(&a.name));
-        if !attrs_left && gone_props.len() == d.props.len() {
+        let attrs_left = desc.attrs.iter().any(|attr| !is_meta_attr(&attr.name) && !remove(&attr.name));
+        let keep_for_stamp = writing_first && index == 0;
+        if !attrs_left && gone_props.len() == desc.props.len() && !keep_for_stamp {
             // nothing of its own left: drop the whole description
-            edits.push((line_start(old, d.tag_start), d.end, String::new()));
+            edits.push((line_start(old, desc.tag_start), desc.end, String::new()));
             continue;
         }
-        if !gone_attrs.is_empty() {
-            let mut tag = format!("<{}", d.raw_name);
-            for a in d.attrs.iter().filter(|a| is_meta_attr(&a.name) || !remove(&a.name)) {
-                tag.push_str(&format!("\n    {}=\"{}\"", a.raw, a.value.replace('"', "&quot;")));
+        if !gone_attrs.is_empty() && !keep_for_stamp {
+            let mut tag = format!("<{}", desc.raw_name);
+            for attr in desc.attrs.iter().filter(|attr| is_meta_attr(&attr.name) || !remove(&attr.name)) {
+                push_attr(&mut tag, &attr.raw, &attr.value);
             }
-            tag.push_str(if d.empty { "/>" } else { ">" });
-            edits.push((d.tag_start, d.tag_end, tag));
+            tag.push_str(if desc.empty { "/>" } else { ">" });
+            edits.push((desc.tag_start, desc.tag_end, tag));
         }
-        for p in gone_props {
-            edits.push((line_start(old, p.start), p.end, String::new()));
+        for prop in gone_props {
+            edits.push((line_start(old, prop.start), prop.end, String::new()));
         }
     }
-    // the new description: its own namespace declarations, the properties to write
+    if writing_first {
+        let first = ex.descs.first().ok_or_else(|| XmpError::Xml("no description".into()))?;
+        edits.extend(place_on_first(fresh, first, fresh_desc, remove, on_first)?);
+    }
+    // the new description: its own namespace declarations, the properties that were not placed above
     let mut block = String::from("\n  <rdf:Description rdf:about=\"\"\n    xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"");
-    for a in fresh_desc.attrs.iter().filter(|a| a.raw.starts_with("xmlns:") && a.raw != "xmlns:rdf") {
-        block.push_str(&format!("\n    {}=\"{}\"", a.raw, a.value));
+    for attr in fresh_desc.attrs.iter().filter(|attr| attr.raw.starts_with("xmlns:") && attr.raw != "xmlns:rdf") {
+        block.push_str(&format!("\n    {}=\"{}\"", attr.raw, attr.value));
+    }
+    let nowhere_else = ex.descs.is_empty();
+    let onto_first_attr = |name: &str| write(name) && listed(rules.onto_first, name);
+    if nowhere_else {
+        for attr in fresh_desc.attrs.iter().filter(|attr| onto_first_attr(&attr.name)) {
+            push_attr(&mut block, &attr.raw, &attr.value);
+        }
     }
     block.push('>');
     let mut written = 0;
-    for p in fresh_desc.props.iter().filter(|p| write(&p.name)) {
-        let text = fresh.get(p.start..p.end).ok_or_else(|| XmpError::Xml("bad property span".into()))?;
+    if nowhere_else {
+        written += fresh_desc.attrs.iter().filter(|attr| onto_first_attr(&attr.name)).count();
+    }
+    let put_here = |name: &str| {
+        if !write(name) {
+            return false;
+        }
+        if nowhere_else {
+            return true;
+        }
+        !listed(rules.onto_first, name)
+    };
+    for prop in fresh_desc.props.iter().filter(|prop| put_here(&prop.name)) {
+        let text = fresh.get(prop.start..prop.end).ok_or_else(|| XmpError::Xml("bad property span".into()))?;
         block.push_str("\n   ");
         block.push_str(text);
         written += 1;
@@ -330,6 +451,7 @@ mod tests {
     const RULES: MergeRules = MergeRules {
         owned: &["xmp:Rating", "xmp:Label", "dc:subject", "dc:title", "lc:*"],
         owned_if_present: &["exif:DateTimeOriginal"],
+        onto_first: &[],
         namespaces: &[LC],
     };
 
@@ -521,6 +643,103 @@ mod tests {
         }
         let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
         assert!(ratio < 10.0, "4x the attributes took {ratio:.1}x as long ({small:?}, then {large:?})");
+    }
+
+    #[test]
+    fn chosen_properties_land_on_the_first_description() {
+        let camera = r#"<?xpacket begin="&#xfeff;" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Camera">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmp:CreatorTool="Camera"
+    crs:Contrast2012="-12">
+   <xmp:Rating>0</xmp:Rating>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#;
+        let fresh = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:xmpDM="http://ns.adobe.com/xmp/1.0/DynamicMedia/"
+    xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"
+    xmlns:lc="http://ns.example.com/lc/1.0/"
+    xmpDM:pick="1"
+    xmp:Rating="4"
+    photoshop:City="Maia &amp; Co"
+    Iptc4xmpCore:Location="Hotel">
+   <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Rita</rdf:li></rdf:Alt></dc:title>
+   <dc:creator><rdf:Seq><rdf:li>Ada</rdf:li></rdf:Seq></dc:creator>
+   <lc:settings>{"crop":1}</lc:settings>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        let rules = MergeRules {
+            owned: &["xmp:Rating", "xmpDM:pick", "photoshop:City", "Iptc4xmpCore:Location", "dc:title", "dc:creator", "lc:*"],
+            owned_if_present: &[],
+            onto_first: &["xmp:Rating", "xmpDM:pick", "photoshop:City", "Iptc4xmpCore:Location", "dc:title", "dc:creator"],
+            namespaces: &[LC],
+        };
+        let out = merge_xmp(camera, fresh, rules).unwrap();
+        let parts: Vec<&str> = out.split("<rdf:Description").collect();
+        assert!(parts.len() >= 3, "the settings stay on their own description:\n{out}");
+        let first = parts[1];
+        let second = parts[2];
+        assert!(first.contains("xmpDM:pick=\"1\""), "{first}");
+        assert!(first.contains("xmp:Rating=\"4\""), "{first}");
+        assert!(first.contains("photoshop:City=\"Maia &amp; Co\""), "{first}");
+        assert!(first.contains("Iptc4xmpCore:Location=\"Hotel\""), "{first}");
+        assert!(first.contains("<dc:title>"), "{first}");
+        assert!(first.contains("<dc:creator>"), "{first}");
+        assert!(!first.contains("<xmp:Rating>0</xmp:Rating>"), "{first}");
+        assert!(!first.contains("lc:settings"), "{first}");
+        assert!(second.contains("lc:settings"), "{second}");
+        assert!(!second.contains("dc:title"), "{second}");
+        assert!(out.contains("xmp:CreatorTool=\"Camera\""), "{out}");
+        assert!(out.contains("crs:Contrast2012=\"-12\""), "{out}");
+        let read = parse_xmp(&out).unwrap();
+        assert_eq!(read.properties.get("xmp:Rating"), Some(&vec!["4".to_string()]));
+        assert_eq!(read.properties.get("photoshop:City"), Some(&vec!["Maia & Co".to_string()]));
+        assert_eq!(read.properties.get("dc:title"), Some(&vec!["Rita".to_string()]));
+        assert_eq!(read.properties.get("dc:creator"), Some(&vec!["Ada".to_string()]));
+        assert_eq!(read.properties.get("lc:settings"), Some(&vec!["{\"crop\":1}".to_string()]));
+        let again = merge_xmp(&out, fresh, rules).unwrap();
+        assert_eq!(merge_xmp(&again, fresh, rules).unwrap(), again, "idempotent");
+
+        let without_pick = fresh.replace("\n    xmpDM:pick=\"1\"", "");
+        let keep_pick = MergeRules {
+            owned: &["xmp:Rating", "photoshop:City", "Iptc4xmpCore:Location", "dc:title", "dc:creator", "lc:*"],
+            owned_if_present: &["xmpDM:pick"],
+            onto_first: rules.onto_first,
+            namespaces: rules.namespaces,
+        };
+        let kept = merge_xmp(&out, &without_pick, keep_pick).unwrap();
+        let kept_first = kept.split("<rdf:Description").nth(1).unwrap_or("");
+        assert!(kept_first.contains("xmpDM:pick=\"1\""), "absent from the fresh packet: kept\n{kept_first}");
+    }
+
+    #[test]
+    fn a_self_closing_description_opens_to_hold_the_chosen_properties() {
+        let camera = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="0"/>
+            </rdf:RDF></x:xmpmeta>"#;
+        let fresh = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="5">
+            <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Title</rdf:li></rdf:Alt></dc:title>
+            </rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let rules =
+            MergeRules { owned: &["xmp:Rating", "dc:title"], owned_if_present: &[], onto_first: &["xmp:Rating", "dc:title"], namespaces: &[LC] };
+        let out = merge_xmp(camera, fresh, rules).unwrap();
+        assert_eq!(out.matches("<rdf:Description").count(), 1, "{out}");
+        assert!(out.contains("xmp:Rating=\"5\""), "{out}");
+        assert!(out.contains("<dc:title>"), "{out}");
+        assert!(!out.contains("xmp:Rating=\"0\""), "{out}");
+        assert_eq!(parse_xmp(&out).unwrap().properties.get("dc:title"), Some(&vec!["Title".to_string()]));
     }
 
     #[test]
