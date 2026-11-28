@@ -316,7 +316,7 @@ enum SourceKind {
 
 impl SourceKind {
     fn formula(self, given: &Option<String>, default: String) -> Option<String> {
-        given.clone().or_else(|| match self {
+        given.clone().or(match self {
             Self::DefaultLayout => Some(default),
             Self::Mixed => None,
         })
