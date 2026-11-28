@@ -3,8 +3,18 @@ use super::{
     TableStyleParts, VAlign, flag, int, props, tw, u32_of,
 };
 use crate::units::tw_i16;
-use craft_wordmodel::props::PropChange;
+use craft_wordmodel::props::{CharProps, PropChange, ThemeFont};
 use std::sync::Arc;
+
+/// The run defaults Word gives a document whose `w:docDefaults` has no `w:rPrDefault`. Word fills
+/// a missing default part from the Normal template of the computer it runs on; this is a Microsoft
+/// 365 template's on a Thai system (measured: the theme's body fonts, 12 pt, complex script 15 pt,
+/// kerning from 1 pt, Thai the bidi language, standard and contextual ligatures). An English one
+/// differs only in the complex-script size (12 pt) and that language.
+const APP_RPR_DEFAULT: &str = r#"<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/><w:kern w:val="2"/><w:sz w:val="24"/><w:szCs w:val="30"/><w:lang w:val="en-US" w:eastAsia="en-US" w:bidi="th-TH"/><w14:ligatures w14:val="standardContextual"/></w:rPr>"#;
+
+/// The font of run defaults that name none (Word, measured: every slot).
+const SPEC_DEFAULT_FONT: &str = "Times New Roman";
 
 fn numbering_level_index(value: Option<&str>) -> Option<usize> {
     match value {
@@ -64,6 +74,47 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
 }
 
 impl Reader<'_> {
+    /// The document's run defaults: its `w:rPrDefault`, or Word's own when it has none (see
+    /// `APP_RPR_DEFAULT`). Each slot of the run defaults the file has that names no font is Times
+    /// New Roman, but a theme slot is the theme's font (measured in Word for Windows: `w:cstheme=
+    /// "minorBidi"` alone draws Thai in the theme's Thai font, and Latin and East Asian text in
+    /// Times New Roman). An East Asian theme slot is kept for the save and left to inherit, as in
+    /// runs: the theme's East Asian fonts aren't read.
+    fn run_defaults(&mut self, rpr_default: Option<&El>) -> CharProps {
+        let mut c = CharProps::default();
+        match rpr_default {
+            None => {
+                if let Ok(r) = crate::xml::parse(APP_RPR_DEFAULT.as_bytes()) {
+                    c = self.pc.rpr(&r);
+                }
+                // `rpr` leaves `w:cstheme` to inherit; here there is nothing to inherit from.
+                c.font_cs = Some(self.pc.app_default_cs_font());
+            }
+            Some(d) => {
+                if let Some(r) = d.child("w:rPr") {
+                    c = self.pc.rpr(r);
+                }
+                // Slot by slot: run defaults naming only a Latin font still draw Thai and East
+                // Asian text in Times New Roman, not in that font (measured in Word for Windows).
+                let unset = || Some(SPEC_DEFAULT_FONT.to_string());
+                if c.font.is_none() {
+                    c.font = unset();
+                }
+                // A theme slot supersedes a fixed font beside it (measured in Word for Windows:
+                // `w:cs="Tahoma" w:cstheme="minorBidi"` draws Thai in the theme's Thai font).
+                c.font_cs = match c.font_cs_theme {
+                    Some(t @ (ThemeFont::MajorBidi | ThemeFont::MinorBidi)) => Some(self.pc.default_bidi_theme_font(t.is_major())),
+                    Some(t) => self.pc.theme_font(t.as_str()).or(c.font_cs.take()).or_else(unset),
+                    None => c.font_cs.take().or_else(unset),
+                };
+                if c.font_ea.is_none() && c.font_ea_theme.is_none() {
+                    c.font_ea = unset();
+                }
+            }
+        }
+        c
+    }
+
     /// Whether a style's kept (last) definition is a default table style.
     fn has_default_table_style(&self, root: &El) -> bool {
         let mut defaults: Vec<String> = Vec::new();
@@ -79,9 +130,23 @@ impl Reader<'_> {
     }
 
     pub(super) fn read_styles(&mut self, path: &str) -> Result<(), DocxError> {
+        let Some(root) = self.xml(path)? else { return Ok(()) };
+        self.styles_from(&root);
+        Ok(())
+    }
+
+    /// A package without a styles part has Word's own defaults, as one whose styles part names none
+    /// (measured in Word for Windows: the theme's body font at 12 pt, 15 pt complex script in the
+    /// theme's Thai font, 8 pt after, single spacing), not the model's built-in ones.
+    pub(super) fn read_no_styles(&mut self) {
+        if let Ok(root) = crate::xml::parse(br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#) {
+            self.styles_from(&root);
+        }
+    }
+
+    fn styles_from(&mut self, root: &El) {
         /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
         const MAX_LATENT_STYLES_XML: usize = 1 << 20;
-        let Some(root) = self.xml(path)? else { return Ok(()) };
         // The default paragraph style must be called `Normal` in our model.
         let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
         if !has_normal
@@ -111,17 +176,13 @@ impl Reader<'_> {
         let mut sheet = StyleSheet::empty();
         let mut normal_is_default = None;
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();
-        if let Some(dd) = root.child("w:docDefaults") {
-            if let Some(r) = dd.child("w:rPrDefault").and_then(|d| d.child("w:rPr")) {
-                sheet.default_chr = self.pc.rpr(r);
-            }
-            if let Some(p) = dd.child("w:pPrDefault").and_then(|d| d.child("w:pPr")) {
-                sheet.default_para = self.pc.ppr(p).0;
-                // Word makes no paragraph a text frame from the document defaults: the sizeless
-                // top-left `w:framePr` Apple Pages writes there would put every paragraph, the
-                // headers' and footers' included, at the page's corner (#2360).
-                sheet.default_para.frame = None;
-            }
+        sheet.default_chr = self.run_defaults(root.child("w:docDefaults").and_then(|dd| dd.child("w:rPrDefault")));
+        if let Some(p) = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).and_then(|d| d.child("w:pPr")) {
+            sheet.default_para = self.pc.ppr(p).0;
+            // Word makes no paragraph a text frame from the document defaults: the sizeless
+            // top-left `w:framePr` Apple Pages writes there would put every paragraph, the
+            // headers' and footers' included, at the page's corner (#2360).
+            sheet.default_para.frame = None;
         }
         if sheet.default_chr.size.is_none() {
             sheet.default_chr.size = Some(10.0);
@@ -221,7 +282,7 @@ impl Reader<'_> {
                 None => sheet.styles.push(st),
             }
         }
-        self.no_default_table_style = !self.has_default_table_style(&root);
+        self.no_default_table_style = !self.has_default_table_style(root);
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
         let fixed: Vec<Option<craft_wordmodel::props::NumRef>> = sheet
@@ -270,7 +331,6 @@ impl Reader<'_> {
             sheet.add_default_gallery();
         }
         self.doc.styles = Arc::new(sheet);
-        Ok(())
     }
 
     /// A table style's table-level formatting and conditional formats. The `wholeTable` region

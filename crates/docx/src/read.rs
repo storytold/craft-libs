@@ -252,6 +252,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     }
     if let Some(p) = part(rt::STYLES) {
         lenient("styles", r.read_styles(&p));
+    } else {
+        r.read_no_styles();
     }
     if let Some(p) = part(rt::NUMBERING) {
         lenient("numbering", r.read_numbering(&p));

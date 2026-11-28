@@ -52,6 +52,8 @@ pub struct PropCtx {
     /// The theme's per-script fonts (`a:font script="Arab" typeface="…"`).
     pub major_scripts: Vec<(String, String)>,
     pub minor_scripts: Vec<(String, String)>,
+    /// Whether the package has a theme with a font scheme (without one, Word uses its own theme's).
+    pub theme_fonts: bool,
     /// The script (ISO 15924) of `w:themeFontLang/@w:bidi`, which picks the font a `…Bidi` theme
     /// slot names. `None` = the settings name no bidi language.
     pub bidi_script: Option<&'static str>,
@@ -174,7 +176,7 @@ impl PropCtx {
         self.alias.get(id).cloned().unwrap_or_else(|| id.to_string())
     }
 
-    fn theme_font(&self, t: &str) -> Option<String> {
+    pub(super) fn theme_font(&self, t: &str) -> Option<String> {
         let major = t.starts_with("major");
         let latin = if major { &self.major_font } else { &self.minor_font };
         if t.ends_with("Bidi") {
@@ -194,6 +196,41 @@ impl PropCtx {
         let Some(script) = self.bidi_script else { return BIDI_THEME_FALLBACK_FONT.to_string() };
         let by_script = if script == "Latn" { named(latin) } else { scripts.iter().find(|(s, _)| s == script).and_then(|(_, f)| named(f)) };
         by_script.or_else(|| named(cs)).unwrap_or_else(|| BIDI_THEME_FALLBACK_FONT.to_string())
+    }
+
+    /// The complex-script font of the run defaults Word gives a document whose styles leave
+    /// `w:rPrDefault` out: its Normal template's `w:cstheme="minorBidi"`. Measured in Word for
+    /// Windows (Thai), `w:cs` runs: the theme's minor font for the script of the settings'
+    /// `w:themeFontLang/@w:bidi`, or Thai with none there (the template's bidi language,
+    /// `APP_RPR_DEFAULT`); else the theme's `a:cs`. With no font for Thai, Angsana New; with no
+    /// theme at all, Word's own theme's Thai font, Cordia New.
+    pub(super) fn app_default_cs_font(&self) -> String {
+        self.default_bidi_theme_font(false)
+    }
+
+    /// The font a `minorBidi` (`major` false) or `majorBidi` slot names in the run defaults, as Word
+    /// for Windows resolves it there: see [`PropCtx::app_default_cs_font`]; also with the file's own
+    /// run defaults naming the slot, and with no bidi language in the settings (measured, minor).
+    /// Word's own theme's major Thai font is Angsana New.
+    pub(super) fn default_bidi_theme_font(&self, major: bool) -> String {
+        let script = self.bidi_script.unwrap_or("Thai");
+        let (latin, cs, scripts) =
+            if major { (&self.major_font, &self.major_cs, &self.major_scripts) } else { (&self.minor_font, &self.minor_cs, &self.minor_scripts) };
+        let named = |f: &String| (!f.is_empty()).then(|| f.clone());
+        if script == "Latn"
+            && let Some(f) = named(latin)
+        {
+            return f;
+        }
+        let themed = self.theme_fonts.then(|| scripts.iter().find(|(s, _)| s == script).and_then(|(_, f)| named(f)).or_else(|| named(cs))).flatten();
+        themed.unwrap_or_else(|| {
+            match (script, self.theme_fonts, major) {
+                ("Thai", false, false) => "Cordia New",
+                ("Thai", _, _) => "Angsana New",
+                _ => BIDI_THEME_FALLBACK_FONT,
+            }
+            .to_string()
+        })
     }
 
     /// The theme colour `e` names in `attr` (`w:themeColor`, `w:themeFill`), through the colour
@@ -271,9 +308,12 @@ impl PropCtx {
                     // Latin letters. A Normal style with only `w:eastAsia`/`w:cs` keeps the
                     // `docDefaults` font, and so does a hinted run, as in Word.
                     c.font = themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi"));
-                    // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
-                    // left to inherit: the theme's per-script fonts aren't read.
-                    c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    // The complex-script font (Thai, Persian, Arabic, Hebrew text). A `w:cstheme` slot
+                    // supersedes the fixed font beside it, as the Latin slots do (measured in Word for
+                    // Windows: a run naming `w:cs` and `w:cstheme` draws in the theme's font, minor or
+                    // major).
+                    let fixed_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    c.font_cs = k.attr("w:cstheme").filter(|t| ThemeFont::parse(t).is_some()).and_then(|t| self.theme_font(t)).or(fixed_cs);
                     // The East Asian font (Chinese, Japanese, Korean text). A `w:eastAsiaTheme` font
                     // is left to inherit, like `w:cstheme`.
                     c.font_ea = k.attr("w:eastAsia").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);

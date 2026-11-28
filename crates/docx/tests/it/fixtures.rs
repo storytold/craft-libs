@@ -185,6 +185,246 @@ fn paragraph_default_presence_survives_repeated_saves() {
     }
 }
 
+/// A default part the file leaves out is Word's own, from its Normal template (Microsoft 365,
+/// measured): run defaults in the theme's body font at 12 pt (15 pt complex script), 8 pt after a
+/// paragraph. Run defaults present but naming no font are Times New Roman in every slot, at 10 pt
+/// unless they say. An empty paragraph default part is no spacing.
+#[test]
+fn a_default_part_left_out_is_words_own() {
+    use craft_wordmodel::props::ParaProps;
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Cambria"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+    let read = |defaults: &str, with_theme: bool| {
+        let styles = format!(
+            r#"<w:styles {W_NS}>{defaults}<w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+        );
+        let mut rels = vec![("rId1", "styles", "styles.xml")];
+        let mut parts = vec![("word/styles.xml", styles.as_str())];
+        if with_theme {
+            rels.push(("rId2", "theme", "theme/theme1.xml"));
+            parts.push(("word/theme/theme1.xml", theme));
+        }
+        let d = craft_docx::read(&docx("<w:p><w:r><w:t>Text</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+        let c = d.styles.resolve_char(None, &Default::default());
+        let after = d.styles.resolve_para(&ParaProps::default()).space_after;
+        let cs = c.complex().size;
+        (c.font, c.size, cs, after)
+    };
+    let s = |f: &str| f.to_string();
+    // No defaults: the theme's body font (Aptos without a theme), 12 pt, 15 pt, 8 pt after.
+    assert_eq!(read("", false), (s("Aptos"), 12.0, 15.0, 8.0));
+    assert_eq!(read("", true), (s("Calibri"), 12.0, 15.0, 8.0));
+    assert_eq!(read("<w:docDefaults/>", true), (s("Calibri"), 12.0, 15.0, 8.0));
+    // Paragraph defaults only: Word's run defaults, the file's (no) spacing.
+    assert_eq!(read("<w:docDefaults><w:pPrDefault><w:pPr/></w:pPrDefault></w:docDefaults>", false), (s("Aptos"), 12.0, 15.0, 0.0));
+    // Run defaults present: theirs, Times New Roman where they name no font, the spec's 10 pt.
+    let tnr = s("Times New Roman");
+    assert_eq!(read("<w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults>", true), (tnr.clone(), 10.0, 10.0, 8.0));
+    assert_eq!(
+        read(r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>"#, false),
+        (tnr, 12.0, 12.0, 8.0)
+    );
+    // Fonts the run defaults name stay theirs.
+    let named = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>"#;
+    assert_eq!(read(named, false), (s("Georgia"), 10.0, 10.0, 0.0));
+}
+
+/// Run defaults naming only a Latin font: Word draws Thai and East Asian text in Times New Roman,
+/// not in that font (measured in Word for Windows), so those slots read as Times New Roman. And
+/// run defaults WordCraft writes name every slot it draws with, the Latin font where the model
+/// leaves one to it, so Word draws Thai and East Asian text in the same font after a save.
+#[test]
+fn run_defaults_naming_only_a_latin_font_leave_the_other_slots_words() {
+    use std::io::Read as _;
+    let part_xml = |bytes: &[u8], name: &str| {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        archive.by_name(name).unwrap().read_to_string(&mut xml).unwrap();
+        xml
+    };
+    let styles = |fonts: &str| {
+        format!(
+            r#"<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr>{fonts}</w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+        )
+    };
+    let read = |fonts: &str| {
+        let styles = styles(fonts);
+        craft_docx::read(&docx("<w:p><w:r><w:t>ไทย</w:t></w:r></w:p>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles.as_str())]))
+            .unwrap()
+    };
+    let s = |f: &str| Some(f.to_string());
+    let d = read(r#"<w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>"#);
+    let c = &d.styles.default_chr;
+    assert_eq!((c.font.clone(), c.font_cs.clone(), c.font_ea.clone()), (s("Georgia"), s("Times New Roman"), s("Times New Roman")));
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).complex().font, "Times New Roman");
+    // Named slots stay theirs.
+    let d = read(r#"<w:rFonts w:ascii="Georgia" w:hAnsi="Georgia" w:cs="Tahoma" w:eastAsia="SimSun"/>"#);
+    let c = &d.styles.default_chr;
+    assert_eq!((c.font.clone(), c.font_cs.clone(), c.font_ea.clone()), (s("Georgia"), s("Tahoma"), s("SimSun")));
+    // Written: each slot WordCraft draws with, and the same when read back.
+    let mut d = craft_wordmodel::Document::new();
+    std::sync::Arc::make_mut(&mut d.styles).default_chr =
+        craft_wordmodel::props::CharProps { font: s("Aptos"), size: Some(11.0), ..Default::default() };
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = part_xml(&bytes, "word/styles.xml");
+    let defaults = xml.split("<w:rPrDefault>").nth(1).and_then(|r| r.split("</w:rPrDefault>").next()).unwrap_or_else(|| panic!("{xml}"));
+    assert!(defaults.contains(r#"w:cs="Aptos""#) && defaults.contains(r#"w:eastAsia="Aptos""#), "{defaults}");
+    let again = craft_docx::read(&bytes).unwrap();
+    let c = &again.styles.default_chr;
+    assert_eq!((c.font.clone(), c.font_cs.clone(), c.font_ea.clone()), (s("Aptos"), s("Aptos"), s("Aptos")));
+    // A theme slot is still written as a theme slot, not filled.
+    let mut d = craft_wordmodel::Document::new();
+    std::sync::Arc::make_mut(&mut d.styles).default_chr = craft_wordmodel::props::CharProps {
+        font: s("Aptos"),
+        font_cs_theme: Some(craft_wordmodel::props::ThemeFont::MinorBidi),
+        ..Default::default()
+    };
+    let xml = part_xml(&craft_docx::write(&d).unwrap(), "word/styles.xml");
+    let defaults = xml.split("<w:rPrDefault>").nth(1).and_then(|r| r.split("</w:rPrDefault>").next()).unwrap_or_else(|| panic!("{xml}"));
+    assert!(defaults.contains(r#"w:cstheme="minorBidi""#) && !defaults.contains(r#"w:cs="Aptos""#), "{defaults}");
+}
+
+/// The complex-script and East Asian fonts a run's text is drawn in stay the same across a save
+/// and reopen, in a document whose run defaults leave those slots to the Latin font (WordCraft's
+/// own): a run's own Latin font, a paragraph style's, a character style's, and a tracked change's
+/// before copy. Where nothing changes, nothing more is written.
+#[test]
+fn script_fonts_a_run_draws_in_survive_a_save() {
+    use craft_wordmodel::props::{CharProps, PropChange};
+    use craft_wordmodel::styles::{Style, StyleKind};
+    use craft_wordmodel::{Revision, RevisionKind};
+    let s = |f: &str| Some(f.to_string());
+    let mut d = Document::new();
+    let sheet = Arc::make_mut(&mut d.styles);
+    let style = |id: &str, kind: StyleKind, font: Option<String>| Style {
+        id: id.into(),
+        name: id.into(),
+        kind,
+        chr: CharProps { font, ..Default::default() },
+        ..Default::default()
+    };
+    sheet.upsert(style("Serif", StyleKind::Paragraph, s("Georgia")));
+    sheet.upsert(style("Mono", StyleKind::Character, s("Consolas")));
+    d.revisions.push(Revision { kind: RevisionKind::Format, author: "A".into(), date: String::new(), move_name: None });
+    let para = |style: Option<&str>, run: CharProps| {
+        let mut p = Paragraph::with_text("ไทย 中文", run);
+        p.props.style = style.map(str::to_string);
+        craft_wordmodel::para_block(p)
+    };
+    let latin = |f: &str| CharProps { font: s(f), ..Default::default() };
+    d.body = vec![
+        // CodeRabbit's case: a run with its own Latin font only.
+        para(None, latin("Verdana")),
+        // A paragraph style's Latin font, and a run's own over it.
+        para(Some("Serif"), CharProps::default()),
+        para(Some("Serif"), latin("Verdana")),
+        // A character style's Latin font.
+        para(None, CharProps { style: s("Mono"), ..Default::default() }),
+        // A tracked change whose before copy had a Latin font of its own.
+        para(None, CharProps { fmt_change: PropChange::boxed(0, latin("Tahoma")), ..Default::default() }),
+    ];
+    let fonts = |d: &Document| -> Vec<(String, String, String)> {
+        paras(d)
+            .iter()
+            .flat_map(|p| {
+                let r = &p.runs[0].props;
+                let rc = d.styles.resolve_char(p.props.style.as_deref(), r);
+                let old = r.fmt_change.as_ref().map(|c| d.styles.resolve_char(p.props.style.as_deref(), &c.old));
+                let ea = |rc: &craft_wordmodel::resolve::ResolvedChar| rc.font_ea.clone().unwrap_or_else(|| rc.font.clone());
+                std::iter::once((rc.font.clone(), rc.font_cs.clone(), ea(&rc))).chain(old.map(|o| (o.font.clone(), o.font_cs.clone(), ea(&o))))
+            })
+            .collect()
+    };
+    let before = fonts(&d);
+    assert_eq!(before[0], ("Verdana".into(), "Verdana".into(), "Verdana".into()), "in WordCraft the Latin font draws the other scripts");
+    let bytes = craft_docx::write(&d).unwrap();
+    let again = craft_docx::read(&bytes).unwrap();
+    assert_eq!(fonts(&again), before, "the same after a save");
+    // The paragraph style names its slots; its runs that use its font name nothing.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let second = xml.split("<w:p>").nth(2).and_then(|p| p.split("</w:p>").next()).unwrap_or_else(|| panic!("{xml}"));
+    assert!(!second.contains("w:cs="), "a Serif run drawn in Georgia names nothing: {second}");
+    // Run defaults that name the slots already: nothing is added.
+    let mut named = d.clone();
+    let dc = &mut Arc::make_mut(&mut named.styles).default_chr;
+    dc.font_cs = s("Tahoma");
+    dc.font_ea = s("SimSun");
+    let again = craft_docx::read(&craft_docx::write(&named).unwrap()).unwrap();
+    assert_eq!(fonts(&again), fonts(&named));
+    assert_eq!(paras(&again)[0].runs[0].props.font_cs, None, "{:?}", paras(&again)[0].runs[0].props);
+}
+
+/// A theme's font names are bounded as the run fonts are: an over-long `a:latin` or `a:cs`
+/// typeface is left out, so it doesn't become the document's theme font or, where the run
+/// defaults are left out, every run's complex-script font.
+#[test]
+fn over_long_theme_font_names_are_left_out() {
+    let long = "F".repeat(300);
+    let theme = format!(
+        r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="{long}"/><a:cs typeface="{long}"/></a:majorFont><a:minorFont><a:latin typeface="{long}"/><a:cs typeface="{long}"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+    );
+    let styles =
+        format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);
+    let rels = [("rId1", "styles", "styles.xml"), ("rId2", "theme", "theme/theme1.xml")];
+    let parts = [("word/styles.xml", styles.as_str()), ("word/theme/theme1.xml", theme.as_str())];
+    let d = craft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>x</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+    assert_ne!(d.settings.major_font, long);
+    assert_ne!(d.settings.minor_font, long);
+    // As a theme with no complex-script font: Angsana New.
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).complex().font, "Angsana New");
+    assert_ne!(d.styles.default_chr.font.as_deref(), Some(long.as_str()));
+}
+
+/// The complex-script font of the run defaults Word gives a file without `w:rPrDefault`: its
+/// template's `w:cstheme="minorBidi"` (Word for Windows, Thai text in a `w:cs` run, read from the
+/// fonts of the PDF Word saves). The theme's minor font for the script of `w:themeFontLang/@w:bidi`,
+/// Thai when the settings name none; else the theme's `a:cs`; Angsana New when the theme has no
+/// font for Thai, Cordia New (Word's own theme's) when there is no theme.
+#[test]
+fn a_left_out_run_defaults_complex_script_font_is_the_themes() {
+    let theme = |minor: &str| {
+        format!(
+            r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Cambria"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/>{minor}</a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+        )
+    };
+    let read = |defaults: &str, minor: Option<&str>, bidi: Option<&str>| {
+        let styles = format!(
+            r#"<w:styles {W_NS}>{defaults}<w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+        );
+        let settings = bidi.map(|b| format!(r#"<w:settings {W_NS}><w:themeFontLang w:val="en-US" w:bidi="{b}"/></w:settings>"#));
+        let theme = minor.map(theme);
+        let mut rels = vec![("rId1", "styles", "styles.xml")];
+        let mut parts = vec![("word/styles.xml", styles.as_str())];
+        if let Some(t) = &theme {
+            rels.push(("rId2", "theme", "theme/theme1.xml"));
+            parts.push(("word/theme/theme1.xml", t.as_str()));
+        }
+        if let Some(s) = &settings {
+            rels.push(("rId3", "settings", "settings.xml"));
+            parts.push(("word/settings.xml", s.as_str()));
+        }
+        let d = craft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>x</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+        (d.styles.resolve_char(None, &Default::default()).complex().font, d.styles.default_chr.font.clone())
+    };
+    let cs = |defaults: &str, minor: Option<&str>, bidi: Option<&str>| read(defaults, minor, bidi).0;
+    let thai = r#"<a:cs typeface=""/><a:font script="Thai" typeface="Tahoma"/><a:font script="Arab" typeface="Courier New"/>"#;
+    let cs_only = r#"<a:cs typeface="Angsana New"/>"#;
+    let bare = r#"<a:cs typeface=""/>"#;
+    assert_eq!(cs("", Some(thai), None), "Tahoma");
+    assert_eq!(cs("", Some(thai), Some("th-TH")), "Tahoma");
+    assert_eq!(cs("", Some(thai), Some("ar-SA")), "Courier New", "the settings' bidi language picks the script");
+    assert_eq!(cs("", Some(cs_only), None), "Angsana New");
+    assert_eq!(cs("", Some(cs_only), Some("th-TH")), "Angsana New");
+    assert_eq!(cs("", Some(bare), None), "Angsana New");
+    assert_eq!(cs("", None, None), "Cordia New");
+    // Only where the run defaults are left out: the Latin font is the theme's as before, and run
+    // defaults the file has keep their own complex-script font.
+    assert_eq!(read("", Some(thai), None).1.as_deref(), Some("Calibri"));
+    let named = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Courier New"/></w:rPr></w:rPrDefault></w:docDefaults>"#;
+    assert_eq!(cs(named, Some(thai), None), "Courier New");
+}
+
 #[test]
 fn zero_frame_keeps_normal_flow() {
     const ROUND_TRIPS: usize = 2;
@@ -297,6 +537,13 @@ fn omitted_paragraph_defaults_can_be_edited() {
     let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     assert!(again.styles.default_para_present);
     assert_eq!(again.styles.default_para.space_after, Some(12.0));
+    // An edit that leaves spacing after alone keeps Word's 8 pt after through a save.
+    let mut d = craft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    Arc::make_mut(&mut d.styles).default_para.space_before = Some(6.0);
+    assert_eq!((d.styles.para_defaults().space_before, d.styles.para_defaults().space_after), (Some(6.0), Some(8.0)));
+    let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    assert!(again.styles.default_para_present);
+    assert_eq!((again.styles.para_defaults().space_before, again.styles.para_defaults().space_after), (Some(6.0), Some(8.0)));
     let new = Document::new();
     assert_eq!(craft_docx::read(&craft_docx::write(&new).unwrap()).unwrap().styles.default_para, new.styles.default_para);
 }
@@ -5541,5 +5788,82 @@ fn extreme_chart_with_text_fallback_uses_the_package_order_map() {
         assert_eq!(float.z, chart_raw);
         let other = paras(&d).iter().flat_map(|p| &p.objects).find(|o| matches!(o, InlineObject::Shape { .. })).unwrap();
         assert_eq!(other.frame().unwrap().2.z, shape_raw);
+    }
+}
+
+/// Run defaults the file has that name no font: Times New Roman in each slot, but a theme slot is
+/// the theme's font (Word for Windows, Thai in a `w:cs` run, Latin text, and the slots read through
+/// the object model). `w:cstheme="minorBidi"` alone draws Thai in the theme's Thai font, with the
+/// settings naming a bidi language or not; an East Asian theme slot stays a theme slot.
+#[test]
+fn run_defaults_naming_only_theme_slots_take_the_themes_fonts() {
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Georgia"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Thai" typeface="Leelawadee UI"/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/><a:ea typeface="SimSun"/><a:cs typeface=""/><a:font script="Thai" typeface="Tahoma"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+    let read = |fonts: &str, bidi: bool| {
+        let styles = format!(
+            r#"<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr>{fonts}<w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+        );
+        let settings = format!(r#"<w:settings {W_NS}><w:themeFontLang w:val="en-US"{}/></w:settings>"#, if bidi { r#" w:bidi="th-TH""# } else { "" });
+        let rels = [("rId1", "styles", "styles.xml"), ("rId2", "theme", "theme/theme1.xml"), ("rId3", "settings", "settings.xml")];
+        let parts = [("word/styles.xml", styles.as_str()), ("word/theme/theme1.xml", theme), ("word/settings.xml", settings.as_str())];
+        let d = craft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>ไทย</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+        let c = d.styles.default_chr.clone();
+        (c.font, c.font_ea, c.font_cs, c.font_ea_theme)
+    };
+    let s = |f: &str| Some(f.to_string());
+    let tnr = s("Times New Roman");
+    for bidi in [true, false] {
+        assert_eq!(read(r#"<w:rFonts w:cstheme="minorBidi"/>"#, bidi), (tnr.clone(), tnr.clone(), s("Tahoma"), None), "bidi language {bidi}");
+        assert_eq!(read(r#"<w:rFonts w:cstheme="majorBidi"/>"#, bidi), (tnr.clone(), tnr.clone(), s("Leelawadee UI"), None), "bidi language {bidi}");
+    }
+    let ea = read(r#"<w:rFonts w:eastAsiaTheme="minorEastAsia"/>"#, true);
+    assert_eq!(ea, (tnr.clone(), None, tnr.clone(), Some(craft_wordmodel::props::ThemeFont::MinorEastAsia)));
+    assert_eq!(read("", true), (tnr.clone(), tnr.clone(), tnr.clone(), None));
+    // A fixed complex-script font beside a theme slot: the theme's font, as Word draws it.
+    for bidi in [true, false] {
+        assert_eq!(
+            read(r#"<w:rFonts w:cs="Arial" w:cstheme="minorBidi"/>"#, bidi),
+            (tnr.clone(), tnr.clone(), s("Tahoma"), None),
+            "bidi language {bidi}"
+        );
+    }
+    // Drawn: the Thai in the theme's Thai font.
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:cstheme="minorBidi"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+    );
+    let rels = [("rId1", "styles", "styles.xml"), ("rId2", "theme", "theme/theme1.xml")];
+    let parts = [("word/styles.xml", styles.as_str()), ("word/theme/theme1.xml", theme)];
+    let d = craft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>ไทย</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).complex().font, "Tahoma");
+}
+
+/// A package without a styles part has Word's own defaults, as one whose styles part names none
+/// (measured in Word for Windows): the theme's body font (Aptos without a theme) at 12 pt, 15 pt
+/// complex script in the theme's Thai font (Cordia New without a theme), 8 pt after, single
+/// spacing. And a run naming a fixed complex-script font beside a `w:cstheme` slot draws in the
+/// theme's font, minor or major.
+#[test]
+fn a_package_without_a_styles_part_has_words_own_defaults() {
+    use craft_wordmodel::props::{LineSpacing, ParaProps};
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Georgia"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Thai" typeface="Angsana UPC"/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Thai" typeface="Leelawadee UI"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+    let settings = format!(r#"<w:settings {W_NS}><w:themeFontLang w:val="en-US" w:bidi="th-TH"/></w:settings>"#);
+    let body = r#"<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>ไทย</w:t></w:r><w:r><w:rPr><w:rFonts w:cs="Tahoma" w:cstheme="majorBidi"/><w:cs/></w:rPr><w:t>ไทย</w:t></w:r></w:p>"#;
+    for (with_theme, latin, thai) in [(false, "Aptos", "Cordia New"), (true, "Verdana", "Leelawadee UI")] {
+        let (rels, parts): (Vec<(&str, &str, &str)>, Vec<(&str, &str)>) = if with_theme {
+            (
+                vec![("rId1", "theme", "theme/theme1.xml"), ("rId2", "settings", "settings.xml")],
+                vec![("word/theme/theme1.xml", theme), ("word/settings.xml", settings.as_str())],
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let d = craft_docx::read(&docx(body, &rels, &parts)).unwrap();
+        let c = d.styles.resolve_char(None, &Default::default());
+        assert_eq!((c.font.as_str(), c.size, c.complex().font.as_str(), c.complex().size), (latin, 12.0, thai, 15.0), "theme {with_theme}");
+        let p = d.styles.resolve_para(&ParaProps::default());
+        assert_eq!((p.space_after, p.line_spacing), (8.0, LineSpacing::Multiple(1.0)), "theme {with_theme}");
+        if with_theme {
+            let run = &paras(&d)[0].runs[1].props;
+            assert_eq!(d.styles.resolve_char(None, run).complex().font, "Angsana UPC", "majorBidi over Tahoma");
+        }
     }
 }

@@ -1,7 +1,9 @@
 use super::{Level, LevelSuffix, ParaProps, Style, StyleKind, TablePart, VAlign, W, Writer, props, xml};
 use crate::write::props::open_change;
 use craft_wordmodel::Document;
-use craft_wordmodel::styles::TableStyleParts;
+use craft_wordmodel::props::CharProps;
+use craft_wordmodel::styles::{StyleSheet, TableStyleParts};
+use std::borrow::Cow;
 
 /// Built-in names Word keeps in lower case in styles.xml.
 fn file_style_name(name: &str) -> String {
@@ -19,9 +21,99 @@ fn file_style_name(name: &str) -> String {
     name.to_string()
 }
 
+/// Does `c` name a complex-script font (a font or a theme slot)?
+fn names_cs(c: &CharProps) -> bool {
+    c.font_cs.is_some() || c.font_cs_theme.is_some()
+}
+
+/// Does `c` name an East Asian font (a font or a theme slot)?
+fn names_ea(c: &CharProps) -> bool {
+    c.font_ea.is_some() || c.font_ea_theme.is_some()
+}
+
+/// The styles as `styles.xml` writes them, when that differs from `s`; `None` when it doesn't.
+/// Word draws each font slot the run defaults leave out in Times New Roman, where WordCraft draws
+/// the Latin font the text resolves to (the body font when that is unset too). So each slot the
+/// run defaults leave out is named, with the Latin font; a theme slot stays a theme slot. A
+/// paragraph style that sets a Latin font, where neither it nor a style it is based on names the
+/// slot, names it with that font too, so its text keeps its font. What else would change
+/// (a run's own Latin font, a character style's) the run names itself ([`run_as_saved`]).
+pub(super) fn saved_styles(s: &StyleSheet) -> Option<StyleSheet> {
+    let d = &s.default_chr;
+    let open_font = d.font.is_none() && d.font_ascii_theme.is_none() && d.font_hansi_theme.is_none();
+    let (open_cs, open_ea) = (!names_cs(d), !names_ea(d));
+    if !open_font && !open_cs && !open_ea {
+        return None;
+    }
+    let mut out = s.clone();
+    let latin = d.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
+    let c = &mut out.default_chr;
+    if open_font {
+        c.font = Some(latin.clone());
+    }
+    if open_cs {
+        c.font_cs = Some(latin.clone());
+    }
+    if open_ea {
+        c.font_ea = Some(latin);
+    }
+    for (st, o) in s.styles.iter().zip(out.styles.iter_mut()) {
+        let Some(font) = st.chr.font.clone().filter(|_| st.kind == StyleKind::Paragraph) else { continue };
+        let up = s.chain(&st.id);
+        if open_cs && !up.iter().any(|x| names_cs(&x.chr)) {
+            o.chr.font_cs = Some(font.clone());
+        }
+        if open_ea && !up.iter().any(|x| names_ea(&x.chr)) {
+            o.chr.font_ea = Some(font);
+        }
+    }
+    Some(out)
+}
+
+/// `c`, a run's formatting in a paragraph of style `para_style` (`table`: the run formatting the
+/// table style gives the cell), as it is written: where the styles as saved (`saved`, from
+/// [`saved_styles`]) would draw its complex-script or East Asian text in another font than
+/// WordCraft draws it in under `mem`, the run names that font itself, so the text keeps its font
+/// in Word and after reopening. A tracked change's before copy the same.
+pub(super) fn run_as_saved<'a>(
+    mem: &StyleSheet,
+    saved: Option<&StyleSheet>,
+    para_style: Option<&str>,
+    table: Option<&CharProps>,
+    c: Cow<'a, CharProps>,
+) -> Cow<'a, CharProps> {
+    let Some(saved) = saved else { return c };
+    let fonts = |p: &CharProps| {
+        let (m, s) = (mem.resolve_char_in(para_style, table, p), saved.resolve_char_in(para_style, table, p));
+        // Without an East Asian font, that text is drawn in the Latin one.
+        let (m_ea, s_ea) = (m.font_ea.unwrap_or(m.font), s.font_ea.unwrap_or(s.font));
+        ((m.font_cs != s.font_cs).then_some(m.font_cs), (m_ea != s_ea).then_some(m_ea))
+    };
+    let own = fonts(&c);
+    let old = c.fmt_change.as_deref().map(|ch| fonts(&ch.old)).unwrap_or((None, None));
+    if own == (None, None) && old == (None, None) {
+        return c;
+    }
+    let mut p = c.into_owned();
+    let name = |p: &mut CharProps, (cs, ea): (Option<String>, Option<String>)| {
+        if cs.is_some() {
+            p.font_cs = cs;
+        }
+        if ea.is_some() {
+            p.font_ea = ea;
+        }
+    };
+    name(&mut p, own);
+    if let Some(ch) = p.fmt_change.as_deref_mut() {
+        name(&mut ch.old, old);
+    }
+    Cow::Owned(p)
+}
+
 pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
     let doc = wr.doc;
-    let s = &doc.styles;
+    let saved = wr.saved_styles.clone();
+    let s: &StyleSheet = saved.as_deref().unwrap_or(&doc.styles);
     let mut w = W::new();
     let ns = xml::body_ns();
     let ns_refs: Vec<(&str, &str)> = ns.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -29,21 +121,20 @@ pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
     w.open("w:docDefaults", &[]);
     w.open("w:rPrDefault", &[]);
     w.open("w:rPr", &[]);
-    if s.default_chr.size.is_none() {
-        // The reader reads an omitted `w:sz` as 10 pt, but the resolver falls back to
-        // DEFAULT_FONT_SIZE, so writing nothing would change the size on reopening.
-        let mut chr = s.default_chr.clone();
-        chr.size = Some(craft_wordmodel::props::DEFAULT_FONT_SIZE);
-        props::rpr_inner(&mut w, &chr);
-    } else {
-        props::rpr_inner(&mut w, &s.default_chr);
-    }
+    let mut chr = s.default_chr.clone();
+    // The reader reads an omitted `w:sz` as 10 pt, but the resolver falls back to
+    // DEFAULT_FONT_SIZE, so writing nothing would change the size on reopening.
+    chr.size.get_or_insert(craft_wordmodel::props::DEFAULT_FONT_SIZE);
+    props::rpr_inner(&mut w, &chr);
     w.close("w:rPr");
     w.close("w:rPrDefault");
     if s.default_para_present || s.default_para != craft_wordmodel::props::ParaProps::default() {
+        // Defaults edited over a file that left `w:pPrDefault` out still stand on Word's own
+        // (8 pt after): written out whole, so reopening keeps them.
+        let para = s.para_defaults();
         w.open("w:pPrDefault", &[]);
         w.open("w:pPr", &[]);
-        props::ppr_inner(&mut w, &s.default_para, false, None);
+        props::ppr_inner(&mut w, &para, false, None);
         w.close("w:pPr");
         w.close("w:pPrDefault");
     }

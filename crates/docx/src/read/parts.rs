@@ -208,15 +208,28 @@ impl Reader<'_> {
         }
         self.theme_fills = shape_style::ThemeFills::read(el.child("a:fmtScheme"));
         if let Some(fs) = el.child("a:fontScheme") {
-            let face =
-                |n: &str| fs.child(n).and_then(|f| f.child("a:latin")).and_then(|l| l.attr("typeface")).filter(|t| !t.is_empty()).map(str::to_string);
+            // Names up to MAX_FONT_NAME bytes, as the run fonts are: an over-long one is left out.
+            let face = |n: &str| {
+                fs.child(n)
+                    .and_then(|f| f.child("a:latin"))
+                    .and_then(|l| l.attr("typeface"))
+                    .filter(|t| !t.is_empty() && t.len() <= MAX_FONT_NAME)
+                    .map(str::to_string)
+            };
             if let Some(f) = face("a:majorFont") {
                 self.doc.settings.major_font = f;
             }
             if let Some(f) = face("a:minorFont") {
                 self.doc.settings.minor_font = f;
             }
-            let cs = |n: &str| fs.child(n).and_then(|f| f.child("a:cs")).and_then(|c| c.attr("typeface")).unwrap_or_default().to_string();
+            let cs = |n: &str| {
+                fs.child(n)
+                    .and_then(|f| f.child("a:cs"))
+                    .and_then(|c| c.attr("typeface"))
+                    .filter(|t| t.len() <= MAX_FONT_NAME)
+                    .unwrap_or_default()
+                    .to_string()
+            };
             self.pc.major_cs = cs("a:majorFont");
             self.pc.minor_cs = cs("a:minorFont");
             // Per-script fonts (`a:font script="Arab"`); Office's themes list about 30.
@@ -232,6 +245,7 @@ impl Reader<'_> {
             };
             self.pc.major_scripts = scripts("a:majorFont");
             self.pc.minor_scripts = scripts("a:minorFont");
+            self.pc.theme_fonts = true;
             // Kept for the save, which writes the theme from the model (`package::THEME_FONTS`).
             let mut kept = String::new();
             for (key, tag) in [("major", "a:majorFont"), ("minor", "a:minorFont")] {

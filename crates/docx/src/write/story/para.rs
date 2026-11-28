@@ -146,6 +146,13 @@ impl Writer<'_> {
         let spans = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
             para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c)
         });
+        // Runs name the script fonts the saved styles would change.
+        let saved = self.saved_styles.clone();
+        let table = self.table_chr.clone();
+        let spans: Vec<_> = spans
+            .into_iter()
+            .map(|(r, c)| (r, crate::write::styles::run_as_saved(styles, saved.as_deref(), para_style, table.as_ref(), c)))
+            .collect();
         for (range, props) in &spans {
             let props: &CharProps = props;
             let range = range.clone();
