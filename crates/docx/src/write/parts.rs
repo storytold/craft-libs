@@ -100,8 +100,8 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
             Some(wm) if !footer => watermark::run(wm, done, &doc.last_section),
             _ => None,
         };
-        wr.blocks(&mut w, &blocks, &mut prels, false, 0);
-        // Always taken: the story ends with a top-level paragraph.
+        write_header_footer_blocks(&mut wr, &mut w, &blocks, &mut prels, footer);
+        // A header's watermark was taken by its own or its trailing top-level paragraph.
         wr.pending_watermark = None;
         w.close(tag);
         push_part(
@@ -306,6 +306,14 @@ fn write_settings(doc: &Document, wr: &Writer<'_>, options: WriteOptions) -> Res
         settings_rels = mail_merge::source_relationships(&settings, settings_rels)?;
     }
     Ok((settings, settings_rels))
+}
+
+fn write_header_footer_blocks(wr: &mut Writer<'_>, w: &mut W, blocks: &Blocks, rels: &mut PartRels, footer: bool) {
+    if footer {
+        wr.footer_blocks(w, blocks, rels);
+    } else {
+        wr.blocks(w, blocks, rels, false, 0);
+    }
 }
 
 fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels, ns_refs: &[(&str, &str)]) -> Vec<u8> {

@@ -48,3 +48,13 @@ Equations (OMML) are read and written by `craft_math::omml`.
 
 - DrawingML (`a:`) shape fills, lines, custom geometry and colours are still read with this
   crate's own code; they move to `craft-drawingml`.
+
+## Table-only footer endings
+
+The shared writer preserves footer parts ending in writable tables without adding
+an extra paragraph. Empty footers and skipped-only tables retain a fallback
+paragraph; nested table cells still receive their required paragraph ending.
+Synthetic repeated-save/XML controls cover all branches in
+`tests/it/footer_table_end.rs`. This ports the public
+[WordCraft #4703](https://github.com/storytold/wordcraft/pull/4703) contribution.
+Native Word and broader corpus qualification are not renewed by this port.
