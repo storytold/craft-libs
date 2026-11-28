@@ -559,7 +559,7 @@ impl PenTool {
 
     // ---- reading the draft ----
 
-    fn rubber_band(&self) -> bool {
+    pub(super) fn rubber_band(&self) -> bool {
         self.options.rubber_band
     }
 
