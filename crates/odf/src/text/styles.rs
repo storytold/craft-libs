@@ -1295,6 +1295,23 @@ impl Styles {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.extra.lang.clone()).or_else(|| self.default_lang.clone())
     }
 
+    /// The document's default East Asian and complex-script properties: the default style's, with
+    /// the Standard style's languages over them, as [`document_lang`](Self::document_lang) does for
+    /// the Western one (#1836: LibreOffice keeps its untouched default on the default style and
+    /// the user's choice on Standard).
+    pub(super) fn document_scripts(&self) -> craft_wordmodel::props::CharProps {
+        let mut scripts = self.default_scripts.clone();
+        if let Some(s) = self.map.get("Standard").filter(|s| !s.auto) {
+            if let Some(l) = &s.fmt.extra.lang_ea {
+                scripts.lang_ea = Some(l.clone());
+            }
+            if let Some(l) = &s.fmt.extra.lang_bidi {
+                scripts.lang_bidi = Some(l.clone());
+            }
+        }
+        scripts
+    }
+
     /// The document's default font: the Standard paragraph style's, else the default style's.
     pub(super) fn doc_font(&self) -> Option<String> {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
@@ -1643,6 +1660,23 @@ impl Styles {
             && fmt.extra.as_ref().is_none_or(|x| x.lang.is_none())
         {
             fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
+        }
+        // And its East Asian and complex-script languages, which the document's defaults take
+        // from Standard too (#1836).
+        if s.parent.is_none() {
+            let doc = self.document_scripts();
+            // The default style's language where the document's differs from it.
+            let differs = |default: &Option<String>, doc: &Option<String>| default.clone().filter(|l| doc.as_ref() != Some(l));
+            if let Some(l) = differs(&self.default_scripts.lang_ea, &doc.lang_ea)
+                && fmt.extra.as_ref().is_none_or(|x| x.lang_ea.is_none())
+            {
+                fmt.extra.get_or_insert_with(Default::default).lang_ea = Some(l);
+            }
+            if let Some(l) = differs(&self.default_scripts.lang_bidi, &doc.lang_bidi)
+                && fmt.extra.as_ref().is_none_or(|x| x.lang_bidi.is_none())
+            {
+                fmt.extra.get_or_insert_with(Default::default).lang_bidi = Some(l);
+            }
         }
         let look = ParaLook {
             align: s.align,

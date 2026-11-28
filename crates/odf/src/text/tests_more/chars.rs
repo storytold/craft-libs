@@ -544,22 +544,28 @@ fn a_language_with_a_script_keeps_it() {
     assert_eq!(d.styles.default_chr.lang.as_deref(), Some("sr-RS"));
 }
 
-/// A style with no parent inherits the default style's language, not Standard's (the document's
-/// here), and one based on Standard takes Standard's.
+/// A style with no parent inherits the default style's languages, not Standard's (the document's
+/// here), and one based on Standard takes Standard's: the Western, East Asian and complex-script
+/// ones alike (#1836).
 #[test]
 fn a_style_with_no_parent_has_the_default_styles_language() {
     let styles = format!(
-        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="en" fo:country="US"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:language="de" fo:country="DE"/></style:style><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph"/><style:style style:name="Gesagt" style:display-name="Gesagt" style:family="paragraph"><style:text-properties fo:language="fr" fo:country="FR"/></style:style><style:style style:name="Kind" style:display-name="Kind" style:family="paragraph" style:parent-style-name="Standard"/></office:styles></office:document-styles>"#
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="en" fo:country="US" style:language-asian="zh" style:country-asian="CN" style:language-complex="hi" style:country-complex="IN"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:language="de" fo:country="DE" style:language-asian="ja" style:country-asian="JP" style:language-complex="ar" style:country-complex="EG"/></style:style><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph"/><style:style style:name="Gesagt" style:display-name="Gesagt" style:family="paragraph"><style:text-properties fo:language="fr" fo:country="FR" style:language-asian="ko" style:country-asian="KR" style:language-complex="he" style:country-complex="IL"/></style:style><style:style style:name="Kind" style:display-name="Kind" style:family="paragraph" style:parent-style-name="Standard"/></office:styles></office:document-styles>"#
     );
     let content = format!(
         r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Eigen">a</text:p><text:p text:style-name="Gesagt">b</text:p><text:p text:style-name="Kind">c</text:p></office:text></office:body></office:document-content>"#
     );
     let check = |d: &craft_wordmodel::Document| {
-        assert_eq!(d.styles.default_chr.lang.as_deref(), Some("de-DE"));
-        let lang = |id: &str| d.styles.resolve_char(Some(id), &Default::default()).lang;
-        assert_eq!(lang("Eigen").as_deref(), Some("en-US"), "no parent: the default style's");
-        assert_eq!(lang("Gesagt").as_deref(), Some("fr-FR"), "its own");
-        assert_eq!(lang("Kind").as_deref(), Some("de-DE"), "based on Standard");
+        let c = &d.styles.default_chr;
+        assert_eq!((c.lang.as_deref(), c.lang_ea.as_deref(), c.lang_bidi.as_deref()), (Some("de-DE"), Some("ja-JP"), Some("ar-EG")));
+        let langs = |id: &str| {
+            let c = d.styles.para_style_props(id).1;
+            (c.lang, c.lang_ea, c.lang_bidi)
+        };
+        let want = |l: &str, ea: &str, bidi: &str| (Some(l.to_string()), Some(ea.to_string()), Some(bidi.to_string()));
+        assert_eq!(langs("Eigen"), want("en-US", "zh-CN", "hi-IN"), "no parent: the default style's");
+        assert_eq!(langs("Gesagt"), want("fr-FR", "ko-KR", "he-IL"), "its own");
+        assert_eq!(langs("Kind"), want("de-DE", "ja-JP", "ar-EG"), "based on Standard");
     };
     let d = import(&crate::text::tests::package(&content, Some(&styles))).unwrap();
     check(&d);
@@ -835,4 +841,50 @@ fn a_headings_text_sizes_are_measured_against_the_heading() {
     let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
     std::sync::Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(24.0);
     assert_eq!(sizes(&d), want(24.0));
+}
+
+/// An ODT whose default style and Standard style state the text properties `default` and
+/// `standard`, with one Japanese paragraph in an automatic style on Standard (#1836).
+fn standard_over_default(default: &str, standard: &str) -> Vec<u8> {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties {default}/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties {standard}/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">今日は月曜日なのです。</text:p></office:text></office:body></office:document-content>"#
+    );
+    package(&content, Some(&styles))
+}
+
+/// The document's default Western, East Asian and complex-script languages.
+fn document_langs(d: &Document) -> (Option<&str>, Option<&str>, Option<&str>) {
+    let c = &d.styles.default_chr;
+    (c.lang.as_deref(), c.lang_ea.as_deref(), c.lang_bidi.as_deref())
+}
+
+const LIBREOFFICE_DEFAULT: &str =
+    r#"fo:language="en" fo:country="US" style:language-asian="zh" style:country-asian="CN" style:language-complex="hi" style:country-complex="IN""#;
+
+/// #1836: the Standard style's East Asian and complex-script languages override the default
+/// style's, as its Western language does: LibreOffice keeps its untouched default (zh-CN, hi-IN)
+/// on the default style and the user's choice on Standard.
+#[test]
+fn the_standard_styles_asian_and_complex_languages_override_the_default_styles() {
+    let standard = r#"fo:language="de" fo:country="DE" style:language-asian="ja" style:country-asian="JP" style:language-complex="ar" style:country-complex="EG""#;
+    let d = import(&standard_over_default(LIBREOFFICE_DEFAULT, standard)).unwrap();
+    assert_eq!(document_langs(&d), (Some("de-DE"), Some("ja-JP"), Some("ar-EG")));
+    // Saved and opened again, the languages are kept.
+    let saved = export(&d).unwrap();
+    assert_eq!(document_langs(&import(&saved).unwrap()), (Some("de-DE"), Some("ja-JP"), Some("ar-EG")));
+    // A Standard that states only some of them takes the rest from the default style.
+    let d = import(&standard_over_default(LIBREOFFICE_DEFAULT, r#"style:language-asian="ko" style:country-asian="KR""#)).unwrap();
+    assert_eq!(document_langs(&d), (Some("en-US"), Some("ko-KR"), Some("hi-IN")));
+}
+
+/// A Standard style without languages leaves the default style's, as before.
+#[test]
+fn a_standard_style_without_languages_keeps_the_default_styles() {
+    let d = import(&standard_over_default(LIBREOFFICE_DEFAULT, r#"fo:font-size="12pt""#)).unwrap();
+    assert_eq!(document_langs(&d), (Some("en-US"), Some("zh-CN"), Some("hi-IN")));
+    let d = import(&standard_over_default(r#"fo:font-size="12pt""#, r#"fo:font-size="12pt""#)).unwrap();
+    assert_eq!(document_langs(&d), (None, None, None));
 }

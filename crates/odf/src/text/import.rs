@@ -1019,7 +1019,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         outline: styles.outline.clone(),
         kern: styles.default_kern,
         widows: styles.stated_widows(),
-        scripts: styles.default_scripts.clone(),
+        scripts: styles.document_scripts(),
         default_lang: styles.document_lang(),
         default_tab: styles.default_tab,
         tabs_from_indent: styles.tabs_from_indent,
