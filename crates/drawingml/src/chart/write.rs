@@ -488,6 +488,11 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.tag("c:axId").attr("val", AX_CAT).empty();
         w.open("c:scaling", &[]);
         w.tag("c:orientation").attr("val", "minMax").empty();
+        for (name, bound) in [("c:max", c.x_max), ("c:min", c.x_min)] {
+            if let Some(bound) = bound.filter(|v| v.is_finite()) {
+                w.tag(name).attr("val", bound).empty();
+            }
+        }
         w.close();
         w.tag("c:delete").attr("val", 0).empty();
         w.tag("c:axPos").attr("val", "b").empty();
@@ -590,8 +595,33 @@ fn series_points(c: &Chart, s: &Series, g: Group) -> usize {
     }
 }
 
-fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)]) {
+fn plot_groups(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)]) {
     let g = group_of(kind);
+    // Apply the cache budget before splitting scatter series so style changes cannot reset it.
+    // Always write the first series; each of its caches is cut at MAX_CACHE_POINTS.
+    let mut left = MAX_EXPORT_POINTS;
+    let mut count = list.len();
+    for (n, (_, s)) in list.iter().enumerate() {
+        let cost = series_points(c, s, g);
+        if n > 0 && cost > left {
+            log::warn!("pptx: chart export stopped after {n} series; the data caches passed {MAX_EXPORT_POINTS} points");
+            count = n;
+            break;
+        }
+        left = left.saturating_sub(cost);
+    }
+    let list = &list[..count];
+    if g == Group::Scatter && !list.is_empty() {
+        // Scatter style applies to the whole group. Split at style changes to preserve series order.
+        for run in list.chunk_by(|(_, a), (_, b)| a.scatter_lines == b.scatter_lines) {
+            plot_group(w, c, kind, g, run);
+        }
+    } else {
+        plot_group(w, c, kind, g, list);
+    }
+}
+
+fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, g: Group, list: &[(usize, &Series)]) {
     let grouping = if kind.percent() {
         "percentStacked"
     } else if kind.stacked() {
@@ -620,7 +650,10 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
             w.tag("c:grouping").attr("val", grouping).empty();
         }
         Group::Line | Group::Area => w.tag("c:grouping").attr("val", grouping).empty(),
-        Group::Scatter => w.tag("c:scatterStyle").attr("val", "lineMarker").empty(),
+        Group::Scatter => {
+            let lines = list.first().is_some_and(|(_, s)| s.scatter_lines);
+            w.tag("c:scatterStyle").attr("val", if lines { "lineMarker" } else { "marker" }).empty();
+        }
         Group::Radar => w.tag("c:radarStyle").attr("val", if kind == ChartType::FilledRadar { "filled" } else { "marker" }).empty(),
         _ => {}
     }
@@ -628,17 +661,7 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
     if g != Group::Stock {
         w.tag("c:varyColors").attr("val", vary).empty();
     }
-    // Each series repeats the categories in its own cache, so the output grows with series times
-    // categories: stop adding series once a group's caches pass the budget (the first is always written).
-    // The first series is always written; each of its caches is cut at MAX_CACHE_POINTS.
-    let mut left = MAX_EXPORT_POINTS;
-    for (n, (i, s)) in list.iter().enumerate() {
-        let cost = series_points(c, s, g);
-        if n > 0 && cost > left {
-            log::warn!("pptx: chart export stopped after {n} series; the data caches passed {MAX_EXPORT_POINTS} points");
-            break;
-        }
-        left = left.saturating_sub(cost);
+    for (i, s) in list {
         series(w, c, s, *i, kind, g);
     }
     if c.data_labels {
@@ -801,7 +824,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
                 })
                 .copied()
                 .collect();
-            plot_group(&mut w, c, k, &list);
+            plot_groups(&mut w, c, k, &list);
         }
         axes(&mut w, c, Group::Bar);
     } else {
@@ -828,7 +851,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         ) {
             log::warn!("pptx: {} chart written as a column chart", c.kind.label());
         }
-        plot_group(&mut w, c, main, &indexed);
+        plot_groups(&mut w, c, main, &indexed);
         let g = group_of(main);
         if !matches!(g, Group::Pie | Group::Doughnut) {
             axes(&mut w, c, g);
@@ -1137,6 +1160,50 @@ mod region_map_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scatter_axis_bounds_and_line_style_survive_rebuilt_xml() {
+        for lines in [false, true] {
+            let mut c = crate::chart::Chart::sample(crate::chart::ChartType::Scatter);
+            c.x_min = Some(-2.0);
+            c.x_max = Some(8.0);
+            for series in &mut c.series {
+                series.scatter_lines = lines;
+                series.marker = Some("none".into());
+            }
+            let (xml, kept) = super::chart_xml(&c);
+            assert!(!kept, "the test exercises the rebuilt chart writer");
+            let read = crate::chart::read::read_chart_xml(&xml).expect("written scatter chart");
+            assert_eq!((read.x_min, read.x_max), (c.x_min, c.x_max), "explicit horizontal bounds survive saving");
+            assert!(read.series.iter().all(|s| s.scatter_lines == lines), "scatter line style survives saving");
+            assert!(read.series.iter().all(|s| s.marker.as_deref() == Some("none")), "saving keeps markers hidden");
+        }
+    }
+
+    #[test]
+    fn scatter_and_bubble_write_horizontal_maximum_before_minimum() {
+        for kind in [ChartType::Scatter, ChartType::Bubble] {
+            let mut c = Chart::sample(kind);
+            c.x_min = Some(-2.0);
+            c.x_max = Some(8.0);
+            let (xml, _) = super::chart_xml(&c);
+            let xml = String::from_utf8(xml).expect("chart XML is UTF-8");
+            let max = xml.find("<c:max ").expect("horizontal maximum");
+            let min = xml.find("<c:min ").expect("horizontal minimum");
+            assert!(max < min, "{kind:?} horizontal maximum must precede the minimum");
+        }
+    }
+
+    #[test]
+    fn scatter_mixed_line_styles_survive_rebuilt_xml_in_series_order() {
+        let mut c = Chart::sample(ChartType::Scatter);
+        c.series[1].scatter_lines = true;
+        let (xml, _) = super::chart_xml(&c);
+        let read = crate::chart::read::read_chart_xml(&xml).expect("written scatter chart");
+        assert_eq!(read.kind, c.kind);
+        let names_and_styles = |chart: &Chart| chart.series.iter().map(|s| (s.name.clone(), s.scatter_lines)).collect::<Vec<_>>();
+        assert_eq!(names_and_styles(&read), names_and_styles(&c));
+    }
+
     use crate::chart::{Chart, ChartType, Series};
     use crate::color::{ColorTransform, Rgba};
     use crate::style::ColorRef;
