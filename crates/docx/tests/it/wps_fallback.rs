@@ -49,21 +49,24 @@ fn a_text_box_gets_a_vml_fallback_with_its_text() {
     d.parts.get_mut(&id).unwrap().body = TextBody { auto_fit: true, inset: Some([0; 4]), ..Default::default() };
     let mut o = shape(ShapeKind::TextBox, Some(id));
     if let InlineObject::Shape { float, .. } = &mut o {
-        (float.dist, float.dist_top, float.dist_bottom) = (18.0, 12.0, 6.0);
+        (float.dist_left, float.dist_right, float.dist_top, float.dist_bottom) = (18.0, 6.0, 12.0, 4.0);
     }
     d.insert_object(&craft_wordmodel::Pos::body(0, 1), o, &Default::default()).unwrap();
     let bytes = craft_docx::write(&d).unwrap();
     let xml = document_xml(&bytes);
     assert!(xml.contains(r#"<mc:AlternateContent><mc:Choice Requires="wps"><w:drawing>"#), "{xml}");
     assert!(!xml.contains("<w:r><w:drawing>"), "no bare Word 2010 shape: {xml}");
-    let fallback = &xml[xml.find("<mc:Fallback>").expect("a fallback")..];
+    let split = xml.find("<mc:Fallback>").expect("a fallback");
+    let choice = &xml[..split];
+    assert!(choice.contains(r#"distL="228600""#) && choice.contains(r#"distR="76200""#), "{choice}");
+    let fallback = &xml[split..];
     assert!(fallback.starts_with("<mc:Fallback><w:pict><v:rect "), "{fallback}");
     for want in [
         "position:absolute",
         "mso-position-horizontal:right",
         "mso-position-horizontal-relative:margin",
         "mso-position-vertical-relative:text",
-        "mso-wrap-distance-left:18.00pt;mso-wrap-distance-right:18.00pt;mso-wrap-distance-top:12.00pt;mso-wrap-distance-bottom:6.00pt",
+        "mso-wrap-distance-left:18.00pt;mso-wrap-distance-right:6.00pt;mso-wrap-distance-top:12.00pt;mso-wrap-distance-bottom:4.00pt",
         r#"filled="f""#,
         r#"stroked="f""#,
         r#"<v:textbox inset="0.00pt,0.00pt,0.00pt,0.00pt" style="mso-fit-shape-to-text:t"><w:txbxContent>"#,

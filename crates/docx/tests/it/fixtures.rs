@@ -575,7 +575,7 @@ fn alternate_content_choice_and_fallback() {
             assert_eq!((*kind, *w, *h), (ShapeKind::TextBox, 72.0, 36.0));
             assert_eq!(float.wrap, Wrap::Square);
             assert_eq!(float.x, 10.0);
-            assert_eq!(float.dist, 1.0);
+            assert_eq!((float.dist_left, float.dist_right), (1.0, 0.0));
             let s = d.parts.get(&story.unwrap()).unwrap();
             assert_eq!(s.blocks[0].as_para().unwrap().text, "boxed");
         }
@@ -1431,9 +1431,9 @@ fn anchor_alignment_reference_areas_and_distances() {
         p[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(float.clone()) } else { None }).collect();
     let [a, b] = floats.as_slice() else { panic!("{floats:?}") };
     assert_eq!((a.h_rel, a.h_align, a.v_rel, a.v_align, a.y), (Anchor::Margin, Some(FloatAlign::Center), Anchor::TopMargin, None, -1.0));
-    assert_eq!((a.dist, a.dist_top, a.dist_bottom), (9.0, 2.0, 4.0));
+    assert_eq!((a.dist_left, a.dist_right, a.dist_top, a.dist_bottom), (0.0, 9.0, 2.0, 4.0));
     assert_eq!((b.h_rel, b.h_align, b.x, b.v_rel, b.v_align), (Anchor::LeftMargin, None, 5.0, Anchor::Line, Some(FloatAlign::End)));
-    assert_eq!((b.dist, b.dist_top, b.dist_bottom), (0.0, 0.0, 0.0));
+    assert_eq!((b.dist_left, b.dist_right, b.dist_top, b.dist_bottom), (0.0, 0.0, 0.0, 0.0));
 }
 
 #[test]
@@ -1809,7 +1809,10 @@ fn absolute_vml_text_box_in_header_floats() {
             (f1.wrap, f1.h_rel, f1.h_align, f1.v_rel, f1.v_align),
             (Wrap::Square, Anchor::Margin, Some(FloatAlign::Center), Anchor::TopMargin, None)
         );
-        assert!((f1.y + 6.0).abs() < 0.01 && (f1.dist - 9.0).abs() < 0.01 && (f1.dist_bottom - 4.0).abs() < 0.01, "{f1:?}");
+        assert!(
+            (f1.y + 6.0).abs() < 0.01 && (f1.dist_left - 9.0).abs() < 0.01 && f1.dist_right.abs() < 0.01 && (f1.dist_bottom - 4.0).abs() < 0.01,
+            "{f1:?}"
+        );
         // No wrap element: in front of the text, relative to the column and paragraph.
         assert_eq!((f2.wrap, f2.h_rel, f2.v_rel), (Wrap::InFrontOfText, Anchor::Column, Anchor::Paragraph));
         assert!((f2.x - 72.0).abs() < 0.01 && (f2.y - 2.0).abs() < 0.01, "{f2:?}");
@@ -1829,8 +1832,28 @@ fn hostile_vml_style_values_stay_finite() {
     let p = paras(&d);
     let Some(InlineObject::Shape { w, h, float, .. }) = p[0].objects.first() else { panic!("{:?}", p[0].objects) };
     assert_eq!(float.wrap, Wrap::InFrontOfText);
-    assert!([*w, *h, float.x, float.y, float.dist, float.dist_top].iter().all(|v| v.is_finite()), "{w} {h} {float:?}");
-    assert_eq!((float.h_align, float.dist, float.dist_top), (None, 0.0, 1584.0));
+    assert!([*w, *h, float.x, float.y, float.dist_left, float.dist_right, float.dist_top].iter().all(|v| v.is_finite()), "{w} {h} {float:?}");
+    assert_eq!((float.h_align, float.dist_left, float.dist_right, float.dist_top), (None, 0.0, 0.0, 1584.0));
+}
+
+/// Reads a floating VML shape with asymmetric horizontal wrap distances and checks that both
+/// sides survive a DOCX save and reload.
+///
+/// Saving rewrites VML shapes as DrawingML anchors with a VML fallback, so `dist_left` and
+/// `dist_right` must stay distinct across both readers and writers.
+#[test]
+fn vml_asymmetric_wrap_distances_round_trip() {
+    let body = r#"<w:p><w:r><w:pict><v:rect style="position:absolute;margin-left:12pt;margin-top:6pt;width:72pt;height:36pt;mso-wrap-distance-left:12pt;mso-wrap-distance-right:7pt;mso-wrap-distance-top:8pt;mso-wrap-distance-bottom:5pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>asym</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="square"/></v:rect></w:pict></w:r></w:p>"#;
+    let check = |d: &Document| {
+        let p = paras(d);
+        let Some(InlineObject::Shape { float, .. }) = p[0].objects.first() else { panic!("{:?}", p[0].objects) };
+        assert_eq!(float.wrap, Wrap::Square);
+        assert_eq!((float.dist_left, float.dist_right, float.dist_top, float.dist_bottom), (12.0, 7.0, 8.0, 5.0));
+    };
+    let d = read_body(body);
+    check(&d);
+    let saved = craft_docx::write(&d).unwrap();
+    check(&craft_docx::read(&saved).unwrap());
 }
 
 // ---- charts and OLE objects written back (#319) ----

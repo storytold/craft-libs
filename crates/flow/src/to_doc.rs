@@ -394,7 +394,8 @@ impl<'a> Builder<'a> {
             float.as_deref().cloned().map(|mut f| {
                 let fit = |v: f32| if v.is_finite() { v.clamp(-1584.0, 1584.0) } else { 0.0 };
                 (f.x, f.y) = (fit(f.x), fit(f.y));
-                (f.dist, f.dist_top, f.dist_bottom) = (fit(f.dist).max(0.0), fit(f.dist_top).max(0.0), fit(f.dist_bottom).max(0.0));
+                (f.dist_left, f.dist_right, f.dist_top, f.dist_bottom) =
+                    (fit(f.dist_left).max(0.0), fit(f.dist_right).max(0.0), fit(f.dist_top).max(0.0), fit(f.dist_bottom).max(0.0));
                 f
             })
         };
@@ -1094,4 +1095,49 @@ pub fn part_blocks(doc: &mut Document, blocks: &[FBlock]) -> Blocks {
         out.push(para_block(Paragraph::new()));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use craft_wordmodel::para::{Float, InlineObject, Wrap};
+
+    use super::to_doc;
+    use crate::{FBlock, Flow, Img, Inline, Para};
+
+    /// Verifies that `to_doc` sanitizes each floating image wrap distance independently (clamping
+    /// negative and NaN values to `0.0` and oversized values to `1584.0`) while leaving valid
+    /// asymmetric values unchanged.
+    ///
+    /// Both `dist_left` and `dist_right` must be clamped individually so an invalid value on one
+    /// side never alters the other side.
+    #[test]
+    fn image_float_distances_are_sanitized_per_side() {
+        let img_with = |float: Float| {
+            Inline::Image(Img {
+                data: Arc::new(vec![1, 2, 3, 4]),
+                ext: "png".into(),
+                w: 72.0,
+                h: 36.0,
+                alt: String::new(),
+                float: Some(Box::new(float)),
+                object: None,
+                crop: [0.0; 4],
+            })
+        };
+        let hostile = Float { wrap: Wrap::Square, dist_left: -5.0, dist_right: f32::NAN, dist_top: 2000.0, dist_bottom: 5.0, ..Float::default() };
+        let valid = Float { wrap: Wrap::Square, dist_left: 12.0, dist_right: 7.0, dist_top: 8.0, dist_bottom: 5.0, ..Float::default() };
+        let flow = Flow {
+            blocks: vec![FBlock::Para(Para { inlines: vec![img_with(hostile), img_with(valid)], ..Para::default() })],
+            meta: Default::default(),
+        };
+        let doc = to_doc(&flow);
+        let p = doc.body[0].as_para().expect("paragraph");
+        let floats: Vec<_> =
+            p.objects.iter().filter_map(|o| if let InlineObject::Image { float, .. } = o { Some(float.clone()) } else { None }).collect();
+        let [f0, f1] = floats.as_slice() else { panic!("expected 2 images: {:?}", p.objects) };
+        assert_eq!((f0.dist_left, f0.dist_right, f0.dist_top, f0.dist_bottom), (0.0, 0.0, 1584.0, 5.0));
+        assert_eq!((f1.dist_left, f1.dist_right, f1.dist_top, f1.dist_bottom), (12.0, 7.0, 8.0, 5.0));
+    }
 }

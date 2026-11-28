@@ -453,9 +453,8 @@ impl Writer<'_> {
             let z = if float.wrap == Wrap::BehindText { z - (i64::from(i32::MAX) + 1) } else { z };
             style.push(format!("z-index:{z}"));
             // The same clearances from the text as the choice's `distL`/`distR`/`distT`/`distB`.
-            let d = pt(float.dist.clamp(0.0, 1584.0));
-            style.push(format!("mso-wrap-distance-left:{d}"));
-            style.push(format!("mso-wrap-distance-right:{d}"));
+            style.push(format!("mso-wrap-distance-left:{}", pt(float.dist_left.clamp(0.0, 1584.0))));
+            style.push(format!("mso-wrap-distance-right:{}", pt(float.dist_right.clamp(0.0, 1584.0))));
             style.push(format!("mso-wrap-distance-top:{}", pt(float.dist_top.clamp(0.0, 1584.0))));
             style.push(format!("mso-wrap-distance-bottom:{}", pt(float.dist_bottom.clamp(0.0, 1584.0))));
             if let Some(a) = float.h_align {

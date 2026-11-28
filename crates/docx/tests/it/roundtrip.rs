@@ -448,7 +448,16 @@ fn images_round_trip() {
         w: 100.0,
         h: 50.0,
         alt: String::new(),
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0, ..Default::default() },
+        float: Float {
+            wrap: Wrap::Square,
+            h_rel: Anchor::Page,
+            v_rel: Anchor::Margin,
+            x: 36.0,
+            y: 12.5,
+            dist_left: 9.0,
+            dist_right: 9.0,
+            ..Default::default()
+        },
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
@@ -464,7 +473,8 @@ fn images_round_trip() {
             h_align: Some(FloatAlign::Center),
             v_rel: Anchor::TopMargin,
             v_align: Some(FloatAlign::End),
-            dist: 9.0,
+            dist_left: 9.0,
+            dist_right: 9.0,
             dist_top: 2.5,
             dist_bottom: 4.0,
             ..Default::default()
@@ -480,7 +490,7 @@ fn images_round_trip() {
             w: 10.0,
             h: 10.0,
             alt: String::new(),
-            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() },
+            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, ..Default::default() },
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
@@ -500,6 +510,47 @@ fn images_round_trip() {
     assert_eq!(got.objects, expect);
     assert_eq!(r.media.get(&key).map(|b| b.as_slice()), Some(png.as_slice()));
     assert_eq!(r.media.len(), 1);
+}
+
+/// Issue #2911: opening and saving a DOCX with asymmetric or one-side-zero horizontal wrap
+/// distances on a floating picture preserves exact `distL`, `distR`, `distT`, and `distB` EMUs.
+///
+/// The package is built directly from raw XML and re-saved with no edits so both the DrawingML
+/// reader (`anchor_float`) and writer (`drawing_open`) are verified end to end.
+#[test]
+fn floating_picture_asymmetric_wrap_distances_round_trip() {
+    let png = tiny_png();
+    let root_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>"#;
+    let cases = [
+        ("152400", "88900", "101600", "63500", (12.0, 7.0, 8.0, 5.0)),
+        ("88900", "152400", "63500", "101600", (7.0, 12.0, 5.0, 8.0)),
+        ("152400", "0", "101600", "63500", (12.0, 0.0, 8.0, 5.0)),
+        ("0", "152400", "101600", "63500", (0.0, 12.0, 8.0, 5.0)),
+    ];
+    for (dl, dr, dt, db, want) in cases {
+        let doc = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body><w:p><w:r><w:drawing><wp:anchor distT="{dt}" distB="{db}" distL="{dl}" distR="{dr}" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="914400" cy="457200"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="1" name="Picture 1"/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Picture 1"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdImg"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:body></w:document>"#
+        );
+        let input = crate::fixtures::zip(&[
+            ("_rels/.rels", root_rels.as_bytes()),
+            ("word/document.xml", doc.as_bytes()),
+            ("word/_rels/document.xml.rels", doc_rels.as_bytes()),
+            ("word/media/image1.png", &png),
+        ]);
+        let opened = craft_docx::read(&input).expect("read");
+        let saved = craft_docx::write(&opened).expect("write");
+        let xml = document_xml(&saved);
+        let expected_anchor = format!(r#"<wp:anchor distT="{dt}" distB="{db}" distL="{dl}" distR="{dr}""#);
+        assert!(xml.contains(&expected_anchor), "expected {expected_anchor} in {xml}");
+        for doc in [&opened, &craft_docx::read(&saved).expect("re-read")] {
+            let Some(InlineObject::Image { float, .. }) = paras(doc)[0].objects.first() else {
+                panic!("expected floating picture: {:?}", paras(doc)[0].objects);
+            };
+            assert_eq!(float.wrap, Wrap::Square);
+            assert_eq!((float.dist_left, float.dist_right, float.dist_top, float.dist_bottom), want);
+        }
+    }
 }
 
 #[test]
@@ -1291,7 +1342,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         fill: Some(Fill::solid(Rgb(255, 255, 200))),
         stroke: Some(Rgb(0, 0, 0)),
         stroke_width: 1.0,
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0, ..Default::default() },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, ..Default::default() },
         story: Some(story),
         freeform: None,
         effects: Default::default(),
@@ -1404,7 +1455,16 @@ fn groups_round_trip() {
         effects: Default::default(),
         extra: Default::default(),
     };
-    let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 20.0, y: 10.0, dist: 9.0, ..Default::default() };
+    let float = Float {
+        wrap: Wrap::Square,
+        h_rel: Anchor::Column,
+        v_rel: Anchor::Paragraph,
+        x: 20.0,
+        y: 10.0,
+        dist_left: 9.0,
+        dist_right: 9.0,
+        ..Default::default()
+    };
     let group = InlineObject::Group {
         w: 240.0,
         h: 120.0,

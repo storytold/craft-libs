@@ -292,7 +292,7 @@ impl Writer<'_> {
         if float.wrap == Wrap::Inline {
             w.open("wp:inline", &[("distT", "0"), ("distB", "0"), ("distL", "0"), ("distR", "0")]);
         } else {
-            let d = emu(float.dist.clamp(0.0, 1584.0));
+            let (dl, dr) = (emu(float.dist_left.clamp(0.0, 1584.0)), emu(float.dist_right.clamp(0.0, 1584.0)));
             let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
             // A stacking order read from a file is kept (one less: see `Float::z`); objects made
             // here go above those.
@@ -303,8 +303,8 @@ impl Writer<'_> {
                 &[
                     ("distT", &dt),
                     ("distB", &db),
-                    ("distL", &d),
-                    ("distR", &d),
+                    ("distL", &dl),
+                    ("distR", &dr),
                     ("simplePos", "0"),
                     ("relativeHeight", &z.to_string()),
                     ("behindDoc", behind),

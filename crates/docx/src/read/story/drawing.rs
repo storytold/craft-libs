@@ -808,7 +808,8 @@ fn anchor_float(c: &El, orders: craft_wordmodel::para::FileOrders) -> Float {
         }
     }
     let dist = |n: &str| c.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
-    f.dist = dist("distL").max(dist("distR"));
+    f.dist_left = dist("distL");
+    f.dist_right = dist("distR");
     f.dist_top = dist("distT");
     f.dist_bottom = dist("distB");
     // Required by the schema; a file leaving it out lays out in the cell, as before.

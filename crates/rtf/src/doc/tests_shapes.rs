@@ -196,3 +196,32 @@ fn the_flow_reader_is_unchanged() {
         FBlock::Table(_) => true,
     }));
 }
+
+/// Verifies that RTF shape wrap distances parse `dxWrapDistLeft` and `dxWrapDistRight`
+/// independently while keeping Word's 9 pt horizontal default for an omitted side.
+///
+/// The second shape sets `dxWrapDistLeft` to `0` with `dxWrapDistRight` absent so copying the
+/// left distance to both sides would wrongly zero `dist_right` instead of preserving `9.0`.
+#[test]
+fn shape_wrap_distances_keep_left_and_right_separate() {
+    let rtf = r"{\rtf1\ansi
+{\shp{\*\shpinst\shpleft0\shptop0\shpright1440\shpbottom1440\shpbxcolumn\shpbypara\shpwr2
+{\sp{\sn shapeType}{\sv 1}}
+{\sp{\sn dxWrapDistLeft}{\sv 152400}}
+{\sp{\sn dxWrapDistRight}{\sv 88900}}
+{\sp{\sn dyWrapDistTop}{\sv 101600}}
+{\sp{\sn dyWrapDistBottom}{\sv 63500}}}}
+{\shp{\*\shpinst\shpleft0\shptop0\shpright1440\shpbottom1440\shpbxcolumn\shpbypara\shpwr2
+{\sp{\sn shapeType}{\sv 1}}
+{\sp{\sn dxWrapDistLeft}{\sv 0}}}}
+Text\par}";
+    let d = import(rtf.as_bytes()).unwrap();
+    let s = shapes(&d);
+    assert_eq!(s.len(), 2, "{s:?}");
+    let f0 = &s[0].5;
+    assert_eq!(f0.wrap, Wrap::Square);
+    assert_eq!((f0.dist_left, f0.dist_right, f0.dist_top, f0.dist_bottom), (12.0, 7.0, 8.0, 5.0));
+    let f1 = &s[1].5;
+    assert_eq!(f1.wrap, Wrap::Square);
+    assert_eq!((f1.dist_left, f1.dist_right, f1.dist_top, f1.dist_bottom), (0.0, 9.0, 0.0, 0.0));
+}
