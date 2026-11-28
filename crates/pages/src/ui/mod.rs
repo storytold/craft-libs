@@ -63,6 +63,6 @@ pub use thumbnails::{
     ThumbnailWords, moved_page,
 };
 pub use view::{
-    GoTo, GoToPlace, PICTURE_REACH, PageBody, PageInsets, PageRegion, PageRevision, PageSnap, PageSource, PageView, PageViewOutput, PageViewState,
-    PageViewWords, PlacedPage,
+    GoTo, GoToPlace, PICTURE_REACH, PageBody, PageInsets, PageMark, PageRegion, PageRevision, PageSnap, PageSource, PageView, PageViewOutput,
+    PageViewState, PageViewWords, PlacedPage,
 };

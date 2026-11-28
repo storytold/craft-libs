@@ -28,7 +28,7 @@ use craft_behavior::{Axis, CanvasView, NavMove, PressPhase, ZoomScheme};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardColor,
-    PasteboardOutput, Rulers, Snap, ToolPass, ToolRegion, canvas_space, pixel_aligned, tool_pass, with_canvas_space,
+    PasteboardOutput, Rulers, ScrollMark, Snap, ToolPass, ToolRegion, canvas_space, pixel_aligned, tool_pass, with_canvas_space,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::textures::{Priority, TextureState, TextureStatistics, ThumbRequest, ThumbSource};
@@ -477,6 +477,26 @@ pub struct PageView<'a> {
     reach: f32,
     go_to_place: GoToPlace,
     fill_screen: bool,
+    scroll_marks: &'a [PageMark],
+}
+
+/// A place on a page to mark on the page view's vertical scroll bar, such as a find match.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PageMark {
+    /// Page index, 0-based.
+    pub page: usize,
+    /// How far down the page the place is, in page points from its top (the space of [`PlacedPage::to_screen`]).
+    pub y: f64,
+    /// The current place (the current find match), drawn stronger.
+    pub current: bool,
+}
+
+impl PageMark {
+    /// A mark `y` page points down page `page`, the current one when `current`.
+    pub const fn new(page: usize, y: f64, current: bool) -> Self {
+        PageMark { page, y, current }
+    }
 }
 
 /// How far from the view, in view heights above and below it (and one view width either side), the page view keeps a
@@ -507,7 +527,17 @@ impl<'a> PageView<'a> {
             reach: PICTURE_REACH,
             go_to_place: GoToPlace::AfterRowAbove,
             fill_screen: false,
+            scroll_marks: &[],
         }
+    }
+
+    /// Places to mark on the vertical scroll bar (find matches), so the reader sees where in the document they are.
+    /// Shown while the pages scroll continuously; a single page's bar covers that page only, and shows none. None by
+    /// default.
+    #[must_use]
+    pub fn scroll_marks(mut self, marks: &'a [PageMark]) -> Self {
+        self.scroll_marks = marks;
+        self
     }
 
     /// Where Go To puts a page's top in the view: after the row above by default, the page gap above it with
@@ -695,6 +725,7 @@ impl<'a> PageView<'a> {
             reach,
             go_to_place,
             fill_screen,
+            scroll_marks,
         } = self;
         let mut spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         // Filling the screen, the pages keep no margin above or below and no gutter beside them, and draw no border.
@@ -724,7 +755,7 @@ impl<'a> PageView<'a> {
         // The canvas is given the view of the state as the pass will read it.
         let mut start = state.clone();
         start.normalise();
-        let build = Geometry { sizes: &sizes, viewport, options, spacing, bodies, go_to_place, fill_screen, cache: RefCell::new(None) };
+        let build = Geometry { sizes: &sizes, viewport, options, spacing, bodies, go_to_place, fill_screen, scroll_marks, cache: RefCell::new(None) };
         let geo = build.of(&start);
         let frame = Frame::of(&geo);
         let given = frame.view(rect, start.offset, geo.scale / SCREEN_POINTS_PER_POINT);
@@ -1203,6 +1234,21 @@ fn run_pass(
         // decides, as the bars measure it.
         let (x_lo, x_hi) = offset_range(drawn.doc.x0, drawn.doc.x1, vw);
         let bars = if x_lo >= x_hi { bars.vertical_only() } else { bars };
+        let marks: Vec<ScrollMark> = if state.continuous {
+            build
+                .scroll_marks
+                .iter()
+                .filter(|mark| mark.page < count && mark.y.is_finite())
+                .map(|mark| {
+                    let band = band_rect(&drawn.layout, mark.page);
+                    let y = (drawn.layout.rects[mark.page].y0 + mark.y * drawn.scale).clamp(band.y0, band.y1);
+                    ScrollMark::new(drawn_frame.document_rect(&DocRect::new(band.x0, y, band.x1, y)).y0, mark.current)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let bars = bars.marks(&marks);
         // Full screen's edge-to-edge view (`PageView::fill_screen`) has no scroll bars: nothing is drawn and nothing takes a press
         // along the window's edges.
         let bar_moved = if build.fill_screen {
@@ -1709,6 +1755,8 @@ struct Geometry<'a> {
     go_to_place: GoToPlace,
     /// `PageView::fill_screen`: a spread that is not continuous fits by its own pages and stands centred.
     fill_screen: bool,
+    /// `PageView::scroll_marks`.
+    scroll_marks: &'a [PageMark],
     /// The last layout and its inputs.
     cache: RefCell<Option<(LayoutKey, Arc<Placed>)>>,
 }

@@ -85,7 +85,7 @@ pub use rulers::{
     CENTIMETRE_LABEL_STEP_MIN, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers,
     RulersOutput, StepLadder, TickRule,
 };
-pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput};
+pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput, ScrollMark};
 
 // canvas-navigator-a
 pub(crate) mod navigator;
