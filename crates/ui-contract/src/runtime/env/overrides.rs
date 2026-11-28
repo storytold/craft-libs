@@ -107,6 +107,11 @@ pub enum WheelScope {
     /// Every taker takes the wheel only while focused or armed: a card in a scrolling overview. Wins over a `Free` set
     /// inside it, so a scroll of the overview never stops on a story's slider.
     Gated,
+    /// Value controls that sense the wheel edit on a dominant horizontal swipe or Shift-wheel
+    /// under the pointer. Vertical scrolling edits only after an explicit press and only until
+    /// the pointer leaves; keyboard focus survives but never rearms wheel editing. Other takers
+    /// are unchanged. An outer `Gated` scope still wins.
+    Directional,
 }
 
 /// Changes to the inherited values for a stretch of code.

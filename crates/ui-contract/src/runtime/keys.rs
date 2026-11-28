@@ -15,6 +15,11 @@ mod input;
 mod intents;
 mod nodes;
 mod route;
+mod scalar;
+
+pub use scalar::{ScalarKeyPolicy, ScalarKeyTrigger};
+#[doc(hidden)]
+pub use scalar::{ScalarRow, register_scalar};
 
 #[doc(hidden)]
 pub use claims::capture;
@@ -251,6 +256,8 @@ struct Source {
 #[derive(Clone, Default)]
 struct Routed {
     items: Vec<Item>,
+    /// Scalar-row moves selected by the canonical router, distinct from ordinary focused navigation.
+    scalar_moves: Vec<(NavMove, MoveMods)>,
     nudge: Option<Nudge>,
     /// The chords a recorder stop's presses spell this pass.
     chords: Vec<Chord>,
@@ -304,6 +311,8 @@ pub(crate) struct Stage {
     layout: Layout,
     nodes: HashMap<u64, Node>,
     last_nodes: HashMap<u64, Node>,
+    /// Opt-in real rows declared this pass; taken at the next begin, so unmounted rows cannot accumulate.
+    scalar_rows: Vec<scalar::ScalarRow>,
     activated: IdMap<Id>,
     alt: AltTrack,
     /// The keys down now, as the input hook read them before it withheld any press.

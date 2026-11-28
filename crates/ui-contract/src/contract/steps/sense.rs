@@ -26,6 +26,7 @@ pub(crate) fn register_wheel(
     scope: WheelScope,
 ) {
     let free = sensed.is_some() && scope == WheelScope::Free;
+    let directional = sensed.is_some() && value_control && scope == WheelScope::Directional;
     let zone = sensed.is_some_and(|taker| taker.zooms_view && !(taker.horizontal || taker.vertical || taker.zoom));
     let taker = sensed.or_else(|| value_control.then(|| craft_behavior::WheelTaker::new(id, rect).vertical(true)));
     if let Some(taker) = taker {
@@ -34,7 +35,9 @@ pub(crate) fn register_wheel(
             taker
                 .value(value_control)
                 .field(value_control && text && sensed.is_some())
-                .gated(scope == WheelScope::Gated || (value_control && !free && !zone)),
+                .gated(scope == WheelScope::Gated || (value_control && !free && !zone))
+                .horizontal(taker.horizontal || directional)
+                .directional(directional),
         );
     }
 }

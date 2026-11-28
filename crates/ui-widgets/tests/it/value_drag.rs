@@ -7,6 +7,16 @@ pub(crate) mod mark_labels;
 
 pub(crate) mod dials;
 
+pub(crate) mod codec_override;
+
+pub(crate) mod custom_scale;
+
+pub(crate) mod scalar_key_policy;
+
+pub(crate) mod scalar_contracts;
+
+pub(crate) mod slider_field_scrub;
+
 pub(crate) mod thumb_row;
 
 use craft_behavior::{EditEvent, MotionMode};
@@ -551,4 +561,113 @@ fn a_slider_drag_on_a_given_value_runs_one_pass_a_frame() {
     }
     assert!(model.get() > 50.0, "the drag moved the app's value");
     assert!(passes.iter().all(|&n| n == 1), "slider drag frames ran {passes:?} passes");
+}
+
+/// A slow frame can merge the pointer's move out of an armed slider and back (or out of the window and back) into one
+/// pass: the slider still left, so the vertical wheel is disarmed though the pass ends with the pointer over it.
+#[trial]
+fn directional_slider_wheel_disarms_on_a_leave_and_return_within_one_frame() {
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    for away in [pointer::moved(Pos2::new(400.0, 200.0)), pointer::gone()] {
+        let value = RefCell::new(START);
+        let mut show = |ui: &mut Ui| {
+            with_env(
+                ui,
+                |set| set.wheel = Some(WheelScope::Directional),
+                |ui| {
+                    Slider::new(Bind::bound(&mut *value.borrow_mut()), 0.0..=100.0).step(1.0).label("Position").show_at(ui, FIELD);
+                },
+            );
+        };
+        let mut frames = Frames::new();
+        frames.idle(3, &mut show);
+        pointer::click(&mut frames, FIELD.center(), &mut show);
+        let before = *value.borrow();
+        frames.frame(vec![pointer::wheel(40.0)], &mut show);
+        frames.idle(30, &mut show);
+        assert!(*value.borrow() > before, "the press armed vertical wheel editing");
+        let armed = *value.borrow();
+        frames.frame(vec![away.clone(), pointer::moved(FIELD.center()), pointer::wheel(-80.0)], &mut show);
+        frames.idle(30, &mut show);
+        assert_eq!(*value.borrow(), armed, "the pointer left the slider within the frame ({away:?})");
+    }
+}
+
+/// Shift asks for the sideways wheel rather than for a coarser step: one Shift-wheel notch over the directional slider
+/// moves it as far as one plain sideways notch.
+#[trial]
+fn directional_slider_shift_wheel_steps_one_plain_notch() {
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    let edited_by = |modifiers: Modifiers, delta: Vec2, source: egui::MouseWheelSource| {
+        let value = RefCell::new(START);
+        let mut show = |ui: &mut Ui| {
+            with_env(
+                ui,
+                |set| set.wheel = Some(WheelScope::Directional),
+                |ui| {
+                    Slider::new(Bind::bound(&mut *value.borrow_mut()), 0.0..=100.0).step(1.0).label("Position").show_at(ui, FIELD);
+                },
+            );
+        };
+        let mut frames = Frames::new();
+        frames.idle(3, &mut show);
+        frames.frame(vec![pointer::moved(FIELD.center())], &mut show);
+        frames.frame(
+            vec![egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Move, modifiers, source }],
+            &mut show,
+        );
+        frames.idle(30, &mut show);
+        *value.borrow() - START
+    };
+    let sideways = edited_by(Modifiers::NONE, Vec2::new(40.0, 0.0), egui::MouseWheelSource::Trackpad);
+    assert!(sideways > 0.0, "a plain sideways notch edits the value");
+    let shifted = edited_by(Modifiers::SHIFT, Vec2::new(0.0, 40.0), egui::MouseWheelSource::Wheel);
+    assert!(shifted > 0.0, "Shift-wheel edits the value");
+    assert!(shifted <= sideways + 1.0, "Shift-wheel steps once, like a plain sideways notch: {shifted} against {sideways}");
+}
+
+#[trial]
+fn directional_slider_wheel_disarms_on_leave_without_losing_keyboard_focus() {
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    let value = RefCell::new(START);
+    let mut show = |ui: &mut Ui| {
+        with_env(
+            ui,
+            |set| set.wheel = Some(WheelScope::Directional),
+            |ui| {
+                Slider::new(Bind::bound(&mut *value.borrow_mut()), 0.0..=100.0).step(1.0).label("Position").show_at(ui, FIELD);
+            },
+        );
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    let sideways = |dx| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(dx, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Trackpad,
+    };
+    frames.frame(vec![pointer::moved(FIELD.center())], &mut show);
+    frames.frame(vec![sideways(40.0)], &mut show);
+    frames.idle(30, &mut show);
+    assert!(*value.borrow() > START, "a horizontal trackpad swipe edits without selecting");
+    pointer::click(&mut frames, FIELD.center(), &mut show);
+    let before = *value.borrow();
+    frames.frame(vec![pointer::wheel(40.0)], &mut show);
+    frames.idle(30, &mut show);
+    assert!(*value.borrow() > before, "an explicit press arms vertical wheel editing");
+    let before_leave = *value.borrow();
+    frames.frame(vec![pointer::moved(Pos2::new(400.0, 200.0))], &mut show);
+    frames.frame(vec![pointer::moved(FIELD.center())], &mut show);
+    frames.frame(vec![pointer::wheel(-80.0)], &mut show);
+    frames.idle(30, &mut show);
+    assert_eq!(*value.borrow(), before_leave, "returning with keyboard focus does not rearm the wheel");
+    frames.frame(vec![pointer::moved(Pos2::new(400.0, 200.0))], &mut show);
+    frames.frame(
+        vec![egui::Event::Key { key: Key::ArrowRight, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+        &mut show,
+    );
+    frames.idle(2, &mut show);
+    assert!(*value.borrow() > before_leave, "keyboard focus survives leaving the slider");
 }

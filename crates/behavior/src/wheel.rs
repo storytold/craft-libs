@@ -362,6 +362,10 @@ pub struct WheelTaker<O> {
     /// It takes any axis (scroll or zoom) only while focused or armed: a value control, unless its scope frees it,
     /// or any taker inside a gated scope.
     pub gated: bool,
+    /// Directional value editing: dominant horizontal (or Shift) scroll edits under the pointer;
+    /// vertical scroll requires explicit arming, not keyboard focus. The existing arming lifecycle
+    /// disarms on leaving the control, without changing keyboard focus.
+    pub directional: bool,
     /// A scroll region (a scrolling body or collection): Shift turns the vertical wheel sideways over it.
     pub scrolls: bool,
     /// The distance of one wheel line.
@@ -430,6 +434,7 @@ impl<O> WheelTaker<O> {
             vertical: false,
             zoom: false,
             gated: false,
+            directional: false,
             scrolls: false,
             notch: WheelNotch::DEFAULT,
             room: None,
@@ -494,6 +499,14 @@ impl<O> WheelTaker<O> {
     /// Whether every axis needs focus or arming.
     pub const fn gated(mut self, on: bool) -> Self {
         self.gated = on;
+        self
+    }
+
+    /// Opts a value control into directional editing, without changing the default focus gate.
+    /// The caller registers both scroll axes and keeps the taker gated so presses can arm it.
+    #[must_use]
+    pub const fn directional(mut self, on: bool) -> Self {
+        self.directional = on;
         self
     }
 
@@ -637,7 +650,8 @@ pub fn split<O: Copy + PartialEq>(
     if !running {
         *gesture = WheelGesture::default();
     }
-    let field = focus.taker.filter(|focused| !focus.by_position && takers.iter().any(|taker| taker.field && taker.owner == *focused));
+    let field =
+        focus.taker.filter(|focused| !focus.by_position && takers.iter().any(|taker| taker.field && !taker.directional && taker.owner == *focused));
     let app_field = focus.app_field && !focus.by_position;
     // A value control keeps its gesture only while the pointer is over it: once the pointer leaves, the gesture goes
     // on by position as a running one (value controls excluded) and the control hears its end now, so its edit run
@@ -696,17 +710,43 @@ fn split_at<O: Copy + PartialEq>(
     // Takers register outer first, so among equal areas the later one is the deeper (or the upper) and goes first.
     let mut under: Vec<&WheelTaker<O>> = takers.iter().rev().filter(|taker| taker.rect.contains(at)).collect();
     under.sort_by(|a, b| a.rect.area().total_cmp(&b.rect.area()));
-    // A trackpad steps a value control only while it is focused or armed: over anything else it scrolls the panel.
+    // Read intent without changing anyone's input: a running panel gesture can cross a
+    // directional control without that control becoming an eligible recipient.
+    // A dominant horizontal swipe, or a Shift-wheel whatever its vertical component; the edit distance is the axis
+    // that intent names, so a Shift-wheel with a little sideways drift still edits by its vertical share.
+    let horizontal = wheel.scroll.x.abs() > wheel.scroll.y.abs();
+    let sideways = horizontal || (wheel.mods.shift && wheel.scroll.y != 0.0);
+    // A trackpad otherwise steps a value control only while it is focused or armed.
     let fingers = wheel.source.fingers();
-    let open = |taker: &WheelTaker<O>| (!taker.gated && !(fingers && taker.value)) || armed == Some(taker.owner) || focused == Some(taker.owner);
+    let open = |taker: &WheelTaker<O>| {
+        if taker.directional {
+            !(wheel.mods.alt || wheel.mods.cmd || wheel.mods.ctrl) && (sideways || armed == Some(taker.owner))
+        } else {
+            (!taker.gated && !(fingers && taker.value)) || armed == Some(taker.owner) || focused == Some(taker.owner)
+        }
+    };
     // The running gesture's owner, while it is registered and open; it takes its axes wherever the pointer is. A
     // focused field holds the wheel by the field rule alone, so a wheel with Alt or Cmd/Ctrl still reaches the view.
-    let held: Option<&WheelTaker<O>> = latch
-        .flatten()
-        .and_then(|owner| takers.iter().find(|taker| taker.owner == owner && open(taker) && !(taker.field && focused == Some(taker.owner))));
+    let held: Option<&WheelTaker<O>> = latch.flatten().and_then(|owner| {
+        // A focused field holds the wheel by the field rule alone, not a directional control: that one took the
+        // gesture by position and keeps it while it runs.
+        takers.iter().find(|taker| taker.owner == owner && open(taker) && !(taker.field && !taker.directional && focused == Some(taker.owner)))
+    });
     // Who takes a scroll axis by position: any open taker for a new gesture; during a running one no value control,
     // so a control the pointer passes over does not take the scroll over.
     let free = |taker: &WheelTaker<O>| open(taker) && (latch.is_none() || !taker.value);
+    let horizontal_recipient = held
+        .filter(|taker| taker.horizontal)
+        .or_else(|| under.iter().copied().find(|taker| taker.horizontal && free(taker) && taker.has_room(false, wheel.scroll.x)));
+    let wheel = if sideways && horizontal_recipient.is_some_and(|taker| taker.directional) {
+        // Only the selected directional recipient reads a normalized dominant-axis share.
+        // Another owner, including a latched panel or a command-chord recipient, keeps the
+        // device's original components unchanged.
+        let (along, lines) = if horizontal { (wheel.scroll.x, wheel.lines.x) } else { (wheel.scroll.y, wheel.lines.y) };
+        Wheel { scroll: Vec2::new(along, 0.0), lines: Vec2::new(lines, 0.0), ..wheel }
+    } else {
+        wheel
+    };
     let zone = (wheel.scroll.y != 0.0).then(|| under.iter().position(|t| (t.vertical || t.zooms_view) && open(t))).flatten();
     let zone_view = zone.filter(|&at| !under[at].vertical).and_then(|at| under[at + 1..].iter().find(|t| t.zoom && open(t))).map(|t| t.owner);
     // A running gesture zooms a view by the zone only when it is that view's gesture.
@@ -758,6 +798,13 @@ fn split_at<O: Copy + PartialEq>(
             None => shares.push((owner, part)),
         }
     }
+    // A directional value control reads a plain notch: Shift reached it as the request for the sideways wheel (the
+    // rule above), never as a multiplier of its step. Another taker keeps its modifiers.
+    for (owner, share) in &mut shares {
+        if takers.iter().any(|taker| taker.directional && taker.owner == *owner) {
+            share.mods = Mods { shift: false, ..share.mods };
+        }
+    }
     shares
 }
 
@@ -768,6 +815,12 @@ mod tests {
 
     fn wheel(x: f32, y: f32) -> Wheel {
         Wheel::new(Vec2::new(x, y), Mods::NONE, WheelUnit::Point, WheelPhase::Move)
+    }
+
+    /// The first share of a split at `at` with nothing armed or latched.
+    fn share_of(takers: &[WheelTaker<u8>], at: Pos2, wheel: Wheel, focus: Option<u8>, armed: Option<u8>) -> (u8, Wheel) {
+        let mut gesture = WheelGesture::default();
+        split(takers, at, wheel, WheelFocus::new(focus), armed, &mut gesture, 0.0)[0]
     }
 
     fn rect(size: f32) -> Rect {
@@ -855,5 +908,71 @@ mod tests {
         }
         assert!(notch(&mut ease, -NOTCH, 2.0 + 11.0 * 0.02) < -NOTCH - 1.0, "precondition: the run is fast again");
         assert!(near(notch(&mut ease, -NOTCH, 5.0), -NOTCH), "an idle gap starts again at one notch");
+    }
+
+    #[test]
+    fn directional_value_wheel_keeps_plain_defaults_and_requires_arming_only_for_vertical() {
+        let panel = WheelTaker::new(1u8, rect(300.0)).horizontal(true).vertical(true).scrolls(true);
+        let control = WheelTaker::new(2u8, rect(100.0)).horizontal(true).vertical(true).value(true).gated(true);
+        let at = pos2(10.0, 10.0);
+        let shares =
+            |control, wheel, focus, armed| split(&[panel, control], at, wheel, WheelFocus::new(focus), armed, &mut WheelGesture::default(), 0.0);
+        assert_eq!(shares(control, wheel(0.0, 6.0), Some(2), None)[0].0, 2, "default focus gate is unchanged");
+        assert_eq!(shares(control, wheel(6.0, 0.0), None, None)[0].0, 1, "default unfocused sideways scroll stays with the panel");
+        let directional = control.directional(true);
+        assert_eq!(shares(directional, wheel(0.0, 6.0), Some(2), None)[0].0, 1, "focus alone does not rearm vertical editing");
+        assert_eq!(shares(directional, wheel(0.0, 6.0), Some(2), Some(2))[0].0, 2, "an explicit press arms vertical editing");
+        let horizontal = shares(directional, wheel(6.0, 0.0).source(WheelSource::Trackpad), None, None);
+        assert_eq!((horizontal[0].0, horizontal[0].1.scroll), (2, Vec2::new(6.0, 0.0)), "an unselected horizontal trackpad swipe edits");
+        let diagonal_right = shares(directional, wheel(12.0, -3.0), None, None);
+        assert_eq!((diagonal_right[0].0, diagonal_right[0].1.scroll), (2, Vec2::new(12.0, 0.0)), "horizontal-dominant intent keeps its sign");
+        let shifted = shares(directional, Wheel { mods: Mods::SHIFT, ..wheel(0.0, 6.0) }, None, None);
+        assert_eq!((shifted[0].0, shifted[0].1.scroll), (2, Vec2::new(6.0, 0.0)), "Shift-wheel is explicitly sideways");
+        assert!(!shifted[0].1.mods.shift, "the directional share carries one plain notch, not Shift's ten");
+        let diagonal = shares(directional, wheel(3.0, -12.0), Some(2), None);
+        assert!(diagonal.iter().all(|(owner, _)| *owner == 1), "a vertical-dominant swipe stays with the panel despite focus");
+        assert_eq!(diagonal[0].1.scroll.y, -12.0, "vertical scrolling remains available");
+        for mods in [Mods::CTRL, Mods::ALT, Mods::CMD, Mods { shift: true, ..Mods::CTRL }] {
+            let chord = shares(directional, Wheel { mods, ..wheel(12.0, -3.0) }, None, None);
+            assert_eq!((chord[0].0, chord[0].1.scroll), (1, Vec2::new(12.0, -3.0)), "command chords keep both original panel components: {mods:?}");
+        }
+    }
+
+    #[test]
+    fn directional_shift_wheel_with_both_axes_edits_by_its_vertical_share() {
+        let panel = WheelTaker::new(1u8, rect(300.0)).horizontal(true).vertical(true).scrolls(true);
+        let directional = WheelTaker::new(2u8, rect(100.0)).horizontal(true).vertical(true).value(true).gated(true).directional(true);
+        let at = pos2(10.0, 10.0);
+        let mixed = share_of(&[panel, directional], at, Wheel { mods: Mods::SHIFT, ..wheel(3.0, -12.0) }, None, None);
+        assert_eq!(mixed.0, 2, "Shift-wheel with mixed axes reaches the directional control");
+        assert_eq!(mixed.1.scroll, Vec2::new(-12.0, 0.0), "and edits by its vertical share");
+        assert!(!mixed.1.mods.shift, "one plain notch");
+        let plain = share_of(&[panel, directional], at, wheel(3.0, -12.0), None, None);
+        assert_eq!(plain.0, 1, "without Shift a vertical-dominant swipe is the panel's");
+    }
+
+    #[test]
+    fn a_focused_directional_field_keeps_its_running_gesture() {
+        let panel = WheelTaker::new(1u8, rect(300.0)).horizontal(true).vertical(true).scrolls(true);
+        let field = WheelTaker::new(2u8, rect(100.0)).horizontal(true).vertical(true).value(true).gated(true).directional(true).field(true);
+        let at = pos2(10.0, 10.0);
+        let mut gesture = WheelGesture::default();
+        let first = split(&[panel, field], at, wheel(6.0, -3.0), WheelFocus::new(Some(2)), None, &mut gesture, 0.0);
+        assert_eq!(first[0].0, 2, "the focused directional field takes the first sideways event");
+        let second = split(&[panel, field], at, wheel(6.0, -3.0), WheelFocus::new(Some(2)), None, &mut gesture, 0.05);
+        assert_eq!(second[0].0, 2, "and the next event of the same gesture, though it is a focused field");
+    }
+
+    #[test]
+    fn directional_control_under_a_running_panel_scroll_must_not_strip_its_vertical_share() {
+        let panel = WheelTaker::new(1u8, rect(300.0)).horizontal(true).vertical(true).scrolls(true);
+        let directional = WheelTaker::new(2u8, rect(100.0)).horizontal(true).vertical(true).value(true).gated(true).directional(true);
+        let mut gesture = WheelGesture::default();
+        let first = split(&[panel, directional], pos2(200.0, 200.0), wheel(12.0, -3.0), WheelFocus::new(None), None, &mut gesture, 0.0);
+        assert_eq!((first[0].0, first[0].1.scroll), (1, Vec2::new(12.0, -3.0)));
+        // The existing panel-owned gesture crosses an opted-in slider. Values are excluded while
+        // another owner holds the gesture, so the untouched panel must retain BOTH scroll axes.
+        let crossing = split(&[panel, directional], pos2(10.0, 10.0), wheel(12.0, -3.0), WheelFocus::new(None), None, &mut gesture, 0.001);
+        assert_eq!((crossing[0].0, crossing[0].1.scroll), (1, Vec2::new(12.0, -3.0)));
     }
 }

@@ -1,5 +1,9 @@
 //! The one egui adapter: the only importer of egui's behavioural APIs.
 
+/// The layer a widget was shown in, for a component whose own API carries one (a scalar row): egui's layer type is a
+/// behavioural API (`contract/egui-import`), so it is named through here.
+pub use egui::LayerId;
+
 pub mod access;
 pub mod alloc;
 pub(crate) mod alt_code;

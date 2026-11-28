@@ -170,6 +170,13 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// ladder); the step is ignored for them. The range still holds the result.
     #[prop(func = "Fn(f64, i32, f64) -> f64")]
     stepper: Option<NumberStepper<'a>>,
+    /// A composite may route AX increment/decrement in separate model units; editing/typing/wheel still use step.
+    /// Zero (or a non-finite amount) leaves the rule's step.
+    #[prop(quantity = "step", vis = "pub(crate)")]
+    scalar_access_step: f64,
+    /// Pointer-only fine/coarse bindings for the field, label and popup-slider scrubs.
+    #[prop]
+    pointer_modifiers: craft_behavior::DragModifiers,
     /// A unit shown after the number.
     #[prop(into)]
     unit: Option<Label>,
@@ -295,6 +302,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             step: None,
             scrub_step: None,
             stepper: None,
+            scalar_access_step: 0.0,
+            pointer_modifiers: craft_behavior::DragModifiers::default(),
             unit: None,
             unit_placement: UnitPlacement::Inside,
             step_arrows: StepArrows::Hidden,
@@ -850,7 +859,12 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn scrub(&self) -> Option<Scrub<V>> {
         let rule = self.rule();
         let step = self.scrub_step.filter(|step| step.is_finite() && *step > 0.0).unwrap_or(rule.step);
-        let drag = ValueDrag::relative(step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS);
+        let drag = ValueDrag::relative(step, rule.bounds())
+            .warp(true)
+            .hide_cursor(true)
+            .coarse(LARGE_STEPS)
+            .fine(1.0 / LARGE_STEPS)
+            .modifiers(self.pointer_modifiers);
         // Rounded to the field's decimals, so a scrubbed value carries no float noise. The step is not a grid
         // here: an Alt drag moves by a share of it.
         let decimals = self.decimals();
@@ -864,7 +878,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         if let Some(range) = self.popup_slider.as_ref().filter(|_| self.track > 0.0) {
             let shown = range.start() * scale..=range.end() * scale;
             let rate = (shown.end() - shown.start()) / f64::from(self.track);
-            scrub = scrub.part(SLIDER, ValueDrag::relative(rate, shown));
+            scrub = scrub.part(SLIDER, ValueDrag::relative(rate, shown).modifiers(self.pointer_modifiers));
         }
         Some(scrub)
     }
@@ -963,7 +977,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             Some(value) => Numeric::new(value, rule.bounds()),
             None => Numeric::empty(rule.bounds()),
         };
-        access.numeric(numeric.step(rule.step));
+        let access_step = self.scalar_access_step;
+        access.numeric(numeric.step(if access_step.is_finite() && access_step > 0.0 { access_step } else { rule.step }));
         if let Some(unit) = self.painted_unit(cx) {
             access.unit(cx.env.resolve(&unit).as_str());
         }

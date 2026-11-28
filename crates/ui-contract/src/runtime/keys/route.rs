@@ -1,7 +1,7 @@
 //! The begin hook's routing: key presses, shortcuts and AccessKit requests to the intents of their owners.
 
 use super::input::chrome_toggle_of;
-use super::{Batch, EscapePress, Item, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Source, Taken, current, with};
+use super::{Batch, EscapePress, Item, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Source, Taken, current, scalar, with};
 use crate::runtime::commands::{self, ClipContent, FirePhase};
 use crate::runtime::egui::input::{Action, ActionKind};
 use crate::runtime::focus::{self, StopRec};
@@ -22,7 +22,7 @@ use std::sync::Arc;
 pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let os = crate::runtime::windows::os_of(ctx);
     let target = focus::focused_rec(ctx);
-    let (batch, nodes, captures, held_claims, alt_claims, fired_claims, hover_deletes) = current(ctx, |stage| {
+    let (batch, nodes, captures, held_claims, alt_claims, fired_claims, hover_deletes, scalar_rows) = current(ctx, |stage| {
         stage.routed.clear();
         stage.intents_read = false;
         stage.contexts.clear();
@@ -42,6 +42,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             alt_claims,
             fired,
             std::mem::take(&mut stage.hover_deletes),
+            std::mem::take(&mut stage.scalar_rows),
         )
     });
     let alt_tapped = alt_claims.first().copied().filter(|_| batch.alt_tap);
@@ -80,6 +81,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let mut routed: HashMap<Option<Id>, Routed> = HashMap::new();
     let mut activated = IdMap::default();
     let mut consumed = vec![Taken::No; batch.presses.len()];
+    let scalar_owned = route_scalar_rows(ctx, &scalar_rows, target.as_ref(), press_captured, &batch, &mut routed, &mut consumed);
     let driven = target.as_ref().and_then(|rec| Driven::of(ctx, rec));
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
     // Whether a component took each text of the pass, as typing, type-ahead or digits; and whether the framework took
@@ -95,7 +97,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         .chain(batch.presses.iter().filter(|press| held_press(press)).filter_map(|press| press.text))
         .collect();
     if let Some(rec) = &target {
-        for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
+        for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, taken)| !press.canvas && **taken == Taken::No) {
             *taken = if let Some(id) = hover_delete.filter(|id| Some(*id) != target.as_ref().map(|rec| rec.stop.id))
                 && press.mods.is_none()
                 && matches!(press.key, Key::Delete | Key::Backspace)
@@ -144,7 +146,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         // arrows with the modifiers it acts on (`KeyUse::nudge_mods`); the others are the app's, as is a page key bound to
         // a command that runs now (`page_key_runs`).
         let declared = |mods: Mods| canvas.as_ref().is_none_or(|canvas| canvas.stop.keys.nudge_mods.contains(mods));
-        for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
+        for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, taken)| !press.canvas && **taken == Taken::No) {
             if let Some(id) = hover_delete
                 && press.mods.is_none()
                 && matches!(press.key, Key::Delete | Key::Backspace)
@@ -187,10 +189,10 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         push(&mut routed, focused, Intent::Edit(command), false);
     }
     let over: Vec<bool> = batch.presses.iter().map(held_press).collect();
-    let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts, &over);
+    let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts, &over, &scalar_owned);
     // The app's own widget, focused or the window's canvas, reads its keys from egui.
     let host = target.as_ref().or(canvas.as_ref()).is_some_and(|rec| rec.stop.host);
-    withdraw_taken(ctx, host, &batch, &held, &withdrawn_texts);
+    withdraw_taken(ctx, host, &batch, &held, &withdrawn_texts, &scalar_owned);
     let pasted = batch.paste.clone().zip(focused).map(|(content, id)| (id, content));
     // PLAN: a repeat Tab of a held-over key is not gated; `take_nav` reads `batch.tabs` before this hook runs (owner: focus).
     // One Escape press cancels once: its repeats cancel nothing more, in the layer it closed or in what that uncovered.
@@ -248,9 +250,11 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         }
     }
     for request in &batch.access {
-        route_access(ctx, request, &nodes, &mut routed, &mut activated);
+        route_access(ctx, request, &nodes, &mut routed, &mut activated, &scalar_rows, press_captured);
     }
     current(ctx, |stage| {
+        stage.scalar_rows = scalar_rows;
+        stage.scalar_rows.clear();
         stage.routed = routed;
         stage.claimed = claimed;
         stage.activated = activated;
@@ -340,12 +344,44 @@ pub(crate) fn focus_in_modal_dialog(ctx: &Context) -> bool {
     })
 }
 
+/// Routes each plain or Shift Up and Down press of the batch to the scalar row the router chooses (`scalar::choose`):
+/// the row takes it as a scalar move, and no other route sees it. Interest comes from real components in last pass's
+/// draw order, never from a synthetic focus stop. Returns which presses the row took; empty when no row was declared.
+fn route_scalar_rows(
+    ctx: &Context,
+    rows: &[scalar::ScalarRow],
+    target: Option<&StopRec>,
+    press_captured: bool,
+    batch: &Batch,
+    routed: &mut HashMap<Option<Id>, Routed>,
+    consumed: &mut [Taken],
+) -> Vec<bool> {
+    let mut owned = if rows.is_empty() { Vec::new() } else { vec![false; batch.presses.len()] };
+    let Some(row) = scalar::choose(ctx, rows, target, press_captured) else { return owned };
+    for (at, press) in batch.presses.iter().enumerate() {
+        let movement = match press.key {
+            Key::Up => NavMove::Up,
+            Key::Down => NavMove::Down,
+            _ => continue,
+        };
+        if press.canvas || !(press.mods.is_none() || press.mods == Mods::SHIFT) || batch.claimed.contains(&Chord::new(press.mods, press.key)) {
+            continue;
+        }
+        let modifiers = MoveMods::new(press.mods == Mods::SHIFT, false, MoveMods::PLAIN.by);
+        routed.entry(Some(row.owner)).or_default().scalar_moves.push((movement, modifiers));
+        owned[at] = true;
+        consumed[at] = Taken::Yes;
+    }
+    owned
+}
+
 /// The shortcut events the key owner leaves to the app (9.3), and the presses the focused component holds
 /// (`holds_press`). The owner is the focused component's class, or `Blocked` while a modal layer is stacked above the
 /// focus; inside a layer its `Overlay.keys` class ranks with the component's. A `Recorder` keeps every key and a `Menu`
 /// its navigation keys (`keeps_key`); a text field keeps the text its presses typed. `consumed` is what
-/// routing did with each press, `taken_texts` whether a component took each text of the pass, and `over` whether each
-/// press is a repeat of a key held over a modal layer's opening or closing, which runs no shortcut either.
+/// routing did with each press, `taken_texts` whether a component took each text of the pass, `over` whether each
+/// press is a repeat of a key held over a modal layer's opening or closing, which runs no shortcut either, and
+/// `scalar_owned` whether a scalar row took each press.
 fn owned_shortcuts(
     ctx: &Context,
     target: Option<&StopRec>,
@@ -353,6 +389,7 @@ fn owned_shortcuts(
     consumed: &[Taken],
     taken_texts: &[bool],
     over: &[bool],
+    scalar_owned: &[bool],
 ) -> (Shortcuts, Vec<bool>) {
     let scopes = target.map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default();
     let owner = owner_at(ctx, target, &scopes, None);
@@ -366,12 +403,26 @@ fn owned_shortcuts(
         .iter()
         .zip(consumed)
         // The canvas's Space is never the focused stop's; a press the unfocused window's canvas took is the canvas's.
-        .map(|(press, taken)| {
+        .enumerate()
+        .map(|(at, (press, taken))| {
             // Text an input method committed for the press goes to the text stop that has the IME.
             let typed = press.text.is_some_and(|at| taken_texts[at]) || (press.ime && target.is_some_and(|rec| rec.stop.text));
-            !press.canvas && (matches!(*taken, Taken::Canvas | Taken::Hover) || holds_press(owner, target, press, *taken == Taken::Yes, typed))
+            scalar_owned.get(at).copied().unwrap_or(false)
+                || (!press.canvas
+                    && (matches!(*taken, Taken::Canvas | Taken::Hover) || holds_press(owner, target, press, *taken == Taken::Yes, typed)))
         })
         .collect();
+    // Only Up/Down are scalar presses. Summarize paired releases once rather than scanning all presses per shortcut.
+    let scalar_releases = batch.presses.iter().zip(scalar_owned).fold([false; 2], |mut held, (press, owned)| {
+        if *owned {
+            match press.release {
+                Some(Key::Up) => held[0] = true,
+                Some(Key::Down) => held[1] = true,
+                _ => {}
+            }
+        }
+        held
+    });
     // A shortcut without a press of its own (a release, or the clipboard event that stands for ⌘C) follows the owner by
     // its modifiers, as its press would.
     let kept: Vec<bool> = batch
@@ -379,7 +430,17 @@ fn owned_shortcuts(
         .iter()
         .map(|shortcut| {
             let key = shortcut.input.typed.or(shortcut.input.physical);
-            !keeps_key(owner, key, shortcut.input.mods) && !shortcut.press.is_some_and(|at| held[at] || over[at])
+            // A release in the same batch belongs to its scalar press too; later releases are withheld by the strip.
+            // A release that names its own press is judged by that press below (`held`), which already knows whether it
+            // was scalar's: only a release with no press of its own is paired to a scalar press by its key here.
+            let scalar_release = shortcut.phase == FirePhase::Release
+                && shortcut.press.is_none()
+                && match key {
+                    Some(Key::Up) => scalar_releases[0],
+                    Some(Key::Down) => scalar_releases[1],
+                    _ => false,
+                };
+            !scalar_release && !keeps_key(owner, key, shortcut.input.mods) && !shortcut.press.is_some_and(|at| held[at] || over[at])
         })
         .collect();
     let keys = batch.shortcuts.iter().zip(&kept).filter(|(_, stays)| **stays).map(|(shortcut, _)| *shortcut).collect();
@@ -514,11 +575,18 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
 /// Takes what the framework handed to one taker out of the running pass's egui input, where the app and egui's text
 /// widgets read their keys: one press, one action, and one text, one reader. `held` marks the presses the focused
 /// component (or the unfocused window's canvas) holds; the app's own widget (`Stop::host`, `host`) reads its keys from
-/// egui, so its presses stay. `texts` are the places in `Batch::texts` of the texts a claim or a framework taker took.
-/// A held press whose release has not come yet leaves its release to the strip.
-fn withdraw_taken(ctx: &Context, host: bool, batch: &Batch, held: &[bool], texts: &[usize]) {
-    let presses: Vec<&Press> =
-        batch.presses.iter().zip(held).filter(|(press, held)| !host && **held && press.in_egui.is_some()).map(|(press, _)| press).collect();
+/// egui, so its presses stay, except the scalar-row presses (`scalar_owned`) the framework routed. `texts` are the
+/// places in `Batch::texts` of the texts a claim or a framework taker took. A held press whose release has not come yet
+/// leaves its release to the strip.
+fn withdraw_taken(ctx: &Context, host: bool, batch: &Batch, held: &[bool], texts: &[usize], scalar_owned: &[bool]) {
+    let presses: Vec<&Press> = batch
+        .presses
+        .iter()
+        .zip(held)
+        .enumerate()
+        .filter(|(at, (press, held))| (!host || scalar_owned.get(*at).copied().unwrap_or(false)) && **held && press.in_egui.is_some())
+        .map(|(_, (press, _))| press)
+        .collect();
     if presses.is_empty() && texts.is_empty() {
         return;
     }
@@ -838,13 +906,31 @@ fn nudge_of(press: &Press) -> Option<Nudge> {
 }
 
 /// Routes an AccessKit action request to the owner of its target node, whatever the focus (9.2 rule 2).
-fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
+fn route_access(
+    ctx: &Context,
+    request: &Action,
+    nodes: &HashMap<u64, Node>,
+    routed: &mut HashMap<Option<Id>, Routed>,
+    activated: &mut IdMap<Id>,
+    scalar_rows: &[scalar::ScalarRow],
+    press_captured: bool,
+) {
     let Some(node) = nodes.get(&request.node()).copied() else { return };
     let owner = Some(node.owner);
     // A request that only scrolls (a screen reader's Scroll Into View) shows the node and leaves focus where it is.
     if node.focusable && !request.scrolls() {
         let target = node.part.map_or(focus::FocusTarget::Id(node.owner), |part| focus::FocusTarget::Part(node.owner, part));
         focus::request_now(ctx, target);
+    }
+    if matches!(request.kind(), ActionKind::Increment | ActionKind::Decrement)
+        && (node.part.is_none() || node.focusable)
+        && let Some(row) = scalar_rows.iter().find(|row| node.owner == row.slider || Some(node.owner) == row.editor)
+    {
+        if !scalar::captured(ctx, press_captured) && scalar::allowed(ctx, row) {
+            let movement = if matches!(request.kind(), ActionKind::Increment) { NavMove::Forward } else { NavMove::Back };
+            routed.entry(Some(row.owner)).or_default().scalar_moves.push((movement, MoveMods::PLAIN));
+        }
+        return;
     }
     match request.kind() {
         ActionKind::Focus if node.focusable => {}

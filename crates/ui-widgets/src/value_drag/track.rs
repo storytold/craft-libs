@@ -320,7 +320,7 @@ pub(crate) fn paint(draw: &Draw<'_>, look: &TrackLook, along: Along, groove: Sty
 }
 
 /// How positions along a slider's track map to values.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub enum SliderScale {
     /// Equal distances are equal changes.
@@ -331,6 +331,42 @@ pub enum SliderScale {
     /// The value grows with the position raised to the exponent: above 1 the start edge gets more room, below 1 the
     /// end edge. The exponent must be positive.
     Power(f32),
+    /// A caller's increasing, mutually inverse projection between model values and track positions. Each callback
+    /// receives the ascending range bounds. `position(value, min, max)` returns a fraction from 0 to 1;
+    /// `value_at(position, min, max)` returns a model value in the range. Both must map the endpoints to endpoints.
+    ///
+    /// Only the track is curved: text, steps, wheel notches and accessibility remain in model units. Inputs and
+    /// outputs are clamped to their ranges; a non-finite output falls back to the corresponding linear projection.
+    /// The caller owns monotonicity and the inverse relationship; the widget does not sample or fit the curve.
+    #[non_exhaustive]
+    Custom {
+        /// The track fraction for a model value.
+        position: fn(f64, f64, f64) -> f64,
+        /// The model value at a track fraction.
+        value_at: fn(f64, f64, f64) -> f64,
+    },
+}
+
+impl SliderScale {
+    /// A caller's own projection: `position(value, min, max)` gives the track fraction, `value_at(position, min, max)`
+    /// the model value. The variant is `#[non_exhaustive]`, so this is how a caller outside the crate builds one.
+    #[must_use]
+    pub const fn custom(position: fn(f64, f64, f64) -> f64, value_at: fn(f64, f64, f64) -> f64) -> Self {
+        SliderScale::Custom { position, value_at }
+    }
+}
+
+impl PartialEq for SliderScale {
+    fn eq(&self, other: &Self) -> bool {
+        match (*self, *other) {
+            (Self::Linear, Self::Linear) | (Self::Log, Self::Log) => true,
+            (Self::Power(a), Self::Power(b)) => a == b,
+            (Self::Custom { position: a, value_at: b }, Self::Custom { position: c, value_at: d }) => {
+                std::ptr::fn_addr_eq(a, c) && std::ptr::fn_addr_eq(b, d)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// The decimals of a track's value text when it has no step.
@@ -356,7 +392,7 @@ impl Scale {
         debug_assert!(a.is_finite() && b.is_finite(), "a slider's range needs finite bounds, not {a}..={b}");
         let (min, max) = if a <= b { (a, b) } else { (b, a) };
         let fits = match kind {
-            SliderScale::Linear => true,
+            SliderScale::Linear | SliderScale::Custom { .. } => true,
             SliderScale::Power(k) => k.is_finite() && k > 0.0,
             SliderScale::Log => min > 0.0 && max > min,
         };
@@ -378,6 +414,11 @@ impl Scale {
             SliderScale::Linear => linear,
             SliderScale::Power(k) => linear.powf(1.0 / f64::from(k)),
             SliderScale::Log => ((value.max(self.min) / self.min).ln() / (self.max / self.min).ln()).clamp(0.0, 1.0),
+            SliderScale::Custom { position, .. } => {
+                let value = self.place(value);
+                let projected = position(value, self.min, self.max);
+                if projected.is_finite() { projected.clamp(0.0, 1.0) } else { (value - self.min) / self.span() }
+            }
         }
     }
 
@@ -388,6 +429,14 @@ impl Scale {
             SliderScale::Linear => self.min + t * self.span(),
             SliderScale::Power(k) => self.min + t.powf(f64::from(k)) * self.span(),
             SliderScale::Log => self.min * (self.max / self.min).powf(t),
+            SliderScale::Custom { value_at, .. } => {
+                let t = if t.is_finite() { t } else { 0.0 };
+                if self.span() <= 0.0 {
+                    return self.min;
+                }
+                let projected = value_at(t, self.min, self.max);
+                if projected.is_finite() { self.place(projected) } else { self.min + t * self.span() }
+            }
         }
     }
 
@@ -632,6 +681,18 @@ impl Travel {
     /// grab moves the thumb by the pointer's travel, Shift ten times as far; a jump puts it at the pointer. Alt
     /// scales a drag finer when `fine`; a click passes false, so it lands where it points.
     pub fn value(&self, press: Press, from: f64, state: &PressState, fine: bool) -> Option<f64> {
+        self.value_with_modifiers(press, from, state, fine, craft_behavior::DragModifiers::default())
+    }
+
+    /// The same travel with caller-selected pointer bindings; clicks still land without fine scaling.
+    pub fn value_with_modifiers(
+        &self,
+        press: Press,
+        from: f64,
+        state: &PressState,
+        fine: bool,
+        modifiers: craft_behavior::DragModifiers,
+    ) -> Option<f64> {
         let drag = if press.grabs() {
             let length = f64::from(self.track.end - self.track.start);
             let rate = if length > 0.0 { (self.units.end() - self.units.start()) / length } else { 0.0 };
@@ -640,6 +701,6 @@ impl Travel {
             ValueDrag::absolute(self.track.clone(), self.units.clone())
         };
         let drag = if fine { drag } else { drag.fine(1.0) };
-        drag.value(from, state, self.rtl)
+        drag.modifiers(modifiers).value(from, state, self.rtl)
     }
 }

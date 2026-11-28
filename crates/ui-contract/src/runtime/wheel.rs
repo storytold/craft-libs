@@ -209,15 +209,16 @@ pub(crate) fn begin(ctx: &Context, pointer_scoped_field_wheel: bool) {
     // take the wheel by position.
     let by_position =
         wheel_in.is_some() && hover.is_some_and(|at| focus::popup_above_focus(ctx, at) || hole.as_ref().is_some_and(|hole| hole.answers(at)));
-    let pressed_on = pass_pointer
-        .events
-        .iter()
-        .rev()
-        .find_map(|event| match event {
-            PointerEvent::Pressed { button: PointerButton::Primary, pos, .. } => Some(*pos),
+    let last_press = pass_pointer.events.iter().rposition(|event| matches!(event, PointerEvent::Pressed { button: PointerButton::Primary, .. }));
+    let pressed_on = last_press
+        .and_then(|at| match pass_pointer.events[at] {
+            PointerEvent::Pressed { pos, .. } => Some(pos),
             _ => None,
         })
         .map(|at| pointer::press_winner(ctx, at, pass_pointer.press_targets).map(|(winner, _)| winner.owner));
+    // The pointer's path through the pass after the press that may arm a control: a slow frame merges a move out of
+    // the control and back into one pass, which still leaves it.
+    let path = &pass_pointer.events[last_press.map_or(0, |at| at + 1)..];
     // A modal layer holds the wheel, except over the canvas it keeps open and inside its own family.
     let blocked = hover.is_some_and(|at| !sampler::wheel_allowed(ctx, at));
     let modal_family = crate::runtime::overlay::top_modal_in(ctx, viewport)
@@ -231,13 +232,14 @@ pub(crate) fn begin(ctx: &Context, pointer_scoped_field_wheel: bool) {
             state.armed = winner.filter(|id| state.last.iter().any(|taker| taker.gated && taker.owner == *id));
         }
         if let Some(armed) = state.armed {
-            let inside = state
-                .last
-                .iter()
-                .find(|taker| taker.owner == armed)
-                .zip(hover)
-                .is_some_and(|(taker, at): (&WheelTaker<Id>, Pos2)| taker.rect.contains(at));
-            if !inside {
+            let rect = state.last.iter().find(|taker| taker.owner == armed).map(|taker| taker.rect);
+            let inside = rect.zip(hover).is_some_and(|(rect, at): (egui::Rect, Pos2)| rect.contains(at));
+            let left = path.iter().any(|event| match event {
+                PointerEvent::Moved { at, .. } => rect.is_none_or(|rect| !rect.contains(*at)),
+                PointerEvent::Gone => true,
+                _ => false,
+            });
+            if !inside || left {
                 state.armed = None;
             }
         }

@@ -2,6 +2,7 @@
 
 mod canvas_view;
 mod cells;
+mod codec_override;
 mod digit_keys;
 mod dock;
 mod dock_apply;
