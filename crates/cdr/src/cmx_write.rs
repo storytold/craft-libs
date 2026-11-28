@@ -2,8 +2,8 @@
 //! reads: the RIFF form `CMX1` (R53), its header (R54), the color, pen, line type, dash, outline and
 //! arrowhead tables (R55 to R59), the screen table (R74) and one `page` chunk of instructions for
 //! each page (R60): pages, layers, groups and curves (R61, R62) with uniform fills and outlines
-//! (R63). `PROVENANCE.md`'s "Written fields" lists every field the writer sets and where its layout
-//! comes from.
+//! (R63), and the index that gives where each of them starts (R77). `PROVENANCE.md`'s "Written
+//! fields" lists every field the writer sets and where its layout comes from.
 //!
 //! Rectangles and ellipses are written as curves. A clipping container is written as a group of
 //! its fill, the objects it clips, unclipped, and its outline. Hidden layers, groups and shapes,
@@ -130,28 +130,58 @@ pub fn write(drawing: &Drawing, limits: crate::Limits) -> Result<Written, Error>
         children.push(c);
         Ok(())
     };
-    add(chunk(b"cont", &cont())?)?;
-    for (n, page) in drawing.pages.iter().enumerate() {
-        add(w.page(n, page.size.or(drawing.page_size), &page.layers)?)?;
+    // The header's index offset is set once the index is placed.
+    add(chunk(b"cont", &cont(0))?)?;
+    // Each page chunk and its reference list, with where they start in the file and the start and
+    // name of each of the page's layers.
+    let mut pages = Vec::new();
+    let mut page = |w: &mut Writer, n: usize, size: Option<(f64, f64)>, layers: &[Layer]| -> Result<(), Error> {
+        let at = w.file_bytes;
+        let (c, written) = w.page(n, size, layers)?;
+        add(c)?;
+        let refs = w.file_bytes;
+        let r = chunk(b"rlst", &reference_list(written.len()))?;
+        w.check_bytes(r.len())?;
+        w.file_bytes += r.len();
+        add(r)?;
+        pages.push(PageAt { at, refs, layers: written });
+        Ok(())
+    };
+    for (n, p) in drawing.pages.iter().enumerate() {
+        page(&mut w, n, p.size.or(drawing.page_size), &p.layers)?;
     }
     // A drawing with no pages but a page size is written as one empty page of that size.
     if drawing.pages.is_empty() && drawing.page_size.is_some() {
-        add(w.page(0, drawing.page_size, &[])?)?;
+        page(&mut w, 0, drawing.page_size, &[])?;
     }
-    // The reader also counts every chunk (`cont`, the pages and the seven tables), every table entry
-    // and the one arrowhead pair.
-    let pages = if drawing.pages.is_empty() { usize::from(drawing.page_size.is_some()) } else { drawing.pages.len() };
+    // The reader leaves out a list as deep as its depth limit, and the index is a list.
+    if w.limits.depth == 0 {
+        return Err(Error::Limit("nesting depth"));
+    }
+    // The reader also counts every chunk (`cont`, each page and its reference list, the seven
+    // tables, and the index list with its three chunks and a layer table for each page), every
+    // table entry and the one arrowhead pair.
     let t = &w.tables;
     let entries = t.colors.entries.len() + t.pens.entries.len() + t.line_types.entries.len() + t.dashes.entries.len() + t.outlines.entries.len() + 1;
-    w.read_cost.chunks = w.read_cost.chunks.saturating_add(1 + pages + 7 + entries);
+    let index_chunks = pages.len().saturating_add(4);
+    w.read_cost.chunks = w.read_cost.chunks.saturating_add(1 + 2 * pages.len() + 7 + entries + index_chunks);
     w.read_cost.check(&w.limits)?;
+    // Where each table chunk starts, by its id.
+    let mut tables = Vec::new();
+    let mut at = w.file_bytes;
     for c in w.tables.chunks(w.limits.input.saturating_sub(w.file_bytes))? {
+        let id: [u8; 4] = c[0..4].try_into().map_err(|_| Error::Limit("chunk size"))?;
+        tables.push((id, at));
+        at = at.saturating_add(c.len());
         add(c)?;
     }
+    let (list, ixmr) = index(at, &pages, &tables)?;
+    add(list)?;
     let total = usize::try_from(size).ok().and_then(|n| n.checked_add(8)).ok_or(Error::Limit("chunk size"))?;
     if total > w.limits.input {
         return Err(Error::Limit("input size"));
     }
+    children[0] = chunk(b"cont", &cont(ixmr))?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(total).map_err(|_| Error::Limit("file size"))?;
     bytes.extend(b"RIFF");
@@ -190,14 +220,107 @@ fn chunk(id: &[u8; 4], body: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 /// The header (R54): the coordinate size digit `4` at byte 52 and the unit in meters at bytes 64
-/// to 72. Bytes 48 and 54 hold the digit `2`, as in the sample files; the rest are zeros.
-fn cont() -> Vec<u8> {
+/// to 72. Bytes 48 and 54 hold the digit `2`, as in the sample files. Bytes 84 to 96 hold the file
+/// offset of the master index `ixmr`, then 0xFFFFFFFF for the information list and for the
+/// picture of the drawing, which the file does not hold (R77); the rest are zeros.
+fn cont(ixmr: u32) -> Vec<u8> {
     let mut c = vec![0u8; 180];
     c[48] = b'2';
     c[52] = b'4';
     c[54] = b'2';
     c[64..72].copy_from_slice(&UNIT_METERS.to_le_bytes());
+    c[84..88].copy_from_slice(&ixmr.to_le_bytes());
+    c[88..96].fill(0xFF);
     c
+}
+
+/// Where a layer's begin-layer instruction starts in the file, and the layer's 8-bit name.
+type LayerAt = (usize, Vec<u8>);
+
+/// Where a page's chunks start in the file, and its layers.
+struct PageAt {
+    at: usize,
+    /// The page's reference list `rlst`.
+    refs: usize,
+    layers: Vec<LayerAt>,
+}
+
+/// A page's reference list (R77): a u16 count of its layers, then for each layer from 1 the u16
+/// values 2 and 9 and its number.
+fn reference_list(layers: usize) -> Vec<u8> {
+    let mut r = (layers as u16).to_le_bytes().to_vec();
+    for n in 1..=layers {
+        r.extend([2u16, 9, n as u16].map(u16::to_le_bytes).concat());
+    }
+    r
+}
+
+/// A file offset as the u32 the index stores.
+fn offset(at: usize) -> Result<u32, Error> {
+    u32::try_from(at).map_err(|_| Error::Limit("chunk size"))
+}
+
+/// The index list `LIST indx` starting at file offset `at` (R77): a layer table `ixlr` for each
+/// page, the table of layer tables `ixtl`, the page index `ixpg` and the master index `ixmr`, with
+/// the file offset of `ixmr`. `tables` gives where each table chunk starts, by its id.
+fn index(at: usize, pages: &[PageAt], tables: &[([u8; 4], usize)]) -> Result<(Vec<u8>, u32), Error> {
+    let mut body = b"indx".to_vec();
+    // Where the next chunk of the list starts.
+    let next = |body: &Vec<u8>| at.saturating_add(8).saturating_add(body.len());
+    let mut layer_tables = Vec::with_capacity(pages.len());
+    for (n, p) in pages.iter().enumerate() {
+        layer_tables.push(next(&body));
+        // The layer count and the page number, then for each layer the size of its record before
+        // the 0xFFFFFFFF that ends it, its begin-layer instruction and its name.
+        let mut t = (p.layers.len() as u16).to_le_bytes().to_vec();
+        t.extend(u16::try_from(n + 1).map_err(|_| Error::Limit("pages"))?.to_le_bytes());
+        for (start, name) in &p.layers {
+            t.extend(((8 + name.len()) as u16).to_le_bytes());
+            t.extend(offset(*start)?.to_le_bytes());
+            t.extend((name.len() as u16).to_le_bytes());
+            t.extend(name);
+            t.extend(u32::MAX.to_le_bytes());
+        }
+        body.extend(chunk(b"ixlr", &t)?);
+    }
+    // The table of layer tables: their count, the size of each record, the type 3 and the offsets.
+    let ixtl = next(&body);
+    let mut t = (pages.len() as u16).to_le_bytes().to_vec();
+    t.extend(4u16.to_le_bytes());
+    t.extend(3u16.to_le_bytes());
+    for l in &layer_tables {
+        t.extend(offset(*l)?.to_le_bytes());
+    }
+    body.extend(chunk(b"ixtl", &t)?);
+    // The page index: the page count, then for each page the size of its record, its page chunk,
+    // its layer table, 0xFFFFFFFF for a picture of the page it does not have and its reference
+    // list.
+    let ixpg = next(&body);
+    let mut t = (pages.len() as u16).to_le_bytes().to_vec();
+    for (p, l) in pages.iter().zip(&layer_tables) {
+        t.extend(16u16.to_le_bytes());
+        for v in [offset(p.at)?, offset(*l)?, u32::MAX, offset(p.refs)?] {
+            t.extend(v.to_le_bytes());
+        }
+    }
+    body.extend(chunk(b"ixpg", &t)?);
+    // The master index: the values 1 and 24, the entry count, then an id and an offset for itself,
+    // the page index, the table of layer tables and each table.
+    let ixmr = next(&body);
+    let ids: [(&[u8; 4], u16); 7] = [(b"rotl", 15), (b"rott", 16), (b"rota", 17), (b"rscr", 18), (b"rpen", 19), (b"rdot", 20), (b"rclr", 21)];
+    let mut entries = vec![(1u16, ixmr), (2, ixpg), (3, ixtl)];
+    for (id, n) in ids {
+        if let Some((_, start)) = tables.iter().find(|(t, _)| t == id) {
+            entries.push((n, *start));
+        }
+    }
+    let mut t = [1u16, 24, entries.len() as u16].map(u16::to_le_bytes).concat();
+    for (n, start) in entries {
+        t.extend(n.to_le_bytes());
+        t.extend(offset(start)?.to_le_bytes());
+    }
+    body.extend(chunk(b"ixmr", &t)?);
+    Ok((chunk(b"LIST", &body)?, offset(ixmr)?))
 }
 
 /// A field: its tag, a u16 length counting the 3 header bytes, then `data` (R55). `None` when the
@@ -462,8 +585,14 @@ struct Writer {
     looks: HashMap<String, [f32; 3]>,
     /// The comparisons [`may_fill_differently`] may still make.
     crossing_budget: u64,
-    /// The groups open where the next instruction is written.
-    open_groups: usize,
+    /// The groups open where the next instruction is written, outermost first.
+    open_groups: Vec<OpenGroup>,
+    /// The instructions written on the current page, its begin-page instruction included.
+    instructions: usize,
+    /// For each group closed on the current page, where its end offset goes in the page's
+    /// instructions after the begin-page instruction, and the offset there, both counted from the
+    /// end of the begin-page instruction.
+    group_ends: Vec<(usize, usize)>,
     /// The smallest and largest x and y the curves written on the current page reach, in
     /// coordinate units.
     bounds: Option<[i32; 4]>,
@@ -585,10 +714,16 @@ impl Writer {
         self.tables.colors.index(key)
     }
 
-    /// A `page` chunk: begin page `n` (from 0), its shown layers back to front, end the page (R60).
-    fn page(&mut self, n: usize, size: Option<(f64, f64)>, layers: &[Layer]) -> Result<Vec<u8>, Error> {
+    /// A `page` chunk: begin page `n` (from 0), its shown layers back to front, end the page (R60),
+    /// with the file offset of each layer's begin-layer instruction and the layer's 8-bit name.
+    /// The chunk starts at the file offset [`Writer::file_bytes`] gives.
+    fn page(&mut self, n: usize, size: Option<(f64, f64)>, layers: &[Layer]) -> Result<(Vec<u8>, Vec<LayerAt>), Error> {
         let mut out = Vec::new();
         self.bounds = None;
+        self.instructions = 1;
+        self.group_ends.clear();
+        // Where each layer's begin-layer instruction starts in `out`, and its 8-bit name.
+        let mut starts = Vec::new();
         // The model holds layers and objects front to back; the file lists them back to front.
         let mut written = 0;
         for layer in layers.iter().rev() {
@@ -604,19 +739,43 @@ impl Writer {
             // The reader also stops a layer's name at its first NUL and takes a blank name as none.
             let name = &layer.name;
             self.long_names |= shortened(name) || name.contains('\0') || (!name.is_empty() && name.trim().is_empty());
-            out.extend(instr(BEGIN_LAYER, &layer_fields(n, written, &layer.name)?));
+            let body = layer_fields(n, written, &layer.name)?;
+            let begin = instr(BEGIN_LAYER, &body);
+            // The layer's instruction count goes at bytes 8 to 12 of field 1, after the
+            // instruction's header and the field's tag and length.
+            let count_at = out.len() + begin.len() - body.len() + 3 + 8;
+            let first = self.instructions;
+            starts.push((out.len(), narrow_name(&layer.name)));
+            out.extend(begin);
+            self.instructions += 1;
             written += 1;
             self.objects(&layer.objects, &mut out)?;
             out.extend(instr(END_LAYER, &[]));
+            self.instructions += 1;
+            put_u32(&mut out, count_at, self.instructions - first)?;
             self.read_cost.chunks += 2;
             self.read_cost.check(&self.limits)?;
             self.check_bytes(out.len())?;
         }
+        let end = out.len();
         out.extend(instr(END_PAGE, &[]));
+        self.instructions += 1;
         // The begin and end page instructions.
         self.read_cost.chunks += 2;
         self.read_cost.check(&self.limits)?;
-        let begin = begin_page(n, size, self.bounds.take())?;
+        let bounds = self.bounds.take();
+        let begin_len = begin_page(n, size, bounds, PageTail::default())?.len();
+        // The page's instructions after the begin-page instruction start here in the file.
+        let base = self.file_bytes.saturating_add(8).saturating_add(begin_len);
+        let tail = PageTail {
+            end: offset(base.saturating_add(end))?,
+            layers: u16::try_from(written).map_err(|_| Error::Limit("layers"))?,
+            instructions: u32::try_from(self.instructions).map_err(|_| Error::Limit("chunk count"))?,
+        };
+        for (at, end) in std::mem::take(&mut self.group_ends) {
+            put_u32(&mut out, at, base.saturating_add(end))?;
+        }
+        let begin = begin_page(n, size, bounds, tail)?;
         if u32::try_from(begin.len() + out.len()).is_err() {
             return Err(Error::Limit("chunk size"));
         }
@@ -624,8 +783,9 @@ impl Writer {
         page.extend(out);
         let c = chunk(b"page", &page)?;
         self.check_bytes(c.len())?;
+        let layers = starts.into_iter().map(|(at, name)| (base.saturating_add(at), name)).collect();
         self.file_bytes += c.len();
-        Ok(c)
+        Ok((c, layers))
     }
 
     /// An [`Error::Limit`] when the file would be longer than the input size of the limits with
@@ -657,7 +817,7 @@ impl Writer {
                         self.shape(&s, out)?;
                     }
                     if ends {
-                        self.end_group(out);
+                        self.end_group(out)?;
                     }
                 }
                 continue;
@@ -699,20 +859,55 @@ impl Writer {
     /// Begin a group. A group inside as many groups as the reader opens (the depth of the
     /// [`crate::Limits`] written for) is an [`Error::Limit`]: the reader leaves out what it holds.
     fn begin_group(&mut self, out: &mut Vec<u8>) -> Result<(), Error> {
-        if self.open_groups >= self.limits.depth {
+        if self.open_groups.len() >= self.limits.depth {
             return Err(Error::Limit("nesting depth"));
         }
-        self.open_groups += 1;
+        if let Some(parent) = self.open_groups.last_mut() {
+            parent.groups = parent.groups.checked_add(1).ok_or(Error::Limit("groups"))?;
+        }
+        self.open_groups.push(OpenGroup { at: out.len(), first: self.instructions, groups: 0, bounds: None });
         out.extend(group());
+        self.instructions += 1;
         self.read_cost.chunks += 1;
         self.read_cost.objects += 1;
         self.read_cost.check(&self.limits)
     }
 
-    fn end_group(&mut self, out: &mut Vec<u8>) {
-        self.open_groups = self.open_groups.saturating_sub(1);
+    /// End the innermost open group, and fill in its begin-group record (R77): the edges of its
+    /// curves (all 0 when it has none), the groups directly inside it, its instructions from begin
+    /// to end, and where the instruction after its end starts, which [`Writer::page`] places in
+    /// the file.
+    fn end_group(&mut self, out: &mut Vec<u8>) -> Result<(), Error> {
         out.extend(instr(END_GROUP, &[]));
+        self.instructions += 1;
         self.read_cost.chunks += 1;
+        let Some(g) = self.open_groups.pop() else { return Ok(()) };
+        if let (Some(parent), Some(b)) = (self.open_groups.last_mut(), g.bounds) {
+            parent.bounds = Some(match parent.bounds {
+                Some(p) => [p[0].min(b[0]), p[1].min(b[1]), p[2].max(b[2]), p[3].max(b[3])],
+                None => b,
+            });
+        }
+        // Field 1's data starts after the instruction's 4-byte header and the field's tag and
+        // length.
+        let data = g.at + 4 + 3;
+        let [x0, y0, x1, y1] = g.bounds.unwrap_or_default();
+        for (i, v) in [x0, y1, x1, y0].into_iter().enumerate() {
+            out[data + 4 * i..data + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        out[data + 16..data + 18].copy_from_slice(&g.groups.to_le_bytes());
+        put_u32(out, data + 18, self.instructions - g.first)?;
+        self.group_ends.push((data + 22, out.len()));
+        Ok(())
+    }
+
+    /// Take in `[x0, y0, x1, y1]`, the edges of a written curve, in the page's and the innermost
+    /// open group's edges.
+    fn reach(&mut self, e: [i32; 4]) {
+        for b in [Some(&mut self.bounds), self.open_groups.last_mut().map(|g| &mut g.bounds)].into_iter().flatten() {
+            let b = b.get_or_insert(e);
+            *b = [b[0].min(e[0]), b[1].min(e[1]), b[2].max(e[2]), b[3].max(e[3])];
+        }
     }
 
     /// A shape as one curve, or as a group of curves when its path holds more than
@@ -802,9 +997,7 @@ impl Writer {
                     _ => [p.x, p.y, p.x, p.y],
                 };
                 // Within the anchors and control points, which are i32, so the casts keep them.
-                let (x0, y0, x1, y1) = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
-                let b = self.bounds.get_or_insert([x0, y0, x1, y1]);
-                *b = [b[0].min(x0), b[1].min(y0), b[2].max(x1), b[3].max(y1)];
+                self.reach([x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32]);
             }
             g.extend(c.iter().map(|(_, t)| *t));
             bodies.push(field(2, &g).ok_or(Error::Limit("curve size"))?);
@@ -815,10 +1008,11 @@ impl Writer {
                 let i = instr(CURVE, &fields(&[f1.clone(), f2.clone()]));
                 self.check_bytes(out.len().saturating_add(i.len()))?;
                 out.extend(i);
+                self.instructions += 1;
             }
         }
         if curves.len() > 1 {
-            self.end_group(out);
+            self.end_group(out)?;
         }
         Ok(())
     }
@@ -912,11 +1106,42 @@ impl Writer {
     }
 }
 
+/// A group open where the next instruction is written.
+struct OpenGroup {
+    /// Where its begin-group instruction starts in the page's instructions after the begin-page
+    /// instruction.
+    at: usize,
+    /// The page's instructions written before it.
+    first: usize,
+    /// The groups directly inside it so far.
+    groups: u16,
+    /// The smallest and largest x and y its curves reach so far, in coordinate units.
+    bounds: Option<[i32; 4]>,
+}
+
+/// What begin page keeps of the rest of the page (R77).
+#[derive(Clone, Copy, Default)]
+struct PageTail {
+    /// The file offset of the end-page instruction.
+    end: u32,
+    /// The layers on the page.
+    layers: u16,
+    /// The page's instructions, begin and end page included.
+    instructions: u32,
+}
+
+/// Write `v` as a u32 at `at` of `out`.
+fn put_u32(out: &mut [u8], at: usize, v: usize) -> Result<(), Error> {
+    let v = u32::try_from(v).map_err(|_| Error::Limit("chunk size"))?;
+    out.get_mut(at..at + 4).ok_or(Error::Limit("chunk size"))?.copy_from_slice(&v.to_le_bytes());
+    Ok(())
+}
+
 /// Begin page `n` (from 0; R61): field 1 the page number from 1, a u32 of flags and the left,
 /// top, right and bottom edges of `bounds`, the page's art (smallest x and y, largest x and y),
-/// or of the page around its center when it has no art; field 4 its width and height. Without a
-/// size the edges are all 0, which the reader takes as no size.
-fn begin_page(n: usize, size: Option<(f64, f64)>, bounds: Option<[i32; 4]>) -> Result<Vec<u8>, Error> {
+/// or of the page around its center when it has no art, then `tail` (R77); field 4 its width and
+/// height. Without a size the edges are all 0, which the reader takes as no size.
+fn begin_page(n: usize, size: Option<(f64, f64)>, bounds: Option<[i32; 4]>, tail: PageTail) -> Result<Vec<u8>, Error> {
     let number = u16::try_from(n + 1).map_err(|_| Error::Limit("pages"))?;
     let mut d = number.to_le_bytes().to_vec();
     d.extend(0u32.to_le_bytes());
@@ -947,6 +1172,9 @@ fn begin_page(n: usize, size: Option<(f64, f64)>, bounds: Option<[i32; 4]>) -> R
     for v in edges {
         d.extend(v.to_le_bytes());
     }
+    d.extend(tail.end.to_le_bytes());
+    d.extend(tail.layers.to_le_bytes());
+    d.extend(tail.instructions.to_le_bytes());
     list.push(field(1, &d).ok_or(Error::Limit("page size"))?);
     if let Some(s) = size_field {
         list.push(field(4, &s).ok_or(Error::Limit("page size"))?);
@@ -962,16 +1190,26 @@ fn windows_1252_byte(c: char) -> u8 {
     }
 }
 
-/// A layer's fields (R62): field 1 the page number and the layer number (u16 each, from 1), 8 zero
-/// bytes, then the name as a u16 count and 8-bit characters (Windows-1252: characters the code
-/// page has no byte for are written as `?`); field 4 the name as a u32 count and UTF-16 units.
-/// `page` and `n` count the pages and the page's layers written from 0; past 65,535 layers is an
-/// [`Error::Limit`].
+/// Whether a layer's `name`, up to the first NUL where the reader stops, is blank: it is written
+/// empty, so it opens with no name.
+fn blank_name(name: &str) -> bool {
+    name.split('\0').next().unwrap_or_default().trim().is_empty()
+}
+
+/// A layer's name as written in 8-bit characters (Windows-1252: characters the code page has no
+/// byte for are written as `?`).
+fn narrow_name(name: &str) -> Vec<u8> {
+    if blank_name(name) { Vec::new() } else { name.chars().map(windows_1252_byte).take(MAX_NAME_BYTES).collect() }
+}
+
+/// A layer's fields (R62): field 1 the page number and the layer number (u16 each, from 1), 4 zero
+/// bytes, the layer's instruction count, which [`Writer::page`] fills in (R77), then the name as a
+/// u16 count and 8-bit characters ([`narrow_name`]); field 4 the name as a u32 count and UTF-16
+/// units. `page` and `n` count the pages and the page's layers written from 0; past 65,535 layers
+/// is an [`Error::Limit`].
 fn layer_fields(page: usize, n: usize, name: &str) -> Result<Vec<u8>, Error> {
-    // A blank name, up to the first NUL where the reader stops, is written empty in both fields,
-    // so it opens with no name.
-    let blank = name.split('\0').next().unwrap_or_default().trim().is_empty();
-    let narrow: Vec<u8> = if blank { Vec::new() } else { name.chars().map(windows_1252_byte).take(MAX_NAME_BYTES).collect() };
+    let blank = blank_name(name);
+    let narrow = narrow_name(name);
     let page = u16::try_from(page + 1).map_err(|_| Error::Limit("pages"))?;
     let number = u16::try_from(n + 1).map_err(|_| Error::Limit("layers"))?;
     let mut d = page.to_le_bytes().to_vec();
@@ -987,7 +1225,7 @@ fn layer_fields(page: usize, n: usize, name: &str) -> Result<Vec<u8>, Error> {
     Ok(fields(&[f1, f4]))
 }
 
-/// Begin a group: field 1 of 26 zero bytes, as the test files of `synth_cmx` hold.
+/// Begin a group: field 1 of 26 bytes, which [`Writer::end_group`] fills in (R77).
 fn group() -> Vec<u8> {
     instr(BEGIN_GROUP, &fields(&[field(1, &[0; 26]).unwrap_or_default()]))
 }

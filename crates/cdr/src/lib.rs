@@ -133,8 +133,9 @@ pub fn read_cmx(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
 ///   width, or a page side that rounds to 0;
 /// - more than 65,535 pages, layers on a page, or different colors, pens, line types, dash
 ///   patterns or outlines, or a dash pattern of more than 32,765 lengths;
-/// - groups nested deeper than the depth of `limits`, or more chunks, objects, coordinates or
-///   dashes than a read within `limits` takes;
+/// - groups nested deeper than the depth of `limits`, a depth of 0, at which the reader leaves out
+///   the index list, more than 65,535 groups directly inside one group, or more chunks, objects,
+///   coordinates or dashes than a read within `limits` takes;
 /// - a file longer than the input size of `limits`, or a chunk past what its 32-bit size holds.
 ///
 /// [`Written`] reports what the file holds differently from the drawing; its fields name each
@@ -142,11 +143,14 @@ pub fn read_cmx(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
 /// written with round corners of its radii times the square root of the scales' product, not with
 /// stretched corners, and is not reported.
 ///
-/// The header's index offsets, the index chunks (`LIST indx`), the instruction counts and offsets
-/// inside page, layer and group records, and the bounds inside layer and group records are not
-/// written, so a reader must find the chunks by their ids and walk the instructions in order, as
-/// [`read_cmx`] does. The record of a page with a size holds the edges of its curves, or of the
-/// page when it has none.
+/// The file holds an index, so that a reader that finds the tables and pages through it, rather
+/// than by their chunk ids, opens it: the header gives where the master index starts, the index
+/// list (`LIST indx`) gives where each table, page, page reference list and layer starts, and the
+/// page, layer and group records give their instruction counts. A page's record also gives where
+/// its end-page instruction starts, and a group's record gives where the instruction after its
+/// end-group instruction starts and the edges of its curves. The record of a page with a size holds the edges of
+/// its curves, or of the page when it has none. The header's bounds and instruction count are not
+/// written.
 pub fn write_cmx(drawing: &Drawing, limits: Limits) -> Result<Written, Error> {
     cmx_write::write(drawing, limits)
 }

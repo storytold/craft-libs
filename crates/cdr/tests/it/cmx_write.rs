@@ -657,7 +657,7 @@ fn a_page_without_a_size_still_writes_its_four_edges() {
     // The begin-page instruction: a u16 size, the code 9, then field 1: a tag and its length.
     assert_eq!(i16::from_le_bytes([bytes[at + 2], bytes[at + 3]]), 9);
     let len = usize::from(u16::from_le_bytes([bytes[at + 5], bytes[at + 6]]));
-    assert_eq!(len - 3, 2 + 4 + 16, "the page number, the flags and four edges");
+    assert_eq!(len - 3, 2 + 4 + 16 + 4 + 2 + 4, "the page number, the flags, four edges, the end, the layers and the instructions");
 }
 
 #[test]
@@ -948,6 +948,248 @@ fn layers_give_their_page_and_their_number() {
         at = end;
     }
     assert_eq!(numbers, [(1, 1), (1, 2), (2, 1), (2, 2)]);
+}
+
+fn u16_at(b: &[u8], at: usize) -> usize {
+    usize::from(u16::from_le_bytes([b[at], b[at + 1]]))
+}
+
+fn u32_at(b: &[u8], at: usize) -> usize {
+    u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize
+}
+
+/// The id of each chunk of a written file by where it starts, those inside lists included.
+fn chunk_ids(b: &[u8]) -> std::collections::HashMap<usize, [u8; 4]> {
+    let mut ids = std::collections::HashMap::new();
+    let mut stack = vec![(12, b.len())];
+    while let Some((mut at, end)) = stack.pop() {
+        while at + 8 <= end {
+            let id: [u8; 4] = b[at..at + 4].try_into().unwrap();
+            let size = u32_at(b, at + 4);
+            ids.insert(at, id);
+            if id == *b"LIST" {
+                stack.push((at + 12, at + 8 + size));
+            }
+            at += 8 + size + size % 2;
+        }
+    }
+    ids
+}
+
+/// The field list at `at` of `b`, in an instruction that ends at `end`: each field's tag and where
+/// its data starts. A field shorter than its 3 header bytes, or past `end`, fails the test.
+fn field_starts(b: &[u8], mut at: usize, end: usize) -> Vec<(u8, usize)> {
+    let mut out = Vec::new();
+    while b[at] != 0xff {
+        let len = u16_at(b, at + 1);
+        assert!(len >= 3 && at + len <= end, "a field of length {len} at {at}, in an instruction that ends at {end}");
+        out.push((b[at], at + 3));
+        at += len;
+    }
+    out
+}
+
+#[test]
+#[should_panic(expected = "a field of length 0")]
+fn a_field_of_length_0_fails_the_check() {
+    field_starts(&[1, 0, 0, 0xff], 0, 4);
+}
+
+#[test]
+#[should_panic(expected = "a field of length 9")]
+fn a_field_past_its_instruction_fails_the_check() {
+    field_starts(&[1, 9, 0, 0, 0xff], 0, 5);
+}
+
+#[test]
+fn the_index_and_the_records_give_where_everything_is() {
+    let plain = |x: f64| Object::Shape(Box::new(Shape::new(square(x, 0.0, 10.0), Matrix::IDENTITY, Some(Color::Gray(0.5)), None)));
+    let inner = Object::Group { objects: vec![plain(20.0)], flags: Flags::default() };
+    let outer = Object::Group { objects: vec![plain(0.0), inner, plain(50.0)], flags: Flags::default() };
+    let pages = vec![
+        Page { size: Some((200.0, 100.0)), layers: vec![layer("Front", vec![outer]), layer("Back", vec![plain(5.0)])] },
+        Page { size: Some((300.0, 100.0)), layers: vec![layer("Only", vec![plain(1.0), plain(2.0)])] },
+    ];
+    let b = write_cmx(&drawing(pages)).unwrap().bytes;
+    let page_entries = page_index(&b);
+    let layer_starts = layer_tables(&b, &page_entries, &[&["Back", "Front"], &["Only"]]);
+    let (seen_layers, groups) = page_records(&b, &page_entries);
+    assert_eq!(seen_layers, layer_starts);
+    // The inner group: itself and a curve; the outer: two curves and the inner group.
+    assert_eq!(groups, [(0, 3), (1, 7)]);
+}
+
+/// The page index of a written file of two pages, each entry's page chunk, layer table, picture
+/// and reference list, checked through the header and the master index.
+fn page_index(b: &[u8]) -> Vec<[usize; 4]> {
+    let ids = chunk_ids(b);
+    let id = |at: usize| ids.get(&at).map(|i| String::from_utf8_lossy(i).into_owned()).unwrap_or_default();
+    // The header names the master index, and no information list or picture.
+    let cont = 12 + 8;
+    let ixmr = u32_at(b, cont + 84);
+    assert_eq!(id(ixmr), "ixmr");
+    assert_eq!((u32_at(b, cont + 88), u32_at(b, cont + 92)), (u32::MAX as usize, u32::MAX as usize));
+    // The master index names itself, the page index, the table of layer tables and each table.
+    let m = ixmr + 8;
+    assert_eq!((u16_at(b, m), u16_at(b, m + 2)), (1, 24));
+    let entries: Vec<(usize, String)> = (0..u16_at(b, m + 4)).map(|i| (u16_at(b, m + 6 + 6 * i), id(u32_at(b, m + 8 + 6 * i)))).collect();
+    let want =
+        [(1, "ixmr"), (2, "ixpg"), (3, "ixtl"), (15, "rotl"), (16, "rott"), (17, "rota"), (18, "rscr"), (19, "rpen"), (20, "rdot"), (21, "rclr")];
+    assert_eq!(entries, want.map(|(n, s)| (n, s.to_string())));
+    let at_of = |n: usize| u32_at(b, m + 8 + 6 * entries.iter().position(|(k, _)| *k == n).unwrap());
+    // The page index: each page chunk, its layer table, no picture and its reference list.
+    let pg = at_of(2) + 8;
+    assert_eq!(u16_at(b, pg), 2);
+    let page_entries: Vec<[usize; 4]> = (0..2)
+        .map(|i| {
+            let e = pg + 2 + 18 * i;
+            assert_eq!(u16_at(b, e), 16);
+            [0, 1, 2, 3].map(|k| u32_at(b, e + 2 + 4 * k))
+        })
+        .collect();
+    for [page, layers, picture, refs] in &page_entries {
+        assert_eq!((id(*page), id(*layers), *picture, id(*refs)), ("page".into(), "ixlr".into(), u32::MAX as usize, "rlst".into()));
+    }
+    // The table of layer tables lists each page's.
+    let tl = at_of(3) + 8;
+    assert_eq!([u16_at(b, tl), u16_at(b, tl + 2), u16_at(b, tl + 4)], [2, 4, 3]);
+    assert_eq!([u32_at(b, tl + 6), u32_at(b, tl + 10)], [page_entries[0][1], page_entries[1][1]]);
+    page_entries
+}
+
+/// Where each layer table of `page_entries` says the layers named `names` start, checking each
+/// table and each reference list: a layer table holds its count, the page number, then each
+/// layer's begin-layer instruction and name, back to front; a reference list a count, and 2, 9 and
+/// the number of each layer.
+fn layer_tables(b: &[u8], page_entries: &[[usize; 4]], names: &[&[&str]]) -> Vec<usize> {
+    let mut layer_starts = Vec::new();
+    for (n, (entry, names)) in page_entries.iter().zip(names).enumerate() {
+        let t = entry[1] + 8;
+        assert_eq!((u16_at(b, t), u16_at(b, t + 2)), (names.len(), n + 1));
+        let mut at = t + 4;
+        for name in *names {
+            let size = u16_at(b, at);
+            let start = u32_at(b, at + 2);
+            let len = u16_at(b, at + 6);
+            assert_eq!((size, &b[at + 8..at + 8 + len]), (8 + name.len(), name.as_bytes()));
+            assert_eq!(u32_at(b, at + 8 + len), u32::MAX as usize);
+            assert_eq!(u16_at(b, start + 2), 11, "a begin-layer instruction");
+            layer_starts.push(start);
+            at += size + 4;
+        }
+        let r = entry[3] + 8;
+        let refs: Vec<usize> = (0..1 + 3 * names.len()).map(|i| u16_at(b, r + 2 * i)).collect();
+        let want: Vec<usize> = std::iter::once(names.len()).chain((1..=names.len()).flat_map(|k| [2, 9, k])).collect();
+        assert_eq!(refs, want);
+    }
+    layer_starts
+}
+
+/// An open begin-page, begin-layer or begin-group record: its code, where its field 1 starts, the
+/// instructions before it, the records found directly inside it and the edges of its curves.
+type Open = (usize, usize, usize, usize, Option<[i32; 4]>);
+
+/// Check what the record `open` gives, now closed by the instruction of `code` and `size` at `at`
+/// after `count` instructions of its page: begin page where the page ends, its layers and its
+/// instructions; begin layer its instructions; begin group the edges of its curves, then its
+/// groups and instructions, which are returned, and where the instruction after it starts.
+fn closed_record(b: &[u8], open: Open, code: usize, at: usize, size: usize, count: usize) -> Option<(usize, usize)> {
+    let (opened, f1, before, inside, edges) = open;
+    assert_eq!(opened + 1, code);
+    let instructions = count - before;
+    match code {
+        10 => {
+            assert_eq!(u32_at(b, f1 + 22), at, "where the page ends");
+            assert_eq!(u16_at(b, f1 + 26), inside, "the page's layers");
+            assert_eq!(u32_at(b, f1 + 28), instructions);
+            None
+        }
+        12 => {
+            assert_eq!(u32_at(b, f1 + 8), instructions);
+            None
+        }
+        _ => {
+            let [x0, y0, x1, y1] = edges.unwrap();
+            let stored: Vec<i32> = (0..4).map(|k| u32_at(b, f1 + 4 * k) as i32).collect();
+            assert_eq!(stored, [x0, y1, x1, y0], "left, top, right and bottom");
+            assert_eq!(u32_at(b, f1 + 22), at + size, "where the group ends");
+            Some((u16_at(b, f1 + 16), u32_at(b, f1 + 18)))
+        }
+    }
+}
+
+/// Walk the instructions of each page of `page_entries`, checking the begin-page, begin-layer and
+/// begin-group records, and give where each begin-layer instruction starts and each group's
+/// groups and instructions, in the order the groups end.
+fn page_records(b: &[u8], page_entries: &[[usize; 4]]) -> (Vec<usize>, Vec<(usize, usize)>) {
+    let mut seen_layers = Vec::new();
+    let mut groups = Vec::new();
+    for entry in page_entries {
+        let end = entry[0] + 8 + u32_at(b, entry[0] + 4);
+        let mut at = entry[0] + 8;
+        let mut open: Vec<Open> = Vec::new();
+        let mut count = 0;
+        while at < end {
+            let size = instruction_size(b, at, end);
+            let code = u16_at(b, at + 2);
+            count += 1;
+            match code {
+                9 | 11 | 13 => {
+                    let f1 = field_starts(b, at + 4, at + size).iter().find(|(t, _)| *t == 1).unwrap().1;
+                    if code == 11 {
+                        seen_layers.push(at);
+                    }
+                    // A page counts its layers and a group the groups directly inside it.
+                    if code != 9 {
+                        open.last_mut().unwrap().3 += 1;
+                    }
+                    open.push((code, f1, count - 1, 0, None));
+                }
+                67 => {
+                    let f2 = field_starts(b, at + 4, at + size).iter().find(|(t, _)| *t == 2).unwrap().1;
+                    for i in 0..u16_at(b, f2) {
+                        let p = f2 + 2 + 8 * i;
+                        let (x, y) = (u32_at(b, p) as i32, u32_at(b, p + 4) as i32);
+                        for o in open.iter_mut().filter(|o| o.0 == 13) {
+                            let e = o.4.get_or_insert([x, y, x, y]);
+                            *e = [e[0].min(x), e[1].min(y), e[2].max(x), e[3].max(y)];
+                        }
+                    }
+                }
+                10 | 12 | 14 => groups.extend(closed_record(b, open.pop().unwrap(), code, at, size, count)),
+                _ => {}
+            }
+            at += size;
+        }
+    }
+    (seen_layers, groups)
+}
+
+/// The size of the instruction at `at` of `b`, in a page that ends at `end`. These files hold
+/// only short instructions, so the long form (0xFFFF), a size shorter than the 4-byte header or
+/// one past `end` fails the test.
+fn instruction_size(b: &[u8], at: usize, end: usize) -> usize {
+    let size = u16_at(b, at);
+    assert!(size != 0xFFFF && size >= 4 && at + size <= end, "an instruction of size {size} at {at}, in a page that ends at {end}");
+    size
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 0")]
+fn an_instruction_of_size_0_fails_the_check() {
+    instruction_size(&[0, 0, 67, 0], 0, 4);
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 65535")]
+fn a_long_instruction_fails_the_check() {
+    instruction_size(&[0xff, 0xff, 67, 0, 8, 0, 0, 0], 0, 8);
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 8")]
+fn an_instruction_past_its_page_fails_the_check() {
+    instruction_size(&[8, 0, 67, 0], 0, 4);
 }
 
 #[test]
