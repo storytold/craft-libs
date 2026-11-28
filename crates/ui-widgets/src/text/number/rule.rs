@@ -2,8 +2,8 @@
 
 use super::value::NumberValue;
 use super::{DEFAULT_STEP, ON_GRID};
-use craft_behavior::nav::{LARGE_STEPS, snap_to_step};
-use craft_behavior::{Codec, MoveMods, NotAValue, NumberCodec, ParseNote, decimals_for_step};
+use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, snap_to_step};
+use craft_behavior::{Codec, MoveMods, NotAValue, NumberCodec, ParseNote, Wheel, decimals_for_step, wheel_step};
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
@@ -21,6 +21,20 @@ impl<'a> NumberStepper<'a> {
     pub(crate) fn next(&self, from: f64, direction: i32, scale: f64) -> f64 {
         (self.0)(from, direction, scale)
     }
+
+    /// The signed steps `wheel` moves a stepper by, the same in every control: one a notch, the notches a share
+    /// carries, `LARGE_STEPS` times that with Shift and a tenth with Alt. `None` for a share with no scroll.
+    pub(crate) fn wheel_steps(wheel: &Wheel, rtl: bool) -> Option<f64> {
+        match wheel_step(&ladder_steps(), ValueAxes::Both, wheel, rtl) {
+            StepResult::Set(steps) if steps != 0.0 => Some(steps),
+            _ => None,
+        }
+    }
+}
+
+/// Keys and the wheel read in steps from zero, independently of a control's scale or grid, for a stepper.
+pub(crate) fn ladder_steps() -> ValueSteps {
+    ValueSteps::new(0.0, f64::NEG_INFINITY, f64::INFINITY, 1.0, LARGE_STEPS)
 }
 
 /// The range and step values are held to.

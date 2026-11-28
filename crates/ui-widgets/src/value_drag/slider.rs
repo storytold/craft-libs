@@ -13,8 +13,9 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceStyle, TextLook, TrackLook};
 use crate::text::NumberStepper;
+use crate::text::number::ladder_steps;
 use craft_behavior::intent::{MoveMods, NavMove};
-use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, step_value};
+use craft_behavior::nav::{StepResult, ValueAxes, step_value};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense, WheelPhase};
 use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
@@ -403,10 +404,7 @@ impl Component for Slider<'_> {
             let next = if wheel.phase == WheelPhase::End {
                 None
             } else if let Some(stepper) = self.stepper.as_ref() {
-                match craft_behavior::wheel_step(&ladder_steps(), ValueAxes::Both, &wheel, rtl) {
-                    StepResult::Set(steps) => ladder_value(stepper, &scale, cx.value().copied(), steps),
-                    _ => None,
-                }
+                NumberStepper::wheel_steps(&wheel, rtl).and_then(|steps| ladder_value(stepper, &scale, cx.value().copied(), steps))
             } else {
                 scale.wheeled(current(&*cx), bounds, &wheel, rtl, self.wheel_step)
             };
@@ -512,11 +510,6 @@ impl Component for Slider<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> EditResponse<f64> {
         cx.edit_response()
     }
-}
-
-/// Read keys and the wheel in steps from zero, independently of the model's scale or snap grid.
-fn ladder_steps() -> ValueSteps {
-    ValueSteps::new(0.0, f64::NEG_INFINITY, f64::INFINITY, 1.0, LARGE_STEPS)
 }
 
 fn ladder_value(stepper: &NumberStepper<'_>, scale: &Scale, from: Option<f64>, steps: f64) -> Option<f64> {

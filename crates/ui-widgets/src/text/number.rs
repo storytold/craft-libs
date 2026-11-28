@@ -35,6 +35,7 @@ mod rule;
 mod value;
 
 pub use rule::NumberStepper;
+pub(crate) use rule::ladder_steps;
 use rule::{Rule, Ruled, key_scale, round_to};
 pub use value::{NamedOr, NumberName, NumberOutput, NumberPick, NumberValue, RangeAlert};
 
@@ -922,17 +923,18 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             let steps = ValueSteps::new(from, rule.low, rule.high, rule.step, rule.step * LARGE_STEPS).fine(rule.step / LARGE_STEPS);
             // A notch that changes the value proposes it; the runtime's zero-scroll end share changes none and ends
             // the run.
-            let next = match wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {
-                StepResult::Set(next) => {
-                    let next = match &self.stepper {
-                        Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }, 1.0),
-                        _ => round_to(next, decimals_for_step(rule.step / LARGE_STEPS)),
-                    };
-                    let next = rule.settle(next);
-                    (next != from).then(|| V::of_number(self.to_stored(next)))
+            let rtl = cx.env.direction().is_rtl();
+            // A stepper takes the wheel's steps as the slider's does: notches, Shift and Alt scale its `scale`.
+            let next = match &self.stepper {
+                Some(stepper) => {
+                    NumberStepper::wheel_steps(&wheel, rtl).map(|steps| stepper.next(from, if steps > 0.0 { 1 } else { -1 }, steps.abs()))
                 }
-                _ => None,
+                None => match wheel_step(&steps, ValueAxes::Both, &wheel, rtl) {
+                    StepResult::Set(next) => Some(round_to(next, decimals_for_step(rule.step / LARGE_STEPS))),
+                    _ => None,
+                },
             };
+            let next = next.map(|next| rule.settle(next)).filter(|next| *next != from).map(|next| V::of_number(self.to_stored(next)));
             cx.wheel_run(wheel.phase, next);
         }
         if let Some(next) = cx.intents().take_set_value() {

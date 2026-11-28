@@ -552,3 +552,68 @@ fn a_slider_drag_on_a_given_value_runs_one_pass_a_frame() {
     assert!(model.get() > 50.0, "the drag moved the app's value");
     assert!(passes.iter().all(|&n| n == 1), "slider drag frames ran {passes:?} passes");
 }
+
+/// A ladder of ones below 10 and fives from 10, as a number field and a slider share it.
+fn threshold_ladder(from: f64, direction: i32, steps: f64) -> f64 {
+    let unit = if from < 10.0 { 1.0 } else { 5.0 };
+    from + f64::from(direction) * steps * unit
+}
+
+/// A wheel turn of `lines` (up positive) with `modifiers` held.
+fn wheel_with(lines: f32, modifiers: Modifiers) -> egui::Event {
+    egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, lines),
+        phase: egui::TouchPhase::Move,
+        modifiers,
+        source: egui::MouseWheelSource::Wheel,
+    }
+}
+
+/// The values a focused control under the pointer takes after each wheel turn, each turn its own gesture.
+fn wheeled(fixture: &mut Fixture, label: &str, value: &Rc<RefCell<f64>>, turns: &[(f32, Modifiers)]) -> Vec<f64> {
+    use craft_behavior::GESTURE_GAP;
+    fixture.motion(MotionMode::Off).settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    let control = fixture.by_label(label).expect("the control");
+    fixture.frame(vec![pointer::moved(control.rect.center())]);
+    turns
+        .iter()
+        .map(|&(lines, modifiers)| {
+            fixture.frame(vec![wheel_with(lines, modifiers)]);
+            fixture.advance(GESTURE_GAP * 2.0).idle(3);
+            *value.borrow()
+        })
+        .collect()
+}
+
+/// A number field and a slider with the same stepper take the same wheel steps: one notch, several notches in one
+/// turn, Shift and Alt each scale what the stepper is asked for, and a turn across the ladder's threshold lands where
+/// the stepper puts it.
+#[trial]
+fn a_number_field_and_a_slider_with_one_stepper_wheel_alike() {
+    use craft_ui::text::NumberField;
+    let turns = [(1.0, Modifiers::NONE), (3.0, Modifiers::NONE), (1.0, Modifiers::SHIFT), (-1.0, Modifiers::ALT), (-1.0, Modifiers::NONE)];
+
+    let field_value = Rc::new(RefCell::new(8.0));
+    let held = field_value.clone();
+    let mut field = Fixture::new(move |ui| {
+        let mut shown = Some(*held.borrow());
+        NumberField::new("Amount", Bind::bound(&mut shown)).id_salt("amount").range(0.0..=200.0).stepper(threshold_ladder).show(ui);
+        if let Some(shown) = shown {
+            *held.borrow_mut() = shown;
+        }
+    });
+    let by_field = wheeled(&mut field, "Amount", &field_value, &turns);
+
+    let slider_value = Rc::new(RefCell::new(8.0));
+    let held = slider_value.clone();
+    let mut slider = Fixture::new(move |ui| {
+        Slider::new(Bind::bound(&mut *held.borrow_mut()), 0.0..=200.0).label("Amount").stepper(threshold_ladder).show_at(ui, FIELD);
+    });
+    let by_slider = wheeled(&mut slider, "Amount", &slider_value, &turns);
+
+    assert!(by_field.windows(2).all(|pair| pair[0] != pair[1]), "every turn moved the field: {by_field:?}");
+    assert!(by_field[1] - by_field[0] > by_field[0] - 8.0, "three notches go further than one: {by_field:?}");
+    assert_eq!(by_field, by_slider, "the field and the slider step the same ladder alike");
+}
