@@ -92,7 +92,14 @@ enum Kind {
     Block(BlockRole),
     List,
     Marker(String),
-    Run { text: String, positions: Vec<f32>, widths: Vec<f32> },
+    /// A run of a line's text; `after` is the run of the same line it goes on from (a line longer than [`MAX_RUN`] is
+    /// split) and whether it starts inside a word that run began.
+    Run {
+        text: String,
+        positions: Vec<f32>,
+        widths: Vec<f32>,
+        after: Option<(AccessNode, bool)>,
+    },
 }
 
 /// A node being built.
@@ -223,6 +230,7 @@ impl AccessBuilder {
         let tables = self.built(parent)?.tables;
         let text: Vec<char> = text.chars().collect();
         let mut first = None;
+        let mut previous = None;
         let mut start = 0;
         loop {
             let end = (start + MAX_RUN).min(text.len());
@@ -232,13 +240,17 @@ impl AccessBuilder {
             let right = spans.iter().map(|c| c.0 + c.1).fold(f32::NEG_INFINITY, f32::max);
             let (left, right) = if left.is_finite() && right.is_finite() { (left, right) } else { (line.left(), line.left()) };
             let bounds = Rect::from_min_max(Pos2::new(left, line.top()), Pos2::new(right.max(left), line.bottom()));
+            // A split falls where it may, inside a word too: the word goes on in the next run.
+            let mid_word = start > 0 && !text[start - 1].is_whitespace() && !text[start].is_whitespace();
             let run = Kind::Run {
                 text: text[start..end].iter().collect(),
                 positions: spans.iter().map(|c| c.0 - left).collect(),
                 widths: spans.iter().map(|c| c.1).collect(),
+                after: previous.map(|previous| (previous, mid_word)),
             };
             let at = self.push(Some(parent), run, tables, Some(bounds))?;
             first.get_or_insert(at);
+            previous = Some(at);
             if end >= text.len() {
                 return first;
             }
@@ -314,8 +326,11 @@ fn emit(access: &mut Access, built: &AccessBuilder, at: AccessNode) {
     let sub = match &node.kind {
         Kind::List => access.node(part, Role::LIST),
         Kind::Marker(text) => access.node(part, Role::LIST_MARKER).value(text.clone()),
-        Kind::Run { text, positions, widths } => {
+        Kind::Run { text, positions, widths, after } => {
             let sub = access.node(part, Role::TEXT_RUN).text_run(text.clone(), positions.clone(), widths.clone(), false);
+            if let Some((previous, mid_word)) = after {
+                sub.after_on_line(AccessBuilder::part(*previous), *mid_word);
+            }
             if let Some(bounds) = node.bounds {
                 sub.bounds(bounds);
             }

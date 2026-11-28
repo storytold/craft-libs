@@ -513,6 +513,8 @@ pub(crate) struct RunFacts {
     pub(crate) positions: Vec<f32>,
     pub(crate) widths: Vec<f32>,
     pub(crate) rtl: bool,
+    /// The run this one goes on from on the same line, and whether it starts inside a word that run began.
+    pub(crate) after: Option<(PartRef, bool)>,
 }
 
 /// A node below a component's node, for a part, a cell or a line of a content painter.
@@ -605,7 +607,18 @@ impl SubNode {
     /// is a `TextRun` whatever role it was given, takes its [`bounds`](Self::bounds) as the line's rectangle, and is
     /// a valid end of [`Access::text_selection`].
     pub fn text_run(&mut self, text: impl Into<String>, positions: Vec<f32>, widths: Vec<f32>, rtl: bool) -> &mut Self {
-        self.run = Some(RunFacts { text: text.into(), positions, widths, rtl });
+        self.run = Some(RunFacts { text: text.into(), positions, widths, rtl, after: None });
+        self
+    }
+
+    /// Makes this run go on from the run of `previous` on the same line, as the runs of a line too long for one do: a
+    /// screen reader's line moves cross from one to the other, and with `mid_word` (the run starts inside a word the
+    /// previous run began) the run's first character starts no word. Follows [`text_run`](Self::text_run).
+    pub fn after_on_line(&mut self, previous: PartRef, mid_word: bool) -> &mut Self {
+        debug_assert!(self.run.is_some(), "`after_on_line` follows `text_run`");
+        if let Some(run) = &mut self.run {
+            run.after = Some((previous, mid_word));
+        }
         self
     }
 

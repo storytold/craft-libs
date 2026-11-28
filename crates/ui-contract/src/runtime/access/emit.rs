@@ -380,6 +380,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
                 rtl: run.rtl,
                 positions: &run.positions,
                 widths: &run.widths,
+                after: run.after.map(|(previous, mid_word)| (sub_node_id(decl.owner, previous), mid_word)),
             },
         );
         keys::register_node(ctx, id, decl.owner, Some(node.part), false);
