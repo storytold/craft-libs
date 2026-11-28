@@ -467,6 +467,10 @@ not apply to it; damage is skipped with the same budget and warnings as `open`. 
 in `streams()`, where a later link of a chained file appears as a new stream when its pages are
 reached. `OggFile::read_packet_into` reads a packet into a reused buffer.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
+`VorbisTiming` gives each Vorbis packet's start and duration (from the block sizes of the modes that
+`VorbisModes` reads from the setup header), the samples to discard before a negative starting
+position, the offset of a stream that starts after 0, and the end trimming of the final page
+(Vorbis I §4.3.8 and §A.2).
 
 The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
 (storytold/filmcraft#4481): it laces the packets of one logical stream into pages (continued
