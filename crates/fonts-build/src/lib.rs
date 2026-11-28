@@ -87,6 +87,26 @@ pub struct EmbeddedFace {
 }
 
 impl EmbeddedFace {
+    /// A face at index 0 of `bytes` with no `role`, for tests and for tables written by hand. Code
+    /// that builds faces with `new` keeps compiling when a field with a default is added; a struct
+    /// literal does not.
+    ///
+    /// ```
+    /// use craft_fonts_build::EmbeddedFace;
+    ///
+    /// static FACE: EmbeddedFace = EmbeddedFace::new("Sans", "Bold", &["Latn"], b"").with_index(2);
+    /// assert_eq!((FACE.name().as_str(), FACE.index), ("Sans Bold", 2));
+    /// ```
+    pub const fn new(family: &'static str, style: &'static str, scripts: &'static [&'static str], bytes: &'static [u8]) -> Self {
+        Self { family, style, scripts, index: 0, bytes, role: None }
+    }
+
+    /// The same face at `index` in a font collection (`.ttc`).
+    #[must_use]
+    pub const fn with_index(self, index: u32) -> Self {
+        Self { index, ..self }
+    }
+
     /// `"<family> <style>"`, e.g. `"Noto Sans Arabic Regular"`.
     pub fn name(&self) -> String {
         format!("{} {}", self.family, self.style)

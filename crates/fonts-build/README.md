@@ -106,7 +106,10 @@ index, bytes, role }` literals; any struct with those fields and that name in sc
 `None`, or `Some("tab")` on the face `tab_face()` adds; craft-ui's font stack leads the Monospace
 family with the `mono` face, the signature family (`FontRef::signature()`) with the `signature`
 face and the tab-title family with the `tab` face. `EmbeddedFace` itself has `name()`,
-`has_script(tag)`, `is_cjk()` and `weight()`.
+`has_script(tag)`, `is_cjk()` and `weight()`. Tests and tables written by hand build a face with
+`EmbeddedFace::new(family, style, scripts, bytes)`, which sets no `role`, plus `.with_index(n)`
+for a face in a collection; both are `const fn`. Code that uses `new` keeps compiling when a
+field with a default is added; a struct literal does not.
 
 ## Document fonts
 

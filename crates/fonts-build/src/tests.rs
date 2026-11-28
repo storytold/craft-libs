@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cmap::Cmap;
 use crate::embed::Env;
-use crate::{Embed, Error};
+use crate::{Embed, EmbeddedFace, Error};
 
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture/craft-fonts")
@@ -44,6 +44,20 @@ fn run(embed: Embed, dir: Option<&Path>, required: Option<&str>) -> Run {
     let result = embed.run(&env, Path::new("craft_fonts.rs"), &mut cargo);
     let table = std::fs::read_to_string(scratch.0.join("craft_fonts.rs")).unwrap();
     Run { result: result.map(|faces| faces.iter().map(|f| format!("{} {}", f.family, f.style)).collect()), cargo, table }
+}
+
+#[test]
+fn embedded_face_new_starts_at_index_zero() {
+    const SCRIPTS: &[&str] = &["Jpan", "Latn"];
+    const FACE: EmbeddedFace = EmbeddedFace::new("Sans JP", "Bold", SCRIPTS, b"font");
+    assert_eq!((FACE.family, FACE.style, FACE.scripts, FACE.index, FACE.bytes), ("Sans JP", "Bold", SCRIPTS, 0, &b"font"[..]));
+    assert_eq!(FACE.role, None);
+    let in_collection = FACE.with_index(3);
+    assert_eq!(in_collection.index, 3);
+    assert_eq!(
+        (in_collection.family, in_collection.style, in_collection.bytes, in_collection.role),
+        (FACE.family, FACE.style, FACE.bytes, FACE.role)
+    );
 }
 
 #[test]
