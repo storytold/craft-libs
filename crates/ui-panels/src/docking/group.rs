@@ -24,7 +24,7 @@ use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, FocusLook, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
 use crate::tabs::{PanelTabLook, Tab, TabKind, TabStrip, TornOff};
-use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
+use craft_behavior::{CursorIcon, CursorPriority, DockSide, HitLevel, HitPriority, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
@@ -244,6 +244,10 @@ fn host_items_key(body: Id) -> Id {
 pub(super) const MENU: PartKey = PartKey::new("panel_menu");
 /// Where the group menu hangs while a context request on a tab holds it open: the request's point.
 const MENU_AT: &str = "menu_at";
+/// The corner mark of a group whose tab strip is hidden.
+const REVEAL: PartKey = PartKey::new("show_tabs");
+/// The side of the corner mark's square, in points; the pointer's hit area grows to the target size around it.
+const REVEAL_SIDE: f32 = 10.0;
 /// The point of a context request on a tab in the last pass, which opens the group menu.
 const MENU_ASKED: &str = "menu_asked";
 
@@ -321,6 +325,9 @@ pub struct DockGroupOutput {
     pub tabs: Vec<(PanelKey, Rect, Id)>,
     /// The band the group is dragged by this pass, with the id of its accessibility node.
     pub grip: Option<(Rect, Id)>,
+    /// The corner mark of a group whose tab strip is hidden ([`tabs_hidden`](DockGroup::tabs_hidden)) was clicked:
+    /// the host shows the strip again.
+    pub show_tabs: bool,
     /// The strip's overflow button, when some tabs do not fit, with the id of its accessibility node.
     pub overflow: Option<(Rect, Id)>,
 }
@@ -344,6 +351,9 @@ pub struct DockGroupStyle {
     focus: FocusLook,
     header: f32,
     sizes: DockSizes,
+    /// The corner mark of a group whose tab strip is hidden, at rest and under the pointer.
+    reveal: StyleColor,
+    reveal_hover: StyleColor,
 }
 
 #[derive(Default)]
@@ -356,6 +366,7 @@ struct Reported {
     item: Option<GroupItem>,
     commands: Vec<DockCommands>,
     toggle_minimized: bool,
+    show_tabs: bool,
     torn_off: Option<TornOff<PanelKey>>,
     drag_started: bool,
     /// A drag started on the strip's empty room, which `finish` starts as a drag of the group.
@@ -394,6 +405,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
+    /// The tab strip is hidden: no header, the body takes the whole group, and a mark in its top start corner shows
+    /// the strip again: [`tabs_hidden`](DockGroup::tabs_hidden).
+    tabs_hidden: bool,
     /// The look of the tabs: [`tab_look`](DockGroup::tab_look).
     tab_look: PanelTabLook,
     /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
@@ -459,6 +473,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             movable: true,
             closable: false,
             wheel_selects_tabs: false,
+            tabs_hidden: false,
             tab_look: PanelTabLook::Plain,
             titled: false,
             take_focus: false,
@@ -499,8 +514,20 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
     /// lie on a strip of `surface.canvas`, the others on the window's background.
     #[must_use]
     pub fn tab_look(mut self, look: PanelTabLook) -> Self {
-        self.props = self.props.header(HeaderRegion::new().fill(strip_surface(look)));
+        if !self.tabs_hidden {
+            self.props = self.props.header(HeaderRegion::new().fill(strip_surface(look)));
+        }
         self.tab_look = look;
+        self
+    }
+
+    /// Hides the tab strip, as Unreal's Hide Tabs does: the group has no header, the shown panel's body takes the
+    /// whole group, and a small mark in its top start corner reports [`show_tabs`](DockGroupOutput::show_tabs) when
+    /// clicked. The strip takes no tab drops while hidden; the body's zones still do.
+    #[must_use]
+    pub fn tabs_hidden(mut self) -> Self {
+        self.props.header = None;
+        self.tabs_hidden = true;
         self
     }
 
@@ -556,7 +583,15 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
 
     fn style(cx: &StyleCx<'_>, _: DockGroupStyleKey<P>) -> DockGroupStyle {
         let sizes = DockSizes::style(cx);
-        DockGroupStyle { metrics: Metrics::new(), focus: cx.focus_look(), header: sizes.strip, sizes }
+        let accent = &cx.tokens.color.accent;
+        DockGroupStyle {
+            metrics: Metrics::new(),
+            focus: cx.focus_look(),
+            header: sizes.strip,
+            sizes,
+            reveal: cx.color(accent.solid),
+            reveal_hover: cx.color(accent.hover),
+        }
     }
 
     fn sense(&self) -> Sense {
@@ -566,7 +601,18 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
     /// The band the group is dragged by and the panel menu button, at the end of the header: the band first. The
     /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did; beside
     /// [`PanelTabLook::Pill`] and [`PanelTabLook::Block`] tabs, in the strip's middle.
-    fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        if self.tabs_hidden {
+            let tooltip = cx.words::<DockWords>().show_tabs.clone();
+            let _ = cx
+                .part(REVEAL, reveal_rect(rect, cx.flow.is_rtl()))
+                .sense(Sense::CLICK | Sense::FOCUS)
+                .focusable()
+                .priority(HitPriority::new(HitLevel::Edge, 0))
+                .tooltip(tooltip)
+                .over();
+            return;
+        }
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();
         let flow = craft_behavior::Flow::new(slot, cx.flow.is_rtl());
@@ -605,6 +651,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         if cx.part_if_declared(MENU).is_some() {
             access.node(MENU, Role::BUTTON).name = Name::Text(words.panel_menu.as_str().to_owned());
         }
+        if cx.part_if_declared(REVEAL).is_some() {
+            access.node(REVEAL, Role::BUTTON).name = Name::Text(words.show_tabs.as_str().to_owned());
+        }
     }
 
     /// The group menu, opened by the panel menu button, under it, or by a context request on a tab, at the request's
@@ -640,6 +689,10 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             ui.face(MENU, self.menu_face(cx.words::<DockWords>().panel_menu.clone()));
         }
         ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
+        if let Some(reveal) = cx.part_if_declared(REVEAL) {
+            let ink = if reveal.hovered { cx.style.reveal_hover } else { cx.style.reveal };
+            ui.draw().fill(&PaintShape::Polygon(reveal_mark(cx.rect, cx.flow.is_rtl()).to_vec()), ink);
+        }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -657,16 +710,25 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         if self.take_focus && self.titled && cx.part_if_declared(GRIP).is_some() {
             focus::request(&cx.core.ctx, FocusTarget::Part(cx.core.id, GRIP.into()));
         }
+        // A hidden strip has no tab row either: the mark that shows it is the group's stop.
+        if self.take_focus && self.tabs_hidden && cx.part_if_declared(REVEAL).is_some() {
+            focus::request(&cx.core.ctx, FocusTarget::Part(cx.core.id, REVEAL.into()));
+        }
         if let Some(grip) = cx.part_if_declared(GRIP).map(|grip| grip.press) {
             self.reported.toggle_minimized |= grip.double_pressed();
             if self.movable && matches!(grip.phase, PressPhase::DragStart { .. }) {
                 self.start_drag(cx);
             }
         }
+        self.reported.show_tabs |= cx.part_activated(REVEAL).is_some();
         let Some(dock) = self.dock else { return };
-        let (rect, rtl, header) = (cx.rect, cx.flow.is_rtl(), cx.style.header);
+        let (rect, rtl) = (cx.rect, cx.flow.is_rtl());
+        // A hidden strip has no room: the body starts at the group's top.
+        let header = if self.tabs_hidden { 0.0 } else { cx.style.header };
         let strip = Rect::from_min_size(rect.min, Vec2::new(rect.width(), header));
-        DockTargets::<P>::register(&cx.core.ctx, dock, DockSpot::tab(self.anchor.clone(), self.panels.as_slice().len()), strip);
+        if !self.tabs_hidden {
+            DockTargets::<P>::register(&cx.core.ctx, dock, DockSpot::tab(self.anchor.clone(), self.panels.as_slice().len()), strip);
+        }
         if self.minimized {
             return;
         }
@@ -700,6 +762,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             item,
             commands,
             toggle_minimized,
+            show_tabs,
             torn_off,
             drag_started,
             tabs,
@@ -720,6 +783,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             drag_started,
             tabs,
             grip,
+            show_tabs,
             overflow,
         }
     }
@@ -737,6 +801,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
     /// visible. The host's items count with the width the header last handed forward for them; before it has, they
     /// count as none.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
+        if self.tabs_hidden {
+            return HeaderParts::NONE;
+        }
         let button = self.menu_room(cx);
         let parts = HeaderParts::NONE.end(grip_width(cx.tokens) + button);
         if self.titled {
@@ -980,6 +1047,19 @@ fn shown_tab(panels: &[PanelTitle], active: PanelKey) -> PanelKey {
         .find(|panel| panel.key == active)
         .and_then(|panel| panel.documents.iter().find(|document| document.shown).map(|document| panel.document_key(document.id)))
         .unwrap_or(active)
+}
+
+/// The square in the top start corner of `rect` that the corner mark of a hidden strip takes.
+fn reveal_rect(rect: Rect, rtl: bool) -> Rect {
+    let x = if rtl { rect.right() - REVEAL_SIDE } else { rect.left() };
+    Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::splat(REVEAL_SIDE))
+}
+
+/// The corner mark of a hidden strip: a right triangle filling the top start corner of `rect`, as Unreal's.
+fn reveal_mark(rect: Rect, rtl: bool) -> [Pos2; 3] {
+    let corner = if rtl { rect.right_top() } else { rect.left_top() };
+    let across = if rtl { -REVEAL_SIDE } else { REVEAL_SIDE };
+    [corner, corner + Vec2::new(across, 0.0), corner + Vec2::new(0.0, REVEAL_SIDE)]
 }
 
 /// What a group's tab row shows: the strip's id, each shown tab's rect and the overflow button with its node id.

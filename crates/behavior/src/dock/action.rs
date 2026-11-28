@@ -260,6 +260,16 @@ pub enum Action<P> {
         /// Only the tab strip shows.
         minimized: bool,
     },
+    /// Hide the tab strip of the panel's group, docked or floating, or show it again: while hidden, the shown panel's
+    /// body takes the whole group. Refused ([`DockError::InvalidPlacement`](super::DockError::InvalidPlacement)) for
+    /// an accordion entry, which has no tab strip.
+    #[non_exhaustive]
+    SetTabsHidden {
+        /// The panel the action applies to.
+        panel: P,
+        /// The tab strip is hidden.
+        hidden: bool,
+    },
     /// Collapse the panel's column to icons, or expand it, docked or floating. Refused
     /// ([`DockError::NotAllowed`](super::DockError::NotAllowed)) for a column holding a panel that does not
     /// collapse ([`Permissions::collapses`]).
@@ -453,6 +463,11 @@ impl<P> Action<P> {
     /// Builds [`Action::SetMinimized`].
     pub fn set_minimized(panel: P, minimized: bool) -> Self {
         Self::SetMinimized { panel, minimized }
+    }
+
+    /// Builds [`Action::SetTabsHidden`].
+    pub fn set_tabs_hidden(panel: P, hidden: bool) -> Self {
+        Self::SetTabsHidden { panel, hidden }
     }
 
     /// Builds [`Action::SetIconic`].

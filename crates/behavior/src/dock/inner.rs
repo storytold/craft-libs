@@ -74,7 +74,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 if let Some(anchor) = anchor {
                     self.insert(entry, Column::new(Vec::new()), &anchor, DockPlacement::Tab { before: None }, canvas)
                 } else if self.root.is_none() {
-                    self.root = Some(Node::Tabs { panels: vec![entry.panel], active: 0 });
+                    self.root = Some(Node::tabs(vec![entry.panel], 0));
                     Ok(())
                 } else {
                     Err(DockError::MissingTarget)
@@ -167,6 +167,20 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 let entry = self.stack_entry_mut(&panel).ok_or(DockError::InvalidPlacement)?;
                 entry.open = !minimized;
                 Ok(())
+            }
+            Action::SetTabsHidden { panel, hidden } => {
+                let place = self.place(&panel).ok_or(DockError::MissingPanel)?;
+                if let Some(group) = self.group_mut(&place) {
+                    group.tabs_hidden = hidden;
+                    return Ok(());
+                }
+                match self.node_of_mut(&place) {
+                    Some(Node::Tabs { tabs_hidden, .. }) => {
+                        *tabs_hidden = hidden;
+                        Ok(())
+                    }
+                    _ => Err(DockError::InvalidPlacement),
+                }
             }
             Action::ResizeGroup { panel, height } => {
                 if !valid_height(height) {
@@ -345,11 +359,11 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         if let DockPlacement::Split(zone) = placement
             && zone != DockSide::Center
         {
-            let new = Node::Tabs { panels: vec![entry.panel], active: 0 };
+            let new = Node::tabs(vec![entry.panel], 0);
             return if split_frame(root, &path, new, zone) { Ok(()) } else { Err(DockError::MissingTarget) };
         }
         if let DockPlacement::SplitSized { zone, size, outer } = placement {
-            let new = Node::Tabs { panels: vec![entry.panel], active: 0 };
+            let new = Node::tabs(vec![entry.panel], 0);
             return if split_frame_sized(root, &path, new, zone, size, outer) { Ok(()) } else { Err(DockError::InvalidPlacement) };
         }
         if insert_node(root, &entry, anchor, &placement) { Ok(()) } else { Err(DockError::MissingTarget) }
@@ -377,7 +391,7 @@ pub(super) fn check_panel<'a, P: Eq + Hash>(panel: &'a P, seen: &mut HashSet<&'a
 /// A `Tabs` or `Stack` node: not empty, a valid selection and heights, panels not seen before.
 pub(super) fn check_leaf<'a, P: Eq + Hash>(node: &'a Node<P>, seen: &mut HashSet<&'a P>) -> Result<(), DockError> {
     match node {
-        Node::Tabs { panels, active } => {
+        Node::Tabs { panels, active, .. } => {
             if panels.is_empty() {
                 return Err(DockError::InvalidGeometry);
             }
@@ -436,11 +450,11 @@ pub(super) fn remove_tab<P: Clone + Eq>(panels: &mut Vec<P>, active: &mut usize,
 
 pub(super) fn remove_node<P: Clone + Eq>(node: Node<P>, panel: &P, removed: &mut Option<StackEntry<P>>) -> Option<Node<P>> {
     match node {
-        Node::Tabs { mut panels, mut active } => {
+        Node::Tabs { mut panels, mut active, tabs_hidden } => {
             if let Some(panel) = remove_tab(&mut panels, &mut active, panel) {
                 *removed = Some(StackEntry { panel, open: true, height: None });
             }
-            (!panels.is_empty()).then_some(Node::Tabs { panels, active })
+            (!panels.is_empty()).then_some(Node::Tabs { panels, active, tabs_hidden })
         }
         Node::Stack { mut entries } => {
             if let Some(i) = entries.iter().position(|e| &e.panel == panel) {
@@ -494,7 +508,7 @@ pub(super) fn resize_split<P>(mut node: &mut Node<P>, path: &[bool], size: Split
 
 pub(super) fn activate<P: Eq>(node: &mut Node<P>, panel: &P) -> bool {
     match node {
-        Node::Tabs { panels, active } => {
+        Node::Tabs { panels, active, .. } => {
             if let Some(i) = panels.iter().position(|p| p == panel) {
                 *active = i;
                 true
@@ -534,7 +548,7 @@ pub(super) fn insert_node<P: Clone + Eq>(node: &mut Node<P>, entry: &StackEntry<
         return false;
     }
     match node {
-        Node::Tabs { panels, active } => {
+        Node::Tabs { panels, active, .. } => {
             let index = match placement {
                 DockPlacement::Tab { before } => before.as_ref().and_then(|p| panels.iter().position(|q| q == p)).unwrap_or(panels.len()),
                 _ => panels.iter().position(|p| p == anchor).map_or(panels.len(), |i| i + 1),
@@ -658,8 +672,8 @@ pub(super) fn restore_around_subtree<P: Clone + Eq + Hash>(
     let mut actual = Vec::new();
     node_members(node, &mut actual);
     if actual.len() == members.len() && actual.iter().all(|p| members.contains(p)) {
-        let new = Node::Tabs { panels: vec![panel.clone()], active: 0 };
-        let old = std::mem::replace(node, Node::Tabs { panels: Vec::new(), active: 0 });
+        let new = Node::tabs(vec![panel.clone()], 0);
+        let old = std::mem::replace(node, Node::tabs(Vec::new(), 0));
         let (first, second) = if matches!(zone, DockSide::Start | DockSide::Top) { (new, old) } else { (old, new) };
         *node = Node::Split {
             axis: if matches!(zone, DockSide::Top | DockSide::Bottom) { Axis::Y } else { Axis::X },

@@ -214,28 +214,57 @@ pub fn stacked(area: Rect, heights: &[f32]) -> Vec<Rect> {
 }
 
 /// The sizes of the groups of `column` for [`group_heights`]: the strip added to the tallest minimum of a group's
-/// panels, and the largest of each of their [`DockHeights`] with the strip added.
+/// panels, and the largest of each of their [`DockHeights`] with the strip added; a group whose tabs are hidden adds
+/// none.
 pub(super) fn group_sizes<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec, sizes: &DockSizes) -> Vec<GroupSize> {
     column
         .groups
         .iter()
         .map(|group| {
             let specs: Vec<PanelSpec> = group.panels.iter().map(spec).collect();
+            // A group whose tabs are hidden shows no strip, unless it is minimized, when the strip is all it shows.
+            let strip = if group.tabs_hidden && !group.minimized { 0.0 } else { sizes.strip };
             let body = specs.iter().map(|spec| spec.limits.min.y).fold(sizes.least, f32::max);
             let content = specs
                 .iter()
                 .filter_map(|spec| spec.heights.filter(|heights| heights.valid()))
                 .reduce(|a, b| DockHeights::new(a.default.max(b.default)).compact(a.compact.max(b.compact)).fill(a.fill.max(b.fill)))
                 .map(|heights| {
-                    DockHeights::new(heights.default + sizes.strip)
-                        .compact(heights.compact.min(heights.default) + sizes.strip)
-                        .fill(if heights.fill > 0.0 { heights.fill + sizes.strip } else { 0.0 })
+                    DockHeights::new(heights.default + strip)
+                        .compact(heights.compact.min(heights.default) + strip)
+                        .fill(if heights.fill > 0.0 { heights.fill + strip } else { 0.0 })
                 });
-            let mut size = GroupSize::new(sizes.strip + body);
+            let mut size = GroupSize::new(strip + body);
             size.minimized = group.minimized;
             size.saved = group.height;
             size.content = content;
             size
         })
         .collect()
+}
+
+#[cfg(feature = "suite")]
+pub(crate) mod trials {
+    use super::{DockHeights, DockSizes, PanelSpec, group_sizes};
+    use crate::testing::trial;
+    use craft_behavior::dock::{Column, Group};
+
+    /// A group whose tabs are hidden counts no strip in its least and asked heights; minimized, it still shows its
+    /// strip and counts it.
+    #[trial]
+    fn a_group_with_hidden_tabs_counts_no_strip_in_its_sizes() {
+        let sizes = DockSizes::of(&egui::Context::default());
+        assert!(sizes.strip > 0.0, "the strip has a height");
+        let mut hidden = Group::new(vec![1_u8], 0);
+        hidden.tabs_hidden = true;
+        let mut minimized = hidden.clone();
+        minimized.minimized = true;
+        let column = Column::new(vec![Group::new(vec![0_u8], 0), hidden, minimized]);
+        let spec = |_: &u8| PanelSpec::new("Panel").heights(DockHeights::new(200.0));
+        let got = group_sizes(&column, &spec, &sizes);
+        let default = |at: usize| got[at].content.map(|heights| heights.default);
+        assert!((got[0].min - got[1].min - sizes.strip).abs() < 1e-3, "hidden tabs drop the strip from the least height");
+        assert_eq!(default(0).zip(default(1)).map(|(shown, hidden)| shown - hidden), Some(sizes.strip), "and from the asked one");
+        assert!((got[2].min - got[0].min).abs() < 1e-3, "a minimized group counts its strip");
+    }
 }

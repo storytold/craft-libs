@@ -266,6 +266,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         location.floating = floating;
         location.group = Some(GroupLocation {
             minimized: own.minimized,
+            tabs_hidden: own.tabs_hidden,
             height: own.height,
             flyout_width: own.flyout_width,
             flyout_offset: own.flyout_offset,
@@ -304,7 +305,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         let showing = match self.place(panel) {
             None => return PanelState::Hidden,
             Some(place @ PanelPlace::Node(_)) => match self.node_of(&place) {
-                Some(Node::Tabs { panels, active }) => panels.get(*active) == Some(panel),
+                Some(Node::Tabs { panels, active, .. }) => panels.get(*active) == Some(panel),
                 Some(Node::Stack { entries }) => entries.iter().any(|e| &e.panel == panel && e.open),
                 _ => false,
             },
@@ -345,6 +346,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 panels: vec![panel.clone()],
                 active: 0,
                 minimized: state.is_some_and(|s| s.minimized),
+                tabs_hidden: state.is_some_and(|s| s.tabs_hidden),
                 height: state.and_then(|s| s.height),
                 flyout_width: state.and_then(|s| s.flyout_width),
                 flyout_offset: state.and_then(|s| s.flyout_offset),
@@ -413,7 +415,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 }
             }
         } else if proposed.root.is_none() {
-            proposed.root = Some(Node::Tabs { panels: vec![panel.clone()], active: 0 });
+            proposed.root = Some(Node::tabs(vec![panel.clone()], 0));
         } else {
             return Err(DockError::MissingTarget);
         }
@@ -436,7 +438,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
     pub fn open_at_edge(&mut self, panel: P) -> Result<(), DockError> {
         let mut proposed = self.clone();
         if self.root.is_none() {
-            proposed.root = Some(Node::Tabs { panels: vec![panel], active: 0 });
+            proposed.root = Some(Node::tabs(vec![panel], 0));
         } else {
             let anchor = self
                 .panels()

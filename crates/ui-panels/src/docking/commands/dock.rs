@@ -47,6 +47,10 @@ pub enum DockCommands {
     /// Minimize the panel's group to its tab strip, or expand it.
     #[command(label = "Minimize", kind = "toggle")]
     ToggleMinimized,
+    /// Hide the tab strip of the panel's group: the shown panel's body takes the whole group, and a mark in its
+    /// corner shows the strip again.
+    #[command(label = "Hide Tabs")]
+    HideTabs,
     /// Collapse the panel's column to icons, or expand it.
     #[command(label = "Collapse to Icons", kind = "toggle")]
     CollapseToIcons,
@@ -204,6 +208,10 @@ pub fn actions<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, command: DockComm
             shown()?;
             one(Action::set_minimized(panel.clone(), !minimized(layout, panel)))
         }
+        DockCommands::HideTabs => {
+            shown()?;
+            one(Action::set_tabs_hidden(panel.clone(), true))
+        }
         DockCommands::CollapseToIcons => {
             let place = layout.place(panel).ok_or(DockError::MissingPanel)?;
             let column = layout.column(&place).ok_or(DockError::InvalidPlacement)?;
@@ -287,6 +295,22 @@ fn minimized<P: Clone + Eq + Hash>(layout: &Layout<P>, panel: &P) -> bool {
     }
 }
 
+/// Whether the tab strip of `panel`'s group is hidden. Only a tab group hides its strip: an accordion section and a
+/// panel the layout does not hold never do.
+fn tabs_hidden<P: Clone + Eq + Hash>(layout: &Layout<P>, panel: &P) -> bool {
+    let Some(place) = layout.place(panel) else { return false };
+    match layout.group(&place) {
+        Some(group) => group.tabs_hidden,
+        None => matches!(layout.node_of(&place), Some(Node::Tabs { tabs_hidden: true, .. })),
+    }
+}
+
+/// Whether `panel` sits in a tab group, the only kind of group whose strip hides.
+fn hides_tabs<P: Clone + Eq + Hash>(layout: &Layout<P>, panel: &P) -> bool {
+    let Some(place) = layout.place(panel) else { return false };
+    layout.group(&place).is_some() || matches!(layout.node_of(&place), Some(Node::Tabs { .. }))
+}
+
 /// Whether `column` may collapse to icons: every panel in it collapses ([`Permissions::collapses`]).
 fn collapses<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, column: &Column<P>) -> bool {
     column.panels().all(|panel| scene.policy(panel).collapses)
@@ -326,6 +350,7 @@ pub fn dock_states<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, panel: &P) ->
         (DockCommands::StepGroupUp, enabled(layout.can_step_group(panel, true, policy))),
         (DockCommands::StepGroupDown, enabled(layout.can_step_group(panel, false, policy))),
         (DockCommands::ToggleMinimized, enabled(shown)),
+        (DockCommands::HideTabs, enabled(shown && hides_tabs(layout, panel) && !tabs_hidden(layout, panel))),
         (DockCommands::CollapseToIcons, CommandState::new().enabled(collapsible).checked(iconic.unwrap_or(false))),
         (DockCommands::ToggleMaximize, enabled(shown && !floating)),
         (DockCommands::AutoCollapse, enabled(true)),

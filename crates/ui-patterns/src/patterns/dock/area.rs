@@ -686,11 +686,12 @@ struct Passed<P> {
     sources: Vec<DockSource<P>>,
 }
 
-/// How a group is shown: minimized, whether it is an accordion section (with its open state), and whether it is in
-/// a floating window, where nothing goes beside it.
+/// How a group is shown: minimized, its tab strip hidden, whether it is an accordion section (with its open state), and
+/// whether it is in a floating window, where nothing goes beside it.
 #[derive(Clone, Copy)]
 struct Look {
     minimized: bool,
+    tabs_hidden: bool,
     section: Option<bool>,
     in_window: bool,
 }
@@ -1227,6 +1228,14 @@ fn panel_menu_rows<P: Clone + Eq + Hash>(
     if config.maximize_item {
         group.push(command(DockCommands::ToggleMaximize));
     }
+    // Only a tab group hides its strip: an accordion section is its own strip.
+    let tabbed = scene
+        .layout
+        .place(panel)
+        .is_some_and(|place| scene.layout.group(&place).is_some() || matches!(scene.layout.node_of(&place), Some(Node::Tabs { .. })));
+    if config.hide_tabs_item && tabbed {
+        group.push(command(DockCommands::HideTabs));
+    }
     let mut rows = panels.panel_rows(panel);
     let hosted = !rows.is_empty();
     if hosted {
@@ -1248,8 +1257,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     fn leaf(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, node: &Node<P>, rect: Rect) {
         let scene = self.scene;
         match node {
-            Node::Tabs { panels: members, active, .. } => {
-                self.group(ui, body, members, *active, Look { minimized: false, section: None, in_window: false }, GroupAt::Show(rect));
+            Node::Tabs { panels: members, active, tabs_hidden, .. } => {
+                let look = Look { minimized: false, tabs_hidden: *tabs_hidden, section: None, in_window: false };
+                self.group(ui, body, members, *active, look, GroupAt::Show(rect));
             }
             Node::Stack { entries, .. } => {
                 let sections: Vec<StackSection> = entries
@@ -1265,7 +1275,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     for (entry, height) in entries.iter().zip(&heights) {
                         let section = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(rect.width(), *height));
                         top += height;
-                        let look = Look { minimized: !entry.open, section: Some(entry.open), in_window: false };
+                        let look = Look { minimized: !entry.open, tabs_hidden: false, section: Some(entry.open), in_window: false };
                         self.group(ui, inner, std::slice::from_ref(&entry.panel), 0, look, GroupAt::Show(section));
                     }
                 });
@@ -1447,6 +1457,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if scene.config.wheel_selects_tabs {
                 group = group.wheel_selects_tabs();
             }
+            // A minimized group is its strip alone, which stays.
+            if look.tabs_hidden && !minimized {
+                group = group.tabs_hidden();
+            }
             group
         };
         let rect = match at {
@@ -1589,6 +1603,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         for command in output.commands {
             self.run(shown, command, Some(source));
         }
+        if output.show_tabs {
+            self.report.actions.push(Action::set_tabs_hidden(shown.clone(), false));
+        }
         if output.toggle_minimized {
             self.report.actions.push(match look.section {
                 Some(open) => Action::set_stack_open(shown.clone(), !open),
@@ -1601,7 +1618,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
 
     /// A group of a column, docked or in a floating window (`in_window`).
     fn group_of(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, group: &Group<P>, at: GroupAt, in_window: bool) -> Option<f32> {
-        let look = Look { minimized: group.minimized, section: None, in_window };
+        let look = Look { minimized: group.minimized, tabs_hidden: group.tabs_hidden, section: None, in_window };
         self.group(ui, body, &group.panels, group.active, look, at)
     }
 

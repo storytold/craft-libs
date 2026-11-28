@@ -32,6 +32,10 @@ pub enum Node<P> {
         panels: Vec<P>,
         /// Index into `panels` of the selected tab.
         active: usize,
+        /// The tab strip is hidden: the shown panel's body takes the whole group, and a mark in its corner shows
+        /// the strip again ([`Action::SetTabsHidden`](super::Action::SetTabsHidden)).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        tabs_hidden: bool,
     },
     /// An accordion keeps its open state and preferred heights when other panels move.
     #[non_exhaustive]
@@ -106,7 +110,7 @@ impl<P: PartialEq> PartialEq for Floating<P> {
 impl<P> Node<P> {
     /// A group of tabs with tab `active` selected.
     pub fn tabs(panels: Vec<P>, active: usize) -> Self {
-        Self::Tabs { panels, active }
+        Self::Tabs { panels, active, tabs_hidden: false }
     }
 
     /// Two children along `axis`, sharing the room by `size`.
@@ -213,7 +217,7 @@ pub(super) mod floating_serde {
         edge: Option<DockEdge>,
     }
 
-    /// One expanded column holding one group with no state of its own: what v1 can hold.
+    /// One expanded column holding one group with no state of its own (tabs shown): what v1 can hold.
     fn plain<P>(column: &Column<P>, group: &Group<P>) -> bool {
         column.width.is_none()
             && !column.iconic
@@ -223,6 +227,7 @@ pub(super) mod floating_serde {
             && group.height.is_none()
             && group.flyout_width.is_none()
             && group.flyout_offset.is_none()
+            && !group.tabs_hidden
     }
 
     impl<P: Serialize> Serialize for Floating<P> {
@@ -397,7 +402,7 @@ pub(super) mod floating_serde {
                     visit.push(*second);
                     visit.push(*first);
                 }
-                Node::Tabs { panels, active } => groups.push(Group::new(panels, active)),
+                Node::Tabs { panels, active, tabs_hidden } => groups.push(Group { tabs_hidden, ..Group::new(panels, active) }),
                 Node::Stack { entries } => groups.extend(entries.into_iter().map(super::StackEntry::into_group)),
                 Node::Dock { columns, .. } => groups.extend(columns.into_iter().flat_map(|column| column.groups)),
             }

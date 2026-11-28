@@ -81,7 +81,7 @@ pub fn tree_panels<P>(root: &Node<P>) -> Vec<&P> {
 /// The shown panel of a tree's first group.
 pub fn first_active<P>(root: &Node<P>) -> Option<&P> {
     match leaves(root).into_iter().next()?.0 {
-        Node::Tabs { panels, active } => panels.get(*active),
+        Node::Tabs { panels, active, .. } => panels.get(*active),
         Node::Stack { entries } => entries.first().map(|e| &e.panel),
         Node::Split { .. } | Node::Dock { .. } => None,
     }
@@ -93,7 +93,7 @@ pub(super) fn split_frame<P>(root: &mut Node<P>, path: &[bool], new: Node<P>, zo
     let axis = if matches!(zone, DockSide::Top | DockSide::Bottom) { Axis::Y } else { Axis::X };
     let new_first = matches!(zone, DockSide::Top | DockSide::Start);
     let Some(node) = node_at_mut(root, path) else { return false };
-    let old = std::mem::replace(node, Node::Tabs { panels: Vec::new(), active: 0 });
+    let old = std::mem::replace(node, Node::tabs(Vec::new(), 0));
     let (first, second) = if new_first { (new, old) } else { (old, new) };
     *node = Node::Split { axis, size: SplitSize::Ratio(0.5), first: Box::new(first), second: Box::new(second) };
     true
@@ -310,7 +310,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     let mut members = Vec::new();
                     run(n, *axis, &mut members);
                     let mut shaped = members.into_iter().rev().map(node);
-                    let last = shaped.next().unwrap_or(Node::Tabs { panels: Vec::new(), active: 0 });
+                    let last = shaped.next().unwrap_or(Node::tabs(Vec::new(), 0));
                     shaped.fold(last, |second, first| Node::Split {
                         axis: *axis,
                         size: SplitSize::Ratio(0.5),
@@ -318,7 +318,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                         second: Box::new(second),
                     })
                 }
-                Node::Tabs { panels, active } => Node::Tabs { panels: panels.clone(), active: *active },
+                Node::Tabs { panels, active, tabs_hidden } => Node::Tabs { panels: panels.clone(), active: *active, tabs_hidden: *tabs_hidden },
                 Node::Stack { entries } => Node::Stack { entries: entries.iter().map(|e| StackEntry { height: None, ..e.clone() }).collect() },
                 Node::Dock { side, columns } => Node::Dock { side: *side, columns: columns.iter().map(column_shape).collect() },
             }
@@ -398,7 +398,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         if !matches!(parent, Node::Split { .. }) {
             return None;
         }
-        match std::mem::replace(parent, Node::Tabs { panels: Vec::new(), active: 0 }) {
+        match std::mem::replace(parent, Node::tabs(Vec::new(), 0)) {
             Node::Split { first, second, .. } => {
                 let (taken, kept) = if *second_child { (second, first) } else { (first, second) };
                 *parent = *kept;
@@ -459,7 +459,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
             return Ok(Moving::group(entries.remove(index).into_group()));
         }
         match self.take_node(path) {
-            Some(Node::Tabs { panels, active }) => Ok(Moving::group(Group::new(panels, active))),
+            Some(Node::Tabs { panels, active, tabs_hidden }) => Ok(Moving::group(Group { tabs_hidden, ..Group::new(panels, active) })),
             Some(Node::Stack { mut entries }) if entries.len() == 1 => Ok(Moving::group(entries.remove(0).into_group())),
             _ => Err(DockError::MissingPanel),
         }
@@ -556,15 +556,13 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     }
                     DockPlacement::Split(zone) => {
                         let path = place.tree_path().ok_or(DockError::InvalidPlacement)?;
-                        let (panels, active) = flatten(moving.column.groups);
                         let root = self.root.as_mut().ok_or(DockError::MissingTarget)?;
-                        if split_frame(root, path, Node::Tabs { panels, active }, zone) { Ok(()) } else { Err(DockError::MissingTarget) }
+                        if split_frame(root, path, moved_tabs(moving.column.groups), zone) { Ok(()) } else { Err(DockError::MissingTarget) }
                     }
                     DockPlacement::SplitSized { zone, size, outer } => {
                         let path = place.tree_path().ok_or(DockError::InvalidPlacement)?;
-                        let (panels, active) = flatten(moving.column.groups);
                         let root = self.root.as_mut().ok_or(DockError::MissingTarget)?;
-                        if split_frame_sized(root, path, Node::Tabs { panels, active }, zone, size, outer) {
+                        if split_frame_sized(root, path, moved_tabs(moving.column.groups), zone, size, outer) {
                             Ok(())
                         } else {
                             Err(DockError::InvalidPlacement)
@@ -603,9 +601,8 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                         if matches!(node, Node::Dock { .. }) {
                             return Err(DockError::InvalidPlacement);
                         }
-                        let (panels, active) = flatten(moving.column.groups);
-                        let new = Node::Tabs { panels, active };
-                        let old = std::mem::replace(node, Node::Tabs { panels: Vec::new(), active: 0 });
+                        let new = moved_tabs(moving.column.groups);
+                        let old = std::mem::replace(node, Node::tabs(Vec::new(), 0));
                         let axis = if matches!(zone, DockSide::Top | DockSide::Bottom) { Axis::Y } else { Axis::X };
                         let (first, second, size) = if matches!(zone, DockSide::Top | DockSide::Start) { (new, old, 0.25) } else { (old, new, 0.75) };
                         *node = Node::Split { axis, size: SplitSize::Ratio(size), first: Box::new(first), second: Box::new(second) };
@@ -657,7 +654,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         let (panels, selected) = flatten(moving.column.groups);
         match place {
             PanelPlace::Node(_) => match self.node_of_mut(place) {
-                Some(Node::Tabs { panels: target, active }) => {
+                Some(Node::Tabs { panels: target, active, .. }) => {
                     splice(target, active, index.unwrap_or(target.len()), panels, selected);
                     Ok(())
                 }
@@ -687,6 +684,14 @@ pub(super) fn leaf_holds<P: PartialEq>(leaf: &Node<P>, panel: &P) -> bool {
 }
 
 /// All panels in order, and the index of the first group's active panel among them.
+/// The tabs node moved groups become: their panels in one group, which keeps its tabs hidden when the one group it
+/// came from had them hidden.
+fn moved_tabs<P>(groups: Vec<Group<P>>) -> Node<P> {
+    let tabs_hidden = matches!(groups.as_slice(), [group] if group.tabs_hidden);
+    let (panels, active) = flatten(groups);
+    Node::Tabs { panels, active, tabs_hidden }
+}
+
 pub(super) fn flatten<P>(groups: Vec<Group<P>>) -> (Vec<P>, usize) {
     let selected = groups.first().map_or(0, |g| g.active.min(g.panels.len().saturating_sub(1)));
     (groups.into_iter().flat_map(|g| g.panels).collect(), selected)

@@ -28,7 +28,7 @@ use std::hash::Hash;
 pub(crate) mod stories;
 
 mod bar;
-mod sizing;
+pub(crate) mod sizing;
 
 use bar::panel_names;
 
