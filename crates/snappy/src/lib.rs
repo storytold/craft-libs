@@ -1,13 +1,27 @@
 //! Snappy raw (unframed) compression, written from the public Snappy format description: a varint
-//! of the uncompressed length, then literal and copy elements. Hap uses it as the second-stage
-//! compressor of its texture data.
+//! of the uncompressed length, then literal and copy elements. Hap video (`craft-video`) uses it as
+//! the second-stage compressor of its texture data.
+//!
+//! - [`decompress`] expands a stream to the length the caller expects, checked before anything
+//!   is allocated; a damaged stream is an error, never a panic.
+//! - [`uncompressed_len`] reads the length a stream declares.
+//! - [`compress`] writes a stream: greedy matching over a hash of four bytes.
 
-use super::Error;
+/// Why a stream couldn't be expanded.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    /// The stream is cut short, or an element in it is out of range.
+    #[error("Snappy data is damaged")]
+    Damaged,
+    /// The stream declares another length than the caller expects.
+    #[error("Snappy data expands to {found} bytes, expected {expected}")]
+    Length { found: u64, expected: usize },
+}
 
 /// Decompress `src`, which must expand to exactly `expected` bytes. The length in the preamble is
 /// checked before anything is allocated, so a hostile stream cannot ask for more than `expected`.
-pub(super) fn decompress(src: &[u8], expected: usize) -> Result<Vec<u8>, Error> {
-    let bad = || Error::Invalid("Snappy data is damaged".into());
+pub fn decompress(src: &[u8], expected: usize) -> Result<Vec<u8>, Error> {
+    let bad = || Error::Damaged;
     // The varint preamble.
     let (mut len, mut shift, mut pos) = (0u64, 0u32, 0usize);
     loop {
@@ -23,7 +37,7 @@ pub(super) fn decompress(src: &[u8], expected: usize) -> Result<Vec<u8>, Error> 
         }
     }
     if len != expected as u64 {
-        return Err(Error::Invalid(format!("Snappy data expands to {len} bytes, expected {expected}")));
+        return Err(Error::Length { found: len, expected });
     }
     let mut out: Vec<u8> = Vec::with_capacity(expected);
     while pos < src.len() {
@@ -82,6 +96,19 @@ pub(super) fn decompress(src: &[u8], expected: usize) -> Result<Vec<u8>, Error> 
     Ok(out)
 }
 
+/// The uncompressed length a Snappy stream declares.
+pub fn uncompressed_len(src: &[u8]) -> Option<usize> {
+    let (mut len, mut shift) = (0u64, 0u32);
+    for &b in src.iter().take(5) {
+        len |= u64::from(b & 0x7F) << shift;
+        if b & 0x80 == 0 {
+            return usize::try_from(len).ok();
+        }
+        shift += 7;
+    }
+    None
+}
+
 fn push_literal(out: &mut Vec<u8>, lit: &[u8]) {
     let mut rest = lit;
     while !rest.is_empty() {
@@ -125,7 +152,7 @@ fn push_copy(out: &mut Vec<u8>, offset: usize, mut len: usize) {
 
 /// Compress `src` into a Snappy stream: greedy matching over a hash of four bytes, offsets up to
 /// 64 KiB.
-pub(super) fn compress(src: &[u8]) -> Vec<u8> {
+pub fn compress(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len() / 2 + 16);
     let mut n = src.len();
     loop {

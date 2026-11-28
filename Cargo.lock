@@ -1918,6 +1918,7 @@ dependencies = [
  "craft-silhouette-studio",
  "craft-sketch",
  "craft-smime",
+ "craft-snappy",
  "craft-sniff",
  "craft-sourcemap",
  "craft-sqlite",
@@ -4195,6 +4196,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-snappy"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-sniff"
 version = "0.1.0"
 
@@ -4783,6 +4791,7 @@ dependencies = [
  "craft-jpeg",
  "craft-media",
  "craft-media-testkit",
+ "craft-snappy",
  "miniz_oxide 0.8.9",
  "rav1e",
  "rayon",

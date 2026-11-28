@@ -22,7 +22,6 @@
 //! is an error, never a panic.
 
 mod dxt;
-mod snappy;
 
 use crate::budget::DECODE_MEMORY_BUDGET;
 
@@ -42,6 +41,12 @@ pub enum Error {
 
 /// `Result` of this module.
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<craft_snappy::Error> for Error {
+    fn from(e: craft_snappy::Error) -> Self {
+        Error::Invalid(e.to_string())
+    }
+}
 
 /// The largest width or height, in pixels.
 pub const MAX_DIMENSION: u32 = 32768;
@@ -171,19 +176,6 @@ const SECTION_OFFSETS: u8 = 0x04;
 const CHUNK_NONE: u8 = 0x0A;
 const CHUNK_SNAPPY: u8 = 0x0B;
 
-/// The uncompressed length a Snappy stream declares.
-fn snappy_len(src: &[u8]) -> Option<usize> {
-    let (mut len, mut shift) = (0u64, 0u32);
-    for &b in src.iter().take(5) {
-        len |= u64::from(b & 0x7F) << shift;
-        if b & 0x80 == 0 {
-            return usize::try_from(len).ok();
-        }
-        shift += 7;
-    }
-    None
-}
-
 /// Decode one texture section holding `expected` bytes of the given format; returns the texture
 /// and the bytes after the section.
 fn decode_section(data: &[u8], width: u32, height: u32) -> Result<(Texture, &[u8])> {
@@ -197,7 +189,7 @@ fn decode_section(data: &[u8], width: u32, height: u32) -> Result<(Texture, &[u8
             }
             payload.to_vec()
         }
-        0xB => snappy::decompress(payload, expected)?,
+        0xB => craft_snappy::decompress(payload, expected)?,
         0xC => decode_chunks(payload, expected)?,
         _ => return Err(Error::Unsupported(format!("second-stage compressor in type {:#04x}", kind))),
     };
@@ -243,11 +235,11 @@ fn decode_chunks(payload: &[u8], expected: usize) -> Result<Vec<u8>> {
                 out.extend_from_slice(chunk);
             }
             CHUNK_SNAPPY => {
-                let n = snappy_len(chunk).ok_or_else(|| bad("damaged Snappy chunk"))?;
+                let n = craft_snappy::uncompressed_len(chunk).ok_or_else(|| bad("damaged Snappy chunk"))?;
                 if out.len() + n > expected {
                     return Err(bad("chunks exceed the texture"));
                 }
-                out.extend_from_slice(&snappy::decompress(chunk, n)?);
+                out.extend_from_slice(&craft_snappy::decompress(chunk, n)?);
             }
             other => return Err(Error::Unsupported(format!("chunk compressor {other:#04x}"))),
         }
@@ -450,7 +442,7 @@ impl Encoder {
         let nibble = t.format.nibble();
         if self.chunks <= 1 {
             if self.snappy {
-                write_section(out, 0xB0 | nibble, &snappy::compress(&t.data));
+                write_section(out, 0xB0 | nibble, &craft_snappy::compress(&t.data));
             } else {
                 write_section(out, 0xA0 | nibble, &t.data);
             }
@@ -464,7 +456,7 @@ impl Encoder {
         for c in 0..n {
             let (from, to) = (c * total_blocks / n * bb, (c + 1) * total_blocks / n * bb);
             let raw = &t.data[from..to];
-            let packed = if self.snappy { Some(snappy::compress(raw)).filter(|p| p.len() < raw.len()) } else { None };
+            let packed = if self.snappy { Some(craft_snappy::compress(raw)).filter(|p| p.len() < raw.len()) } else { None };
             let (kind, body) = packed.as_deref().map_or((CHUNK_NONE, raw), |p| (CHUNK_SNAPPY, p));
             compressors.push(kind);
             sizes.extend_from_slice(&(body.len() as u32).to_le_bytes());
