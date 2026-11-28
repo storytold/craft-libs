@@ -180,6 +180,11 @@ pub struct LayerHeader {
     pub out_relative: Rational,
     /// Bytes 37, 38 and 39 of `ldta`: the switch bits (see the `is_*` methods).
     pub flag_bytes: [u8; 3],
+    /// Preserve Underlying Transparency (the T switch): bit `0x01` of `ldta` byte 103. Observed in
+    /// a project saved by After Effects 2026 on the one layer After Effects reads back with
+    /// `preserveTransparency` true, 0 on every other layer; byte 103 is 0 in every layer of the
+    /// corpus. Off in a header shorter than 104 bytes.
+    pub preserve_transparency: bool,
     /// The id of the source item (`ldta` byte 40), `None` for the values `0` (shape, text, camera)
     /// and `0xffff_ffff` (light).
     pub source_id: Option<u32>,
@@ -230,6 +235,7 @@ impl LayerHeader {
             },
             parent_id: (parent != 0).then_some(parent),
             light_type_code: be_u32(ldta, 136)?,
+            preserve_transparency: ldta.get(103).is_some_and(|b| b & 0x01 != 0),
         })
     }
 
