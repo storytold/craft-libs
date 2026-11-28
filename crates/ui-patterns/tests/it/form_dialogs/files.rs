@@ -2,10 +2,12 @@
 //! answers them.
 
 use craft_host::{AppInfo, Host, PickId, Picked, ScriptedFiles};
+use craft_theme::Size;
 use craft_ui::contract::Bind;
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, FileList, FileListPicker, Param, ParamRows};
 use craft_ui::runtime::requests::ListingRequest;
 use craft_ui::testing::{Fixture, trial};
+use egui::Rect;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -88,4 +90,28 @@ fn a_folder_row_asks_for_its_listing_once_per_folder_and_shows_the_answer() {
     fixture.idle(4);
     assert_eq!(asked.borrow().len(), 1, "later passes ask for nothing");
     assert!(fixture.by_label("dawn.png").is_some() && fixture.by_label("dusk.png").is_some(), "the answered files are listed");
+}
+
+/// In a room shorter than its column of buttons, the picker keeps its list a positive height and shows each button
+/// whole, one under another, inside the picker.
+#[trial]
+fn a_short_room_keeps_the_list_and_buttons_inside_the_picker() {
+    let picker = Rc::new(Cell::new(Rect::NOTHING));
+    let shown = Rc::clone(&picker);
+    let mut list = FileList::default();
+    list.add(paths(&["a.png", "b.png"]));
+    let mut fixture = Fixture::new(move |ui| shown.set(FileListPicker::new("Files to load", Bind::bound(&mut list)).show(ui).response.rect));
+    fixture.density(Size::Comfortable).room(egui::vec2(400.0, 60.0)).settle();
+
+    let picker = picker.get();
+    let files = fixture.by_label("Files").expect("the file list").rect;
+    assert!(files.height() > 0.0, "the list keeps a positive height: {files:?}");
+    assert!(picker.contains_rect(files), "the list stays inside the picker: {files:?} in {picker:?}");
+    let mut above = f32::NEG_INFINITY;
+    for name in ["Browse…", "Remove", "Add Open Files", "Sort By Name"] {
+        let button = fixture.by_label(name).unwrap_or_else(|| panic!("the {name} button")).rect;
+        assert!(button.height() > 0.0 && picker.contains_rect(button), "{name} shows whole inside the picker: {button:?} in {picker:?}");
+        assert!(button.min.y >= above, "{name} stands under the button before it: {button:?}");
+        above = button.max.y;
+    }
 }

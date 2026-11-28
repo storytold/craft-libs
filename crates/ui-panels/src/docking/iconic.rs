@@ -18,7 +18,7 @@ use crate::menu::GroupItem;
 use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::env::{Env, EnvValue, Label, with_env};
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, GlyphRole, RuleKind, StyleColor, StyleCx, SurfaceKind, SurfaceStyle};
+use crate::style::{ComponentStyle, Corners, FocusLook, GlyphRole, RuleKind, StyleColor, StyleCx, SurfaceKind, SurfaceStyle};
 use crate::tabs::PanelTabLook;
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::overlay::Side;
@@ -177,6 +177,9 @@ impl<P: Value + Hash + 'static> Outcome for IconicColumnOutput<P> {
 pub struct IconicColumnStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the chevron, the icon cell or the edge divider that has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     sizes: IconicSizes,
     /// The ink of a panel's name in a wide column.
     name: StyleColor,
@@ -550,6 +553,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         let colors = &cx.tokens.color;
         IconicColumnStyle {
             metrics: Metrics::new(),
+            focus: cx.focus_look(),
             sizes: IconicSizes::style(cx),
             name: cx.color(colors.text.normal),
             name_open: cx.color(colors.accent.text),

@@ -60,6 +60,8 @@ struct Config {
     f32_host: bool,
     centre_mark: bool,
     round_handles: bool,
+    /// The host's handle side, `None` for the theme's.
+    handle_side: Option<f32>,
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
@@ -119,6 +121,7 @@ fn defaults() -> Config {
         f32_host: false,
         centre_mark: false,
         round_handles: false,
+        handle_side: None,
         line: None,
         targets: Vec::new(),
         suspend: SnapSuspend::Control,
@@ -217,6 +220,9 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             }
             if let Some(line) = config.line {
                 control = control.line(line);
+            }
+            if let Some(side) = config.handle_side {
+                control = control.handle_side(side);
             }
             control = control.reach(config.reach).session_commit(config.session_commit);
             if config.hover_frame {
@@ -1648,4 +1654,84 @@ fn round_handles_are_circles() {
     };
     // Each handle is a filled circle and its stroke.
     assert_eq!(circles(true), circles(false) + 16, "the four corners and four sides are circles");
+}
+
+/// A host's handle side draws the corner and side handles at that side: a larger side draws a larger square.
+#[trial]
+fn a_host_handle_side_sets_the_drawn_handle_square() {
+    let corner_side = |side: Option<f32>| {
+        let mut h = harness(BoxState::from_rect(RECT), |config| config.handle_side = side);
+        let corner = h.screen(Point::new(RECT.x1, RECT.y1));
+        let sides: Vec<f32> = h
+            .fixture
+            .frame_shapes()
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Rect(square) if (square.rect.center() - corner).length() < 0.5 => Some(square.rect.width()),
+                _ => None,
+            })
+            .collect();
+        sides.into_iter().fold(0.0, f32::max)
+    };
+    let (small, large) = (corner_side(Some(4.0)), corner_side(Some(12.0)));
+    assert!(small > 0.0, "the corner handle is drawn as a square");
+    assert!(large > small, "a larger side draws a larger square: {large} against {small}");
+}
+
+/// A host handle side that is zero, negative or not finite draws the theme's handle and keeps the theme's reach.
+#[trial]
+fn an_unusable_host_handle_side_uses_the_themes() {
+    let corner_side = |side: Option<f32>| {
+        let mut h = harness(BoxState::from_rect(RECT), |config| config.handle_side = side);
+        let corner = h.screen(Point::new(RECT.x1, RECT.y1));
+        h.fixture
+            .frame_shapes()
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Rect(square) if (square.rect.center() - corner).length() < 0.5 => Some(square.rect.width()),
+                _ => None,
+            })
+            .collect::<Vec<f32>>()
+    };
+    let theme = corner_side(None);
+    assert!(!theme.is_empty(), "the theme's corner handle is drawn");
+    // 3 points in from the bottom right corner on both axes: inside the theme's handle reach.
+    let near = Point::new(RECT.x1 - 3.0, RECT.y1 - 3.0);
+    for side in [0.0, -6.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(corner_side(Some(side)), theme, "a side of {side} draws the theme's corner handle");
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.rules = free_rules();
+            config.handle_side = Some(side);
+        });
+        hover(&mut h, near);
+        assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(2)), "a side of {side} keeps the theme's reach");
+        // Far outside the theme's reach: an infinite side must not widen the reach to the whole canvas.
+        let mut far = harness(BoxState::from_rect(RECT), |config| {
+            config.rules = free_rules();
+            config.handle_side = Some(side);
+        });
+        hover(&mut far, Point::new(RECT.x1 + 60.0, RECT.y1 + 60.0));
+        assert_ne!(far.host.borrow().hovered, Some(BoxPart::Corner(2)), "a side of {side} does not widen the reach");
+    }
+}
+
+/// A large host handle takes a press anywhere on its square, also past the theme's reach, and the press drags it.
+#[trial]
+fn a_press_just_inside_a_large_handles_edge_grabs_it() {
+    // 7 points in from the bottom right corner on both axes: inside a 16 point square, about 9.9 from its centre.
+    let near_edge = Point::new(RECT.x1 - 7.0, RECT.y1 - 7.0);
+    let mut theme = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
+    hover(&mut theme, near_edge);
+    assert_ne!(theme.host.borrow().hovered, Some(BoxPart::Corner(2)), "past the theme's handle reach");
+
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.rules = free_rules();
+        config.handle_side = Some(16.0);
+    });
+    hover(&mut h, near_edge);
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(2)), "on the large handle's square");
+    drag(&mut h, near_edge, Point::new(RECT.x1 + 13.0, RECT.y1 + 13.0));
+    let quad = h.state().quad;
+    assert!(quad[2].x > RECT.x1 + 1.0 && quad[2].y > RECT.y1 + 1.0, "the corner moved with the drag: {quad:?}");
+    assert_eq!(quad[0], Point::new(RECT.x0, RECT.y0), "the opposite corner stayed: {quad:?}");
 }

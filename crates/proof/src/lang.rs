@@ -70,6 +70,15 @@ pub enum ProofLang {
     /// dictionary (else the neighbouring Rioplatense `es_AR`, a Latin American or a generic one),
     /// and the `vos` forms of verbs (`tenés`, `vení`, `decime`) accepted ([`crate::es::voseo`]).
     EsUy,
+    /// Gujarati (`gu`, `gu-IN`, `guj`): the installed Hunspell dictionary (`gu_IN`, when there is
+    /// one), dictionary-driven suggestions and generic checks with Gujarati messages.
+    /// Hyphenation breaks between aksharas ([`crate::indic`]), or follows a `gu` pack's patterns.
+    Gu,
+    /// Hindi (`hi`, `hi-IN`, `hin`): the installed Hunspell dictionary (`hi_IN`, when there is
+    /// one), dictionary-driven suggestions and generic checks with Hindi messages
+    /// ([`crate::hi`]). Hyphenation breaks between aksharas ([`crate::indic`]), or follows a `hi`
+    /// pack's patterns.
+    Hi,
     /// German (`de`, `de-DE`, `de-AT`…; `de-CH` and `de-LI` are [`ProofLang::Pack`] `de-ch`, with
     /// their own dictionary and these patterns): hyphenation by the German patterns (reformed
     /// spelling), and spelling when a German Hunspell dictionary or `de` pack is found. No grammar
@@ -90,7 +99,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 16] = [
+    pub const PROOFED: [ProofLang; 18] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnAu,
@@ -107,6 +116,8 @@ impl ProofLang {
         ProofLang::EsMx,
         ProofLang::Es419,
         ProofLang::EsUy,
+        ProofLang::Gu,
+        ProofLang::Hi,
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
@@ -142,6 +153,10 @@ impl ProofLang {
             ProofLang::Cs
         } else if primary.eq_ignore_ascii_case("id") || primary.eq_ignore_ascii_case("ind") || primary.eq_ignore_ascii_case("in") {
             ProofLang::Id
+        } else if primary.eq_ignore_ascii_case("gu") || primary.eq_ignore_ascii_case("guj") {
+            ProofLang::Gu
+        } else if primary.eq_ignore_ascii_case("hi") || primary.eq_ignore_ascii_case("hin") {
+            ProofLang::Hi
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
@@ -225,6 +240,8 @@ impl ProofLang {
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
             ProofLang::Id => "id",
+            ProofLang::Gu => "gu",
+            ProofLang::Hi => "hi",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
             ProofLang::Other => "",

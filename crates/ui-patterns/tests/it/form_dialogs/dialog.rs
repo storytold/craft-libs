@@ -933,8 +933,13 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     let mut fixture = host_fixture(&host, &twice);
     host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "light", DialogFields::new(), light));
     fixture.idle(6);
+    // The number field named `label`: a range row's slider, before it on the line, carries the same name.
     let enter = |fixture: &mut Fixture, label: &str, text: &str| {
-        let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
+        let field = fixture
+            .by_role(Role::SPIN_BUTTON)
+            .into_iter()
+            .find(|target| fixture.tree().name_of(target.node) == Some(label))
+            .unwrap_or_else(|| panic!("the {label} field"));
         fixture.click(&field).settle();
         fixture.key(Key::A, Modifiers::COMMAND).type_text(text);
         fixture.key(Key::Tab, Modifiers::NONE).settle();
@@ -1134,6 +1139,88 @@ fn a_footer_row_flips_its_value_and_automation_sets_it() {
     assert!(!ParamDialog::remembered(&footer_params(), &fields).contains("grid"), "the footer key is not remembered");
 }
 
+#[trial]
+fn a_footer_toggle_takes_input_only_while_all_its_conditions_hold() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    fn build(fields: &mut DialogFields) -> ParamDialog<'_> {
+        let rows = vec![
+            Param::new("custom", "Custom", ParamKind::bool(false)),
+            Param::new("advanced", "Advanced", ParamKind::bool(false)),
+            Param::new("grid", "Show Grid", ParamKind::bool(false))
+                .enabled_when("custom", true)
+                .and_enabled_when_in("advanced", [true])
+                .in_footer("Hide Grid"),
+        ];
+        ParamDialog::new("conditional-grid", "Grid", rows).values(Bind::bound(fields))
+    }
+    let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "conditional-grid", DialogFields::new(), build));
+    let grid = || on_dialog(&host, |dialog| dialog.fields().bool("grid")).flatten();
+    fixture.idle(6);
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "custom", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button stays visible");
+    assert!(fixture.tree().is_disabled_key(button.node));
+    fixture.click(&button).idle(6);
+    assert_ne!(grid(), Some(true), "a disabled footer button does not flip the value");
+    assert!(host.borrow_mut().set_json_field(&ctx, id, "grid", json!(true)).is_err());
+
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button");
+    assert!(!fixture.tree().is_disabled_key(button.node));
+    fixture.press(&button).release(&button);
+    assert_ne!(grid(), Some(true), "the flip waits for the next pass");
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(false)), Ok(()));
+    fixture.idle(6);
+    assert_ne!(grid(), Some(true), "a queued flip is dropped once its condition no longer holds");
+
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button is enabled again");
+    fixture.click(&button).idle(6);
+    assert_eq!(grid(), Some(true));
+    assert!(fixture.by_label("Hide Grid").is_some());
+}
+
+#[trial]
+fn a_queued_footer_press_follows_its_dialog_when_the_stack_changes() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    let lower = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("lower"));
+    let top = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("top"));
+    fixture.idle(6);
+    let top_button = fixture.by_label("Show Grid").expect("the top dialog's toggle");
+    fixture.press(&top_button).release(&top_button);
+    assert!(host.borrow_mut().cancel_by_id(&ctx, lower));
+    let new = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("new"));
+    fixture.idle(6);
+    let grid = |id| host.borrow().get_by_id::<HostedParamDialog>(id).and_then(|dialog| dialog.fields().bool("grid"));
+    assert_eq!(grid(top), Some(true), "the press follows the original dialog");
+    assert_eq!(grid(new), Some(false), "the new dialog does not inherit the press");
+}
+
+#[trial]
+fn a_replacement_footer_button_keeps_its_own_enablement() {
+    let mut fixture = Fixture::new(|ui| {
+        ParamDialog::new("custom-footer", "Custom Footer", footer_params())
+            .shaped(|dialog| {
+                dialog.buttons([
+                    FooterButton::new("OK", DialogRole::Accept),
+                    FooterButton::new("Cancel", DialogRole::Cancel),
+                    FooterButton::new("Unavailable", DialogRole::Other).enabled(false),
+                ])
+            })
+            .show(ui);
+    });
+    fixture.settle();
+    let replacement = fixture.by_label("Unavailable").expect("the caller's replacement button");
+    assert!(fixture.tree().is_disabled_key(replacement.node));
+    assert!(fixture.by_label("Show Grid").is_none());
+}
+
 // The presets row lists the presets; a pick writes the preset's values as one edit, and a value edited after it
 // leaves the values matching no preset.
 #[trial]
@@ -1249,32 +1336,39 @@ fn escape_in_a_text_field_closes_the_form_dialog_typed_or_not() {
     }
 }
 
-/// A modeless form keeps its other edits when Escape cancels an active text edit.
+/// A modeless form keeps its other edits when Escape cancels an active text edit. The field keeps the focus through
+/// that Escape, also where Escape otherwise takes a field's focus (`escape_leaves_fields`), so the next Escape closes
+/// the window.
 #[trial]
 fn escape_in_a_modeless_form_restores_the_field_before_closing() {
-    let open = Rc::new(Cell::new(true));
-    let value = Rc::new(RefCell::new(String::from("Original")));
-    let (shown, text) = (Rc::clone(&open), Rc::clone(&value));
-    let mut fixture = Fixture::new(move |ui| {
-        let mut is_open = shown.get();
-        let mut text = text.borrow_mut();
-        craft_ui::patterns::form_dialogs::FormDialog::new("Tool", Bind::bound(&mut *text))
-            .opened(Bind::bound(&mut is_open))
-            .shaped(|dialog| dialog.modeless())
-            .show(ui, |ui, _, text| {
-                craft_ui::text::TextField::new("Name", Bind::bound(text)).show(ui);
-                true
-            });
-        shown.set(is_open);
-    });
-    fixture.idle(10);
-    let field = fixture.by_label("Name").expect("the field is shown");
-    fixture.click(&field).idle(2);
-    fixture.type_text("x").idle(2);
-    assert_ne!(&*value.borrow(), "Original", "typing changed the value");
-    fixture.key(Key::Escape, Modifiers::NONE).idle(2);
-    assert!(open.get(), "the first Escape leaves the window open");
-    assert_eq!(&*value.borrow(), "Original", "the field's edit is restored");
-    fixture.key(Key::Escape, Modifiers::NONE).idle(6);
-    assert!(!open.get(), "the second Escape closes the window");
+    for leaves in [false, true] {
+        let open = Rc::new(Cell::new(true));
+        let value = Rc::new(RefCell::new(String::from("Original")));
+        let (shown, text) = (Rc::clone(&open), Rc::clone(&value));
+        let mut fixture = Fixture::new(move |ui| {
+            let mut is_open = shown.get();
+            let mut text = text.borrow_mut();
+            craft_ui::patterns::form_dialogs::FormDialog::new("Tool", Bind::bound(&mut *text))
+                .opened(Bind::bound(&mut is_open))
+                .shaped(|dialog| dialog.modeless())
+                .show(ui, |ui, _, text| {
+                    craft_ui::text::TextField::new("Name", Bind::bound(text)).show(ui);
+                    true
+                });
+            shown.set(is_open);
+        });
+        let mut root = craft_ui::runtime::env::RootEnv::new();
+        root.escape_leaves_fields = leaves;
+        fixture.root(root).idle(10);
+        let field = fixture.by_label("Name").expect("the field is shown");
+        fixture.click(&field).idle(2);
+        fixture.type_text("x").idle(2);
+        assert_ne!(&*value.borrow(), "Original", "leaves {leaves}: typing changed the value");
+        fixture.key(Key::Escape, Modifiers::NONE).idle(2);
+        assert!(open.get(), "leaves {leaves}: the first Escape leaves the window open");
+        assert_eq!(&*value.borrow(), "Original", "leaves {leaves}: the field's edit is restored");
+        assert!(fixture.focused().is_some(), "leaves {leaves}: the field keeps the focus");
+        fixture.key(Key::Escape, Modifiers::NONE).idle(6);
+        assert!(!open.get(), "leaves {leaves}: the second Escape closes the window");
+    }
 }

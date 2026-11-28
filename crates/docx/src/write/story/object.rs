@@ -1,7 +1,7 @@
-use super::drawing::{DrawingInfo, shape_name, spin_attrs, write_fill, xfrm_spin_only};
+use super::drawing::{DrawingInfo, MemberInfo, nv_props, shape_name, spin_attrs, write_fill, xfrm_spin_only};
 use super::field::{FieldData, field_run};
 use super::section::comment_reference_style;
-use super::{Anchor, CharProps, Fill, Float, InlineObject, NoteKind, PartRels, ShapeKind, TextColor, W, Wrap, Writer, emu, n, rpr};
+use super::{Anchor, CharProps, Fill, Float, InlineObject, MAX_DEPTH, NoteKind, PartRels, ShapeKind, TextColor, W, Wrap, Writer, emu, n, rpr, rt};
 
 impl Writer<'_> {
     /// Write an inline object (`Bookmark`, `Comment`, `Equation`, `Field`, `Shape`, etc.).
@@ -284,7 +284,7 @@ impl Writer<'_> {
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")]);
-        self.pic(w, o, &file, (0.0, 0.0), rels);
+        self.pic(w, o, &file, MemberInfo { id: None, off: (0.0, 0.0), link: None }, rels);
         w.close("a:graphicData");
         w.close("a:graphic");
         w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
@@ -404,7 +404,7 @@ impl Writer<'_> {
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
-        let content = self.wsp(w, o, None, (0.0, 0.0), rels, depth);
+        let content = self.wsp(w, o, MemberInfo { id: None, off: (0.0, 0.0), link: None }, rels, depth);
         w.close("a:graphicData");
         w.close("a:graphic");
         w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
@@ -605,30 +605,8 @@ impl Writer<'_> {
                 "wpg:wgp"
             }
         };
-        for c in children.iter().take(craft_wordmodel::para::MAX_GROUP_CHILDREN) {
-            let at = (c.x, c.y);
-            match &c.obj {
-                InlineObject::Image { media, .. } => {
-                    if let Some(file) = self.media_files.get(media).cloned() {
-                        self.pic(w, &c.obj, &file, at, rels);
-                    }
-                }
-                InlineObject::Shape { extra, .. } => {
-                    let id = self.shape_docpr(extra.id);
-                    self.wsp(w, &c.obj, Some(&id), at, rels, depth);
-                }
-                // Native ink kept from the file, with its fallback, at the member's place.
-                InlineObject::Graphic { w: iw, h: ih, float, graphic, .. } if graphic.kind == craft_wordmodel::graphic::GraphicKind::Ink => {
-                    if let Some(src) = graphic.source.as_deref()
-                        && let Some(mut root) = self.embedded_tree(src, rels, None)
-                    {
-                        Self::place_member(&mut root, [c.x, c.y, *iw, *ih], float, 0);
-                        w.raw(&root.to_xml());
-                    }
-                }
-                _ => {}
-            }
-        }
+        let mut remaining = craft_wordmodel::para::MAX_GROUP_CHILDREN;
+        self.write_group_members(w, children, rels, depth, &mut remaining);
         if canvas.is_some() && float.spin() != craft_wordmodel::geom::Spin::default() {
             // The canvas schema has no transform of its own: keep its turn in our
             // extension (Word draws it unturned, as it can't turn a canvas).
@@ -646,6 +624,84 @@ impl Writer<'_> {
         w.close("w:r");
         self.rev_close(w, props);
     }
+    /// Members share one finite budget across the whole recursive group, not one per level.
+    fn write_group_members(
+        &mut self,
+        w: &mut W,
+        children: &[craft_wordmodel::para::GroupChild],
+        rels: &mut PartRels,
+        depth: usize,
+        remaining: &mut usize,
+    ) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for c in children {
+            if *remaining == 0 {
+                break;
+            }
+            *remaining -= 1;
+            let at = (c.x, c.y);
+            match &c.obj {
+                InlineObject::Image { media, .. } => {
+                    if let Some(file) = self.media_files.get(media).cloned() {
+                        let id = self.next_docpr();
+                        let link = member_link(c.link.as_deref(), rels);
+                        self.pic(w, &c.obj, &file, MemberInfo { id: Some(&id), off: at, link: link.as_deref() }, rels);
+                    }
+                }
+                InlineObject::Shape { extra, .. } => {
+                    let id = self.shape_docpr(extra.id);
+                    let link = member_link(c.link.as_deref(), rels);
+                    self.wsp(w, &c.obj, MemberInfo { id: Some(&id), off: at, link: link.as_deref() }, rels, depth);
+                }
+                InlineObject::Group { .. } if depth < MAX_DEPTH => {
+                    let id = self.next_docpr();
+                    let link = member_link(c.link.as_deref(), rels);
+                    self.write_inner_group(w, &c.obj, MemberInfo { id: Some(&id), off: at, link: link.as_deref() }, rels, depth + 1, remaining);
+                }
+                // Native ink kept from the file, with its fallback, at the member's place.
+                InlineObject::Graphic { w: iw, h: ih, float, graphic, .. } if graphic.kind == craft_wordmodel::graphic::GraphicKind::Ink => {
+                    if let Some(src) = graphic.source.as_deref()
+                        && let Some(mut root) = self.embedded_tree(src, rels, None)
+                    {
+                        Self::place_member(&mut root, [c.x, c.y, *iw, *ih], float, 0);
+                        w.raw(&root.to_xml());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A nested group is an inner `wpg:grpSp`, never another run or drawing anchor.
+    fn write_inner_group(&mut self, w: &mut W, o: &InlineObject, member: MemberInfo<'_>, rels: &mut PartRels, depth: usize, remaining: &mut usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children, .. } = o else { return };
+        let id = member.id.unwrap_or("0");
+        let name = format!("Group {id}");
+        w.open("wpg:grpSp", &[]);
+        nv_props(w, "wpg:cNvPr", (id, &name), o.alt_text(), &float.alt, float.hidden, member.link);
+        w.empty("wpg:cNvGrpSpPr", &[]);
+        w.open("wpg:grpSpPr", &[]);
+        w.open("a:xfrm", &spin_attrs(float.spin()).iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+        w.empty("a:off", &[("x", &emu(member.off.0)), ("y", &emu(member.off.1))]);
+        w.empty("a:ext", &[("cx", &emu(gw.max(0.0))), ("cy", &emu(gh.max(0.0)))]);
+        w.empty("a:chOff", &[("x", "0"), ("y", "0")]);
+        w.empty("a:chExt", &[("cx", &emu(ch_w.max(0.0))), ("cy", &emu(ch_h.max(0.0)))]);
+        w.close("a:xfrm");
+        w.close("wpg:grpSpPr");
+        self.write_group_members(w, children, rels, depth, remaining);
+        w.close("wpg:grpSp");
+    }
+}
+
+/// Group members have no enclosing run, so even a literal `#name` needs its own
+/// external hyperlink relationship. Top-level drawings retain `drawing_link`'s policy.
+fn member_link(target: Option<&str>, rels: &mut PartRels) -> Option<String> {
+    target.filter(|url| !url.is_empty()).map(|url| rels.add(rt::HYPERLINK, url, true))
 }
 
 /// The VML element that draws a shape kind, for the kinds VML has one for.

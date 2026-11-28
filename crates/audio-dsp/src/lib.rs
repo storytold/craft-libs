@@ -171,8 +171,10 @@ pub trait AudioEffect: Send {
     /// Parameter descriptions (same as the registry entry's).
     fn params(&self) -> &'static [ParamSpec];
     /// Set a parameter by id; the value is clamped to its range. Returns `false` for unknown ids.
-    /// Takes effect from the next processed sample. Gains, mix amounts and equalizer bands move to
-    /// the new value smoothly; the crate documentation lists which other parameters change at once.
+    /// Updates the target immediately. Sample-based effects use the target from the next processed
+    /// sample. Frame-based effects may apply it at the next frame callback while earlier output
+    /// remains queued. Gains, mix amounts and equalizer bands move to the new value smoothly; the
+    /// crate documentation lists which other parameters change at once.
     fn set_param(&mut self, id: &str, value: f32) -> bool;
     /// Current (target) value of a parameter.
     fn param(&self, id: &str) -> Option<f32>;
@@ -182,7 +184,11 @@ pub trait AudioEffect: Send {
     /// Process one block in place. All channel slices must have the same length (the shortest
     /// length is used otherwise). Zero-length blocks are allowed.
     fn process(&mut self, channels: &mut [&mut [f32]]);
-    /// Processing latency in samples (look-ahead / STFT delay) for delay compensation.
+    /// Processing latency in samples (look-ahead / STFT delay) for delay compensation. It does
+    /// not change with the parameters, except for `voice_pitch`'s `formant_follow` (Keep
+    /// Formants), which adds the formant stage's latency while it is on. The value changes as
+    /// soon as the switch changes, while the output crossfades between the two delays over the
+    /// next 20 ms, so during that fade the output does not match the reported latency.
     fn latency(&self) -> usize {
         0
     }
@@ -197,7 +203,9 @@ pub trait AudioEffect: Send {
         None
     }
     /// How long the output keeps sounding after the input stops, in samples (reverb and delay
-    /// tails), so an offline render can run past the end of its input.
+    /// tails), so an offline render can run past the end of its input. The count starts after
+    /// the latency: a render that keeps all of the output runs `latency() + tail_samples()`
+    /// samples past the end of its input.
     fn tail_samples(&self) -> usize {
         0
     }
