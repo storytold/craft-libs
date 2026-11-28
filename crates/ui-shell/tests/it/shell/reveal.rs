@@ -198,7 +198,7 @@ fn chrome_state_reads_the_hiding_the_shell_left_and_show_panels_ends_it() {
     assert!(!seen.panels_hidden);
 
     let seen = tabbed(&mut windows, &mut mode);
-    assert_eq!(state(&windows), (true, false, None), "Tab hid the chrome");
+    assert_eq!(state(&windows), (false, false, None), "Tab hid the chrome in standard mode: the window's own hiding, not the body-only one");
     assert!(!seen.panels_hidden && !seen.revealed);
     tabbed(&mut windows, &mut mode);
     assert_eq!(state(&windows), (false, false, None), "Tab showed it");
@@ -228,4 +228,124 @@ fn chrome_state_reads_the_hiding_the_shell_left_and_show_panels_ends_it() {
         ChromeState::default(),
         "a viewport with no shell reads the default"
     );
+}
+
+/// What one pass of a full document window's shell showed: the slots it laid out, whether the shell put the
+/// window into its body-only hiding, and whether the body saw the chrome hiding.
+struct WindowSeen {
+    slots: Vec<&'static str>,
+    hidden: bool,
+    bars: bool,
+    body_sees_bars: bool,
+}
+
+/// One frame of a document window's shell: a title bar under the host's menu-bar flag, an options bar, a status
+/// bar and a tool rail, with a document canvas in the body and nothing focused, so Tab reaches the shell.
+fn window_pass(windows: &mut Frames, mode: &mut ScreenMode, events: Vec<Event>) -> WindowSeen {
+    let ctx = windows.ctx.clone();
+    let mut seen = WindowSeen { slots: Vec::new(), hidden: false, bars: false, body_sees_bars: false };
+    windows.frame(events, |ui| {
+        let mut body_sees_bars = false;
+        let out = AppShell::new(WindowKey::main())
+            .screen_mode(Bind::bound(&mut *mode))
+            .title_bar_if(
+                true,
+                |_| Some(0),
+                |ui, _, _: &mut ()| {
+                    Text::new("Title").show(ui);
+                },
+            )
+            .options_bar(
+                true,
+                |_| Some(0),
+                |ui, _, _: &mut ()| {
+                    Text::new("Options").show(ui);
+                },
+            )
+            .status(
+                true,
+                |_| Some(0),
+                |ui, _, _: &mut ()| {
+                    Text::new("Status").show(ui);
+                },
+            )
+            .start(
+                Slot::new("tools").reveal(),
+                |_| Some(0),
+                |ui, _, _: &mut ()| {
+                    Text::new("Tools").show(ui);
+                },
+            )
+            .body(|ui, cx, _| {
+                body_sees_bars = cx.shell().is_some_and(|shell| shell.chrome_hidden());
+                let canvas = ui.scope_id().with("document");
+                ui.interact(ui.max_rect(), canvas, Sense::click());
+                host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+            })
+            .show(ui, &mut ());
+        let state = chrome_state(&ctx, ViewportId::ROOT);
+        seen = WindowSeen {
+            slots: out.regions.slots.iter().map(|(key, _)| *key).collect(),
+            hidden: state.hidden,
+            bars: state.chrome_hidden,
+            body_sees_bars,
+        };
+    });
+    seen
+}
+
+fn window_settled(windows: &mut Frames, mode: &mut ScreenMode) -> WindowSeen {
+    (0..3).map(|_| window_pass(windows, mode, vec![])).last().expect("three passes")
+}
+
+fn window_tabbed(windows: &mut Frames, mode: &mut ScreenMode) -> WindowSeen {
+    let key = |pressed| Event::Key { key: Key::Tab, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    window_pass(windows, mode, vec![key(true)]);
+    window_pass(windows, mode, vec![key(false)]);
+    window_settled(windows, mode)
+}
+
+#[trial]
+fn tab_in_standard_hides_the_options_bar_and_rail_and_keeps_the_title_and_status() {
+    let mut windows = window();
+    let mut mode = ScreenMode::Standard;
+    let settled = window_settled(&mut windows, &mut mode);
+    assert_eq!(settled.slots, ["title", "options", "status", "tools"], "the document window shows its bars and its rail");
+    assert!(!settled.bars && !settled.body_sees_bars, "nothing is hidden");
+    let seen = window_tabbed(&mut windows, &mut mode);
+    assert_eq!(seen.slots, ["title", "status"], "Tab hides the options bar and the rail and keeps the title bar and the status bar");
+    assert!(!seen.hidden, "the window does not become body-only: its own chrome stays");
+    assert!(seen.bars && seen.body_sees_bars, "the pass and its body read the chrome hiding, so a body with panels hides them too");
+    let seen = window_tabbed(&mut windows, &mut mode);
+    assert_eq!(seen.slots, ["title", "options", "status", "tools"], "Tab again shows what it hid");
+    assert!(!seen.hidden && !seen.bars && !seen.body_sees_bars, "and the window is a normal window again");
+    window_tabbed(&mut windows, &mut mode);
+    command(&windows, ChromeToggle::Reveal(Some(RevealEdge::Top)));
+    assert_eq!(
+        window_settled(&mut windows, &mut mode).slots,
+        ["title", "options", "status"],
+        "an edge reveal shows the hidden bar over the body, as it does today"
+    );
+    command(&windows, ChromeToggle::Reveal(None));
+    window_settled(&mut windows, &mut mode);
+    command(&windows, ChromeToggle::PanelsKeepTools);
+    let seen = window_settled(&mut windows, &mut mode);
+    assert_eq!(seen.slots, ["title", "status"], "Shift+Tab refuses while the bars are hidden, as it does while the window is body-only");
+    assert!(seen.bars && !seen.hidden, "and stays in the chrome hiding, not the window's own one");
+    command(&windows, ChromeToggle::ShowPanels);
+    let seen = window_settled(&mut windows, &mut mode);
+    assert_eq!(seen.slots, ["title", "options", "status", "tools"], "ShowPanels ends the chrome hiding too");
+    assert!(!seen.bars && !seen.hidden, "and no hiding is left");
+}
+
+#[trial]
+fn tab_in_full_screen_with_menu_bar_hides_every_slot_as_before() {
+    let mut windows = window();
+    let mut mode = ScreenMode::FullScreenWithMenuBar;
+    assert_eq!(window_settled(&mut windows, &mut mode).slots, ["title", "options", "status", "tools"], "the mode keeps the bars and the rail");
+    let seen = window_tabbed(&mut windows, &mut mode);
+    assert!(seen.slots.is_empty(), "Tab there hides every slot, the title bar included, as it does today");
+    assert!(seen.hidden, "the window behaves as body-only");
+    let seen = window_tabbed(&mut windows, &mut mode);
+    assert_eq!(seen.slots, ["title", "options", "status", "tools"], "Tab again shows them");
 }

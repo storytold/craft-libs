@@ -13,12 +13,15 @@ pub(crate) const EDGE_REVEAL_STRIP: f32 = 8.0;
 ///
 /// - `hidden`: the user hid every panel, tool and bar in normal mode (Tab); the window then behaves as in body-only
 ///   mode, and Tab shows them again.
+/// - `chrome`: in standard screen mode the user hid the editor's chrome (Tab): the bars and rails built to hide with it
+///   go, the title and status slots stay, and Tab shows them again. The window does not become body-only.
 /// - `panels_hidden`: the panels are hidden and the tools and bars stay (Shift+Tab).
 /// - `tab`: in body-only mode, Tab shows the slots built to reveal until the next Tab.
 /// - `edges`: in body-only mode the pointer at the top, start or end edge shows the slots of that edge.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Reveal {
     hidden: bool,
+    chrome: bool,
     panels_hidden: bool,
     tab: bool,
     edges: [bool; 3],
@@ -78,14 +81,15 @@ const EDGES: [RevealEdge; 3] = [RevealEdge::Top, RevealEdge::Start, RevealEdge::
 
 impl Reveal {
     /// Applies the toggles the window's shell took from the frame state in this pass. `host_only` says the screen mode
-    /// shows the body only; `allow_reveal` is off for a presentation.
-    pub(crate) fn apply(&mut self, toggles: &[ChromeToggle], host_only: bool, allow_reveal: bool) {
+    /// shows the body only; `allow_reveal` is off for a presentation; `standard` says the screen mode is Standard,
+    /// where Tab hides the editor's chrome bars and rails while the window keeps its title and status slots.
+    pub(crate) fn apply(&mut self, toggles: &[ChromeToggle], host_only: bool, allow_reveal: bool, standard: bool) {
         for toggle in toggles {
-            self.toggle(*toggle, host_only, allow_reveal);
+            self.toggle(*toggle, host_only, allow_reveal, standard);
         }
     }
 
-    fn toggle(&mut self, toggle: ChromeToggle, host_only: bool, allow_reveal: bool) {
+    fn toggle(&mut self, toggle: ChromeToggle, host_only: bool, allow_reveal: bool, standard: bool) {
         match toggle {
             ChromeToggle::Panels if host_only => {
                 if allow_reveal {
@@ -96,20 +100,26 @@ impl Reveal {
                     }
                 }
             }
+            ChromeToggle::Panels if standard => {
+                self.chrome = !(self.chrome || self.panels_hidden);
+                self.panels_hidden = false;
+                self.end_reveal();
+            }
             ChromeToggle::Panels => {
                 self.hidden = !(self.hidden || self.panels_hidden);
                 self.panels_hidden = false;
                 self.end_reveal();
             }
-            ChromeToggle::PanelsKeepTools if !host_only && !self.hidden => self.panels_hidden = !self.panels_hidden,
+            ChromeToggle::PanelsKeepTools if !host_only && !(self.hidden || self.chrome) => self.panels_hidden = !self.panels_hidden,
             ChromeToggle::ShowPanels => {
-                if self.hidden || self.panels_hidden {
+                if self.hidden || self.chrome || self.panels_hidden {
                     self.hidden = false;
+                    self.chrome = false;
                     self.panels_hidden = false;
                     self.end_reveal();
                 }
             }
-            ChromeToggle::Reveal(Some(edge)) if allow_reveal && !self.tab && (self.only(host_only) || self.panels_hidden()) => {
+            ChromeToggle::Reveal(Some(edge)) if allow_reveal && !self.tab && (self.only(host_only) || self.chrome || self.panels_hidden()) => {
                 self.edges = [false; 3];
                 self.edges[at(edge)] = true;
                 self.pinned = Some((edge, None));
@@ -125,6 +135,7 @@ impl Reveal {
     /// Ends the Tab and edge reveal and the user's hiding: every screen-mode change does.
     pub(crate) fn clear(&mut self) {
         self.hidden = false;
+        self.chrome = false;
         self.panels_hidden = false;
         self.end_reveal();
     }
@@ -153,6 +164,12 @@ impl Reveal {
     /// Whether the user hid every panel, tool and bar.
     pub(crate) fn hidden(&self) -> bool {
         self.hidden
+    }
+
+    /// Whether the user hid the editor's chrome bars and rails with Tab in standard screen mode; the window's title
+    /// and status slots, and everything of the body that is not a bar, stay.
+    pub(crate) fn chrome_hidden(&self) -> bool {
+        self.chrome
     }
 
     /// The edge whose reveal is on, when one is.
