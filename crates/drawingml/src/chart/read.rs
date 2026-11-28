@@ -668,11 +668,8 @@ fn read_axes<'a>(
                 };
                 let reciprocal = if version >= 4 {
                     let value_id = val_ax.and_then(|a| a.child(Local("axId"))).and_then(|a| a.attr_local("val"));
-                    pa.elements().find(|a| {
-                        eligible(a)
-                            && value_id.is_some()
-                            && a.child(Local("crossAx")).and_then(|c| c.attr_local("val")) == value_id
-                    })
+                    pa.elements()
+                        .find(|a| eligible(a) && value_id.is_some() && a.child(Local("crossAx")).and_then(|c| c.attr_local("val")) == value_id)
                 } else {
                     None
                 };
@@ -2015,12 +2012,22 @@ mod tests {
             assert_eq!(review_written_ids(&default_written), review_written_ids(&written));
             let default_back = read_chart_xml(&default_written).unwrap();
             assert_eq!(default_back.series[0].refs.values.as_deref(), Some("Sheet1!$B$2:$B$2"));
-            assert!(back.series[0].refs.name.is_none() && back.series[0].refs.values.is_none(), "new literal series do not guess a column in a mixed workbook layout");
+            assert!(
+                back.series[0].refs.name.is_none() && back.series[0].refs.values.is_none(),
+                "new literal series do not guess a column in a mixed workbook layout"
+            );
             assert_eq!(back.series[1].refs.name.as_deref(), Some("Data!$Z$1"));
             assert_eq!(back.series[1].refs.values.as_deref(), Some("Data!$Z$2:$Z$2"));
             assert_eq!(default_back.series[2].refs.name.as_deref(), Some("Sheet1!$D$1"));
-            assert_eq!(default_back.series[2].refs.values.as_deref(), Some("Sheet1!$D$2:$D$2"), "formula columns follow display position, not source ID");
-            assert!(back.series[2].refs.name.is_none() && back.series[2].refs.values.is_none(), "the original literal A remains literal in the mixed layout");
+            assert_eq!(
+                default_back.series[2].refs.values.as_deref(),
+                Some("Sheet1!$D$2:$D$2"),
+                "formula columns follow display position, not source ID"
+            );
+            assert!(
+                back.series[2].refs.name.is_none() && back.series[2].refs.values.is_none(),
+                "the original literal A remains literal in the mixed layout"
+            );
             assert_eq!(back.series[3].refs.values.as_deref(), Some("Data!$Z$2:$Z$2"));
         }
         for invalid in [None, Some("-1"), Some("1.5"), Some("4294967296"), Some("bad")] {
@@ -2090,9 +2097,11 @@ mod tests {
     #[test]
     fn review_6094777682_mixed_references_keep_literals_and_intentional_shared_ranges() {
         // Original two-series worksheet/cache fixture: sorting moves the literal before B's range.
-        let xml = metadata_chart(r#"<c:barChart><c:barDir val="col"/>
+        let xml = metadata_chart(
+            r#"<c:barChart><c:barDir val="col"/>
 <c:ser><c:idx val="17"/><c:order val="1"/><c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:pt idx="0"><c:v>Referenced</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:f>Sheet1!$B$2:$B$2</c:f><c:numCache><c:pt idx="0"><c:v>7</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
-<c:ser><c:idx val="9"/><c:order val="0"/><c:tx><c:v>Literal</c:v></c:tx><c:val><c:numLit><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart>"#);
+<c:ser><c:idx val="9"/><c:order val="0"/><c:tx><c:v>Literal</c:v></c:tx><c:val><c:numLit><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart>"#,
+        );
         let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
         chart.title = Some("Rebuild after sorting".into());
         let mut shared = chart.series[1].clone();
@@ -2102,7 +2111,10 @@ mod tests {
         assert!(!kept);
         let back = read_chart_xml(&written).unwrap();
         assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), [vec![Some(2.0)], vec![Some(7.0)], vec![Some(7.0)]]);
-        assert!(back.series[0].refs.name.is_none() && back.series[0].refs.values.is_none(), "a literal must not alias the populated B column after sorting");
+        assert!(
+            back.series[0].refs.name.is_none() && back.series[0].refs.values.is_none(),
+            "a literal must not alias the populated B column after sorting"
+        );
         for index in [1, 2] {
             assert_eq!(back.series[index].refs.name, chart.series[index].refs.name);
             assert_eq!(back.series[index].refs.values, chart.series[index].refs.values, "intentionally shared references are not reassigned");
@@ -2118,14 +2130,24 @@ mod tests {
         for kind in [ChartType::Column, ChartType::Scatter, ChartType::Bubble] {
             let mut c = Chart { kind, categories: vec!["1.5".into()], category_format: Some("0.0".into()), ..Default::default() };
             c.series.push(Series {
-                name: "Referenced".into(), values: vec![Some(8.0)],
+                name: "Referenced".into(),
+                values: vec![Some(8.0)],
                 refs: crate::chart::SeriesRefs { values: Some("Data!$Z$2:$Z$2".into()), ..Default::default() },
                 ..Default::default()
             });
-            c.series.push(Series { name: "Literal".into(), values: vec![Some(3.0)], x_values: vec![Some(1.5)], sizes: vec![Some(4.0)], ..Default::default() });
+            c.series.push(Series {
+                name: "Literal".into(),
+                values: vec![Some(3.0)],
+                x_values: vec![Some(1.5)],
+                sizes: vec![Some(4.0)],
+                ..Default::default()
+            });
             let back = read_chart_xml(&crate::chart::write::chart_xml(&c).0).unwrap();
             assert_eq!(back.series[0].refs.values, c.series[0].refs.values);
-            assert!(back.series[1].refs.name.is_none() && back.series[1].refs.values.is_none() && back.series[1].refs.sizes.is_none(), "{kind:?}: missing positional fields use caches, not fabricated ranges");
+            assert!(
+                back.series[1].refs.name.is_none() && back.series[1].refs.values.is_none() && back.series[1].refs.sizes.is_none(),
+                "{kind:?}: missing positional fields use caches, not fabricated ranges"
+            );
             assert_eq!(back.series[1].refs.categories.as_deref(), Some("Sheet1!$A$2:$A$2"));
             assert_eq!(back.series[1].values, c.series[1].values);
             if kind == ChartType::Column {
@@ -2142,8 +2164,12 @@ mod tests {
     #[test]
     fn review_6094777682_model_kinds_agree_with_rebuilt_plots_and_chart_wide_edits() {
         let make = |kind| Chart {
-            kind: ChartType::Column, categories: vec!["Category".into()],
-            series: vec![Series { values: vec![Some(7.0)], kind: Some(kind), ..Default::default() }, Series { values: vec![Some(8.0)], kind: Some(kind), ..Default::default() }],
+            kind: ChartType::Column,
+            categories: vec!["Category".into()],
+            series: vec![
+                Series { values: vec![Some(7.0)], kind: Some(kind), ..Default::default() },
+                Series { values: vec![Some(8.0)], kind: Some(kind), ..Default::default() },
+            ],
             ..Default::default()
         };
         for (kind, extent) in [(ChartType::Column, 8.0), (ChartType::StackedColumn, 15.0)] {
@@ -2186,7 +2212,8 @@ mod tests {
     #[test]
     fn review_6094777682_secondary_percent_axes_use_percent_labels_without_extra_headroom() {
         for horizontal in [false, true] {
-            let xml = same_kind_chart_xml().replace("clustered", "percentStacked").replace(r#"<c:max val="10"/>"#, "").replace(r#"<c:max val="90"/>"#, "");
+            let xml =
+                same_kind_chart_xml().replace("clustered", "percentStacked").replace(r#"<c:max val="10"/>"#, "").replace(r#"<c:max val="90"/>"#, "");
             let xml = if horizontal { xml.replace(r#"<c:barDir val="col"/>"#, r#"<c:barDir val="bar"/>"#) } else { xml };
             let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
             for secondary in [false, true] {
@@ -2209,16 +2236,20 @@ mod tests {
         let bottom = r#"<c:valAx><c:axId val="10"/><c:axPos val="b"/><c:crossAx val="20"/></c:valAx>"#;
         let vertical = r#"<c:valAx><c:axId val="10"/><c:axPos val="r"/><c:crossAx val="999"/></c:valAx>"#;
         let partners = if vertical_last { format!("{bottom}{vertical}") } else { format!("{vertical}{bottom}") };
-        metadata_chart(&format!(r#"<c:barChart><c:barDir val="col"/><c:ser><c:tx><c:v>Secondary</c:v></c:tx><c:val><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="30"/><c:axId val="40"/></c:barChart>
+        metadata_chart(&format!(
+            r#"<c:barChart><c:barDir val="col"/><c:ser><c:tx><c:v>Secondary</c:v></c:tx><c:val><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="30"/><c:axId val="40"/></c:barChart>
 <c:valAx><c:axId val="20"/><c:axPos val="l"/><c:scaling><c:max val="10"/></c:scaling><c:crossAx val="10"/></c:valAx>{partners}
-<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/></c:catAx><c:valAx><c:axId val="40"/><c:axPos val="r"/><c:scaling><c:max val="90"/></c:scaling><c:crossAx val="30"/></c:valAx>"#))
+<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/></c:catAx><c:valAx><c:axId val="40"/><c:axPos val="r"/><c:scaling><c:max val="90"/></c:scaling><c:crossAx val="30"/></c:valAx>"#
+        ))
     }
 
     fn review_duplicate_category_xml() -> String {
-        metadata_chart(r#"<c:barChart><c:barDir val="col"/><c:ser/><c:axId val="10"/><c:axId val="20"/></c:barChart>
+        metadata_chart(
+            r#"<c:barChart><c:barDir val="col"/><c:ser/><c:axId val="10"/><c:axId val="20"/></c:barChart>
 <c:catAx><c:axId val="10"/><c:axPos val="b"/><c:title><c:tx><c:v>Unrelated duplicate</c:v></c:tx></c:title><c:crossAx val="999"/></c:catAx>
 <c:catAx><c:axId val="10"/><c:axPos val="b"/><c:title><c:tx><c:v>Reciprocal category</c:v></c:tx></c:title><c:crossAx val="20"/></c:catAx>
-<c:valAx><c:axId val="20"/><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>"#)
+<c:valAx><c:axId val="20"/><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>"#,
+        )
     }
 
     #[test]
@@ -2232,7 +2263,11 @@ mod tests {
         let xml = review_duplicate_category_xml();
         assert_eq!(read_chart_xml(xml.as_bytes()).unwrap().axis_titles.0.as_deref(), Some("Reciprocal category"));
         let fallback = xml.replace(r#"<c:crossAx val="20"/>"#, r#"<c:crossAx val="998"/>"#);
-        assert_eq!(read_chart_xml(fallback.as_bytes()).unwrap().axis_titles.0.as_deref(), Some("Unrelated duplicate"), "keep the original ID-only fallback when no reciprocal partner exists");
+        assert_eq!(
+            read_chart_xml(fallback.as_bytes()).unwrap().axis_titles.0.as_deref(),
+            Some("Unrelated duplicate"),
+            "keep the original ID-only fallback when no reciprocal partner exists"
+        );
     }
 
     #[test]
@@ -2251,7 +2286,11 @@ mod tests {
                     assert_eq!(chart.y_max, Some(90.0), "retain the exact old last-ID-map interpretation");
                 }
                 if category {
-                    assert_eq!(chart.axis_titles.0.as_deref(), Some(if version < 4 { "Unrelated duplicate" } else { "Reciprocal category" }), "keep the native version's category interpretation");
+                    assert_eq!(
+                        chart.axis_titles.0.as_deref(),
+                        Some(if version < 4 { "Unrelated duplicate" } else { "Reciprocal category" }),
+                        "keep the native version's category interpretation"
+                    );
                 }
                 let mut edit = chart.clone();
                 edit.series[0].secondary_axis = !edit.series[0].secondary_axis;
@@ -2277,7 +2316,10 @@ mod tests {
         let mut chart = read_chart_xml(metadata_chart(&plot).as_bytes()).unwrap();
         assert_eq!(chart.series.len(), 1001, "retain the existing per-group cap and the later group's record");
         let first = chart.series[0].clone();
-        assert_eq!((first.name.as_str(), first.values.as_slice(), first.kind, first.secondary_axis), ("Later secondary", [Some(123.0)].as_slice(), Some(ChartType::Column), true));
+        assert_eq!(
+            (first.name.as_str(), first.values.as_slice(), first.kind, first.secondary_axis),
+            ("Later secondary", [Some(123.0)].as_slice(), Some(ChartType::Column), true)
+        );
         assert_eq!(serde_json::to_value(&first).unwrap()["sourceIdx"], 9000);
         assert!(chart.series.iter().all(|s| s.name != "Primary1000"));
         assert_eq!(chart.series.last().unwrap().values, [Some(999.0)]);
