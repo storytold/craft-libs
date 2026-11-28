@@ -6,6 +6,9 @@ use parquet::file::metadata::ParquetMetaData;
 pub(crate) const MAX_DECODED: usize = 512 << 20;
 const MAX_PAGE: usize = 64 << 20;
 const MAX_FOOTER: usize = 16 << 20;
+const DATA_PAGE: i64 = 0;
+const DICTIONARY_PAGE: i64 = 2;
+const DATA_PAGE_V2: i64 = 3;
 #[derive(Clone, Copy)]
 enum Context {
     Footer,
@@ -21,10 +24,14 @@ struct Compact<'a> {
     pos: usize,
     uncompressed: Option<usize>,
     compressed: Option<usize>,
+    page_type: Option<i64>,
+    /// The PageHeader field whose struct `Context::Counts` is reading.
+    counts_field: i64,
+    encoding: Option<i64>,
 }
 impl<'a> Compact<'a> {
     fn new(bytes: &'a [u8], limits: &'a TableLimits) -> Self {
-        Self { bytes, limits, pos: 0, uncompressed: None, compressed: None }
+        Self { bytes, limits, pos: 0, uncompressed: None, compressed: None, page_type: None, counts_field: 0, encoding: None }
     }
     fn byte(&mut self) -> Result<u8> {
         let b = self.bytes.get(self.pos).copied().ok_or_else(|| invalid("Truncated Parquet metadata"))?;
@@ -85,6 +92,9 @@ impl<'a> Compact<'a> {
                 if matches!(context, Context::Schema) && id == 5 && value != 0 {
                     return Err(invalid("Nested Parquet fields are not supported; flatten the table first"));
                 }
+                if matches!(context, Context::Page) && id == 1 {
+                    self.page_type = Some(value);
+                }
                 if matches!(context, Context::Page) && matches!(id, 2 | 3) {
                     let size = usize::try_from(value).map_err(|_| invalid("Negative Parquet page size"))?;
                     if size > MAX_PAGE {
@@ -103,8 +113,13 @@ impl<'a> Compact<'a> {
                     if id == 1 && value > i64::from(self.limits.max_rows) + 1 {
                         return Err(invalid("Invalid Parquet page value count"));
                     }
+                    // DataPageHeader field 2 and DataPageHeaderV2 field 4 hold the value encoding.
+                    if (self.counts_field, id) == (5, 2) || (self.counts_field, id) == (8, 4) {
+                        self.encoding = Some(value);
+                    }
                 }
             } else if matches!(context, Context::Page) && kind == 12 && matches!(id, 5 | 7 | 8) {
+                self.counts_field = id;
                 self.structure(depth + 1, Context::Counts)?;
             } else {
                 self.skip(kind, depth + 1)?;
@@ -219,6 +234,7 @@ pub(crate) fn pages(bytes: &[u8], metadata: &ParquetMetaData, footer_start: usiz
                 .filter(|end| *end <= footer_start && start >= 4)
                 .ok_or_else(|| invalid("Parquet column lies outside the file data"))?;
             let mut cursor = start;
+            let mut dictionary = false;
             while cursor < end {
                 pages += 1;
                 if pages > 1_000_000 {
@@ -228,6 +244,15 @@ pub(crate) fn pages(bytes: &[u8], metadata: &ParquetMetaData, footer_start: usiz
                 header.structure(0, Context::Page)?;
                 let size = header.compressed.ok_or_else(|| invalid("Missing Parquet compressed-page size"))?;
                 let uncompressed = header.uncompressed.ok_or_else(|| invalid("Missing Parquet decoded-page size"))?;
+                // The decoder panics on a dictionary-encoded data page (PLAIN_DICTIONARY or
+                // RLE_DICTIONARY) that no dictionary page precedes.
+                match header.page_type {
+                    Some(DICTIONARY_PAGE) => dictionary = true,
+                    Some(DATA_PAGE | DATA_PAGE_V2) if matches!(header.encoding, Some(2 | 8)) && !dictionary => {
+                        return Err(invalid("A dictionary-encoded Parquet page has no dictionary page before it"));
+                    }
+                    _ => {}
+                }
                 decoded = decoded
                     .checked_add(uncompressed)
                     .filter(|n| *n <= MAX_DECODED)

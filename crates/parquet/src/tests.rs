@@ -594,3 +594,26 @@ fn a_repeated_dictionary_entry_cannot_pass_the_row_text_budget() {
     assert_eq!((result.unwrap().rows, calls), (64, 64));
     assert_eq!(read_rows(&bytes, &LIMITS, |_| Ok(())).unwrap().rows, 64);
 }
+
+#[test]
+fn a_dictionary_page_marked_as_an_index_page_fails_instead_of_panicking() {
+    let schema = Arc::new(parse_message_type("message test { REQUIRED INT64 n; }").unwrap());
+    let properties = Arc::new(WriterProperties::builder().set_dictionary_enabled(true).build());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, properties).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    col.typed::<Int64Type>().write_batch(&[7, 7, 8], None, None).unwrap();
+    col.close().unwrap();
+    group.close().unwrap();
+    let mut bytes = writer.into_inner().unwrap();
+    let reader = SerializedFileReader::new(Bytes::from(bytes.clone())).unwrap();
+    let offset = reader.metadata().row_group(0).column(0).dictionary_page_offset().unwrap() as usize;
+    // PageHeader field 1, page type DICTIONARY_PAGE (zigzag 4); INDEX_PAGE is zigzag 2.
+    assert_eq!(bytes[offset..offset + 2], [0x15, 0x04]);
+    bytes[offset + 1] = 0x02;
+    for result in
+        [std::panic::catch_unwind(|| read(&bytes).map(|_| ())), std::panic::catch_unwind(|| read_rows(&bytes, &LIMITS, |_| Ok(())).map(|_| ()))]
+    {
+        assert!(result.expect("no panic").unwrap_err().to_string().contains("no dictionary page"));
+    }
+}
