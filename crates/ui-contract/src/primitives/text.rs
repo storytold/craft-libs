@@ -508,6 +508,17 @@ impl TextRun<'_> {
         if let Some(layout) = cached {
             return (*layout).clone();
         }
+        let layout = self.layout_uncached(ctx, env, max_width);
+        with_memo(ctx, |memo| {
+            if memo.generation == generation {
+                memo.put(&key, Some(Arc::new(layout.clone())), None);
+            }
+        });
+        layout
+    }
+
+    /// Builds a layout without consulting or writing the framework memo.
+    fn layout_uncached(&self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> TextLayout {
         // Only a custom cut needs the joined text: other jobs already own the full text.
         let full = self.wrap.cuts().then(|| self.full_text_cow());
         // Every cut goes through the one cut that `least` measures, so a run shown at its least keeps its
@@ -532,42 +543,33 @@ impl TextRun<'_> {
         let original = full.filter(|_| changed).map(|full| Arc::<str>::from(full.as_ref()));
         let mut layout = TextLayout::from_job(aligned_rows(galley, self.align, self.is_rtl(env), ctx.pixels_per_point()), elided, original);
         layout.rotation = self.rotation;
-        with_memo(ctx, |memo| {
-            if memo.generation == generation {
-                memo.put(&key, Some(Arc::new(layout.clone())), None);
-            }
-        });
         layout
     }
 
     /// The whole layout and the width at its readable least, sharing the cached unbounded layout.
     pub(crate) fn least(&self, ctx: &Context, env: &TextEnv<'_>) -> LeastLayout {
-        let whole = self.layout(ctx, env, f32::INFINITY);
-        let width = self.least_width(ctx, env);
+        let key = self.layout_key(ctx, env, f32::INFINITY);
+        let (cached_layout, cached_least, generation) = with_memo(ctx, |memo| {
+            let cached = memo.get(&key).map(|entry| (entry.layout.clone(), entry.least));
+            let (layout, least) = cached.unwrap_or_default();
+            (layout, least, memo.generation)
+        });
+        let missing_layout = cached_layout.is_none();
+        let whole = cached_layout.map_or_else(|| self.layout_uncached(ctx, env, f32::INFINITY), |layout| (*layout).clone());
+        let width = cached_least.unwrap_or_else(|| self.compute_least_width(ctx, env, whole.size().x));
+        if missing_layout || cached_least.is_none() {
+            with_memo(ctx, |memo| {
+                if memo.generation == generation {
+                    memo.put(&key, missing_layout.then(|| Arc::new(whole.clone())), cached_least.is_none().then_some(width));
+                }
+            });
+        }
         LeastLayout { width, whole }
     }
 
-    /// The width of the run at its readable least: cut where its wrap says, keeping
-    /// [`READABLE_CHARACTERS`](Self::READABLE_CHARACTERS) and the ellipsis, or whole when it has no more than one
-    /// character beyond them.
-    pub(crate) fn least_width(&self, ctx: &Context, env: &TextEnv<'_>) -> f32 {
-        let key = self.layout_key(ctx, env, f32::INFINITY);
-        let (cached, generation) = with_memo(ctx, |memo| (memo.get(&key).and_then(|entry| entry.least), memo.generation));
-        if let Some(least) = cached {
-            return least;
-        }
-        let least = self.compute_least_width(ctx, env);
-        with_memo(ctx, |memo| {
-            if memo.generation == generation {
-                memo.put(&key, None, Some(least));
-            }
-        });
-        least
-    }
-
-    fn compute_least_width(&self, ctx: &Context, env: &TextEnv<'_>) -> f32 {
+    /// The width of the run at its readable least, using the whole layout already found by `least`.
+    fn compute_least_width(&self, ctx: &Context, env: &TextEnv<'_>, whole: f32) -> f32 {
         let full = self.full_text_cow();
-        let whole = self.layout(ctx, env, f32::INFINITY).size().x;
         let ends: Vec<usize> = full.char_indices().map(|(at, _)| at).chain([full.len()]).collect();
         if ends.len() - 1 <= Self::READABLE_CHARACTERS + 1 {
             return whole;
@@ -979,6 +981,24 @@ pub(crate) mod memo_tests {
     }
 
     #[trial]
+    fn an_uncached_least_lays_out_the_whole_run_once() {
+        let tokens = tokens();
+        let env = env(&tokens);
+        let ctx = Context::default();
+        // Over the per-entry text limit: the framework memo cannot hide a repeated whole request.
+        let text = "x".repeat(16 * 1024 + 1);
+        let run = TextRun::new(text.as_str());
+        pass(&ctx, |ctx| {
+            let least = run.least(ctx, &env);
+            assert!(least.width > 0.0 && least.whole.size().x >= least.width);
+            assert_eq!(entries(ctx), 0, "the oversized run bypasses the framework memo");
+        });
+        // This counter counts every text_layout::layout call, including an egui galley-cache hit.
+        // One unbounded whole layout and one cut layout are required.
+        assert_eq!(crate::runtime::measure::last_pass_text_layouts(&ctx), 2);
+    }
+
+    #[trial]
     fn cached_layout_does_not_call_egui_layout_for_a_sentinel() {
         let tokens = tokens();
         let env = env(&tokens);
@@ -1018,7 +1038,7 @@ pub(crate) mod memo_tests {
             assert_eq!(again.runs(), first.runs());
             let before = entries(ctx);
             let _ = run.layout(ctx, &env, 120.0);
-            let _ = run.least_width(ctx, &env);
+            let _ = run.least(ctx, &env).width;
             let least_key = run.layout_key(ctx, &env, f32::INFINITY);
             with_memo(ctx, |memo| {
                 assert_eq!(memo.len(), before + 2, "a new room and the least width each add an entry");
@@ -1163,7 +1183,7 @@ pub(crate) mod memo_tests {
             for room in (101..150).map(|room| room as f32) {
                 assert!(Arc::ptr_eq(&line.layout(ctx, &env, room).galley, &first.galley), "a Line run hits at room {room}");
             }
-            let _ = line.least_width(ctx, &env);
+            let _ = line.least(ctx, &env).width;
             assert_eq!(entries(ctx), before, "the label's rooms and its least width share one entry");
             for room in [100.0, 120.0, 140.0] {
                 let _ = wrapped.layout(ctx, &env, room);
