@@ -484,15 +484,15 @@ Google	Pixel Fold Inner Camera	DNG	2022	unverified	DNG decoder (uncompressed, LJ
 Google	Pixel Fold Telephoto Camera	DNG	2022	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Google	Pixel Fold Ultrawide Camera	DNG	2022	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Google	Pixel Fold Wide Camera	DNG	2022	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
-GoPro	FUSION	GPR	2017	unsupported	GPR is not imported
-GoPro	HERO5 Black	GPR	2015	unsupported	GPR is not imported
-GoPro	HERO6 Black	GPR	2017	unsupported	GPR is not imported
-GoPro	HERO7 Black	GPR	2018	unsupported	GPR is not imported
-GoPro	HERO10 Black	GPR	2021	unsupported	GPR is not imported
-GoPro	HERO12 Black	GPR	2024	unsupported	GPR is not imported
-GoPro	HERO13 Black	GPR	2024	unsupported	GPR is not imported
-GoPro	MISSION 1	GPR	2025	unsupported	GPR is not imported
-GoPro	MISSION 1 PRO	GPR	2025	unsupported	GPR is not imported
+GoPro	FUSION	GPR	2017	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO5 Black	GPR	2015	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO6 Black	GPR	2017	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO7 Black	GPR	2018	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO10 Black	GPR	2021	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO12 Black	GPR	2024	unverified	GPR decoder (VC-5, one tile)
+GoPro	HERO13 Black	GPR	2024	unverified	GPR decoder (VC-5, one tile)
+GoPro	MISSION 1	GPR	2025	unverified	GPR decoder (VC-5, one tile)
+GoPro	MISSION 1 PRO	GPR	2025	unverified	GPR decoder (VC-5, one tile)
 Hasselblad	503CWD	3FR	2008	preview	3FR is opened from its embedded JPEG only
 Hasselblad	A6D-100c	3FR	2017	preview	3FR is opened from its embedded JPEG only
 Hasselblad	CF-22	3FR	2008	preview	3FR is opened from its embedded JPEG only

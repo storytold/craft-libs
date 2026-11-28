@@ -113,6 +113,11 @@ Fujifilm	X-T20	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES
 Fujifilm	X-T4**	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	X-T5	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	X-T50	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+GoPro	FUSION	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO5 Black	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO6 Black	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO7 Black	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO10 Black	verified	corpus: LightCraft crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
 Google	Pixel 2 XL	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Hasselblad	Lunar	verified	issue #1275: raw.pixls.us 4051 (a Sony NEX-7 ARW under Make HASSELBLAD) decodes from sensor data; black 512 and SR2SubIFD WB as on a NEX-7
 Leica	C (Typ 112)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format

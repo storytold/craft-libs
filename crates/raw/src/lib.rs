@@ -157,6 +157,14 @@ mod srw;
 mod tiffraw;
 #[cfg_attr(not(feature = "dng"), allow(dead_code))]
 mod unpack;
+#[cfg(feature = "dng")]
+mod vc5;
+
+/// Synthetic inputs for other crates' tests.
+#[cfg(all(feature = "dng", feature = "testdata"))]
+pub mod testdata {
+    pub use crate::vc5::synthetic_stream as vc5_stream;
+}
 
 #[cfg(feature = "dng")]
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng};
