@@ -42,7 +42,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 rect: *rect,
                 enabled: enabled && self.source.enabled(at) && self.toggle_open(at, &column),
                 focusable: false,
-                clickable: true,
+                clickable: enabled && self.source.enabled(at) && self.toggle_open(at, &column),
                 active: false,
                 face: None,
                 label: "",
@@ -145,13 +145,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// An AccessKit click on a toggle cell's sub-node flips that cell, as a click on it does.
     pub(super) fn toggle_by_access(&mut self, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: Placement) {
+        if !cx.core.resolved.enabled {
+            return;
+        }
         let wanted = |request: &craft_behavior::AccessRequest| {
             request.action == craft_behavior::AccessAction::Click && request.target.is_some_and(|part| part.key == TOGGLE_CELL)
         };
         while let Some(request) = cx.core.intents.take_access_where(wanted) {
             let Some(part) = request.target else { continue };
             let (_, built) = self.built(layout, place.rect, place.offset);
-            let found = built.into_iter().find_map(|at| {
+            let found = built.into_iter().filter(|&at| self.source.enabled(at)).find_map(|at| {
                 let key = self.source.key(at);
                 self.header
                     .toggle_columns()
