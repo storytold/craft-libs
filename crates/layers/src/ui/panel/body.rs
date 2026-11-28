@@ -120,7 +120,7 @@ pub(super) fn show_body<T: LayerTree>(
     session.no_matches = no_matches;
     if no_matches && let Some((message, filter_focused)) = no_matches_message {
         if became_empty && filter_focused {
-            announce(ui.ctx(), Env::of(ui).resolve(message).as_str().to_owned(), Politeness::Polite);
+            announce(ui.ctx(), message.resolved(&Env::of(ui).words).as_str().to_owned(), Politeness::Polite);
         }
         let clip = ui.clip_rect();
         let room = out.response.rect.intersect(clip);
