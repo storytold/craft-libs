@@ -366,6 +366,48 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
                 replace_selection(ctx, widget, text, at, &typed);
                 changed = true;
             }
+            // The input method deletes around the caret, or around the marked text while it composes: the characters the
+            // reported range covers whole, before the selection's start and after its end. The selection and the
+            // marked text keep their place in what is left.
+            EditorInput::DeleteSurrounding { before, after, unit, .. } => {
+                let (caret, anchor) = selection(text);
+                let (lo, hi) = state.preedit.as_ref().map_or((caret.min(anchor), caret.max(anchor)), |p| (p.at, p.at));
+                let (lo_byte, hi_byte) = (byte_of(text, lo), byte_of(text, hi));
+                let gone_before = unit.chars_before(before, &text[..lo_byte]);
+                let gone_after = unit.chars_after(after, &text[hi_byte..]);
+                if gone_before + gone_after == 0 {
+                    continue;
+                }
+                // The input method deletes two stretches, not one: `[lo - gone_before, lo)` before the selection and
+                // `[hi, hi + gone_after)` after it. What lies between them is the selection itself, which the deletion
+                // leaves where it is.
+                let (before_from, after_to) = (lo - gone_before, hi + gone_after);
+                let end = byte_of(text, after_to);
+                text.replace_range(hi_byte..end, "");
+                let start = byte_of(text, before_from);
+                text.replace_range(start..lo_byte, "");
+                // A place in the text moves through both stretches: one before them stays, one in a stretch lands where
+                // that stretch began, and one beyond them loses the characters taken. Every place from `lo` to `hi`
+                // keeps its place, so the selection, and the marked text held at `lo`, still cover the same characters.
+                let shift = |at: usize| {
+                    if at <= before_from {
+                        at
+                    } else if at < lo {
+                        before_from
+                    } else if at <= hi {
+                        at - gone_before
+                    } else if at < after_to {
+                        hi - gone_before
+                    } else {
+                        at - (gone_before + gone_after)
+                    }
+                };
+                if let Some(preedit) = &mut state.preedit {
+                    preedit.at = shift(preedit.at);
+                }
+                text_edit::select(ctx, widget, shift(anchor), shift(caret));
+                changed = true;
+            }
             _ => {}
         }
     }

@@ -19,7 +19,8 @@ impl SurroundingUnit {
     /// the range only partly covers stays.
     pub fn chars_before(self, n: usize, text: &str) -> usize {
         match self {
-            SurroundingUnit::Chars => n,
+            // `text` is only what lies before the caret: a range wider than it covers all of it.
+            SurroundingUnit::Chars => n.min(text.chars().count()),
             SurroundingUnit::Bytes => {
                 let from = text.len().saturating_sub(n);
                 text.char_indices().filter(|(at, _)| *at >= from).count()
@@ -31,7 +32,7 @@ impl SurroundingUnit {
     /// character the range only partly covers stays.
     pub fn chars_after(self, n: usize, text: &str) -> usize {
         match self {
-            SurroundingUnit::Chars => n,
+            SurroundingUnit::Chars => n.min(text.chars().count()),
             SurroundingUnit::Bytes => text.char_indices().take_while(|(at, c)| at + c.len_utf8() <= n).count(),
         }
     }

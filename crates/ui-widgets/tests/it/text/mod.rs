@@ -6,6 +6,7 @@ pub(crate) mod edit_menu;
 pub(crate) mod edit_run;
 pub(crate) mod fields;
 pub(crate) mod hex;
+pub(crate) mod ime_delete;
 mod kit;
 pub(crate) mod linked;
 pub(crate) mod mixed_blank;
