@@ -196,7 +196,9 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     let geo_nrm = (pb - pa).cross(pc - pa).try_normalize().map_or(nrm, |n| n.as_vec3());
     let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
-    let tdir = tan.truncate().try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
+    // Interpolated tangents drift off the interpolated normal: take the part perpendicular to it.
+    let tan3 = tan.truncate();
+    let tdir = (tan3 - nrm * nrm.dot(tan3)).try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
     let w = mesh.tangents.get(a).map(|t| if t.w < 0.0 { -1.0 } else { 1.0 }).unwrap_or(1.0);
     Some(Surface { pos, nrm, geo_nrm, tangent: tdir.extend(w), uv, tri: t })
 }
@@ -285,6 +287,27 @@ mod tests {
         let m = Mesh { positions: vec![Vec3::ZERO, Vec3::X * tiny, Vec3::Y * tiny], ..m };
         let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
         assert!((surface.geo_nrm - Vec3::Z).length() < 1e-6, "{}", surface.geo_nrm);
+    }
+
+    #[test]
+    fn surface_tangent_is_perpendicular_to_the_interpolated_normal() {
+        let m = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            normals: vec![Vec3::Z, Vec3::X, Vec3::X],
+            tangents: vec![Vec4::new(1.0, 0.0, 0.0, 1.0), Vec4::new(0.0, 1.0, 0.0, 1.0), Vec4::new(0.0, 1.0, 0.0, 1.0)],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        let s = surface_at(&m, 0, 0.5, 0.0).unwrap();
+        let t = s.tangent.truncate();
+        assert!(s.nrm.dot(t).abs() < 1e-6, "nrm {} tangent {}", s.nrm, t);
+        assert!((t.length() - 1.0).abs() < 1e-6, "{t}");
+        // A tangent parallel to the normal falls back to some perpendicular direction.
+        let m = Mesh { tangents: vec![Vec4::new(0.0, 0.0, 1.0, 1.0); 3], normals: vec![Vec3::Z; 3], ..m };
+        let s = surface_at(&m, 0, 0.25, 0.25).unwrap();
+        let t = s.tangent.truncate();
+        assert!(s.nrm.dot(t).abs() < 1e-6 && (t.length() - 1.0).abs() < 1e-6, "{t}");
     }
 
     #[test]
