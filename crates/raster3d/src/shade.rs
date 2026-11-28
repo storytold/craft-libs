@@ -409,7 +409,8 @@ fn shadow_factor(m: &ShadowMap, cube: Option<&[ShadowMap]>, texels: &[f32], p: [
         let s = t + bias;
         let g = tx * (xi as f32 + 0.5 - u) + ty * (yi as f32 + 0.5 - v);
         let fast = if m.ortho {
-            (s.is_finite() && g.is_finite() && texel.is_finite()).then_some(z - g * texel <= s)
+            let d = z - g * texel;
+            (s.is_finite() && d.is_finite()).then_some(d <= s)
         } else {
             let inv = iz + g * iq;
             (!wide && s.is_finite() && inv.is_finite()).then_some(inv <= 0.0 || inv * s >= 1.0)
@@ -654,7 +655,17 @@ pub(crate) fn shade(s: &Scene, f: &Frag) -> Option<[f32; 4]> {
     // Shadow lookups follow the geometric surface, not the normal map.
     let ng = n;
     if let Some(t) = tex(m.tex_normal) {
-        let tn = [(t[0] * 2.0 - 1.0) * m.normal_scale, (t[1] * 2.0 - 1.0) * m.normal_scale, t[2] * 2.0 - 1.0];
+        let mut tn = [(t[0] * 2.0 - 1.0) * m.normal_scale, (t[1] * 2.0 - 1.0) * m.normal_scale, t[2] * 2.0 - 1.0];
+        // A finite sample far outside 0..=1 can overflow f32 when decoded; it is then decoded in
+        // f64 and scaled to its largest component, which keeps its direction.
+        if !tn.iter().all(|c| c.is_finite()) {
+            let k = f64::from(m.normal_scale);
+            let w = [(f64::from(t[0]) * 2.0 - 1.0) * k, (f64::from(t[1]) * 2.0 - 1.0) * k, f64::from(t[2]) * 2.0 - 1.0];
+            let big = w.iter().fold(0.0f64, |a, c| a.max(c.abs()));
+            if big.is_finite() && big > 0.0 {
+                tn = w.map(|c| (c / big) as f32);
+            }
+        }
         let tg = [f.tangent[0], f.tangent[1], f.tangent[2]];
         // Gram-Schmidt against the shading normal.
         let tg = norm(sub(tg, scale(n, dot(n, tg))));
@@ -663,7 +674,7 @@ pub(crate) fn shade(s: &Scene, f: &Frag) -> Option<[f32; 4]> {
         n = norm(add(add(scale(tg, tn[0]), scale(bt, tn[1])), scale(n, tn[2])));
     }
     let ao = match tex(m.tex_occlusion) {
-        Some(t) => 1.0 + m.occlusion_strength * (t[0] - 1.0),
+        Some(t) => 1.0 + m.occlusion_strength * (t[0].clamp(0.0, 1.0) - 1.0),
         None => 1.0,
     };
     let v = if s.ortho {
@@ -1045,5 +1056,89 @@ mod tests {
         let far = shadow_factor(&m, None, &vec![1.003e38; 512 * 512], [1e37, 0.0, 1e38], ng, 1.0);
         assert!(0.0 < near && near < 0.99, "{near}");
         assert!((far - near).abs() < 0.05, "{far} vs {near}");
+    }
+
+    #[test]
+    fn an_orthographic_plane_depth_that_overflows_f32_is_compared_in_f64() {
+        // A plane sloping 9 texel footprints per texel, 3 footprints from the light, over texels
+        // at −3 footprints: the texel half a texel out is blocked and the one 1.5 texels out is
+        // not. Scaled by 2^126, the nearer texel's offset of 4.5 × 2^126 overflows f32 while the
+        // plane's depth there does not.
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let r = 82f32.sqrt();
+        let ng = [-9.0 / r, 0.0, -1.0 / r];
+        let m = ShadowMap { view, focal: 1.0, ortho: true, size: 8, offset: 0, bias: 0.0, radius: 0.0 };
+        let near = shadow_factor(&m, None, &[-3.0; 64], [0.0, 0.0, 3.0], ng, 1.0);
+        let k = 2f32.powi(126);
+        let wide = ShadowMap { focal: 1.0 / k, ..m };
+        let far = shadow_factor(&wide, None, &[-3.0 * k; 64], [0.0, 0.0, 3.0 * k], ng, 1.0);
+        assert!(0.0 < near && near < 1.0, "{near}");
+        assert_eq!(far, near);
+    }
+
+    fn textured_scene(texture: impl FnOnce(&mut crate::scene::Material)) -> crate::scene::Scene {
+        use crate::scene::{EnvInfo, Material, Scene, TexInfo};
+        let mut material = Material { base: [1.0; 4], metallic: 0.0, roughness: 1.0, ..Material::default() };
+        texture(&mut material);
+        Scene {
+            ortho: true,
+            cam_fwd: [0.0, 0.0, -1.0],
+            materials: vec![material],
+            textures: vec![TexInfo { width: 1, height: 1, ..TexInfo::default() }, TexInfo { width: 1, height: 1, offset: 1, ..TexInfo::default() }],
+            texels: vec![[1.0; 4], [1.0; 4]],
+            env: Some(EnvInfo {
+                radiance: 1,
+                mips: 1,
+                irradiance: 1,
+                intensity: 1.0,
+                rotation: 0.0,
+                sun: [0.0; 3],
+                key: 0.0,
+                shadow: -1,
+                shadow_darkness: 0.0,
+                shadow_diffusion: 0.0,
+            }),
+            ..Scene::default()
+        }
+    }
+
+    #[test]
+    fn out_of_range_occlusion_texels_use_the_nearest_endpoint() {
+        let mut scene = textured_scene(|m| m.tex_occlusion = 0);
+        let fragment = super::Frag { pos: [0.0; 3], normal: [0.0, 0.0, 1.0], uv: [0.0; 2], tangent: [1.0, 0.0, 0.0, 1.0], material: 0, front: true };
+        for (endpoint, outside) in [(1.0, 2.0), (0.0, -1.0)] {
+            scene.texels[0][0] = endpoint;
+            let expected = super::shade(&scene, &fragment).unwrap();
+            scene.texels[0][0] = outside;
+            assert_eq!(super::shade(&scene, &fragment).unwrap(), expected, "{outside}");
+        }
+    }
+
+    #[test]
+    fn a_normal_texel_that_overflows_when_decoded_keeps_its_direction() {
+        let mut scene = textured_scene(|m| m.tex_normal = 0);
+        scene.env = None;
+        scene.lights = vec![Light {
+            kind: 0,
+            pos: [0.0; 3],
+            dir: [-1.0, 0.0, 0.0],
+            color: [1.0; 3],
+            cos_inner: 1.0,
+            cos_outer: 1.0,
+            falloff: 0,
+            radius: 0.0,
+            falloff_distance: 0.0,
+            shadow: -1,
+            shadow_darkness: 0.0,
+            shadow_diffusion: 0.0,
+        }];
+        let fragment = super::Frag { pos: [0.0; 3], normal: [0.0, 0.0, 1.0], uv: [0.0; 2], tangent: [1.0, 0.0, 0.0, 1.0], material: 0, front: true };
+        // [1, 0.5, 0.5] decodes to +X exactly; [f32::MAX, 0.5, 1] to almost +X.
+        scene.texels[0] = [1.0, 0.5, 0.5, 1.0];
+        let expected = super::shade(&scene, &fragment).unwrap();
+        assert!(expected[0] > 0.0, "{expected:?}");
+        scene.texels[0] = [f32::MAX, 0.5, 1.0, 1.0];
+        let wide = super::shade(&scene, &fragment).unwrap();
+        assert!(wide.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-5), "{wide:?} vs {expected:?}");
     }
 }

@@ -227,7 +227,15 @@ fn raster_triangle(s: &Scene, m: &ShadowMap, tri: [MapCorner; 3], alpha: Option<
             let z = if m.ortho {
                 l[0] * tri[0].2 + l[1] * tri[1].2 + l[2] * tri[2].2
             } else {
-                1.0 / (l[0] * tri[0].1 + l[1] * tri[1].1 + l[2] * tri[2].1)
+                let z = 1.0 / (l[0] * tri[0].1 + l[1] * tri[1].1 + l[2] * tri[2].1);
+                // 1/z can round to a value whose reciprocal overflows; the depth is then taken in
+                // f64 from the corners' depths.
+                if z.is_finite() {
+                    z
+                } else {
+                    let iz: f64 = (0..3).map(|k| f64::from(l[k]) / f64::from(tri[k].2)).sum();
+                    (1.0 / iz) as f32
+                }
             };
             let px = &mut d[y * n + x];
             if z >= *px {
@@ -608,8 +616,19 @@ fn shadow_maps_checked(s: &mut Scene, draft: bool, limits: &Limits) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{NEAR, light_poly};
+    use super::{NEAR, light_poly, raster_triangle};
     use crate::{Scene, ShadowMap, Vertex};
+
+    #[test]
+    fn a_caster_at_the_largest_finite_depth_keeps_a_finite_depth() {
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let map = ShadowMap { view, focal: 1.0, ortho: false, size: 4, offset: 0, bias: 0.0, radius: 0.0 };
+        let z = f32::MAX;
+        let corner = |x: f64, y: f64| ([x, y], 1.0 / z, z, [0.0, 0.0]);
+        let mut d = vec![f32::INFINITY; 16];
+        raster_triangle(&Scene::default(), &map, [corner(0.0, 0.0), corner(4.0, 0.0), corner(0.0, 4.0)], None, &mut d);
+        assert_eq!(d[0], z);
+    }
 
     #[test]
     fn near_plane_clipping_preserves_finite_opposite_uvs() {

@@ -85,24 +85,44 @@ pub fn try_resolve(t: &Target, k: u32) -> Result<(Image, Vec<f32>), RenderError>
     Ok((img, depth))
 }
 
-/// Output pixel (`x`, `y`) of a `k`-per-side resolve, summed in `f64`.
+/// A compensated (Neumaier) `f64` sum, which keeps small terms that large terms of opposite
+/// sign would otherwise absorb before they cancel.
+#[derive(Clone, Copy, Default)]
+struct Sum {
+    sum: f64,
+    carry: f64,
+}
+
+impl Sum {
+    fn add(&mut self, v: f64) {
+        let t = self.sum + v;
+        self.carry += if self.sum.abs() >= v.abs() { (self.sum - t) + v } else { (v - t) + self.sum };
+        self.sum = t;
+    }
+
+    fn total(self) -> f64 {
+        self.sum + self.carry
+    }
+}
+
+/// Output pixel (`x`, `y`) of a `k`-per-side resolve, summed in `f64` with compensation.
 fn mean_f64(t: &Target, k: usize, x: usize, y: usize) -> ([f32; 4], f32) {
-    let (mut acc, mut dz, mut dn) = ([0.0f64; 4], 0.0f64, 0u64);
+    let (mut acc, mut dz, mut dn) = ([Sum::default(); 4], Sum::default(), 0u64);
     for j in 0..k {
         for i in 0..k {
             let s = (y * k + j) * t.width as usize + x * k + i;
             for (a, c) in acc.iter_mut().zip(t.color[s]) {
-                *a += f64::from(c);
+                a.add(f64::from(c));
             }
             if t.depth[s].is_finite() {
-                dz += f64::from(t.depth[s]);
+                dz.add(f64::from(t.depth[s]));
                 dn += 1;
             }
         }
     }
     let n = (k * k) as f64;
-    let depth = if dn > 0 { (dz / dn as f64) as f32 } else { f32::INFINITY };
-    (acc.map(|v| (v / n) as f32), depth)
+    let depth = if dn > 0 { (dz.total() / dn as f64) as f32 } else { f32::INFINITY };
+    (acc.map(|v| (v.total() / n) as f32), depth)
 }
 
 /// Convert premultiplied linear pixels to premultiplied sRGB-encoded pixels in place: each
@@ -160,8 +180,22 @@ pub fn try_render_cpu(s: &Scene, limits: &Limits) -> Result<(Image, Vec<f32>), R
 
 #[cfg(test)]
 mod tests {
-    use super::{Image, encode_with};
+    use super::{Image, encode_with, mean_f64};
     use crate::RenderError;
+    use crate::raster::Target;
+
+    #[test]
+    fn small_samples_survive_the_cancellation_of_large_ones() {
+        let big = 2.0f32.powi(100);
+        let reds = [big, 1.0, -big, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let t = Target { width: 3, height: 3, color: reds.map(|r| [r, 0.0, 0.0, 1.0]).to_vec(), depth: reds.to_vec() };
+        let (c, d) = mean_f64(&t, 3, 0, 0);
+        assert_eq!(c[0], 1.0 / 9.0);
+        assert_eq!(d, 1.0 / 9.0);
+        // A block with no covered depth sample keeps the infinity sentinel.
+        let t = Target { depth: vec![f32::INFINITY; 9], ..t };
+        assert_eq!(mean_f64(&t, 3, 0, 0).1, f32::INFINITY);
+    }
 
     #[test]
     fn a_bad_pixel_is_reported_before_the_encoded_buffer_is_allocated() {

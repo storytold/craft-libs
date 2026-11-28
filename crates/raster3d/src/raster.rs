@@ -194,7 +194,8 @@ fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Clipped<ScreenCorne
         .iter()
         .map(|(c, wt)| {
             let iw = 1.0 / c[3];
-            let (nx, ny) = (c[0] * iw, c[1] * iw);
+            // A subnormal 1/w has lost precision; x and y are then divided by w directly.
+            let (nx, ny) = if iw.is_subnormal() { (c[0] / c[3], c[1] / c[3]) } else { (c[0] * iw, c[1] * iw) };
             // A subnormal 1/w can carry z × 1/w past the depth range; z / w is then taken directly.
             let z = c[2] * iw;
             let z = if (0.0..=1.0).contains(&z) { z } else { c[2] / c[3] };
@@ -369,7 +370,14 @@ const BAND: i32 = 16;
 fn clip_positions(s: &Scene) -> Result<Vec<[f32; 4]>, RenderError> {
     let mut out = try_with_capacity(s.vertices.len())?;
     for (i, v) in s.vertices.iter().enumerate() {
-        let c = mat_mul(&s.clip, v.pos);
+        let mut c = mat_mul(&s.clip, v.pos);
+        // Products that overflow f32 with opposite signs can cancel; such a row is taken in f64.
+        for (r, x) in c.iter_mut().enumerate() {
+            if !x.is_finite() {
+                let m = s.clip[r].map(f64::from);
+                *x = (m[0] * f64::from(v.pos[0]) + m[1] * f64::from(v.pos[1]) + m[2] * f64::from(v.pos[2]) + m[3]) as f32;
+            }
+        }
         if !c.iter().all(|x| x.is_finite()) {
             return Err(RenderError::BadClipPosition(i));
         }
@@ -606,7 +614,8 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Band, Pass, STri, cover, f32_crossing, fan, project};
+    use super::{Band, Pass, STri, clip_positions, cover, f32_crossing, fan, project};
+    use crate::RenderError;
     use crate::scene::{Material, Scene, Vertex};
     use std::sync::atomic::AtomicU64;
 
@@ -620,6 +629,17 @@ mod tests {
         let z = band.cam_z([3e38, 3e38, 0.0]);
         assert!(z.is_finite() && (z / 1e38 - 1.2426406).abs() < 1e-5, "{z}");
         assert!(band.cam_z([f32::MAX, f32::MAX, 0.0]).is_finite());
+    }
+
+    #[test]
+    fn clip_rows_whose_products_overflow_and_cancel_are_taken_in_f64() {
+        let v = Vertex { pos: [2e38, 2e38, -1.0], ..Vertex::default() };
+        let mut scene = Scene { vertices: vec![v], ..Scene::default() };
+        scene.clip = [[2.0, -2.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]];
+        assert_eq!(clip_positions(&scene).unwrap()[0], [-1.0, 1.0, 1.0, 1.0]);
+        // A row whose result does not fit f32 is still rejected.
+        scene.clip[0] = [2.0, 2.0, 0.0, 0.0];
+        assert_eq!(clip_positions(&scene), Err(RenderError::BadClipPosition(0)));
     }
 
     #[test]

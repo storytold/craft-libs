@@ -434,6 +434,18 @@ fn a_triangle_on_the_near_plane_with_a_huge_w_is_drawn() {
 }
 
 #[test]
+fn a_subnormal_reciprocal_w_keeps_a_pixel_on_an_inclusive_left_edge() {
+    // With the same huge w, pixel (1, 0) of a 2×1 target lies on the triangle's left edge, which
+    // x × 1/w would move to the right of the pixel center.
+    let big = 16_777_211.0 * 2f32.powi(104);
+    let mut s = clip_space_triangle([[0.5, -1.0, 0.5], [1.0, 0.0, 0.5], [0.5, 1.0, 0.5]]);
+    (s.width, s.height) = (2, 1);
+    s.clip = [[big, 0.0, 0.0, 0.0], [0.0, big, 0.0, 0.0], [0.0, 0.0, 0.0, big], [0.0, 0.0, 0.0, big]];
+    let t = try_render(&s, &Limits::default()).unwrap();
+    assert_eq!(t.color[1], WHITE);
+}
+
+#[test]
 fn triangles_on_the_far_plane_are_drawn() {
     // Camera depth 1024 maps to ndc z exactly 0, the far end of the depth range.
     let mut s = quad_scene(8, 8, &[([1.0, 1.0, 4.0, 7.0], 1024.0, WHITE), ([4.0, 1.0, 7.0, 7.0], 1024.0, [1.0, 1.0, 1.0, 0.5])]);
