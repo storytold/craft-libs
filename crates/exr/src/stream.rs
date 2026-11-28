@@ -1,6 +1,6 @@
 //! Bounded block-by-block reading of one flat scan-line part (feature `decode`): a reader that
 //! never sizes a buffer by the whole picture. [`Decoder::new`] reads the headers (at most 8 MiB
-//! and 4096 attributes) and the offset table through `Read + Seek`; [`Decoder::next_band`] then
+//! and 4,096 attributes) and the offset table through `Read + Seek`; [`Decoder::next_band`] then
 //! returns one compression block at a time as interleaved f32 samples. A caller that writes bands
 //! into tiled storage can open pictures larger than memory.
 //!
@@ -21,7 +21,7 @@ use exr::{
 };
 
 use crate::channels::{ColorLayout, color_channels};
-use crate::decode::{Error, Result};
+use crate::decode::{Error, MAX_HEADER_ATTRIBUTES, Result};
 
 const META_BYTES: usize = 8 << 20;
 const BLOCK_BYTES: usize = 64 << 20;
@@ -73,8 +73,8 @@ fn metadata(r: &mut impl Read, cancel: &dyn Fn() -> bool) -> Result<Vec<u8>> {
             break;
         }
         attributes += 1;
-        if attributes > 4096 {
-            return Err(limit("EXR metadata exceeds 4096 attributes"));
+        if attributes > MAX_HEADER_ATTRIBUTES {
+            return Err(limit(&format!("EXR metadata exceeds {MAX_HEADER_ATTRIBUTES} attributes")));
         }
         string(r, &mut prefix)?;
         let length = read::<4>(r)?;

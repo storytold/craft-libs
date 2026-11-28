@@ -1,5 +1,6 @@
 use super::{
-    ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, open_change, ppr_inner, rpr, rpr_inner, rt,
+    ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, empty_change, open_change, ppr_inner, rpr,
+    rpr_inner, rt,
 };
 
 impl Writer<'_> {
@@ -37,12 +38,8 @@ impl Writer<'_> {
     fn write_mark_rpr(&mut self, w: &mut W, mark: &CharProps, mark_revs: &[(u32, &str)]) {
         w.open("w:rPr", &[]);
         for (idx, tag) in mark_revs {
-            let (id, author, date) = self.rev_attrs(*idx);
-            if date.is_empty() {
-                w.empty(tag, &[("w:id", &id), ("w:author", &author)]);
-            } else {
-                w.empty(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
-            }
+            let a = self.change_attrs(*idx);
+            empty_change(w, tag, &a);
         }
         rpr_inner(w, mark);
         if let Some(ch) = mark.fmt_change.as_deref() {
@@ -213,17 +210,24 @@ impl Writer<'_> {
                 i += 1;
                 continue;
             }
-            // Hyperlinks with different ScreenTips stay separate even if their target is shared.
-            let link = props
-                .link
-                .as_deref()
-                .filter(|target| !target.is_empty())
-                .map(|target| (target, props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip)));
+            // Hyperlinks with different ScreenTips or history settings stay separate even if their target is shared.
+            let base = link_target_and_tip;
+            // Text with no history of its own (typed into a link) takes the history of the link it
+            // is in: the open one, or else the first of the following text in the same link that has one.
+            let link = base(props).map(|(target, tip)| {
+                let history = match open_link {
+                    Some((open_target, open_tip, open_history)) if (open_target, open_tip) == (target, tip) => props.link_history.or(open_history),
+                    _ => props.link_history.or_else(|| {
+                        pieces.iter().skip(i + 1).map(|(_, p)| *p).take_while(|p| base(p) == Some((target, tip))).find_map(|p| p.link_history)
+                    }),
+                };
+                (target, tip, history)
+            });
             if link != open_link {
                 if open_link.is_some() {
                     w.close("w:hyperlink");
                 }
-                if let Some((link, tip)) = link {
+                if let Some((link, tip, hist)) = link {
                     let id;
                     let target = if let Some(anchor) = link.strip_prefix('#') {
                         ("w:anchor", anchor)
@@ -231,11 +235,19 @@ impl Writer<'_> {
                         id = rels.add(rt::HYPERLINK, link, true);
                         ("r:id", id.as_str())
                     };
-                    if let Some(tip) = tip {
-                        w.open("w:hyperlink", &[target, ("w:history", "1"), ("w:tooltip", tip)]);
-                    } else {
-                        w.open("w:hyperlink", &[target, ("w:history", "1")]);
+                    let mut attrs = [("", ""); 3];
+                    let mut n = 0;
+                    attrs[n] = target;
+                    n += 1;
+                    if let Some(h) = link_history_val(hist) {
+                        attrs[n] = ("w:history", h);
+                        n += 1;
                     }
+                    if let Some(tip) = tip {
+                        attrs[n] = ("w:tooltip", tip);
+                        n += 1;
+                    }
+                    w.open("w:hyperlink", &attrs[..n]);
                 }
                 open_link = link;
             }
@@ -300,21 +312,20 @@ impl Writer<'_> {
         }
     }
 
-    pub(super) fn rev_attrs(&mut self, idx: u32) -> (String, String, String) {
+    /// `w:id`, `w:author`, `w:date` and `w16du:dateUtc` of a tracked change by revision `idx`.
+    pub(crate) fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
         self.next_rev_id += 1;
         let r = self.doc.revisions.get(idx as usize);
         let author = crate::write::annotation_author(self.doc, r.map_or("", |r| r.author.as_str())).to_string();
-        // Remove date and time (§17.15.1.69): tracked changes are saved without `w:date`.
-        let date = if self.doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
-        (self.next_rev_id.to_string(), author, date)
-    }
-
-    /// `w:id`, `w:author` and `w:date` of a tracked change by revision `idx`.
-    pub(crate) fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
-        let (id, author, date) = self.rev_attrs(idx);
-        let mut a = vec![("w:id", id), ("w:author", author)];
-        if !date.is_empty() {
-            a.push(("w:date", date));
+        let mut a = vec![("w:id", self.next_rev_id.to_string()), ("w:author", author)];
+        // Remove date and time (§17.15.1.69): tracked changes are saved without their dates.
+        if let Some(r) = r.filter(|_| !self.doc.settings.remove_date_time) {
+            if !r.date.is_empty() {
+                a.push(("w:date", r.date.clone()));
+            }
+            if let Some(utc) = r.date_utc.as_ref().filter(|d| !d.is_empty()) {
+                a.push(("w16du:dateUtc", utc.clone()));
+            }
         }
         a
     }
@@ -344,12 +355,8 @@ impl Writer<'_> {
                 continue;
             }
             let tag = self.rev_tag(idx, tag);
-            let (id, author, date) = self.rev_attrs(idx);
-            if date.is_empty() {
-                w.open(tag, &[("w:id", &id), ("w:author", &author)]);
-            } else {
-                w.open(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
-            }
+            let a = self.change_attrs(idx);
+            open_change(w, tag, &a);
         }
     }
 
@@ -361,5 +368,21 @@ impl Writer<'_> {
                 w.close(self.rev_tag(i, tag));
             }
         }
+    }
+}
+
+/// A run's hyperlink target and the ScreenTip it is written with, or `None` outside a link.
+fn link_target_and_tip(p: &CharProps) -> Option<(&str, Option<&str>)> {
+    p.link.as_deref().filter(|target| !target.is_empty()).map(|target| (target, p.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip)))
+}
+
+/// The `w:history` value a hyperlink is written with: off or none when a .docx file gave that,
+/// otherwise on, as Word writes it for a new link.
+fn link_history_val(history: Option<craft_wordmodel::props::LinkHistory>) -> Option<&'static str> {
+    use craft_wordmodel::props::LinkHistory;
+    match history {
+        None => Some("1"),
+        Some(LinkHistory::Off) => Some("0"),
+        Some(LinkHistory::Omitted) => None,
     }
 }

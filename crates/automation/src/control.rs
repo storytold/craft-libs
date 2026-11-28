@@ -5,8 +5,9 @@
 //! (`engine.execute`, `ui.inspect`, `ui.set`, `ui.dialog.*`, `ui.screenshot`, …) and hands the
 //! [`Reply`] to [`ControlChannel::settle`]. The channel replies at once, after the queued
 //! injected input has been processed ([`Reply::AfterInput`], so a following `ui.inspect` sees
-//! the effect), when a background job ends ([`Reply::AfterJob`]), or when a screenshot completes
-//! ([`Reply::Screenshot`], through [`crate::screenshot::Captures`]).
+//! the effect), when a background job ends ([`Reply::AfterJob`]), when the app answers a dialog's
+//! held OK ([`Reply::AfterHeldOk`]), or when a screenshot completes ([`Reply::Screenshot`], through
+//! [`crate::screenshot::Captures`]).
 //!
 //! Deadlines: a request still queued when its [`REPLY_DEADLINE`] passes is dropped before dispatch
 //! and the transport replies [`expired_error`] (safe to re-send); one that was dispatched and gave
@@ -15,6 +16,7 @@
 
 use std::sync::mpsc::{Receiver, Sender};
 
+use craft_ui::dialog::{DialogHost, DialogId, HeldOk};
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use serde_json::{Value, json};
@@ -133,6 +135,19 @@ pub enum Reply {
     /// A `ui.accessTree`: hold the reply until the window's settled access tree can be read
     /// ([`ControlChannel::poll_access_trees`]).
     AccessTree,
+    /// A `ui.dialog.confirm` that filed the held OK of a dialog for the app: hold the reply until the
+    /// app answers it ([`ControlChannel::poll_held`]).
+    #[non_exhaustive]
+    AfterHeldOk {
+        /// The dialog whose OK is held.
+        dialog: DialogId,
+        /// Which open of the dialog ([`DialogHost::open_serial`]): a later open of the same dialog
+        /// is not the one the request confirmed.
+        open: u64,
+        /// The app's refusal of the dialog's previous OK, when this confirm filed OK again after it:
+        /// the earlier confirms still held for this open are answered with it.
+        refused: Option<String>,
+    },
 }
 
 impl Reply {
@@ -174,6 +189,7 @@ pub struct ControlChannel {
     input_waiters: Vec<Sender<ControlResponse>>,
     job_waiters: Vec<(JobId, Sender<ControlResponse>)>,
     tree_waiters: Vec<Sender<ControlResponse>>,
+    held_waiters: Vec<(DialogId, u64, Sender<ControlResponse>)>,
     /// The screenshot queue; the app calls its `issue` and `drain` from its UI and logic phases.
     pub captures: Captures,
 }
@@ -181,7 +197,14 @@ pub struct ControlChannel {
 impl ControlChannel {
     /// Attach a transport's receiver (TCP, stdin, tests).
     pub fn new(rx: Receiver<ControlRequest>) -> Self {
-        Self { rx, input_waiters: Vec::new(), job_waiters: Vec::new(), tree_waiters: Vec::new(), captures: Captures::default() }
+        Self {
+            rx,
+            input_waiters: Vec::new(),
+            job_waiters: Vec::new(),
+            tree_waiters: Vec::new(),
+            held_waiters: Vec::new(),
+            captures: Captures::default(),
+        }
     }
 
     /// The next request to run, claimed through [`Dispatch::start`]. Expired or abandoned
@@ -200,8 +223,16 @@ impl ControlChannel {
 
     /// Reply now, or park the reply on input, a job or a screenshot. `settle_ms` is the
     /// screenshot settle delay ([`crate::screenshot::settle_ms`] of the animation time);
-    /// `document` the identity a screenshot is attributed to.
+    /// `document` the identity a screenshot is attributed to. A screenshot is admitted at
+    /// [`motion::now`]; [`Self::settle_at`] takes the time instead.
     pub fn settle(&mut self, req: ControlRequest, outcome: Reply, document: Option<DocumentId>, settle_ms: f64) {
+        self.settle_at(req, outcome, document, settle_ms, motion::now());
+    }
+
+    /// [`Self::settle`] with a screenshot admitted at `now`: its settle delay and its
+    /// [`crate::screenshot::DEADLINE`] count from `now`, on the clock the app passes to
+    /// [`Captures::issue`] and [`Captures::drain`].
+    pub fn settle_at(&mut self, req: ControlRequest, outcome: Reply, document: Option<DocumentId>, settle_ms: f64, now: Instant) {
         let reply = req.reply;
         match outcome {
             Reply::Done(v) => {
@@ -210,9 +241,21 @@ impl ControlChannel {
             Reply::AfterInput => self.input_waiters.push(reply),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
             Reply::AccessTree => self.tree_waiters.push(reply),
+            Reply::AfterHeldOk { dialog, open, refused } => {
+                if let Some(reason) = refused {
+                    self.held_waiters.retain(|(earlier, earlier_open, tx)| {
+                        let answered = (*earlier, *earlier_open) == (dialog, open);
+                        if answered {
+                            let _ = tx.send(json!({"ok": false, "error": reason}));
+                        }
+                        !answered
+                    });
+                }
+                self.held_waiters.push((dialog, open, reply));
+            }
             Reply::Screenshot { token, path, region, viewport } => {
                 let request = ScreenshotRequest { token, path, region, viewport, reply, document, settle_ms };
-                if let Err((reply, e)) = self.captures.admit(request, motion::now()) {
+                if let Err((reply, e)) = self.captures.admit(request, now) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
                 }
             }
@@ -291,6 +334,29 @@ impl ControlChannel {
         }
     }
 
+    /// Answers the held `ui.dialog.confirm` requests ([`Reply::AfterHeldOk`]) from `host`: success
+    /// once the app accepted the dialog's held OK; once it refused it, an error whose text is the
+    /// refusal's reason, English for a reason given as a `Word`; an error once the dialog closed
+    /// while it waited, also when the same dialog opened again since. A request stays held while
+    /// the app has not answered. Call it in every pass after the app answered the held OKs it
+    /// answers in that pass and before the pass runs the host ([`DialogHost::run`]), which closes a
+    /// dialog the app accepted; calling it more than once in a pass is harmless.
+    pub fn poll_held(&mut self, host: &DialogHost) {
+        self.held_waiters.retain(|(dialog, open, reply)| {
+            let answer = match host.held_state(*dialog) {
+                _ if host.open_serial(*dialog) != Some(*open) => {
+                    json!({"ok": false, "error": "the dialog closed while its OK waited for the app's answer"})
+                }
+                Some(HeldOk::Waiting) => return true,
+                Some(HeldOk::Accepted) => json!({"ok": true, "result": null}),
+                Some(HeldOk::Refused(reason)) => json!({"ok": false, "error": reason.as_str()}),
+                _ => json!({"ok": false, "error": "the app refused OK"}),
+            };
+            let _ = reply.send(answer);
+            false
+        });
+    }
+
     /// Drops the host's queued input and the step in flight, and fails every
     /// [`Reply::AfterInput`] waiter with `input cancelled: {reason}`, also when only waiters
     /// remain (their input was already consumed). True when anything was pending or waiting.
@@ -331,6 +397,6 @@ impl ControlChannel {
 
     /// Waiters of every kind, for `ui.inspect`'s `pending` count and tests.
     pub fn waiting(&self) -> usize {
-        self.input_waiters.len() + self.job_waiters.len() + self.tree_waiters.len() + self.captures.pending()
+        self.input_waiters.len() + self.job_waiters.len() + self.tree_waiters.len() + self.held_waiters.len() + self.captures.pending()
     }
 }

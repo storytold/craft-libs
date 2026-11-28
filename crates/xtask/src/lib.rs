@@ -12,12 +12,17 @@
 //! - [`assets`]: the asset attribution check. The app supplies its attribution document, folders
 //!   and extra extensions as an [`assets::Policy`]; [`assets::run`] lists the files through Git and
 //!   reports each asset without a row.
+//! - [`names`]: the display-name scanner. [`names::scan`] looks for the words an app lists in its
+//!   Rust string literals, `Cargo.toml` descriptions and text files, and returns what it finds.
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
 //! - `fetch` (feature `fetch`): files named in a pinned list, each checked against its SHA-256 before
 //!   it is written in place, and tar archives extracted under entry and size limits.
 //! - `stats` (feature `stats`): files, lines and tests of Rust per workspace crate (`cargo xtask stats`).
+//! - `version` (feature `version`): `cargo xtask version [set X.Y.Z[-pre]]`, which reads and sets the
+//!   `[workspace.package]` version of the root `Cargo.toml` and moves the workspace crates' path
+//!   dependency pins with it.
 //!
 //! ```no_run
 //! use std::path::Path;
@@ -46,11 +51,14 @@ pub mod assets;
 pub mod fetch;
 #[cfg(feature = "lock")]
 pub mod lock;
+pub mod names;
 #[cfg(feature = "report")]
 pub mod report;
 pub mod runner;
 #[cfg(feature = "stats")]
 pub mod stats;
+#[cfg(feature = "version")]
+pub mod version;
 
 /// Writes one diagnostic line to stderr. A failed write, such as one to a closed pipe, is ignored, so a
 /// diagnostic never stops a run.

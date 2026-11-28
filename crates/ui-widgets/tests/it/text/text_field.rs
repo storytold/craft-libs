@@ -477,3 +477,48 @@ fn a_kept_escape_that_closes_its_popover_returns_focus_to_the_opener() {
     assert!(!open.get(), "the Escape closed the popover");
     assert_eq!(fixture.focused(), Some(opener_id.get()), "focus returned to the opener");
 }
+
+/// The placeholder colour and the fill under it that an empty field paints, in either look.
+fn placeholder_on_fill(mode: craft_theme::Mode, look: craft_ui::style::FieldLook) -> (egui::Color32, egui::Color32) {
+    let mut fixture = Fixture::new(move |ui| {
+        TextField::search("Search", Bind::given(String::new())).look(look).placeholder("Find a command").show(ui);
+    });
+    fixture.theme(mode, craft_theme::Contrast::Standard).settle();
+    let shapes = fixture.frame_shapes();
+    let hint = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Text(text) if text.galley.text() == "Find a command" => {
+                Some((text.visual_bounding_rect(), text.galley.rows.iter().flat_map(|row| row.row.visuals.mesh.vertices.iter()).next()?.color))
+            }
+            _ => None,
+        })
+        .expect("the empty field paints its placeholder");
+    let fill = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.fill.a() == 255 && rect.rect.contains_rect(hint.0) => Some(rect),
+            _ => None,
+        })
+        .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
+        .expect("the field paints its fill under the placeholder")
+        .fill;
+    (hint.1, fill)
+}
+
+/// A quiet field (a bar's search box) sits on the bar's fill, where the faint placeholder of other fields falls under
+/// the 4.5:1 text contrast: its placeholder reads at 4.5:1 on its own fill in light and dark, and other fields keep
+/// theirs.
+#[trial]
+fn a_quiet_field_placeholder_reads_on_its_fill_and_other_fields_keep_theirs() {
+    use craft_ui::style::FieldLook;
+    let ratio = |a: egui::Color32, b: egui::Color32| {
+        craft_theme::contrast_ratio(craft_theme::Rgba::rgb(a.r(), a.g(), a.b()), craft_theme::Rgba::rgb(b.r(), b.g(), b.b()))
+    };
+    for mode in [craft_theme::Mode::Light, craft_theme::Mode::Dark] {
+        let (quiet, fill) = placeholder_on_fill(mode, FieldLook::Quiet);
+        let (plain, _) = placeholder_on_fill(mode, FieldLook::Normal);
+        assert!(ratio(quiet, fill) >= 4.5, "{mode:?}: the quiet placeholder reads at {:.2}:1 on its fill", ratio(quiet, fill));
+        assert_ne!(plain, quiet, "{mode:?}: other fields keep their own placeholder colour");
+    }
+}
