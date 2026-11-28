@@ -20,6 +20,7 @@ craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 | German | — | — | TeX patterns (embedded, or a Language pack) |
 | Bulgarian | — | — | syllable rules |
 | Gujarati, Hindi | the installed Hunspell dictionary (Hindi: nukta letters spelled either way) | generic checks | akshara rules (or a Language pack) |
+| Marathi (mr) | its Language pack or Hunspell dictionary, as any pack language | — | akshara rules (or a Language pack) |
 
 Grammar rules, suggestion tuning and the rule-based hyphenation are code: they work in every
 build.

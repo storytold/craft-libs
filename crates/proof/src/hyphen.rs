@@ -15,7 +15,7 @@
 //!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
-//! **Gujarati and Hindi**: breaks between aksharas, never inside a conjunct or between a
+//! **Gujarati, Hindi and Marathi**: breaks between aksharas, never inside a conjunct or between a
 //! consonant and its vowel sign ([`crate::indic`], rules from the script's Unicode encoding); no
 //! pattern file.
 //!
@@ -120,7 +120,7 @@ pub enum Source {
     Patterns,
     /// A heuristic for a language without a dictionary or patterns.
     Heuristic,
-    /// A language's syllable rules (Bulgarian [`crate::bg`], Turkish, Gujarati and Hindi [`crate::indic`]).
+    /// A language's syllable rules (Bulgarian [`crate::bg`], Turkish, Gujarati, Hindi and Marathi [`crate::indic`]).
     Rules,
     /// No break points: the word is too short or no source applies.
     None,
@@ -167,7 +167,7 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if lang == ProofLang::Bg && core.iter().all(|&c| crate::bg::is_letter(c)) {
         return (crate::bg::points(core), Source::Rules);
     }
-    // Gujarati and Hindi words break between aksharas ([`crate::indic`]); other words in their runs
+    // Gujarati, Hindi and Marathi words break between aksharas ([`crate::indic`]); other words in their runs
     // (`WordCraft`) are hyphenated as English.
     if let Some(script) = crate::indic::Script::of(lang)
         && core.iter().all(|&c| script.is_letter(c))
@@ -242,8 +242,8 @@ fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
     (nfc, starts)
 }
 
-/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian, Turkish, Gujarati and
-/// Hindi: a word in their script (the guard their rules use; for Gujarati and Hindi, the script's
+/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian, Turkish, Gujarati, Hindi
+/// and Marathi: a word in their script (the guard their rules use; for the Indic ones, the script's
 /// letters and marks and the joiners inside a conjunct, [`crate::indic`]) whose letters the
 /// patterns know, so a word with a letter the pack never mentions goes on to the fallback rules. Polish, Portuguese, Italian
 /// and German: every word, as their embedded patterns do. Any other language: a word whose letters
@@ -254,7 +254,7 @@ fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
         ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
-        ProofLang::Gu | ProofLang::Hi => {
+        _ if crate::indic::Script::of(lang).is_some() => {
             crate::indic::Script::of(lang).is_some_and(|s| core.iter().all(|&c| s.is_letter(c))) && pack_knows(pats, core)
         }
         _ => pats.values(core).is_some(),
