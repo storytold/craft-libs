@@ -1098,3 +1098,60 @@ fn a_column_page_takes_its_rhythm_from_the_page_sizes() {
         assert!(roomy > standard + 1.0, "{what} grows with the page sizes: {standard} → {roomy}");
     }
 }
+
+/// The keys whose revision the app was asked for.
+type Asked = Rc<RefCell<Vec<craft_ui::shell::ThumbKey>>>;
+
+/// A source with no pictures that writes down every key it is asked the revision of.
+struct CountingSource(Asked);
+
+impl craft_ui::primitives::ThumbSource<craft_ui::shell::ThumbKey> for CountingSource {
+    fn revision(&self, key: &craft_ui::shell::ThumbKey, _: &craft_ui::primitives::ThumbRequest) -> craft_ui::primitives::Revision {
+        self.0.borrow_mut().push(key.clone());
+        craft_ui::primitives::Revision::new(0)
+    }
+
+    fn render(&self, _: &craft_ui::shell::ThumbKey, _: &craft_ui::primitives::ThumbRequest) -> craft_ui::primitives::ThumbRender {
+        craft_ui::primitives::ThumbRender::Blank
+    }
+}
+
+/// Home asks the app for a card's thumbnail only once the card can be seen, so a long recent list costs the app no
+/// work for the cards below the fold until the page scrolls to them.
+#[trial]
+fn home_asks_for_a_cards_thumbnail_only_once_it_is_in_view() {
+    use craft_ui::primitives::{ThumbnailOptions, Thumbnails};
+    use craft_ui::shell::ThumbKey;
+
+    let files: Vec<_> = (0..12).map(|n| RecentFile::new(format!("/tmp/work/{}", file_name(n)), file_name(n))).collect();
+    let last = files.last().expect("a file").path.clone();
+    let first = files[0].path.clone();
+    let asked: Asked = Rc::default();
+    let source = CountingSource(Rc::clone(&asked));
+    let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let thumbnails = Thumbnails::<ThumbKey>::in_context(ui.ctx(), "offscreen-thumbs", ThumbnailOptions::new());
+        let _ = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files)
+            .home_layout("Photo app", &[])
+            .thumbnails(&thumbnails, &source)
+            .show(ui);
+    });
+    fixture.room(egui::vec2(1100.0, 700.0)).settle();
+    let card = |fixture: &Fixture, path: &PathBuf| {
+        let name = path.file_name().and_then(|name| name.to_str()).expect("a name").to_owned();
+        fixture.by_label(&name).expect("the card is laid out").rect
+    };
+    let was_asked = |path: &PathBuf| asked.borrow().contains(&ThumbKey::Recent(path.clone()));
+    assert!(fixture.shown().intersects(card(&fixture, &first)) && was_asked(&first), "a card in view asks for its thumbnail");
+    assert!(!fixture.shown().intersects(card(&fixture, &last)), "the last card starts below the fold");
+    assert!(!was_asked(&last), "a card below the fold does not ask for its thumbnail");
+
+    let inside = card(&fixture, &first).center();
+    fixture.frame(vec![moved(inside)]);
+    for _ in 0..10 {
+        fixture.frame(vec![craft_ui::testing::pointer::wheel(-2000.0)]);
+    }
+    fixture.settle();
+    assert!(fixture.shown().intersects(card(&fixture, &last)), "the page scrolls to the last card");
+    assert!(was_asked(&last), "the card asks for its thumbnail once it scrolls into view");
+}
