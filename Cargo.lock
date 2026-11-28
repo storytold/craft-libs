@@ -2502,6 +2502,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft-cfb",
+ "craft-codepage",
  "craft-drawingml",
  "craft-flow",
  "craft-math",
