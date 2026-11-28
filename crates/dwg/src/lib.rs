@@ -411,6 +411,24 @@ mod native {
         }
     }
 
+    /// The start and end angles of every hatch's elliptic boundary edge (edge type 3), turned by
+    /// `convert`. A DWG holds them in radians, and acadrust's DXF reader and writer both keep them
+    /// as they are, while DXF holds them in degrees (acadrust does convert a circular-arc edge).
+    /// Written as read, a circle (0 to 2π) reached a DXF reader as an arc of 6.28 degrees. It covers
+    /// the hatches of blocks and layouts as well as those of model space.
+    fn hatch_edge_angles(doc: &mut acadrust::CadDocument, convert: fn(f64) -> f64) {
+        use acadrust::entities::{BoundaryEdge, EntityType};
+        for e in doc.entities_mut() {
+            let EntityType::Hatch(h) = e else { continue };
+            for edge in h.paths.iter_mut().flat_map(|p| p.edges.iter_mut()) {
+                if let BoundaryEdge::EllipticArc(a) = edge {
+                    a.start_angle = convert(a.start_angle);
+                    a.end_angle = convert(a.end_angle);
+                }
+            }
+        }
+    }
+
     /// The fix-ups made to a document after the DWG read, returning how many orphaned DGN
     /// components were dropped. The document comes from a third-party reader and is hostile.
     fn post_process(doc: &mut acadrust::CadDocument) -> usize {
@@ -420,6 +438,7 @@ mod native {
         table_cell_heights(doc);
         table_style_rows(doc, false);
         keep_sort_handles(doc);
+        hatch_edge_angles(doc, f64::to_degrees);
         drop_orphaned_dgn_components(doc)
     }
 
@@ -1325,6 +1344,8 @@ mod native {
                 None => proxy_classes(&mut doc, classes.as_deref()),
             };
             other_layout_owners(&mut doc);
+            // The DXF holds a hatch edge's angles in degrees, the DWG in radians.
+            hatch_edge_angles(&mut doc, f64::to_radians);
             table_style_rows(&mut doc, true);
             field_formats(&mut doc, &legacy);
             dimension_flags(&mut doc);
@@ -2320,5 +2341,71 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A hatch whose boundary has an elliptic edge (a circle, as a drawing from another CAD program
+    /// stores one) with the angles 0 and 2π in the DWG's radians.
+    #[cfg(not(no_dwg_bridge))]
+    fn dwg_with_a_hatch_circle() -> Vec<u8> {
+        use acadrust::entities::{BoundaryEdge, BoundaryPath, EllipticArcEdge, EntityType, Hatch};
+        use acadrust::types::Vector2;
+        let mut path = BoundaryPath::new();
+        path.edges = vec![BoundaryEdge::EllipticArc(EllipticArcEdge {
+            center: Vector2::new(5.0, 5.0),
+            major_axis_endpoint: Vector2::new(-2.0, 0.0),
+            minor_axis_ratio: 1.0,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::TAU,
+            counter_clockwise: true,
+        })];
+        let mut hatch = Hatch::new();
+        hatch.paths = vec![path];
+        let mut doc = acadrust::CadDocument::new();
+        assert!(doc.add_entity(EntityType::Hatch(Box::new(hatch))).is_ok());
+        acadrust::DwgWriter::write_to_vec(&doc).unwrap()
+    }
+
+    /// The end angle (group 51) of the first elliptic hatch edge (group 72 of 3) in a DXF.
+    #[cfg(not(no_dwg_bridge))]
+    fn dxf_edge_end_angle(dxf: &[u8]) -> Option<f64> {
+        let text = String::from_utf8_lossy(dxf);
+        let mut lines = text.lines().map(str::trim);
+        let mut in_ellipse = false;
+        while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
+            match code {
+                "72" => in_ellipse = value == "3",
+                "51" if in_ellipse => return value.parse().ok(),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// A DWG holds a hatch edge's angles in radians and a DXF in degrees: the circle is 360 in the
+    /// DXF the DWG reads as, so a DXF reader doesn't take it for an arc of 6.28 degrees.
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn a_hatch_circle_edge_reads_as_360_degrees() {
+        let dxf = dwg_to_dxf(&dwg_with_a_hatch_circle()).unwrap();
+        let end = dxf_edge_end_angle(&dxf).expect("the hatch's elliptic edge");
+        assert!((end - 360.0).abs() < 1e-6, "the end angle is {end}");
+    }
+
+    /// And back: the DXF's 360 degrees are 2π in the DWG written from it.
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn a_hatch_circle_edge_is_written_back_as_radians() {
+        let dxf = dwg_to_dxf(&dwg_with_a_hatch_circle()).unwrap();
+        let dwg = dxf_to_dwg(&dxf).unwrap();
+        let doc = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+        let end = doc.entities().find_map(|e| match e {
+            acadrust::entities::EntityType::Hatch(h) => h.paths.iter().flat_map(|p| p.edges.iter()).find_map(|edge| match edge {
+                acadrust::entities::BoundaryEdge::EllipticArc(a) => Some(a.end_angle),
+                _ => None,
+            }),
+            _ => None,
+        });
+        let end = end.expect("the hatch's elliptic edge");
+        assert!((end - std::f64::consts::TAU).abs() < 1e-6, "the end angle is {end} radians");
     }
 }
