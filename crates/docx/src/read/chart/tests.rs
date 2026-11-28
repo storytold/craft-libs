@@ -776,6 +776,29 @@ fn markers_use_the_automatic_series_colour_not_the_line_colour() {
 }
 
 #[test]
+fn a_chart_type_dlblpos_places_series_labels_that_give_none() {
+    // A line series with markers, labels shown for the whole chart type at `type_pos`, and
+    // `own` in the series' own `c:dLbls`.
+    let at = |type_pos: &str, own: &str| {
+        let own = if own.is_empty() { String::new() } else { format!("<c:dLbls>{own}<c:showVal val=\"1\"/></c:dLbls>") };
+        let s = ser(0, "S", Some("FF0000"), &["Q1", "Q2", "Q3"], &["3.2", "4.1", "5"])
+            .replace("<c:cat>", &format!("{}{own}<c:cat>", marker_xml("circle", 9)));
+        let plot = format!(
+            r#"<c:lineChart><c:grouping val="standard"/>{s}<c:dLbls>{type_pos}<c:showVal val="1"/></c:dLbls><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+        );
+        let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+        let (m, _) = first_ellipse(&items).unwrap();
+        let t =
+            items.iter().find_map(|it| if let GraphicItem::Text { text, rect, .. } = it { (text == "3.2").then_some(*rect) } else { None }).unwrap();
+        (t[1] + t[3] / 2.0) - (m[1] + m[3] / 2.0)
+    };
+    assert!(at(r#"<c:dLblPos val="t"/>"#, "") < -4.0, "the chart type's position: above");
+    assert!(at(r#"<c:dLblPos val="b"/>"#, "") > 4.0, "the chart type's position: below");
+    // The series' own position wins.
+    assert!(at(r#"<c:dLblPos val="t"/>"#, r#"<c:dLblPos val="b"/>"#) > 4.0, "the series' own position");
+}
+
+#[test]
 fn line_data_labels_default_to_the_right_and_honour_dlblpos() {
     let dl = |pos: &str| format!(r#"{}<c:dLbls>{pos}<c:showVal val="1"/></c:dLbls>"#, marker_xml("circle", 9));
     let text_rect = |items: &[GraphicItem]| {

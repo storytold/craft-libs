@@ -40,6 +40,7 @@ impl Chart {
         let radar_style = ty.child("c:radarStyle").and_then(|r| r.attr("val"));
         let type_labels = show_values(ty.child("c:dLbls"));
         let type_fmt = label_format(ty.child("c:dLbls"));
+        let type_pos = label_position(ty.child("c:dLbls"));
         for s in &mut series {
             s.values.resize(n, None);
             s.xs.resize(n, None);
@@ -48,6 +49,8 @@ impl Chart {
             if s.label_fmt.is_none() {
                 s.label_fmt.clone_from(&type_fmt);
             }
+            // The series' own position first, else the chart type's.
+            s.label_pos = s.label_pos.or(type_pos);
             if s.labels == Some(true) {
                 s.raw = s.values.clone();
             }
@@ -192,6 +195,11 @@ fn show_values(d: Option<&El>) -> Option<bool> {
     d.child("c:showVal").map(|v| v.attr("val").is_none_or(truthy))
 }
 
+/// A `c:dLbls`' `c:dLblPos`, when it gives a known one.
+fn label_position(d: Option<&El>) -> Option<LabelPos> {
+    d?.child("c:dLblPos")?.attr("val").and_then(LabelPos::parse)
+}
+
 /// The number format of data labels (`c:dLbls/c:numFmt`): `None` when the labels say nothing,
 /// `Some(None)` when they are linked to the source (so a chart-level format does not apply),
 /// `Some(Some(code))` for their own format code.
@@ -262,7 +270,7 @@ impl Series {
         }
         let labels = show_values(ser.child("c:dLbls"));
         let label_fmt = label_format(ser.child("c:dLbls"));
-        let label_pos = ser.child("c:dLbls").and_then(|d| d.child("c:dLblPos")).and_then(|p| p.attr("val")).and_then(LabelPos::parse);
+        let label_pos = label_position(ser.child("c:dLbls"));
         Series {
             name,
             idx,
