@@ -229,6 +229,8 @@ const ORB_PANEL_VALLEY: f32 = 0.88;
 /// meets the body) and plain rounded corners (gradients). Faces +Z (front), -X (left) and +Y (top)
 /// carry the panels, so the shape is made to be seen from the front left, slightly from above.
 /// The body takes the top 79 % of the UV square, the base the bottom 19 %.
+/// The body's seam endpoints have identical positions and normals at each row, and the vertices at
+/// each pole share one position and normal.
 pub fn preview_orb() -> Mesh {
     // Grid rows (columns: twice as many); fewer blur the panel walls, more cost bake time
     const ROWS: usize = 300;
@@ -243,10 +245,17 @@ pub fn preview_orb() -> Mesh {
     let mut b = Builder::default();
     b.grid(ROWS, ROWS * 2, |i, j| {
         let (u, v) = (j as f32 / (ROWS * 2) as f32, i as f32 / ROWS as f32);
-        let (theta, phi) = (v * PI, u * TAU + PI * 1.5);
-        let dir = Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin());
+        let (theta, phi) = (v * PI, if j == ROWS * 2 { PI * 1.5 } else { u * TAU + PI * 1.5 });
+        let dir = if i == 0 {
+            Vec3::Y
+        } else if i == ROWS {
+            -Vec3::Y
+        } else {
+            Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin())
+        };
         (dir * preview_orb_radius(dir), dir, Vec2::new(u, v * BODY_UV_HEIGHT))
     });
+    let body_width = ROWS * 2 + 1;
 
     // Base: a thin disc with a rounded rim (a half circle from its top face to its bottom face)
     let mut profile = vec![(0.0, BASE_HALF_HEIGHT)];
@@ -260,6 +269,17 @@ pub fn preview_orb() -> Mesh {
     let mut m = b.into_mesh("Preview");
     // Normals from the triangles: the panel walls are too steep for the sphere's directions
     m.compute_normals();
+    // Each seam row's two vertices, and each pole's vertices, take the sum of their one-sided normals
+    for row in 0..=ROWS {
+        let columns = if row == 0 || row == ROWS { (0..body_width).collect::<Vec<_>>() } else { vec![0, body_width - 1] };
+        let indices: Vec<usize> = columns.into_iter().map(|column| row * body_width + column).collect();
+        let joined = indices.iter().filter_map(|&index| m.normals.get(index)).copied().sum::<Vec3>().try_normalize().unwrap_or(Vec3::Y);
+        for index in indices {
+            if let Some(normal) = m.normals.get_mut(index) {
+                *normal = joined;
+            }
+        }
+    }
     // Body and base both run U around the vertical axis, so the tangent is that direction (a
     // fraction of the cost of the general tangent pass on this many triangles)
     m.tangents = m
@@ -749,6 +769,39 @@ mod tests {
         let rim = (1.0 - ORB_CUT * ORB_CUT).sqrt() / ORB_CUT;
         let (dome, valley) = (front_depth(0.2), front_depth(rim * ORB_PANEL_VALLEY));
         assert!(dome > ORB_CUT && valley < ORB_CUT - 0.05, "dome {dome}, valley {valley}");
+    }
+
+    #[test]
+    fn preview_orb_body_closes_its_seam_and_poles_exactly() {
+        let mesh = preview_orb();
+        // The body grid's first row is the only one at v = 0; the base starts lower in the UV square
+        let width = mesh.uvs.iter().filter(|uv| uv.y == 0.0).count();
+        let (cols, rows) = (width - 1, (width - 1) / 2);
+        for row in 0..=rows {
+            let (a, b) = (row * width, row * width + cols);
+            assert_eq!(mesh.positions[a], mesh.positions[b], "seam row {row}");
+            assert_eq!(mesh.normals[a], mesh.normals[b], "seam normal row {row}");
+            assert_eq!(mesh.tangents[a], mesh.tangents[b], "seam tangent row {row}");
+            assert_eq!((mesh.uvs[a].x, mesh.uvs[b].x), (0.0, 1.0));
+        }
+        for row in [0, rows] {
+            let first = row * width;
+            assert!(mesh.positions[first].x == 0.0 && mesh.positions[first].z == 0.0, "pole row {row}: {:?}", mesh.positions[first]);
+            for column in 1..=cols {
+                assert_eq!(mesh.positions[first + column], mesh.positions[first], "pole row {row} column {column}");
+                assert_eq!(mesh.normals[first + column], mesh.normals[first], "pole normal row {row} column {column}");
+            }
+        }
+
+        let seams = mesh.uv_seam_edges();
+        for row in 1..rows - 1 {
+            let (top, bottom) = (row * width, (row + 1) * width);
+            let found = seams[0].iter().any(|&(from, to)| {
+                let (from, to) = (from as usize, to as usize);
+                (from.min(to), from.max(to)) == (top, bottom) || (from.min(to), from.max(to)) == (top + cols, bottom + cols)
+            });
+            assert!(found, "meridian edge below row {row} is not a seam");
+        }
     }
 
     #[test]
