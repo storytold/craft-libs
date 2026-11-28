@@ -15,7 +15,7 @@
 //! - Displacements and bulges are two's complement bytes; the arc direction byte keeps its
 //!   sign in the high bit.
 
-use std::f64::consts::{FRAC_PI_4, TAU};
+use std::f64::consts::{FRAC_PI_4, PI, TAU};
 
 use super::ShxKind;
 use std::ops::{Add, Mul, Neg, Sub};
@@ -79,6 +79,18 @@ pub trait Font {
 pub struct Glyph {
     pub strokes: Vec<Vec<Point>>,
     pub advance: Point,
+    /// The box (least and greatest corner) AutoCAD measures the shape by when it lays text out,
+    /// `None` for a shape that draws nothing. Line runs count as drawn; an arc counts as
+    /// the box its chord makes with the chord moved by the arc's sagitta (chord midpoint to arc
+    /// midpoint), which is how AutoCAD's MTEXT wrapping and justification measure SHX fonts:
+    /// exact for a half turn and (√2 − 1)/2 of the radius past a quarter-turn arc (octant-arc
+    /// fonts such as isocp.shx). An arc longer than a half turn is measured in half-turn pieces,
+    /// which matches AutoCAD on the degree circles of simplex, romans and isocp and on bold.shx.
+    pub extent: Option<(Point, Point)>,
+    /// The points [`Glyph::extent`] is the box of: the ends of drawn runs and the corners of
+    /// each arc's chord-and-sagitta box. Slanted text (an oblique angle) is measured by these
+    /// points slanted, not by the slanted box.
+    pub extent_points: Vec<Point>,
 }
 
 /// Subshape nesting (a cycle ends here).
@@ -114,6 +126,12 @@ struct Pen<'a> {
     active: Vec<Point>,
     steps: usize,
     points: usize,
+    /// [`Glyph::extent`] so far.
+    extent: Option<(Point, Point)>,
+    /// [`Glyph::extent_points`] so far.
+    extent_points: Vec<Point>,
+    /// Inside [`Pen::arc`]: its runs don't widen the extent, the arc's box does.
+    in_arc: bool,
 }
 
 pub fn outline(font: &dyn Font, number: u16, vertical: bool) -> Result<Glyph, Broken> {
@@ -129,10 +147,13 @@ pub fn outline(font: &dyn Font, number: u16, vertical: bool) -> Result<Glyph, Br
         active: Vec::new(),
         steps: 0,
         points: 0,
+        extent: None,
+        extent_points: Vec::new(),
+        in_arc: false,
     };
     pen.run(number, 0)?;
     pen.flush();
-    Ok(Glyph { strokes: pen.strokes, advance: pen.pos })
+    Ok(Glyph { strokes: pen.strokes, advance: pen.pos, extent: pen.extent, extent_points: pen.extent_points })
 }
 
 /// The 16 vector directions (unit length on the major axis).
@@ -183,6 +204,26 @@ impl Pen<'_> {
         if self.steps > MAX_STEPS { Err(Broken) } else { Ok(()) }
     }
 
+    /// Widen the extent to `p`. Too many points break the glyph, as too many strokes do,
+    /// so `extent` is always the box of `extent_points`.
+    fn reach(&mut self, p: Point) -> Res {
+        if !p.is_finite() {
+            return Ok(());
+        }
+        // Consecutive runs share their ends; keep each point once in a row.
+        if self.extent_points.last() != Some(&p) {
+            if self.extent_points.len() >= MAX_POINTS {
+                return Err(Broken);
+            }
+            self.extent_points.push(p);
+        }
+        self.extent = Some(match self.extent {
+            Some((lo, hi)) => (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y))),
+            None => (p, p),
+        });
+        Ok(())
+    }
+
     fn flush(&mut self) {
         if self.active.len() >= 2 {
             self.strokes.push(std::mem::take(&mut self.active));
@@ -195,6 +236,10 @@ impl Pen<'_> {
     fn to(&mut self, target: Point) -> Res {
         if !target.is_finite() || target.x.abs().max(target.y.abs()) > MAX_COORD {
             return Err(Broken);
+        }
+        if self.down && !self.in_arc {
+            self.reach(self.pos)?;
+            self.reach(target)?;
         }
         if self.down {
             if self.active.is_empty() {
@@ -229,12 +274,35 @@ impl Pen<'_> {
         let n = if self.down { (sweep.abs() / TAU * ARC_STEPS).ceil().clamp(1.0, ARC_STEPS) as usize } else { 1 };
         let from = self.pos;
         let s0 = Point::new(start.cos(), start.sin());
-        for i in 1..=n {
-            let a = start + sweep * i as f64 / n as f64;
+        let axes = self.axes;
+        let at = |a: f64| {
             let d = (Point::new(a.cos(), a.sin()) - s0) * r;
-            self.to(from + Point::new(d.x * self.axes.x, d.y * self.axes.y))?;
+            from + Point::new(d.x * axes.x, d.y * axes.y)
+        };
+        if self.down {
+            // The extent: each piece of at most a half turn as its chord-and-sagitta box.
+            let pieces = (sweep.abs() / PI).ceil().max(1.0);
+            let step = sweep / pieces;
+            let mut a = start;
+            for _ in 0..pieces as usize {
+                let (p, q, m) = (at(a), at(a + step), at(a + step / 2.0));
+                let sag = m - (p + q) * 0.5;
+                for corner in [p, q, p + sag, q + sag] {
+                    self.reach(corner)?;
+                }
+                a += step;
+            }
         }
-        Ok(())
+        self.in_arc = true;
+        let mut res = Ok(());
+        for i in 1..=n {
+            res = self.to(at(start + sweep * i as f64 / n as f64));
+            if res.is_err() {
+                break;
+            }
+        }
+        self.in_arc = false;
+        res
     }
 
     /// An arc to the displacement `d` with `bulge` (−127..127, ±127 a semicircle).
@@ -527,10 +595,50 @@ mod instruction_tests {
     }
 
     #[test]
+    fn extent_counts_drawn_runs_not_pen_up_moves() {
+        // Pen up to (5, 0), down, one unit up, pen up to the advance (9, 0).
+        let g = outline(&fixture(vec![2, 8, 5, 0, 1, 0x14, 2, 8, 4, 255, 0]), 0, false).unwrap();
+        assert_eq!(g.extent, Some((Point::new(5.0, 0.0), Point::new(5.0, 1.0))));
+        assert_eq!(g.advance, Point::new(9.0, 0.0));
+        // Nothing drawn: no extent.
+        assert_eq!(outline(&fixture(vec![2, 0x10, 0]), 0, false).unwrap().extent, None);
+    }
+
+    #[test]
+    fn extent_takes_a_quarter_arc_by_its_chord_and_sagitta_box() {
+        // Clockwise from 90° through two octants, radius 10: the arc runs from (0, 0) to (10, -10)
+        // and reaches x = 10, but its box reaches (√2 − 1)/2 · 10 further, as AutoCAD measures it.
+        let g = outline(&fixture(vec![10, 10, 0xA2, 0]), 0, false).unwrap();
+        let (lo, hi) = g.extent.unwrap();
+        let over = 10.0 * (2f64.sqrt() - 1.0) / 2.0;
+        assert!((hi.x - (10.0 + over)).abs() < 1e-9 && (hi.y - over).abs() < 1e-9, "{hi:?}");
+        assert!(lo.x.abs() < 1e-9 && (lo.y + 10.0).abs() < 1e-9, "{lo:?}");
+        let ink = g.strokes.iter().flatten().fold(f64::MIN, |m, p| m.max(p.x));
+        assert!((ink - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn extent_is_exact_for_half_turns_and_full_circles() {
+        // Clockwise half turn from 180° (radius 10): exactly the arc's box.
+        let g = outline(&fixture(vec![10, 10, 0xC4, 0]), 0, false).unwrap();
+        let (lo, hi) = g.extent.unwrap();
+        assert!(lo.x.abs() < 1e-9 && lo.y.abs() < 1e-9 && (hi.x - 20.0).abs() < 1e-9 && (hi.y - 10.0).abs() < 1e-9, "{lo:?} {hi:?}");
+        // A full circle from 0° is measured in two half turns: its own box.
+        let (lo, hi) = outline(&fixture(vec![10, 10, 0, 0]), 0, false).unwrap().extent.unwrap();
+        assert!((lo.x + 20.0).abs() < 1e-9 && (lo.y + 10.0).abs() < 1e-9 && hi.x.abs() < 1e-9 && (hi.y - 10.0).abs() < 1e-9, "{lo:?} {hi:?}");
+        // An arc drawn with the pen up adds nothing.
+        assert_eq!(outline(&fixture(vec![2, 10, 10, 0, 0]), 0, false).unwrap().extent, None);
+    }
+
+    #[test]
     fn malformed_operands_and_resource_exhaustion_return_errors() {
         for program in [vec![8, 1], vec![7, 99], vec![5; MAX_STACK + 1], vec![0x10; MAX_POINTS + 1], vec![4, 255, 4, 255, 4, 255]] {
             assert!(outline(&fixture(program), 0, false).is_err());
         }
         assert!(outline(&fixture(vec![0]), 1, false).is_err());
+        // Tiny fractional arcs: one stroke point but four extent points each.
+        let mut tiny: Vec<u8> = [11, 0, 1, 0, 10, 0x01].repeat(MAX_POINTS / 4 + 1);
+        tiny.push(0);
+        assert!(outline(&fixture(tiny), 0, false).is_err());
     }
 }
