@@ -663,6 +663,12 @@ pub(crate) fn measure_under<C: Component>(
     measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None }, super::MeasureFor::Component)
 }
 
+/// Measures `child` as a composite's own child in its measure (`MeasureCx::child`): as [`measure_under`], with a
+/// transcript leaf that is new to the body when the kept transcript never held it (`MeasureFor::Child`).
+pub(crate) fn measure_child<C: Component>(child: &mut C, ui: &Ui, id: Id, proposal: Proposal, under: &crate::contract::cx::Under) -> Vec2 {
+    measure_shape(child, ui, Some(id), proposal, Some(under), &mut LeafHooks { scope: None }, super::MeasureFor::Child)
+}
+
 /// Measures `face` as `PaintUi::face` will show it, as part of the measure call of the composite whose `under` it
 /// takes: as [`measure_under`], with no transcript leaf of its own.
 pub(crate) fn measure_face<C: Component>(face: &mut C, ui: &Ui, id: Id, proposal: Proposal, under: &crate::contract::cx::Under) -> Vec2 {

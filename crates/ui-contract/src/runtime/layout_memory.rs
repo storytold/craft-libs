@@ -129,6 +129,10 @@ pub(crate) struct Call {
 struct Leaf {
     fill: Option<Axis>,
     calls: Vec<Call>,
+    /// Every call came from a composite measuring the component as its own child (`MeasureCx::child`): the
+    /// composite's own call, or the rect it was shown at, is what the body takes, so the child is new to the body
+    /// when the transcript does not hold it, and gone without changing the body when the real run does not ask it.
+    nested: bool,
 }
 
 /// What a body's measuring run found.
@@ -849,12 +853,16 @@ pub(crate) fn probing<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
 /// answer). A measuring run adds them to the innermost body's transcript. A real run inside a body whose records a
 /// kept transcript gave checks each call the transcript holds for the component, once per pass: a kept call this run
 /// made too (same proposal and room, no inputs read besides the room) compares with this run's answer, and any other
-/// is asked again (`ask`) under the inputs it read. `ask` runs outside the memory's lock.
-pub(crate) fn leaf_call(ctx: &Context, id: Id, calls: &mut [Call], ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
+/// is asked again (`ask`) under the inputs it read. `ask` runs outside the memory's lock. `nested`: a composite measures
+/// the component as its own child; a component the kept transcript does not hold is then new to the body, not a change
+/// of it (`Leaf::nested`).
+pub(crate) fn leaf_call(ctx: &Context, id: Id, nested: bool, calls: &mut [Call], ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
     let moment = Moment::of(ctx);
     if !real(ctx) {
         with(ctx, &moment, |memory| {
             if let Some(leaf) = memory.leaf(id) {
+                let first = leaf.calls.is_empty() && leaf.fill.is_none();
+                leaf.nested = nested && (first || leaf.nested);
                 let kept = &mut leaf.calls;
                 for call in calls {
                     if !kept.iter().any(|kept| kept.proposal == call.proposal && kept.room == call.room) {
@@ -866,10 +874,10 @@ pub(crate) fn leaf_call(ctx: &Context, id: Id, calls: &mut [Call], ask: impl FnM
         });
         return;
     }
-    check(ctx, &moment, id, calls, ask);
+    check(ctx, &moment, id, nested, calls, ask);
 }
 
-fn check(ctx: &Context, moment: &Moment, id: Id, made: &[Call], mut ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
+fn check(ctx: &Context, moment: &Moment, id: Id, nested: bool, made: &[Call], mut ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
     let transcript = with(ctx, moment, |memory| {
         let scope = memory.checking()?;
         if !scope.visited.insert(id) {
@@ -878,6 +886,11 @@ fn check(ctx: &Context, moment: &Moment, id: Id, made: &[Call], mut ask: impl Fn
         scope.served.clone()
     });
     let Some(transcript) = transcript else { return };
+    // A child a composite measures for the first time (new ids, as a row salted by the document it shows) is new: the
+    // composite's own call, or its rect, is what the body takes from it.
+    if nested && !transcript.leaves.contains_key(&id) {
+        return;
+    }
     let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
     // A component the transcript does not hold was added; one that answers differently under the inputs it read then
     // changed. An input that changed since (a shared column a later row widened in the measuring run's sweep) is not a
@@ -1179,15 +1192,39 @@ pub(crate) fn close_content(ctx: &Context, regions: &[(Id, Vec2)]) {
         // What the real run reported to the aggregators around its rows is what the measuring run did.
         let reports_differ = made.len() != scope.reported.len()
             || made.iter().zip(&scope.reported).any(|(was, now)| was.0 != now.0 || (was.1 - now.1).abs() > tolerance);
-        let removed = reports_differ
-            || served
-                .leaves
-                .iter()
-                .any(|(id, leaf)| (!leaf.calls.is_empty() && !scope.visited.contains(id)) || (leaf.fill.is_some() && !scope.fills.contains(id)));
+        // A composite's own child the real run did not ask is gone from the composite, not from the body (`Leaf::nested`).
+        let unvisited = |(id, leaf): &(&Id, &Leaf)| !leaf.nested && !leaf.calls.is_empty() && !scope.visited.contains(*id);
+        let unseen = |(id, leaf): &(&Id, &Leaf)| leaf.fill.is_some() && !scope.fills.contains(*id);
+        let removed = reports_differ || served.leaves.iter().any(|entry| unvisited(&entry) || unseen(&entry));
         if removed {
             #[cfg(feature = "testing")]
             if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
-                eprintln!("layout memory: a component of {:?} did not run", scope.body);
+                let mut causes = Vec::new();
+                if reports_differ {
+                    let differing = made.iter().zip(&scope.reported).find(|(was, now)| was.0 != now.0 || (was.1 - now.1).abs() > tolerance);
+                    causes.push(format!(
+                        "a report differed: the measuring run made {} ({made:?}), the real run {} ({:?}); first difference {differing:?}",
+                        made.len(),
+                        scope.reported.len(),
+                        scope.reported
+                    ));
+                }
+                causes.extend(
+                    served
+                        .leaves
+                        .iter()
+                        .filter(|entry| unvisited(entry))
+                        .map(|(id, _)| format!("the leaf {id:?} the kept transcript holds was not asked")),
+                );
+                causes.extend(
+                    served
+                        .leaves
+                        .iter()
+                        .filter(|entry| unseen(entry))
+                        .map(|(id, leaf)| format!("the leaf {id:?} that fills {:?} did not fill", leaf.fill)),
+                );
+                let what = if causes.is_empty() { String::from("no cause found") } else { causes.join("; ") };
+                eprintln!("layout memory: a component of {:?} did not run: {what}", scope.body);
             }
             memory.changed(moment.frame, scope.body);
         }

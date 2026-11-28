@@ -175,7 +175,7 @@ impl<C: Component> MeasureCx<'_, C> {
     /// Measures a child under the composite's resolved `enabled` and `size`, as `PaintUi::child` will show it.
     pub fn child<D: Show>(&self, key: impl Hash + Debug, child: &mut D, proposal: Proposal) -> Vec2 {
         let id = self.id.with(key);
-        crate::contract::measure_under(child, self.ui, Some(id), proposal, Some(&self.under()))
+        crate::contract::run::measure_child(child, self.ui, id, proposal, &self.under())
     }
 
     /// Measures a child as `PaintUi::labelled` will show it with `side`: under the inside label `side` gives it
@@ -184,7 +184,7 @@ impl<C: Component> MeasureCx<'_, C> {
         let id = self.id.with(key);
         let mut under = self.under();
         under.inside = crate::contract::label::inside(self.env, side, under.enabled);
-        crate::contract::measure_under(child, self.ui, Some(id), proposal, Some(&under))
+        crate::contract::run::measure_child(child, self.ui, id, proposal, &under)
     }
 
     fn under(&self) -> crate::contract::cx::Under {

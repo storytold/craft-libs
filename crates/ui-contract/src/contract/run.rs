@@ -30,8 +30,8 @@ use std::sync::Arc;
 mod typed;
 
 pub(crate) use typed::{
-    MemberNode, MemberPrep, MemberShown, measure_container, measure_face, measure_under, measured_extent, member_prepare, member_show, paint_face,
-    show_container, show_container_taking, show_items, show_leaf,
+    MemberNode, MemberPrep, MemberShown, measure_child, measure_container, measure_face, measure_under, measured_extent, member_prepare, member_show,
+    paint_face, show_container, show_container_taking, show_items, show_leaf,
 };
 
 /// Where a component is placed.
@@ -1755,7 +1755,7 @@ fn measure_step(
                 &mut one
             }
         };
-        crate::runtime::layout_memory::leaf_call(ctx, id, calls, |proposal, room| ask(&mut *t, proposal, room, extent).0);
+        crate::runtime::layout_memory::leaf_call(ctx, id, false, calls, |proposal, room| ask(&mut *t, proposal, room, extent).0);
     }
     begun.trace().mark(Step::Measure);
     let min = min_took.inspect(|min| scope::record_control_min(ctx, min.x));
@@ -1934,6 +1934,10 @@ fn scoped_env(ctx: &Context, env: Env, theme: Option<ThemeScope>) -> Env {
 pub(crate) enum MeasureFor {
     /// A component its caller shows, or sizes a rect by: a leaf of the transcript of the body it is measured in.
     Component,
+    /// A component a composite measures as its own child in its measure (`MeasureCx::child`, `MeasureCx::labelled`): a
+    /// leaf of the body's transcript, but the composite's own call (or its rect) is what the body takes, so a child the
+    /// transcript never held is new to the body, not a change of it.
+    Child,
     /// A composite's face (`MeasureCx::face`), measured inside the composite's own run (measure, parts or header
     /// parts). Only the composite's measure call sizes the composite, and its answer and inputs are the transcript's
     /// record, so the face keeps no leaf of its own.
@@ -1982,9 +1986,10 @@ pub(super) fn measure_shape(
     };
     let ask = |t: &mut dyn Erased, proposal: Proposal| measured(t, &MeasureIn { ui, env: &env, proposal, room: None }, &*style, &resolved, extent);
     let (took, inputs) = ask(&mut *t, proposal);
-    if leaf && purpose == MeasureFor::Component && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
+    if leaf && purpose != MeasureFor::Face && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
         let calls = &mut [Call { proposal, room: None, inputs, took }];
-        crate::runtime::layout_memory::leaf_call(ui.ctx(), id, calls, |proposal, _| ask(&mut *t, proposal).0);
+        let nested = purpose == MeasureFor::Child;
+        crate::runtime::layout_memory::leaf_call(ui.ctx(), id, nested, calls, |proposal, _| ask(&mut *t, proposal).0);
     }
     if let Some(key) = t.bind_key(id) {
         reads::note(ui.ctx(), key, id, true, &[Sample { proposal, room: None, took }]);
