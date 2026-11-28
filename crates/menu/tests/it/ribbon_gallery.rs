@@ -263,3 +263,26 @@ fn the_current_tile_paints_an_accent_fill_and_edge_even_when_focused() {
         assert!(shapes.iter().any(|p| p.fill == fill && near(p, current)), "{who}: the focused current tile keeps its fill");
     }
 }
+
+/// How many shapes a gallery of one rendered tile of a transparent image paints, as built or with `checker(false)`.
+fn shapes_of_rendered(opt_out: bool) -> usize {
+    use craft_ui::primitives::textures::{FakeThumbSource, ThumbnailOptions, Thumbnails};
+    let mut fixture = Fixture::new(move |ui| {
+        let options = ThumbnailOptions::new().jobs(std::sync::Arc::new(craft_host::InlineJobs));
+        let thumbnails = Thumbnails::<u64>::in_context(ui.ctx(), "gallery_checker_test", options);
+        let source = FakeThumbSource::<u64>::new();
+        // The default case sets nothing, so a default that turned the grid off fails here.
+        let face = GalleryFace::rendered(1, &thumbnails, &source);
+        let face = if opt_out { face.checker(false) } else { face };
+        let items = [GalleryItem { key: 0_usize, label: Label::from("Mask"), face }];
+        Gallery::new("Symbols", &items, None).tiles(1, 1).show(ui);
+    });
+    fixture.settle();
+    fixture.frame_shapes().len()
+}
+
+#[trial]
+fn a_rendered_gallery_tile_paints_a_checker_unless_it_opts_out() {
+    let (with, without) = (shapes_of_rendered(false), shapes_of_rendered(true));
+    assert!(with > without, "the default paints {with} shapes, the opt-out {without}: the grid is the difference");
+}
