@@ -799,12 +799,21 @@ impl<'a> TransformBox<'a> {
                 if (!distort_mode || matches!(grip.part, BoxPart::Corner(_))) && !self.rules.keeps_proportions(grip.part, mods) =>
             {
                 let off = grip.from - grabbed;
-                let (at, lines) = snap.point(to - off, mods, gesture);
+                let (at, mut lines) = snap.point(to - off, mods, gesture);
                 // An edge handle snaps only along its drag (the reference's): across the box's top edge for a side, along
                 // it for the top or bottom edge. A pull along the edge would turn a dragged side on a box in perspective.
                 let pull = at - (to - off);
                 let pull = match (grip.part, drag_axis(&grip.start.quad, grip.part)) {
-                    (BoxPart::Edge(_), Some(axis)) => axis * pull.dot(axis),
+                    (BoxPart::Edge(_), Some(axis)) => {
+                        let along = axis * pull.dot(axis);
+                        // A line the handle does not reach after that (a guide across the drag) is not reported.
+                        let handle = to - off + along;
+                        lines.retain(|line| {
+                            let across = if matches!(line.along, Axis::Y) { handle.x } else { handle.y };
+                            (across - line.position).abs() < 1e-6
+                        });
+                        along
+                    }
                     _ => pull,
                 };
                 (to + pull, lines)

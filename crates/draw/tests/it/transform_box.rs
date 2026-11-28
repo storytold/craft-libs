@@ -1863,11 +1863,14 @@ fn an_edge_handle_snaps_only_along_its_drag() {
         frame(&mut h, vec![pointer::press(from)]);
         frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
         frame(&mut h, vec![pointer::moved(from + by(50.0, 0.0))]);
+        let lines = h.host.borrow().snapped;
         frame(&mut h, vec![pointer::release(from + by(50.0, 0.0))]);
-        h.state().quad
+        (h.state().quad, lines)
     };
-    let (off, on) = (run(false), run(true));
+    let ((off, _), (on, lines)) = (run(false), run(true));
     assert!(off.iter().zip(on).all(|(a, b)| a.distance(b) < 1e-6), "snapping off {off:?}, on {on:?}");
+    // The line the handle was not pulled to is not reported either: the host would draw an alignment that is not there.
+    assert_eq!(lines, 0, "no snap line for the guide across the drag");
 }
 
 /// An ⌥ click inside the box puts the reference point half a unit up and left of the click (measured on the
