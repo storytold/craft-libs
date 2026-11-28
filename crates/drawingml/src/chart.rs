@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::style::{ColorRef, Fill, Line};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChartType {
     #[default]
@@ -225,6 +225,12 @@ pub struct Series {
     /// Missing or invalid IDs and new series get an unused ID when the chart is rebuilt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_idx: Option<u32>,
+    /// Membership in an imported classic plot group, scoped to this chart. Clones retain
+    /// membership; a new default series forms the default group for its type and axis.
+    /// To join an imported stack, carry its group token. Clear/rebind it when copying charts.
+    /// Rebuilding may renumber tokens; only the membership relation is meaningful.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_group: Option<u32>,
     pub values: Vec<Option<f64>>,
     /// X values for scatter/bubble.
     pub x_values: Vec<Option<f64>>,
@@ -488,7 +494,8 @@ pub struct Chart {
     pub raw: Option<String>,
     /// Metadata interpretation of retained classic chart XML: 0 is the former reader, 1 is
     /// the first typed-metadata reader, 2 adds stacked marker visibility and secondary-only
-    /// axis ownership, 3 retains series IDs, and 4 selects reciprocal duplicate-axis partners.
+    /// axis ownership, 3 retains series IDs, 4 selects reciprocal duplicate-axis partners,
+    /// and 5 retains plot-group membership and the selected axes' metadata.
     /// Missing fields are version 0. Preserve when editing.
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub raw_metadata_version: u16,
@@ -811,27 +818,46 @@ impl Chart {
     /// Widens `ext` by the points of the stacked and 100 % series in `ser`; returns whether a
     /// 100 % series is among them.
     fn fold_stacked(&self, ser: &[&Series], ext: &mut (f64, f64), kinds: &SeriesKinds<'_>) -> bool {
+        // Resolve each series once. Independent kinds and source groups are separate stacks;
+        // the caller has already selected one value axis. None is the default new-series group.
+        let mut groups = std::collections::HashMap::new();
+        let planned = ser
+            .iter()
+            .map(|s| {
+                let kind = kinds.kind(s);
+                let slot = if kind.stacked() && !kind.percent() {
+                    let next = groups.len();
+                    Some(*groups.entry((kind, s.source_group)).or_insert(next))
+                } else {
+                    None
+                };
+                (*s, kind, slot)
+            })
+            .collect::<Vec<_>>();
+        let mut totals = vec![(0.0_f64, 0.0_f64, false); groups.len()];
         let mut percent = false;
         let n = ser.iter().map(|s| s.values.len()).max().unwrap_or(0);
         let budget = (ser.len() * n).min(10_000_000);
         let n_clamped = if ser.is_empty() { 0 } else { n.min(budget / ser.len()) };
         for i in 0..n_clamped {
-            let (mut p, mut m, mut stacked) = (0.0, 0.0, false);
-            for s in ser {
-                let k = kinds.kind(s);
+            totals.fill((0.0, 0.0, false));
+            for (s, kind, slot) in &planned {
                 let Some(v) = s.values.get(i).copied().flatten().filter(|v| v.is_finite()) else { continue };
-                if k.percent() {
+                if kind.percent() {
                     percent = true;
-                } else if k.stacked() {
-                    stacked = true;
-                    if v >= 0.0 { p += v } else { m += v }
+                } else if let Some(slot) = slot {
+                    let (positive, negative, present) = &mut totals[*slot];
+                    *present = true;
+                    if v >= 0.0 { *positive += v } else { *negative += v }
                 } else {
                     widen(ext, v);
                 }
             }
-            if stacked {
-                ext.1 = ext.1.max(p);
-                ext.0 = ext.0.min(m);
+            for &(positive, negative, present) in &totals {
+                if present {
+                    ext.1 = ext.1.max(positive);
+                    ext.0 = ext.0.min(negative);
+                }
             }
         }
         percent
@@ -904,7 +930,6 @@ impl Chart {
         // A 100 % stacked chart's value axis counts in percent unless the file says otherwise.
         let code = match code.as_deref() {
             None if self.series_kinds().percent_axis(secondary) => "0%",
-            Some("General") if !secondary && self.kind.percent() => "0%",
             c => c.unwrap_or("General"),
         };
         crate::numfmt::format_dated(code, v, self.lang.as_deref(), self.date_1904)
@@ -972,7 +997,9 @@ impl Chart {
         if self.kind == ChartType::Waterfall {
             return self.waterfall_value_range();
         }
-        if !kinds.all_chart_kind() {
+        if !kinds.all_chart_kind()
+            || (self.kind.stacked() && self.series.iter().any(|s| s.source_group.is_some() || self.on_secondary(s)))
+        {
             // Keep the aggregate value_range contract while respecting each actual plot's kind.
             let mut extent = (0.0_f64, 0.0_f64);
             for secondary in [false, true] {

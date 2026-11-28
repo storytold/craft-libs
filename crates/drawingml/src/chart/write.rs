@@ -776,7 +776,26 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(SeriesIndex, 
     w.close();
 }
 
-/// Retain the old per-kind cache budget before axis ownership partitions that list.
+/// Partition in first-occurrence order without changing source IDs or global display order.
+/// None is the synthetic default group; imported group tokens are scoped to this chart.
+fn source_groups<'a>(list: &[(SeriesIndex, &'a Series)]) -> Vec<Vec<(SeriesIndex, &'a Series)>> {
+    let mut positions = std::collections::HashMap::new();
+    let mut groups: Vec<Vec<(SeriesIndex, &'a Series)>> = Vec::new();
+    for &(index, series) in list {
+        let next = groups.len();
+        let group = *positions.entry(series.source_group).or_insert(next);
+        if group == groups.len() {
+            groups.push(Vec::new());
+        }
+        groups[group].push((index, series));
+    }
+    if groups.is_empty() {
+        groups.push(Vec::new());
+    }
+    groups
+}
+
+/// Retain the old per-kind cache budget before axis and source-group partitioning.
 fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(SeriesIndex, &Series)], override_markers: Option<bool>) -> [Option<ChartType>; 2] {
     let g = group_of(kind);
     let mut left = MAX_EXPORT_POINTS;
@@ -792,14 +811,18 @@ fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(SeriesIndex, &
     }
     let retained = &list[..end];
     if matches!(g, Group::Pie | Group::Doughnut) {
-        plot_group(w, c, kind, retained, false, override_markers);
+        for group in source_groups(retained) {
+            plot_group(w, c, kind, &group, false, override_markers);
+        }
         return [None, None];
     }
     let mut emitted = [None, None];
     for secondary in [false, true] {
         let part = retained.iter().filter(|(_, s)| s.secondary_axis == secondary).copied().collect::<Vec<_>>();
         if !part.is_empty() || (!secondary && retained.is_empty()) {
-            plot_group(w, c, kind, &part, secondary, override_markers);
+            for group in source_groups(&part) {
+                plot_group(w, c, kind, &group, secondary, override_markers);
+            }
             emitted[usize::from(secondary)] = Some(kind);
         }
     }

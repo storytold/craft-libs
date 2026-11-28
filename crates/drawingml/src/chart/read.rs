@@ -130,7 +130,7 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
 fn chart_within(root: &El, budget: usize) -> Option<Chart> {
-    read_chart(root, budget, 4)
+    read_chart(root, budget, 5)
 }
 
 /// Exact former metadata projection for unchanged legacy native saves, using the same caps.
@@ -153,6 +153,11 @@ pub(super) fn metadata_v3_chart_from(root: &El) -> Option<Chart> {
     read_chart(root, MAX_CHART_POINTS, 3)
 }
 
+/// The published reciprocal-pair projection, before selected-element and category-format fixes.
+pub(super) fn metadata_v4_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, 4)
+}
+
 #[cfg(test)]
 std::thread_local! {
     static RAW_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -166,6 +171,7 @@ pub(super) fn chart_for_version(root: &El, version: u16) -> Option<Chart> {
         1 => metadata_v1_chart_from(root),
         2 => metadata_v2_chart_from(root),
         3 => metadata_v3_chart_from(root),
+        4 => metadata_v4_chart_from(root),
         _ => chart_from(root),
     }
 }
@@ -220,13 +226,18 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
             ))
         })
         .collect();
-    let primary_val = primary_value_axis(pa, &val_map, version);
+    let primary_axis = primary_value_axis(pa, &val_map, version);
+    let primary_val = primary_axis.and_then(|a| a.child(Local("axId"))).and_then(|a| a.attr_local("val")).map(str::to_string);
+    let mut group_ordinal = 0_u32;
     for g in pa.elements() {
         let name = g.local();
         if !name.ends_with("Chart") {
             continue;
         }
         let Some((mut kind, group_markers)) = group_metadata(name, g, version) else { continue };
+        // Membership token for this read, not a persistent numeric group ID across rebuilds.
+        let source_group = group_ordinal;
+        group_ordinal = group_ordinal.saturating_add(1);
         if legacy
             && kind == ChartType::LineMarkers
             && g.children(Local("ser")).any(|s| s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")) == Some("none"))
@@ -243,6 +254,9 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
         for s in g.children(Local("ser")).take(1000) {
             let needs_categories = c.categories.is_empty();
             let mut ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget);
+            if version >= 5 {
+                ser.source_group = Some(source_group);
+            }
             if version >= 3 {
                 ser.source_idx = s.child(Local("idx")).and_then(|i| i.attr_local("val")).and_then(|v| v.trim().parse::<u32>().ok());
             }
@@ -260,7 +274,8 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
                 }
             }
             if needs_categories && !c.categories.is_empty() {
-                c.category_format = category_format(pa, g, s);
+                let axis = if version >= 5 { group_category_axis(pa, g, primary_axis, &val_map) } else { category_axis(pa, g) };
+                c.category_format = category_format(axis, s);
             }
             let order = s.child(Local("order")).and_then(|o| o.attr_local("val")).and_then(|v| v.trim().parse::<u32>().ok());
             series.push((order.map(|v| v as usize).unwrap_or(series.len()), ser));
@@ -307,7 +322,7 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
             outline: flag("showOutline"),
         }
     });
-    let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val, &val_map, version);
+    let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val, primary_axis, &val_map, version);
     read_text_styles(&mut c, root, ch, val_ax, cat_ax);
     Some(c)
 }
@@ -321,7 +336,7 @@ fn group_value_axis(val_map: &std::collections::HashMap<&str, bool>, g: &El) -> 
 
 /// The primary value axis is the one on the left (bottom for bar charts); the secondary one
 /// sits on the right or top, or crosses the category axis at its maximum.
-fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, version: u16) -> Option<String> {
+fn primary_value_axis<'a>(pa: &'a El, val_map: &std::collections::HashMap<&str, bool>, version: u16) -> Option<&'a El> {
     let legacy = version == 0;
     let secondary_placed = |a: &El| {
         a.child(Local("crosses")).and_then(|c| c.attr_local("val")) == Some("max")
@@ -337,7 +352,7 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
         .filter_map(|g| group_value_axis(val_map, g))
         .collect();
     if let Some(id) = used.iter().find(|id| val_axes_by_id.get(id.as_str()).is_some_and(|a| !secondary_placed(a))) {
-        return Some(id.clone());
+        return val_axes_by_id.get(id.as_str()).copied();
     }
     if version >= 2 {
         // A secondary-only plot still owns the right/top pair. The writer keeps the unused
@@ -360,18 +375,17 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
                 (!a.is(Local("valAx")) || horizontal).then_some((id, a.child(Local("crossAx"))?.attr_local("val")?))
             })
             .collect();
-        if let Some(id) = pa.children(Local("valAx")).find_map(|a| {
-            let id = a.child(Local("axId"))?.attr_local("val")?;
-            let cross = a.child(Local("crossAx"))?.attr_local("val")?;
-            if secondary_placed(a) || !matches!(a.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("l" | "b")) {
-                return None;
-            }
-            partners.contains(&(cross, id)).then(|| id.to_string())
+        if let Some(axis) = pa.children(Local("valAx")).find(|a| {
+            let Some(id) = a.child(Local("axId")).and_then(|a| a.attr_local("val")) else { return false };
+            let Some(cross) = a.child(Local("crossAx")).and_then(|a| a.attr_local("val")) else { return false };
+            !secondary_placed(a)
+                && matches!(a.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("l" | "b"))
+                && partners.contains(&(cross, id))
         }) {
-            return Some(id);
+            return Some(axis);
         }
     }
-    used.first().cloned()
+    used.first().and_then(|id| val_axes_by_id.get(id.as_str()).copied())
 }
 
 // Cache current marker inheritance once per group. The two older save projections keep
@@ -589,6 +603,7 @@ fn read_axes<'a>(
     c: &mut Chart,
     pa: &'a El,
     primary_val: &Option<String>,
+    primary_axis: Option<&'a El>,
     val_map: &std::collections::HashMap<&str, bool>,
     version: u16,
 ) -> (Option<&'a El>, Option<&'a El>) {
@@ -597,7 +612,9 @@ fn read_axes<'a>(
     let by_id = |id: &Option<String>| {
         pa.children(Local("valAx")).find(|a| id.is_some() && a.child(Local("axId")).and_then(|c| c.attr_local("val")) == id.as_deref())
     };
-    let val_ax = by_id(primary_val).or_else(|| pa.children(Local("valAx")).find(vertical)).or_else(|| pa.children(Local("valAx")).last());
+    // Earlier native projections deliberately preserve their first-by-ID interpretation.
+    let selected = if version >= 5 { primary_axis } else { None };
+    let val_ax = selected.or_else(|| by_id(primary_val)).or_else(|| pa.children(Local("valAx")).find(vertical)).or_else(|| pa.children(Local("valAx")).last());
     let num = |a: &El, k: &str| a.child(Local(k)).and_then(|c| c.attr_local("val")).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
     // An axis' number format: its own unless linked to the source (`sourceLinked="1"`, or no
     // c:numFmt at all), in which case the data's format of the first series plotted on it.
@@ -658,23 +675,7 @@ fn read_axes<'a>(
         pa.child(Local("catAx")).or_else(|| pa.child(Local("dateAx"))).or_else(|| pa.children(Local("valAx")).find(|a| !vertical(a)))
     } else {
         val_ax
-            .and_then(|a| a.child(Local("crossAx")))
-            .and_then(|a| a.attr_local("val"))
-            .and_then(|id| {
-                let eligible = |a: &&El| {
-                    matches!(a.local(), "catAx" | "dateAx" | "valAx")
-                        && (!a.is(Local("valAx")) || !vertical(a))
-                        && a.child(Local("axId")).and_then(|i| i.attr_local("val")) == Some(id)
-                };
-                let reciprocal = if version >= 4 {
-                    let value_id = val_ax.and_then(|a| a.child(Local("axId"))).and_then(|a| a.attr_local("val"));
-                    pa.elements()
-                        .find(|a| eligible(a) && value_id.is_some() && a.child(Local("crossAx")).and_then(|c| c.attr_local("val")) == value_id)
-                } else {
-                    None
-                };
-                reciprocal.or_else(|| pa.elements().find(eligible))
-            })
+            .and_then(|a| category_axis_for_value(pa, a, version >= 4))
             .or_else(|| {
                 primary_val.as_deref().and_then(|id| {
                     pa.elements()
@@ -735,15 +736,49 @@ fn category_axis<'a>(pa: &'a El, group: &El) -> Option<&'a El> {
         })
 }
 
+/// The category partner of this exact value axis. Versions 1–3 use the ID-only path;
+/// version 4 and later prefer the reciprocal partner, then retain that fallback.
+fn category_axis_for_value<'a>(pa: &'a El, value_axis: &El, reciprocal: bool) -> Option<&'a El> {
+    let id = value_axis.child(Local("crossAx"))?.attr_local("val")?;
+    let eligible = |axis: &&El| {
+        matches!(axis.local(), "catAx" | "dateAx" | "valAx")
+            && (!axis.is(Local("valAx")) || !matches!(axis.child(Local("axPos")).and_then(|a| a.attr_local("val")), Some("l" | "r")))
+            && axis.child(Local("axId")).and_then(|a| a.attr_local("val")) == Some(id)
+    };
+    let paired = if reciprocal {
+        let value_id = value_axis.child(Local("axId")).and_then(|a| a.attr_local("val"));
+        pa.elements().find(|axis| {
+            eligible(axis) && value_id.is_some() && axis.child(Local("crossAx")).and_then(|a| a.attr_local("val")) == value_id
+        })
+    } else {
+        None
+    };
+    paired.or_else(|| pa.elements().find(eligible))
+}
+
+/// Resolve the pair belonging to the group that actually supplied the categories.
+fn group_category_axis<'a>(pa: &'a El, group: &El, primary_axis: Option<&'a El>, val_map: &std::collections::HashMap<&str, bool>) -> Option<&'a El> {
+    let value_id = group_value_axis(val_map, group);
+    let value_axis = primary_axis
+        .filter(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref())
+        .or_else(|| pa.children(Local("valAx")).find(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref()));
+    value_axis
+        .and_then(|a| category_axis_for_value(pa, a, true))
+        .filter(|a| {
+            let id = a.child(Local("axId")).and_then(|a| a.attr_local("val"));
+            id.is_some() && group.children(Local("axId")).any(|a| a.attr_local("val") == id)
+        })
+        .or_else(|| category_axis(pa, group))
+}
+
 /// The number format of the category labels, for categories that are numbers or dates: the category
 /// axis' own format, unless it is linked to the source (`sourceLinked`, or no `c:numFmt`), in which
 /// case the format code of the category cells. `None` when the categories are text (their cached
 /// strings show as they are) or the file gives only General.
-fn category_format(pa: &El, group: &El, series: &El) -> Option<String> {
+fn category_format(cat_ax: Option<&El>, series: &El) -> Option<String> {
     // Called only when the budgeted series read first supplies categories. Never rescan caches
     // or take a format from a skipped series or another plot group's axis.
     let cat = series.child(Local("cat")).or_else(|| series.child(Local("xVal")))?;
-    let cat_ax = category_axis(pa, group);
     if cat.find(Local("strCache")).or_else(|| cat.find(Local("strLit"))).is_some() {
         return None;
     }
@@ -1687,6 +1722,7 @@ mod tests {
         old["rawMetadataVersion"] = serde_json::json!(1);
         for series in old["series"].as_array_mut().unwrap() {
             series.as_object_mut().unwrap().remove("sourceIdx");
+            series.as_object_mut().unwrap().remove("sourceGroup");
         }
         old["series"][0]["secondaryAxis"] = serde_json::json!(false);
         old["yMax"] = serde_json::json!(90.0);
@@ -1843,6 +1879,7 @@ mod tests {
                 for series in old["series"].as_array_mut().unwrap() {
                     series.as_object_mut().unwrap().remove("markerVisible");
                     series.as_object_mut().unwrap().remove("sourceIdx");
+                    series.as_object_mut().unwrap().remove("sourceGroup");
                 }
                 let old: Chart = serde_json::from_value(old).unwrap();
                 assert!(crate::chart::write::chart_xml(&old).1, "unchanged version1 saves retain their raw part");
@@ -2184,7 +2221,7 @@ mod tests {
         }
         let xml = same_kind_chart_xml();
         let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
-        for version in 0..=4 {
+        for version in 0..=5 {
             let mut chart = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
             chart.raw = Some(xml.clone());
             for s in &mut chart.series {
@@ -2275,7 +2312,7 @@ mod tests {
         for (category, fixture) in [(false, review_duplicate_axis_xml(true)), (true, review_duplicate_category_xml())] {
             let xml = fixture.replace("</c:chartSpace>", r#"<c:extLst><c:ext uri="urn:craft:original-axis-fixture"><own:preserved xmlns:own="urn:craft:original"/></c:ext></c:extLst></c:chartSpace>"#);
             let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
-            for version in 0..=4 {
+            for version in 0..=5 {
                 let mut chart = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
                 chart.raw = Some(xml.clone());
                 let chart: Chart = serde_json::from_str(&serde_json::to_string(&chart).unwrap()).unwrap();
@@ -2299,7 +2336,7 @@ mod tests {
                 assert_eq!(read_chart_xml(&written).unwrap().series[0].secondary_axis, edit.series[0].secondary_axis);
             }
             let current = read_chart_xml(xml.as_bytes()).unwrap();
-            assert_eq!(current.raw_metadata_version, 4);
+            assert_eq!(current.raw_metadata_version, 5);
             if !category {
                 assert_eq!(current.y_max, Some(10.0));
             }
