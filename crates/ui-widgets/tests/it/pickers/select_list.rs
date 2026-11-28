@@ -131,9 +131,8 @@ fn turkic(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
 }
 
-/// The value after typing `typed` on the closed, focused select holding `held`, with Azerbaijani as the host's
-/// interface language.
-fn typed_in_azerbaijani(held: u8, typed: &str) -> u8 {
+/// A focused select holding `held`, with Azerbaijani as the host's interface language.
+fn focused_in_azerbaijani(held: u8) -> Fixture {
     let (i18n, _) = craft_i18n::I18n::from_owned([("az".to_owned(), String::new(), String::new())], &["az"]);
     let lang = i18n.from_code("az").expect("Azerbaijani is offered");
     let host = Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(Arc::new(i18n)).lang(lang).build();
@@ -143,6 +142,12 @@ fn typed_in_azerbaijani(held: u8, typed: &str) -> u8 {
     fixture.settle();
     fixture.key(Key::Tab, Modifiers::NONE);
     fixture.settle();
+    fixture
+}
+
+/// The value after typing `typed` on the closed, focused select holding `held`.
+fn typed_in_azerbaijani(held: u8, typed: &str) -> u8 {
+    let mut fixture = focused_in_azerbaijani(held);
     fixture.type_text(typed);
     fixture.settle();
     assert!(list_open(&mut fixture), "`{typed}` matches an entry and opens the list");
@@ -160,6 +165,18 @@ fn type_ahead_folds_case_in_the_interface_language() {
     assert_eq!(typed_in_azerbaijani(1, "i\u{307}s"), 3, "a typed i with a combining dot finds İSTANBUL");
     assert_eq!(typed_in_azerbaijani(1, "ωμ"), 4, "a Greek prefix finds its label");
     assert_eq!(typed_in_azerbaijani(1, "ΩΜ"), 4, "in capitals too");
+}
+
+#[trial]
+fn a_combining_dot_in_a_later_frame_completes_the_type_ahead_prefix() {
+    let mut fixture = focused_in_azerbaijani(1);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Alt+Down opens the list");
+    fixture.frame(vec![text("I")]);
+    assert_eq!(value(&mut fixture), 2, "bare I finds the dotless row");
+    fixture.frame(vec![text("\u{307}")]);
+    assert_eq!(value(&mut fixture), 3, "the combining dot completes I and finds the dotted row");
 }
 
 /// A select over two groups under headings: Shapes (One, Two) and Lines (Three).
