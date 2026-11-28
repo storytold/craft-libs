@@ -9,8 +9,8 @@ use craft_behavior::geometry::quad::{self, BoxAllow, BoxDrag, BoxPart, BoxRules,
 use craft_behavior::geometry::{SNAP_PX, SnapKind, SnapKinds, SnapLine, SnapSuspend};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
-    Axis, CancelReason, CanvasView, Cursor, CursorIcon, CursorPriority, GesturePhase, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape,
-    PaintedCursor, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
+    Axis, CancelReason, CanvasView, Cursor, CursorBadge, CursorIcon, CursorPriority, GesturePhase, HitLevel, HitPriority, HitShape, Intent, Metrics,
+    NavShape, PaintedCursor, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasSpace, GestureSnap, Snap, canvas_snap, canvas_space, readout};
@@ -506,6 +506,11 @@ pub struct TransformBox<'a> {
     /// nothing.
     #[prop]
     reach: TransformReach,
+    /// Whether the reference point's pointer shows before a drag where an Alt press places the point and over the
+    /// shown point; off (the default) keeps the drag's pointers there. Crate-private: the public entry is
+    /// `TransformOverlay::reference_point_pointer`.
+    #[prop(vis = "pub(crate)")]
+    reference_point_pointer: bool,
     /// The frame and handle edges in the host's colour, else `overlay.line`.
     #[prop]
     color: Option<DataColor>,
@@ -546,6 +551,7 @@ impl<'a> TransformBox<'a> {
             handle_side: None,
             line: None,
             reach: TransformReach::Box,
+            reference_point_pointer: false,
             color: None,
             session_commit: true,
             own_context_menu: false,
@@ -721,8 +727,30 @@ impl<'a> TransformBox<'a> {
         }
     }
 
-    /// The pointer for `part` at `pointer`, `dragging` during its drag.
+    /// Whether a press on `part` at screen position `at`, with `mods` held, places the reference point there instead of
+    /// moving or turning the box: Alt inside the box, or outside it where the outside takes the press. The move reach
+    /// only moves. The knob and the rotate handle are handles, so an Alt press on one turns the box rather than moving
+    /// the reference point onto it. The press and the pointer both read this rule.
+    fn alt_places_pivot(&self, screen: &BoxState, part: BoxPart, mods: Mods, at: Pos2) -> bool {
+        mods.alt
+            && self.move_only().is_none()
+            && match part {
+                BoxPart::Inside => true,
+                BoxPart::Outside => {
+                    !matches!(self.rotate_zone, RotateZone::Knob | RotateZone::Handle) && self.rotate_zone.rotates_at(&screen.quad, at)
+                }
+                _ => false,
+            }
+    }
+
+    /// The pointer for `part` at `pointer`, `dragging` during its drag. With the
+    /// [reference point's pointer](Self::reference_point_pointer) on, before a drag, where a press would place the
+    /// reference point ([`alt_places_pivot`](Self::alt_places_pivot)) and over the shown reference point, it is the
+    /// system arrow with the target mark beside it.
     fn cursor(&self, look: &CursorLook<'_>, part: BoxPart, pointer: Pos2, mods: Mods, dragging: bool) -> Cursor {
+        if self.reference_point_pointer && !dragging && (part == BoxPart::Pivot || self.alt_places_pivot(look.screen, part, mods, pointer)) {
+            return PaintedCursor::badged(CursorIcon::Default, CursorBadge::Target).into();
+        }
         let Some(kind) = self.rules.drag_kind(part, mods) else { return CursorIcon::Default.into() };
         let (screen, view, style) = (look.screen, &look.space.view, look.style);
         let (corner, away) = nearest_corner(screen, pointer);
@@ -865,9 +893,7 @@ impl<'a> TransformBox<'a> {
                     let from = space.view.to_doc(start.origin);
                     // The move reach only moves: an Alt press there is a move too. The knob and the rotate handle are
                     // handles, so an Alt press on one turns the box rather than moving the reference point onto it.
-                    let knob = reference.key == KNOB;
-                    let away_from_handles = part == BoxPart::Inside || (part == BoxPart::Outside && self.rotate_zone != RotateZone::Handle && !knob);
-                    let moves_pivot = acting.alt && self.move_only().is_none() && away_from_handles;
+                    let moves_pivot = self.alt_places_pivot(&screen, part, acting, start.origin);
                     let follows = follows_in_slop(part);
                     let (part, begin) = if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from)) } else { (part, *shown) };
                     held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, pressed: *shown, last: *shown });
