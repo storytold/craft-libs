@@ -38,10 +38,20 @@ let breaks = hyphen_points_in("hyphenation", &Limits::default(), ProofLang::En);
 ```
 
 Hunspell dictionaries are not bundled; they are read from, in order: the folder given to
-`set_dictionaries_folder`, `WORDCRAFT_DICTIONARIES`, WordCraft's own folder under the user's
-application data (`%LOCALAPPDATA%\WordCraft\dictionaries` and `%APPDATA%\WordCraft\dictionaries`,
-`~/Library/Application Support/WordCraft/dictionaries`, `$XDG_DATA_HOME/wordcraft/dictionaries`),
-then the usual Hunspell and LibreOffice locations. None on the web.
+`set_dictionaries_folder`, the host's own environment variable and folders, then the usual Hunspell
+and LibreOffice locations. None on the web.
+
+The host names its own: no application's variable or folder is built in, so an app never reads
+another app's dictionaries.
+
+```rust
+use craft_proof::{HostFolders, app_folders, set_host_folders};
+
+// At start: the app's variable and its usual per-user folders (`%LOCALAPPDATA%\Example\dictionaries`
+// and `%APPDATA%\Example\dictionaries` on Windows, `~/Library/Application Support/Example/dictionaries`
+// on macOS, `$XDG_DATA_HOME/example/dictionaries` elsewhere), or any folders it likes.
+set_host_folders(HostFolders { env_var: Some("EXAMPLE_DICTIONARIES".into()), folders: app_folders("Example") });
+```
 
 French remains a `ProofLang::Pack` locale: use its full `tag()` for settings and issue identity.
 The shared pack loader keeps regional dictionary overrides, fallback to `fr`, reloads and its
@@ -156,8 +166,8 @@ that leaves the pack (`..`, an absolute path, a drive, a backslash). Folders sta
 English spelling uses the first of these that is there; `english_source(lang)` says which.
 
 1. **Dictionaries folder:** the English's own `.aff`/`.dic` pair (`en_US`, `en_GB` or `en_CA`)
-   that the user put in the folder set with `set_dictionaries_folder`, in `WORDCRAFT_DICTIONARIES`
-   or in WordCraft's own `dictionaries` folder. The user's choice comes first.
+   that the user put in the folder set with `set_dictionaries_folder` or in the host's own folders
+   (`set_host_folders`). The user's choice comes first.
 2. **Installed English pack:** reserved for Language packs (craft-libs#485, CP4.2).
 3. **Embedded SCOWL:** the English's own SCOWL `rel-2026.02.25` Hunspell dictionary from
    `CRAFT_I18N_DIR` (`language-data/en-us`, `en-gb` (British `-ise`), `en-au` or `en-ca`,

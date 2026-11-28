@@ -1,8 +1,8 @@
 //! English spelling never goes unchecked. Its words come from the first of these that is there:
 //!
 //! 1. **Dictionaries folder**: a Hunspell `.aff`/`.dic` pair for the run's own English that the
-//!    user keeps for WordCraft ([`crate::hunspell::user_dirs`]: the folder set in the options,
-//!    `WORDCRAFT_DICTIONARIES`, WordCraft's own `dictionaries` folder).
+//!    user keeps for the host ([`crate::hunspell::user_dirs`]: the folder set in the options, and
+//!    the host's own variable and folders, [`crate::hunspell::HostFolders`]).
 //! 2. **Installed English pack**: reserved for Language packs (craft-libs#485, CP4.2).
 //! 3. **Embedded SCOWL**: the run's English's SCOWL dictionary (en-US, en-GB, en-AU or en-CA) embedded
 //!    from craft-i18n at build time ([`crate::scowl`]); a word it knows (British English: also

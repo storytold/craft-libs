@@ -136,8 +136,9 @@ impl Default for Options {
 pub use english::EnglishSource;
 pub use grammar_en::check_grammar;
 use grammar_en::grammar_en;
+pub use hunspell::{HostFolders, app_folders};
 pub use lang::{PackLocale, ProofLang};
-pub use languages::{dictionary_load_error, english_source, installed_dictionaries, pack_dictionary_file, set_dictionaries_folder};
+pub use languages::{dictionary_load_error, english_source, installed_dictionaries, pack_dictionary_file, set_dictionaries_folder, set_host_folders};
 pub(crate) use languages::{language, reload_dictionaries};
 pub(crate) use user_dict::in_user_dictionary;
 pub use user_dict::{
