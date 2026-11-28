@@ -520,7 +520,9 @@ fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, u
     if let Some(s) = start {
         out.push((s, text.len()));
     }
-    // Trim surrounding apostrophes/hyphens.
+    // Only Dutch elision candidates need to distinguish a straight opening quote from
+    // the apostrophe in the spelling; compute quote pairs at most once per paragraph.
+    let quotes = std::cell::OnceCell::new();
     out.into_iter()
         .filter_map(|(a, b)| {
             let w = text.get(a..b)?;
@@ -535,9 +537,8 @@ fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, u
                 language(from).pack_locale().is_some_and(|l| l.primary() == "nl") && text.get(from..end).is_some_and(pack_lang::dutch_elision);
             let start = if dutch_prefix {
                 match text.get(a..from).and_then(|prefix| prefix.chars().next_back()) {
-                    Some(apostrophe @ ('\'' | '’')) if !text.get(end..b).is_some_and(|suffix| suffix.starts_with(apostrophe)) => {
-                        from - apostrophe.len_utf8()
-                    }
+                    Some('’') => from - '’'.len_utf8(),
+                    Some('\'') if !quotes.get_or_init(|| paired_straight_quotes(text)).contains(&(from - 1)) => from - 1,
                     _ => from,
                 }
             } else {
@@ -546,6 +547,30 @@ fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, u
             Some((start, end))
         })
         .collect()
+}
+
+/// Opening straight single quotes with a closing quote in this paragraph. Apostrophes
+/// inside words have word characters on both sides and do not affect pairing.
+fn paired_straight_quotes(text: &str) -> std::collections::HashSet<usize> {
+    let mut starts = std::collections::HashSet::new();
+    let mut open = None;
+    let mut prev_word = false;
+    let mut chars = text.char_indices().peekable();
+    while let Some((offset, c)) = chars.next() {
+        if c == '\'' {
+            let next_word = chars.peek().is_some_and(|(_, c)| c.is_alphanumeric());
+            if !prev_word && next_word {
+                open = Some(offset);
+            } else if prev_word
+                && !next_word
+                && let Some(start) = open.take()
+            {
+                starts.insert(start);
+            }
+        }
+        prev_word = c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c);
+    }
+    starts
 }
 
 /// Spelling issues in a paragraph of English text (no suggestions; ask [`suggest`] on demand).
@@ -830,6 +855,9 @@ mod language_token_tests {
         assert_eq!(words_for(quoted_ca, |at| if at == 0 { ProofLang::En } else { catalan }), [(1, quoted_ca.len() - 1)]);
         let quoted_nl = "'T-profiel'";
         assert_eq!(words_for(quoted_nl, |_| dutch), [(1, quoted_nl.len() - 1)]);
+        assert_eq!(words_for("'T-profiel met letters'", |_| dutch)[0], (1, "T-profiel".len() + 1));
+        let curved_nl = "‘’s-Hertogenbosch’";
+        assert_eq!(words_for(curved_nl, |_| dutch), [('‘'.len_utf8(), curved_nl.len() - '’'.len_utf8())]);
 
         assert!(!super::words(text).into_iter().any(|(a, b)| &text[a..b] == "col·legi"));
     }

@@ -387,11 +387,23 @@ fn dutch_suggestions(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
         return crate::affix_suggest::suggest_in(d, word, max, &Tuning::DEFAULT);
     }
     let full = format!("'{body}");
-    let mut found = crate::affix_suggest::suggest_in(d, &full, max, &Tuning::DEFAULT);
-    if apostrophe.is_none() && d.can_suggest(&full) {
-        found.insert(0, full);
-        found.truncate(max);
-    }
+    let mut found = if apostrophe.is_none() {
+        let mut ordinary = crate::affix_suggest::suggest_in(d, word, max, &Tuning::DEFAULT);
+        if d.can_suggest(&full) {
+            ordinary.insert(0, full.clone());
+            ordinary.truncate(max);
+        }
+        if ordinary.len() < max {
+            for restored in crate::affix_suggest::suggest_in(d, &full, max - ordinary.len(), &Tuning::DEFAULT) {
+                if !ordinary.contains(&restored) {
+                    ordinary.push(restored);
+                }
+            }
+        }
+        ordinary
+    } else {
+        crate::affix_suggest::suggest_in(d, &full, max, &Tuning::DEFAULT)
+    };
     if apostrophe == Some('’') {
         for suggestion in &mut found {
             if let Some(rest) = suggestion.strip_prefix('\'') {
@@ -432,6 +444,7 @@ mod tests {
         assert!(check_word(&nl, "t-shirt", "t-shirt", "nl"));
         assert!(!check_word(&nl, "’t-shirt", "t-shirt", "nl"));
         assert!(check_word(&nl, "T-profiel", "T-profiel", "nl"));
+        assert!(dutch_suggestions(&nl, "t-shrit", 5).contains(&"t-shirt".into()));
     }
 
     /// Review follow-up (craft-libs#485): a panic inside a check (caught by the app) doesn't leave
