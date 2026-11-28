@@ -3,14 +3,17 @@
 //! container (in a window of its own, or in a full-screen or Wayland-maximized main window), the size of a
 //! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
 //! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
-//! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the
-//! placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted window's
-//! Control-click and window-input policy.
+//! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, that
+//! it closes after its timeout, the placement of a minimized window, the root frame decided again, a held close, `act`,
+//! and a hosted window's Control-click and window-input policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
-use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::overlay::Dismiss;
+use craft_ui::contract::{
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Scroll, Show as _, ShowContainer as _,
+};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
 use craft_ui::runtime::overlay::CloseReason;
@@ -523,6 +526,84 @@ fn a_layer_in_a_popup_window_keeps_its_scroll_until_it_closes() {
     open.set(true);
     settled();
     assert!((top.get() - start).abs() < 0.5, "opened again, it starts at the top: {} after {scrolled}, {start} unscrolled", top.get());
+}
+
+/// A layer mounted from the trial's `props`, with the caller's open state when it has one, adding how it closed to
+/// `closed`.
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct Sheet<'a> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    open: Option<Bind<'a, bool>>,
+    closed: &'a RefCell<Vec<CloseReason>>,
+}
+
+impl Component for Sheet<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: SheetStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(120.0, 60.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Sheet<'_> {
+    fn open(&mut self) -> Option<BindMut<'_, bool>> {
+        self.open.as_mut().map(Bind::reborrow)
+    }
+
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.borrow_mut().push(why);
+    }
+}
+
+/// A layer shown in a popup window of a palette window closes after its timeout with no input at all: the timeout
+/// counts from the pass the layer appeared, and its body runs in the popup's pass, which stamps its appearance in that
+/// window's record, while its host decides the window in the palette's pass, where the opener's record never held it.
+#[trial]
+fn a_layer_in_a_popup_window_closes_after_its_timeout() {
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(true));
+    // A menu that closes by itself a quarter second after it appears: fifteen frames at the kit's sixty a second.
+    const TIMEOUT: f32 = 0.25;
+    let overlay = Overlay::menu().dismiss(Dismiss::new().timeout(Some(TIMEOUT)));
+    let (open, closed) = (Cell::new(false), RefCell::new(Vec::new()));
+    let frame = || {
+        let mut is_open = open.get();
+        let out = windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                let props = ContainerProps::new().mount(Mount::Layer(overlay.clone()));
+                Sheet { common: Common::new(), props, open: Some(Bind::bound(&mut is_open)), closed: &closed }.id_salt("sheet").show(ui, |_, _| {});
+            });
+        });
+        open.set(is_open);
+        out
+    };
+    let palette = builder_titled(&frame(), "tool").0;
+    open.set(true);
+    let mut out = frame();
+    for _ in 0..2 {
+        out = frame();
+    }
+    assert!(popup_window(&out, palette).is_some(), "the layer opened in the palette shows in a popup window");
+    assert!(open.get(), "the layer is open early in its timeout: {:?}", closed.borrow());
+    assert_eq!(*closed.borrow(), [], "early in its timeout, nothing closed the layer");
+    // Well past a quarter second of frames, with no input at all.
+    for _ in 0..30 {
+        out = frame();
+    }
+    assert!(!open.get(), "the layer closed after its timeout with no input: {:?}", closed.borrow());
+    assert_eq!(*closed.borrow(), [CloseReason::Timeout], "the timeout closed it, and no other rule did");
+    assert_eq!(popup_window(&out, palette), None, "its popup window closed with it");
 }
 
 /// A popup that a press in another window of the app opened stays open, also when its opener runs a second pass of the
