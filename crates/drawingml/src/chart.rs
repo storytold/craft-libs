@@ -502,7 +502,8 @@ pub struct Chart {
     /// retains resolved secondary ownership without a primary pair, literal source formats
     /// and source-linked General without substituting a stored axis format. Version 10
     /// prioritizes exact secondary and format owners and retains literal and General
-    /// source formats on value axes.
+    /// source formats on value axes. Version 11 confines fallback formats to the value-axis
+    /// role and the retained series prefix.
     /// Missing fields are version 0. Preserve when editing.
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub raw_metadata_version: u16,

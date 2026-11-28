@@ -130,7 +130,7 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
 fn chart_within(root: &El, budget: usize) -> Option<Chart> {
-    read_chart(root, budget, 10)
+    read_chart(root, budget, 11)
 }
 
 /// Exact former metadata projection for unchanged legacy native saves, using the same caps.
@@ -183,6 +183,11 @@ pub(super) fn metadata_v9_chart_from(root: &El) -> Option<Chart> {
     read_chart(root, MAX_CHART_POINTS, 9)
 }
 
+/// The published exact-owner/source-format projection, before role and retained-prefix fixes.
+pub(super) fn metadata_v10_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, 10)
+}
+
 #[cfg(test)]
 std::thread_local! {
     static RAW_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -202,6 +207,7 @@ pub(super) fn chart_for_version(root: &El, version: u16) -> Option<Chart> {
         7 => metadata_v7_chart_from(root),
         8 => metadata_v8_chart_from(root),
         9 => metadata_v9_chart_from(root),
+        10 => metadata_v10_chart_from(root),
         _ => chart_from(root),
     }
 }
@@ -478,6 +484,42 @@ impl<'a> AxisRelations<'a> {
         self.partners.get(&(cross, value.as_str())).copied().flatten()?;
         Some(axis)
     }
+
+    /// Numeric role for the source-format fallback, not ownership of an axis element.
+    /// An ambiguous Y can still have one horizontal reciprocal X partner; unused axes
+    /// sharing X's ID must not redefine that role through the last-ID placement map.
+    fn format_value_axis(&self, group: &El, val_map: &std::collections::HashMap<&str, bool>) -> Option<String> {
+        let fallback = || group_value_axis(val_map, group);
+        if !matches!(group.local(), "scatterChart" | "bubbleChart") {
+            return fallback();
+        }
+        let mut ids = group.children(Local("axId")).filter_map(|a| a.attr_local("val"));
+        let Some(first) = ids.next() else { return fallback() };
+        let mut second = None;
+        for id in ids {
+            if id == first || second == Some(id) {
+                continue;
+            }
+            if second.is_some() {
+                return fallback();
+            }
+            second = Some(id);
+        }
+        let Some(second) = second else { return fallback() };
+        let y_role = |id, cross| {
+            self.values.contains_key(&(id, cross))
+                && self.partners.get(&(cross, id)).copied().flatten().is_some_and(|partner| {
+                    partner.is(Local("valAx"))
+                        && matches!(partner.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("b" | "t"))
+                })
+        };
+        match (y_role(first, second), y_role(second, first)) {
+            (true, false) => Some(first.to_string()),
+            (false, true) => Some(second.to_string()),
+            _ => fallback(), // No unique role evidence: keep the established fallback.
+        }
+    }
+
 }
 
 /// The primary value axis is the one on the left (bottom for bar charts); the secondary one
@@ -790,10 +832,14 @@ fn read_axes<'a>(
                     // An unresolved group may use numeric IDs, but a resolved group belongs
                     // to its actual element even when another axis shares that numeric ID.
                     (version < 10 || relations.and_then(|index| index.value_axis(g, val_map)).is_none())
-                        && g.children(Local("axId")).any(|a| a.attr_local("val") == id)
+                        && if version >= 11 {
+                            relations.and_then(|index| index.format_value_axis(g, val_map)).or_else(|| group_value_axis(val_map, g)).as_deref() == id
+                        } else {
+                            g.children(Local("axId")).any(|a| a.attr_local("val") == id)
+                        }
                 }
             })
-            .flat_map(|g| g.children(Local("ser")))
+            .flat_map(|g| g.children(Local("ser")).take(if version >= 11 { 1000 } else { usize::MAX }))
             .find_map(|s| {
                 s.child(Local("val"))
                     .or_else(|| s.child(Local("yVal")))
@@ -2660,7 +2706,7 @@ mod tests {
                 assert_eq!(read_chart_xml(&written).unwrap().series[0].secondary_axis, edit.series[0].secondary_axis);
             }
             let current = read_chart_xml(xml.as_bytes()).unwrap();
-            assert_eq!(current.raw_metadata_version, 10);
+            assert_eq!(current.raw_metadata_version, 11);
             if !category {
                 assert_eq!(current.y_max, Some(10.0));
             }

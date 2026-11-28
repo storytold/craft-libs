@@ -648,7 +648,9 @@ fn axes(w: &mut Writer, c: &Chart, g: Group, kind: ChartType, secondary: bool) {
     }
     match y_format.filter(|f| !f.is_empty()) {
         Some(f) => w.tag("c:numFmt").attr("formatCode", f).attr("sourceLinked", 0).empty(),
-        None => w.tag("c:numFmt").attr("formatCode", if kind.percent() { "0%" } else { "General" }).attr("sourceLinked", 1).empty(),
+        // A generated General value cache is not an authored source format. Keep the
+        // typed percent default authoritative instead of linking it to that synthetic code.
+        None => w.tag("c:numFmt").attr("formatCode", if kind.percent() { "0%" } else { "General" }).attr("sourceLinked", u8::from(!kind.percent())).empty(),
     }
     w.tag("c:majorTickMark").attr("val", "none").empty();
     w.tag("c:minorTickMark").attr("val", "none").empty();
