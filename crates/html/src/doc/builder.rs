@@ -171,8 +171,14 @@ pub(super) fn decls(css: &str) -> impl Iterator<Item = (String, &str)> {
 /// share one buffer.
 pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
 
+/// Builds a flow image from bytes the normal raster reader does not recognize. The arguments
+/// are source, bytes, width and height in points, and alt text. The caller is responsible for
+/// validating the data and deciding whether its format can be handled downstream.
+pub type ImageFallback<'a> = &'a dyn Fn(&str, Arc<Vec<u8>>, Option<f32>, Option<f32>, &str) -> Option<model::Img>;
+
 pub(super) struct Builder<'r> {
     images: ImageLoader<'r>,
+    image_fallback: Option<ImageFallback<'r>>,
     containers: Vec<Vec<FBlock>>,
     cells: Vec<Cell>,
     tables: Vec<TableB>,
@@ -581,9 +587,10 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 impl<'r> Builder<'r> {
-    pub(super) fn new(images: ImageLoader<'r>, page: bool) -> Builder<'r> {
+    pub(super) fn new(images: ImageLoader<'r>, page: bool, image_fallback: Option<ImageFallback<'r>>) -> Builder<'r> {
         Builder {
             images,
+            image_fallback,
             containers: vec![Vec::new()],
             cells: Vec::new(),
             tables: Vec::new(),
@@ -1166,14 +1173,20 @@ impl<'r> Builder<'r> {
                         }
                     }
                 }
-                let image = attr(attrs, "src")
-                    .and_then(|src| if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) })
-                    .and_then(|data| make_img(data, width, height, &alt));
+                let image = attr(attrs, "src").and_then(|src| {
+                    let data = if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) }?;
+                    make_img(data.clone(), width, height, &alt)
+                        .or_else(|| self.image_fallback.and_then(|fallback| fallback(src, data, width, height, &alt)))
+                });
                 let fmt = self.fmt();
                 match image {
                     Some(image) => self.start_para().inlines.push(Inline::Image(image)),
-                    None if !alt.is_empty() => self.start_para().push_text(&alt, &fmt),
-                    None => {}
+                    None => {
+                        model::dropped(model::Dropped::HtmlImage);
+                        if !alt.is_empty() {
+                            self.start_para().push_text(&alt, &fmt);
+                        }
+                    }
                 }
             }
             _ => return false,
