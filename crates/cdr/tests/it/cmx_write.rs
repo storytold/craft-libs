@@ -283,9 +283,15 @@ fn pages_are_numbered_in_their_order() {
     assert_eq!(numbers, [1, 2]);
 }
 
-/// Field 1 of each entry of the table chunk `id`: a u16 count, then a field list per entry (a tag,
-/// a u16 length counting the 3 header bytes, the data; 0xff after the last field).
+/// Field 1 of each entry of the table chunk `id`.
 fn table_entries(bytes: &[u8], id: &[u8; 4]) -> Vec<Vec<u8>> {
+    table_fields(bytes, id).into_iter().map(|e| e.into_iter().find(|(tag, ..)| *tag == 1).map(|(.., data)| data).expect("field 1")).collect()
+}
+
+/// The fields of each entry of the table chunk `id`, each its tag, where it starts in the file and
+/// its data: a u16 count, then a field list per entry (a tag, a u16 length counting the 3 header
+/// bytes, the data; 0xff after the last field).
+fn table_fields(bytes: &[u8], id: &[u8; 4]) -> Vec<Vec<(u8, usize, Vec<u8>)>> {
     let at = bytes.windows(4).position(|w| w == id).unwrap_or_else(|| panic!("no {id:?} chunk")) + 8;
     // The chunk's body runs for the size after its id.
     let end = at + u32::from_le_bytes(bytes[at - 4..at].try_into().unwrap()) as usize;
@@ -294,7 +300,7 @@ fn table_entries(bytes: &[u8], id: &[u8; 4]) -> Vec<Vec<u8>> {
     let mut p = at + 2;
     let mut out = Vec::new();
     for _ in 0..count {
-        let mut first = None;
+        let mut entry = Vec::new();
         loop {
             assert!(p < end, "entry runs past the {id:?} chunk at {p}");
             if bytes[p] == 0xff {
@@ -304,13 +310,11 @@ fn table_entries(bytes: &[u8], id: &[u8; 4]) -> Vec<Vec<u8>> {
             let len = usize::from(u16::from_le_bytes([bytes[p + 1], bytes[p + 2]]));
             // A length shorter than its header, or past the chunk, would stop the walk.
             assert!(len >= 3 && p + len <= end, "field at {p} has length {len}");
-            if bytes[p] == 1 {
-                first = Some(bytes[p + 3..p + len].to_vec());
-            }
+            entry.push((bytes[p], p, bytes[p + 3..p + len].to_vec()));
             p += len;
         }
         p += 1;
-        out.push(first.expect("field 1"));
+        out.push(entry);
     }
     // The size counts the u16 count and the entries; the pad byte comes after it.
     assert_eq!(p, end, "{id:?} chunk has bytes left after its entries");
@@ -346,6 +350,61 @@ fn every_outline_names_a_screen_and_a_dash_pattern_the_file_holds() {
     patterns.sort();
     // The solid outline names an empty pattern; the dashed one names its two lengths.
     assert_eq!(patterns, vec![(false, vec![]), (true, vec![3, 1])]);
+}
+
+#[test]
+fn colors_are_also_written_in_the_model_and_value_fields() {
+    let colors = [
+        Color::Rgb([1.0, 0.2, 0.0]),
+        Color::Cmyk([0.6, 0.0, 0.13, 0.05]),
+        Color::Gray(0.75),
+        Color::Spot { name: "Ink 300".into(), tint: 0.4, look: Some([0.0, 0.4, 0.8]) },
+        Color::Registration,
+    ];
+    let objects = colors
+        .iter()
+        .enumerate()
+        .map(|(i, c)| Object::Shape(Box::new(Shape::new(square(20.0 * i as f64, 0.0, 10.0), Matrix::IDENTITY, Some(c.clone()), None))))
+        .collect();
+    let d = drawing(vec![Page { size: Some((200.0, 100.0)), layers: vec![layer("Art", objects)] }]);
+    let mut bytes = write_cmx(&d).unwrap().bytes;
+    let entries = table_fields(&bytes, b"rclr");
+    // Each entry holds the model and the palette 5 in field 1 and four values in field 2, before
+    // the property list of field 10.
+    let mut older: Vec<(Vec<u8>, Vec<u8>)> = entries
+        .iter()
+        .map(|e| {
+            assert_eq!(e.iter().map(|(tag, ..)| *tag).collect::<Vec<_>>(), [1, 2, 10]);
+            (e[0].2.clone(), e[1].2.clone())
+        })
+        .collect();
+    older.sort();
+    let mut want = vec![
+        // Red, green and blue.
+        (vec![5, 5], vec![255, 51, 0, 0]),
+        // Cyan, magenta, yellow and black in percent.
+        (vec![2, 5], vec![60, 0, 13, 5]),
+        // Gray, 255 white.
+        (vec![9, 5], vec![64, 0, 0, 0]),
+        // The spot color's look at its tint of 40 percent.
+        (vec![5, 5], vec![153, 194, 235, 0]),
+        // The registration color as every ink at 100 percent.
+        (vec![2, 5], vec![100, 100, 100, 100]),
+    ];
+    want.sort();
+    assert_eq!(older, want);
+    // With field 10 retagged, the reader takes each color from fields 1 and 2.
+    for e in &entries {
+        bytes[e[2].1] = 11;
+    }
+    let back = read_cmx(&bytes, Limits::default()).unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    let fills: Vec<Color> = back.pages[0].layers[0].objects.iter().map(|o| shape(o).fill.clone().unwrap()).collect();
+    let opened = [colors[0].clone(), colors[1].clone(), colors[2].clone(), Color::Rgb([0.6, 0.76, 0.92]), Color::Cmyk([1.0; 4])];
+    assert_eq!(fills.len(), opened.len());
+    for (got, want) in fills.iter().zip(&opened) {
+        assert!(near_color(got, want), "{got:?} for {want:?}");
+    }
 }
 
 #[test]
@@ -976,14 +1035,29 @@ fn chunk_ids(b: &[u8]) -> std::collections::HashMap<usize, [u8; 4]> {
     ids
 }
 
-/// The field list at `at` of `b`: each field's tag and where its data starts.
-fn field_starts(b: &[u8], mut at: usize) -> Vec<(u8, usize)> {
+/// The field list at `at` of `b`, in an instruction that ends at `end`: each field's tag and where
+/// its data starts. A field shorter than its 3 header bytes, or past `end`, fails the test.
+fn field_starts(b: &[u8], mut at: usize, end: usize) -> Vec<(u8, usize)> {
     let mut out = Vec::new();
     while b[at] != 0xff {
+        let len = u16_at(b, at + 1);
+        assert!(len >= 3 && at + len <= end, "a field of length {len} at {at}, in an instruction that ends at {end}");
         out.push((b[at], at + 3));
-        at += u16_at(b, at + 1);
+        at += len;
     }
     out
+}
+
+#[test]
+#[should_panic(expected = "a field of length 0")]
+fn a_field_of_length_0_fails_the_check() {
+    field_starts(&[1, 0, 0, 0xff], 0, 4);
+}
+
+#[test]
+#[should_panic(expected = "a field of length 9")]
+fn a_field_past_its_instruction_fails_the_check() {
+    field_starts(&[1, 9, 0, 0, 0xff], 0, 5);
 }
 
 #[test]
@@ -1143,12 +1217,12 @@ fn page_records(b: &[u8], page_entries: &[[usize; 4]]) -> (Vec<usize>, Vec<(usiz
         let mut open: Vec<Open> = Vec::new();
         let mut count = 0;
         while at < end {
-            let size = u16_at(b, at);
+            let size = instruction_size(b, at, end);
             let code = u16_at(b, at + 2);
             count += 1;
             match code {
                 9 | 11 | 13 => {
-                    let f1 = field_starts(b, at + 4).iter().find(|(t, _)| *t == 1).unwrap().1;
+                    let f1 = field_starts(b, at + 4, at + size).iter().find(|(t, _)| *t == 1).unwrap().1;
                     if code == 11 {
                         seen_layers.push(at);
                     }
@@ -1159,7 +1233,7 @@ fn page_records(b: &[u8], page_entries: &[[usize; 4]]) -> (Vec<usize>, Vec<(usiz
                     open.push((code, f1, count - 1, 0, None));
                 }
                 67 => {
-                    let f2 = field_starts(b, at + 4).iter().find(|(t, _)| *t == 2).unwrap().1;
+                    let f2 = field_starts(b, at + 4, at + size).iter().find(|(t, _)| *t == 2).unwrap().1;
                     for i in 0..u16_at(b, f2) {
                         let p = f2 + 2 + 8 * i;
                         let (x, y) = (u32_at(b, p) as i32, u32_at(b, p + 4) as i32);
@@ -1176,6 +1250,33 @@ fn page_records(b: &[u8], page_entries: &[[usize; 4]]) -> (Vec<usize>, Vec<(usiz
         }
     }
     (seen_layers, groups)
+}
+
+/// The size of the instruction at `at` of `b`, in a page that ends at `end`. These files hold
+/// only short instructions, so the long form (0xFFFF), a size shorter than the 4-byte header or
+/// one past `end` fails the test.
+fn instruction_size(b: &[u8], at: usize, end: usize) -> usize {
+    let size = u16_at(b, at);
+    assert!(size != 0xFFFF && size >= 4 && at + size <= end, "an instruction of size {size} at {at}, in a page that ends at {end}");
+    size
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 0")]
+fn an_instruction_of_size_0_fails_the_check() {
+    instruction_size(&[0, 0, 67, 0], 0, 4);
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 65535")]
+fn a_long_instruction_fails_the_check() {
+    instruction_size(&[0xff, 0xff, 67, 0, 8, 0, 0, 0], 0, 8);
+}
+
+#[test]
+#[should_panic(expected = "an instruction of size 8")]
+fn an_instruction_past_its_page_fails_the_check() {
+    instruction_size(&[8, 0, 67, 0], 0, 4);
 }
 
 #[test]

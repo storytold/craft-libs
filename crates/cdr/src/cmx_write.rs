@@ -535,9 +535,25 @@ fn color_key(c: &Color) -> ColorKey {
     }
 }
 
-/// A color entry (R56): field 10 holds a property list, a u32 length then parts of a u8 kind, a u32
-/// length and the body (R11): part 1 the color record (model, palette 5, 4 zero bytes, the
-/// values; R14), and for a named color part 3, a u32 count and UTF-16 units.
+/// The color of `k` in the fields 1 and 2 of a color entry (R56): the model and the palette 5,
+/// then four value bytes. A spot color is written as its look at its tint in red, green and blue,
+/// and the registration color as cyan, magenta, yellow and black at 100 percent, since the
+/// models of these fields hold neither.
+fn older_fields(k: &ColorKey) -> (u8, [u8; 4]) {
+    let [v0, v1, v2, v3] = k.values;
+    match k.model {
+        2 => (2, [v0, v1, v2, v3]),
+        // Red, green and blue, where the color record holds blue, green and red.
+        5 | 21 => (5, [v2, v1, v0, 0]),
+        9 => (9, [v0, 0, 0, 0]),
+        _ => (2, [100; 4]),
+    }
+}
+
+/// A color entry (R56): field 1 the model and the palette, field 2 the values, as
+/// [`older_fields`] gives them, then field 10, a property list: a u32 length then parts of a u8
+/// kind, a u32 length and the body (R11): part 1 the color record (model, palette 5, 4 zero bytes,
+/// the values; R14), and for a named color part 3, a u32 count and UTF-16 units.
 fn color_entry(k: &ColorKey) -> Result<Vec<u8>, Error> {
     let mut list = vec![1u8];
     list.extend(12u32.to_le_bytes());
@@ -554,7 +570,9 @@ fn color_entry(k: &ColorKey) -> Result<Vec<u8>, Error> {
     }
     let mut rec = (list.len() as u32).to_le_bytes().to_vec();
     rec.extend(list);
-    Ok(fields(&[field(10, &rec).ok_or(Error::Limit("table entry size"))?]))
+    let (model, values) = older_fields(k);
+    let size = || Error::Limit("table entry size");
+    Ok(fields(&[field(1, &[model, 5]).ok_or_else(size)?, field(2, &values).ok_or_else(size)?, field(10, &rec).ok_or_else(size)?]))
 }
 
 /// The counts [`crate::read_cmx`] holds to [`crate::Limits`] while it reads a file.

@@ -107,7 +107,10 @@ corners, not stretched ones. Hidden layers, groups and shapes, guide and grid la
 and master layers are left out; opacity, blend modes, fill rules and locked states are not
 written, desktop layers are written as drawing layers, and a spot color with no name opens as a
 process color; every use of a named spot color takes the look of its use at the strongest tint
-among the uses whose look is known.
+among the uses whose look is known. Each color entry holds the color twice: as the property list
+`read_cmx` reads, and as the model and value fields that other readers, such as libcdr, read. In
+those fields a spot color is written as its look at its tint, and the registration color as 100
+percent cyan, magenta, yellow and black.
 
 `write_cmx` returns an error, and writes nothing, for a coordinate, page side or outline width
 past the 32-bit range, a negative or NaN outline width, a page side that rounds to 0, more than
@@ -125,8 +128,9 @@ unclipped or unlocked.
 The file holds an index, so that a reader that finds the tables and pages through it, rather than
 by their chunk ids, opens it: the header gives where the master index starts, the index list
 (`LIST indx`) gives where each table, page, page reference list and layer starts, and the page,
-layer and group records give their instruction counts and where they end; a group's record also
-gives the edges of its curves. The record of a page with a size holds the edges of its curves, or
+layer and group records give their instruction counts. A page's record also gives where its
+end-page instruction starts, and a group's record gives where the instruction after its end-group
+instruction starts and the edges of its curves. The record of a page with a size holds the edges of its curves, or
 of the page when it has none. The header repeats the first page's edges and instruction count.
 `PROVENANCE.md`'s "Written fields" table lists every field the `.cmx` writer sets.
 
