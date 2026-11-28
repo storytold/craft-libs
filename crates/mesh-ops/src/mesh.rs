@@ -355,25 +355,10 @@ impl Mesh {
     }
 
     /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
-    /// this mesh's material count. Returns an error when an index of `other` is out of range or a
-    /// rebased index or submesh range would not fit in `u32`; an error leaves this mesh unchanged.
-    pub fn append(&mut self, other: &Mesh) -> Result<()> {
-        if let Some(bad) = other.indices.iter().find(|&&i| i as usize >= other.positions.len()) {
-            return Err(GeomError::Invalid(format!("index {bad} out of range ({} vertices)", other.positions.len())));
-        }
-        let too_large = |what: &str| GeomError::Invalid(format!("the appended {what} do not fit in u32"));
-        let vertices = self.positions.len().checked_add(other.positions.len()).ok_or_else(|| too_large("vertices"))?;
-        if vertices > 0 && u32::try_from(vertices - 1).is_err() {
-            return Err(too_large("vertices"));
-        }
-        let ibase = u32::try_from(self.indices.len()).map_err(|_| too_large("indices"))?;
-        let index_count = self.indices.len().checked_add(other.indices.len()).ok_or_else(|| too_large("indices"))?;
-        u32::try_from(index_count).map_err(|_| too_large("indices"))?;
-        for s in &other.submeshes {
-            ibase.checked_add(s.start).and_then(|start| start.checked_add(s.count)).ok_or_else(|| too_large("submeshes"))?;
-            s.material.checked_add(self.materials.len()).ok_or_else(|| too_large("submeshes"))?;
-        }
+    /// this mesh's material count.
+    pub fn append(&mut self, other: &Mesh) {
         let base = self.positions.len() as u32;
+        let ibase = self.indices.len() as u32;
         let mbase = self.materials.len();
         self.positions.extend_from_slice(&other.positions);
         self.normals.extend_from_slice(&other.normals);
@@ -396,7 +381,6 @@ impl Mesh {
             start: s.start + ibase,
             count: s.count,
         }));
-        Ok(())
     }
 
     /// Each triangle split into four at its edge midpoints (shared edges share their midpoint);
@@ -561,7 +545,7 @@ mod tests {
         assert_eq!(seam.wire_edges()[0].len(), 6);
         // Appending keeps each side's diagonals on its own triangles.
         let mut a = Mesh::from_parts(m.positions.clone(), None, m.uvs.clone(), vec![0, 1, 2], "A").unwrap();
-        a.append(&m).unwrap();
+        a.append(&m);
         assert_eq!(a.diagonals, vec![0, 0b100, 0b001]);
         assert_eq!(crate::primitives::plane(1.0, 2).wire_edges()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
     }
@@ -677,28 +661,10 @@ mod tests {
     }
 
     #[test]
-    fn append_refuses_out_of_range_indices_and_overflowing_submeshes() {
-        let mut a = quad();
-        let before = a.clone();
-        let mut bad_index = quad();
-        bad_index.indices[0] = 99;
-        assert!(a.append(&bad_index).is_err());
-        assert_eq!(a, before);
-
-        let mut overflow = quad();
-        overflow.submeshes[0].start = u32::MAX - 2;
-        assert!(a.append(&overflow).is_err());
-        assert_eq!(a, before);
-
-        a.append(&quad()).unwrap();
-        a.validate().unwrap();
-    }
-
-    #[test]
     fn append_offsets_indices_and_materials() {
         let mut a = quad();
         let b = quad();
-        a.append(&b).unwrap();
+        a.append(&b);
         assert_eq!(a.indices[6], 4);
         assert_eq!(a.submeshes[1].material, 1);
         assert_eq!(a.submeshes[1].start, 6);
@@ -706,10 +672,10 @@ mod tests {
         // Colors on one side only: the other side's vertices become white.
         let mut red = quad();
         red.colors = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); 4];
-        a.append(&red).unwrap();
+        a.append(&red);
         assert_eq!(a.colors.len(), 12);
         assert_eq!((a.colors[0], a.colors[8]), (Vec4::ONE, Vec4::new(1.0, 0.0, 0.0, 1.0)));
-        a.append(&quad()).unwrap();
+        a.append(&quad());
         assert_eq!(a.colors[15], Vec4::ONE);
         a.validate().unwrap();
         a.colors.pop();

@@ -396,7 +396,7 @@ pub fn udim_plane() -> Mesh {
     }
     right.materials.clear();
     right.submeshes.clear();
-    let _ = m.append(&right);
+    m.append(&right);
     let count = m.indices.len() as u32;
     if let Some(s) = m.submeshes.first_mut() {
         s.count = count;
@@ -432,7 +432,7 @@ pub fn material_ball() -> Mesh {
     disk_into(&mut base, Vec3::new(0.0, top + 0.06, 0.0), 0.42, true, 128, UvRect { o: Vec2::new(0.0, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
     disk_into(&mut base, Vec3::new(0.0, bot, 0.0), r - bev, false, 128, UvRect { o: Vec2::new(0.5, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
     let base = base.finish("Base");
-    let _ = ball.append(&base);
+    ball.append(&base);
     ball
 }
 
@@ -444,7 +444,7 @@ pub fn crate_scene() -> Mesh {
     let mut m = body.finish("Crate");
     let mut lid = Builder::default();
     rounded_box_into(&mut lid, Vec3::new(0.0, 1.72, 0.0), Vec3::new(1.28, 0.12, 0.88), 0.08, UvRect::FULL);
-    let _ = m.append(&lid.finish("Lid"));
+    m.append(&lid.finish("Lid"));
     let mut handle = torus(0.32, 0.07, 64, 24);
     for p in &mut handle.positions {
         *p = Vec3::new(p.x, p.z, -p.y) + Vec3::new(0.0, 1.84, 0.0);
@@ -457,7 +457,7 @@ pub fn crate_scene() -> Mesh {
         s.name = "Handle".into();
     }
     handle.compute_tangents();
-    let _ = m.append(&handle);
+    m.append(&handle);
     m
 }
 
