@@ -138,6 +138,7 @@ craft-raster-codecs = { workspace = true, optional = true }
 craft-raw = { workspace = true, optional = true }
 craft-rtf = { workspace = true, optional = true }
 craft-scraft-format = { workspace = true, optional = true }
+craft-scopes = { workspace = true, optional = true }
 craft-sf2 = { workspace = true, optional = true }
 craft-sheet = { workspace = true, optional = true }
 craft-silhouette-studio = { workspace = true, optional = true }
@@ -809,6 +810,8 @@ rtf-doc = ["rtf", "craft-rtf/doc"]
 rtf-outlook = ["rtf", "craft-rtf/outlook"]
 
 sbs = ["dep:craft-sbs"]
+
+scopes = ["dep:craft-scopes"]
 
 score = ["dep:craft-score"]
 

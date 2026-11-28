@@ -1905,6 +1905,7 @@ dependencies = [
  "craft-review",
  "craft-rtf",
  "craft-sbs",
+ "craft-scopes",
  "craft-score",
  "craft-scraft-format",
  "craft-settings",
@@ -4039,6 +4040,15 @@ dependencies = [
  "flate2",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-scopes"
+version = "0.1.0"
+dependencies = [
+ "craft-color",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
