@@ -7,7 +7,7 @@ use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{CancelReason, CanvasView, EditEvent, PointerButton};
 use craft_color_ui::AreaMode;
 use craft_color_ui::ui::{
-    ColorArea, ColorDisc, ColorHud, ColorRamp, ColorWheel, DiscMove, DiscRadius, RampKind, RampPick, WheelGeometry, WheelInner, hue_at,
+    ColorArea, ColorDisc, ColorHud, ColorRamp, ColorWheel, DiscMove, DiscRadius, RampKind, RampPick, WheelGeometry, WheelInner, WheelPart, hue_at,
     hue_direction, patch_at, triangle_corners, triangle_point, triangle_sv,
 };
 use craft_keymap::Mods;
@@ -29,7 +29,7 @@ fn within(a: f32, b: f32) -> bool {
 #[trial]
 fn the_wheel_geometry_round_trips() {
     let center = pos2(100.0, 100.0);
-    let corners = triangle_corners(center, 60.0, 210.0);
+    let corners = triangle_corners(center, 60.0);
     for (s, b) in [(0.0, 1.0), (1.0, 1.0), (0.4, 0.7), (0.9, 0.2)] {
         let (read_s, read_b) = triangle_sv(corners, triangle_point(corners, s, b)).expect("a triangle point reads back");
         assert!(within(read_s, s) && within(read_b, b), "({s}, {b}) read as ({read_s}, {read_b})");
@@ -559,6 +559,87 @@ fn color_hud_picks_at_an_injected_move() {
     ToolHost::inject(&ctx, canvas.get(), ToolInput::up(area.center()));
     fixture.run_injected().idle(2);
     assert_eq!(count(|event| matches!(event, EditEvent::Commit { .. })), 1, "the injected release commits");
+}
+
+/// A wheel over HSB values its host keeps, with the triangle the last frame painted.
+struct TriangleRig {
+    fixture: Fixture,
+    values: Rc<Cell<ModelValues>>,
+}
+
+impl TriangleRig {
+    fn new(hsb: [f32; 3]) -> Self {
+        let values = Rc::new(Cell::new(ModelValues::new("hsb", &hsb)));
+        let kept = values.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let out = craft_color_ui::ui::ColorWheel::new("Color wheel", Bind::given(kept.get())).show(ui);
+            if let Some(value) = out.edit.value() {
+                kept.set(*value);
+            }
+        });
+        fixture.room(vec2(320.0, 320.0));
+        fixture.settle();
+        TriangleRig { fixture, values }
+    }
+
+    /// The painted triangle's corners (pure hue, white, black): the corners of the mesh with 17 by 17 vertices.
+    fn triangle(&mut self) -> [Pos2; 3] {
+        let n = 16;
+        let mesh = self
+            .fixture
+            .frame_shapes()
+            .into_iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) if mesh.vertices.len() == (n + 1) * (n + 1) => Some(mesh),
+                _ => None,
+            })
+            .expect("the wheel paints its triangle");
+        let at = |i: usize, j: usize| mesh.vertices[j * (n + 1) + i].pos;
+        [at(n, n), at(0, n), at(0, 0)]
+    }
+
+    fn hsb(&self) -> [f32; 3] {
+        let v = self.values.get().values;
+        [v[0], v[1], v[2]]
+    }
+}
+
+/// The triangle stays put while the hue turns (storytold/photocraft#10122): it is painted in the same place at every
+/// hue with the pure hue at the top, so the same press picks the same saturation and brightness, and a press just
+/// inside the pure-hue corner (in the ring's grab band) is the triangle's and keeps the hue.
+#[trial]
+fn the_wheel_triangle_stays_put_while_the_hue_turns() {
+    let mut picks = Vec::new();
+    let mut painted = Vec::new();
+    for hue in [20.0, 200.0] {
+        let mut rig = TriangleRig::new([hue, 50.0, 50.0]);
+        let tri @ [top, white, black] = rig.triangle();
+        painted.push(tri);
+        assert!(top.y < white.y && top.y < black.y && (top.x - (white.x + black.x) / 2.0).abs() < 0.5, "pure hue at the top: {tri:?}");
+        // Saturation 50, brightness 50 of the painted triangle.
+        rig.fixture.click_at(triangle_point(tri, 0.5, 0.5));
+        let [h, s, b] = rig.hsb();
+        assert!(within(h, hue) && (s - 50.0).abs() <= 1.0 && (b - 50.0).abs() <= 1.0, "hue {hue}: picked {:?}", rig.hsb());
+        picks.push((s, b));
+        // Half a point inside the pure-hue corner.
+        let center = Pos2::new((top.x + white.x + black.x) / 3.0, (top.y + white.y + black.y) / 3.0);
+        rig.fixture.click_at(top + (center - top).normalized() * 0.5);
+        let [h, s, b] = rig.hsb();
+        assert!(within(h, hue) && s >= 95.0 && b >= 95.0, "hue {hue}: the corner picked {:?}", rig.hsb());
+    }
+    let same = painted[0].iter().zip(&painted[1]).all(|(a, b)| a.distance(*b) < 1e-3);
+    assert!(same, "the triangle moved with the hue: {:?} vs {:?}", painted[0], painted[1]);
+    assert_eq!(picks[0], picks[1]);
+
+    // The pure geometry agrees: just inside the top corner is the triangle, the same radius beside it the ring, and a
+    // point that isn't finite is nothing.
+    let geometry = WheelGeometry::new(Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), 4.0, (8.0, 24.0), 0.09, 1.0);
+    let [top, ..] = geometry.corners(0.0);
+    let near = top + (geometry.center - top).normalized() * 0.5;
+    assert_eq!(geometry.part_at(near, 8.0, 8.0), Some(WheelPart::Triangle));
+    let beside = geometry.center + craft_color_ui::ui::hue_direction(120.0) * near.distance(geometry.center);
+    assert_eq!(geometry.part_at(beside, 8.0, 8.0), Some(WheelPart::Ring));
+    assert_eq!(geometry.part_at(Pos2::new(f32::NAN, 0.0), 8.0, 8.0), None);
 }
 
 /// A colour as a host that keeps 8-bit colours stores it.
