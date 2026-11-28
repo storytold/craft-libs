@@ -4,7 +4,8 @@
 
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{GesturePhase, Sense};
-use craft_ui::contract::overlay::{Anchor, FloatPlace, Place, PlacementChange, PlacementKind};
+use craft_theme::{Contrast, Mode};
+use craft_ui::contract::overlay::{Anchor, DragBounds, FloatPlace, Place, PlacementChange, PlacementKind};
 use craft_ui::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MemoProps, MemoView, Mount, Overlay, Props as _, Role,
     Show as _, ShowContainer as _, Sizing,
@@ -143,6 +144,106 @@ fn a_placed_layer_reports_its_move_and_keeps_no_placement_of_its_own() {
     caller.controlled.set(false);
     frames.idle(3, &mut show);
     assert!((caller.rect.get().min - commit.rect.min).abs().max_elem() > SLACK, "no placement was stored: {:?}", caller.rect.get());
+}
+
+/// A movable float dragged by its header far toward the window's bottom right corner: under the default
+/// `DragBounds::Inside` it stops with the whole of it inside the window. Under `DragBounds::TitleVisible` it goes past
+/// the right and bottom edges at its own size with its header still inside, and a second drag of the header moves it
+/// back by the pointer's travel.
+#[trial]
+fn a_layer_that_keeps_its_title_strip_inside_moves_past_the_window_edges() {
+    for bounds in [DragBounds::Inside, DragBounds::TitleVisible] {
+        let (shown, log, seen) = (Cell::new(Rect::NOTHING), RefCell::new(Vec::new()), RefCell::new(Seen::default()));
+        let mut show = |ui: &mut Ui| {
+            let overlay = Overlay::floating().movable(true).drag_bounds(bounds);
+            let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content).header(HeaderRegion::new().band(DragBand::Move));
+            let out = Pane { common: Common::new(), props, log: &log }.id_salt("aside").show(ui, |ui, _| {
+                Probe::new(&seen).size(BODY).show(ui);
+            });
+            shown.set(out.output.rect);
+        };
+        let mut frames = Frames::new();
+        frames.idle(4, &mut show);
+        let window = frames.ctx.content_rect();
+        let start = shown.get();
+        assert!(start.is_positive() && window.contains_rect(start), "{bounds:?}: the layer opens inside {window:?}: {start:?}");
+        // The pointer ends just inside the window's corner; the layer's own corner would end far past it.
+        let grab = header_of(start);
+        pointer::drag(&mut frames, grab, window.right_bottom() - Vec2::splat(4.0) - grab, &mut show);
+        frames.idle(3, &mut show);
+        let moved = shown.get();
+        assert!((moved.size() - start.size()).abs().max_elem() < SLACK, "{bounds:?}: the layer keeps its size: {start:?} -> {moved:?}");
+        if bounds == DragBounds::Inside {
+            assert!(window.expand(SLACK).contains_rect(moved), "{bounds:?}: the layer stays inside {window:?}: {moved:?}");
+            continue;
+        }
+        assert!(moved.right() > window.right() + SLACK, "the layer goes past the right edge of {window:?}: {moved:?}");
+        assert!(moved.bottom() > window.bottom() + SLACK, "the layer goes past the bottom edge of {window:?}: {moved:?}");
+        // The part of the header left inside the window takes the next drag.
+        let title = Pos2::new((moved.left() + window.right()) / 2.0, moved.top() + 8.0);
+        assert!(window.contains(title) && moved.contains(title), "the header stays inside {window:?}: {moved:?}");
+        let back = Vec2::new(-200.0, -200.0);
+        pointer::drag(&mut frames, title, back, &mut show);
+        frames.idle(3, &mut show);
+        let returned = shown.get();
+        assert!((returned.min - (moved.min + back)).abs().max_elem() < SLACK, "a drag of the header moves it back: {moved:?} -> {returned:?}");
+        assert!(window.contains_rect(returned), "the layer is back inside {window:?}: {returned:?}");
+    }
+}
+
+/// A resizable dialog under `DragBounds::TitleVisible`, its placement kept in shown memory: the user resizes it by its
+/// bottom right grip, which leaves a size in that placement, then drags it by its header far past the window's right
+/// and bottom edges. It goes past them at its resized size, and the strip of its title the rule keeps stays inside: its
+/// top left, where its title row starts, and the band there. A drag that pushes further leaves it where it is, so the
+/// user takes it back by the band rather than losing it off the window.
+#[trial]
+fn a_resized_layer_keeps_its_title_strip_inside_a_drag_past_the_window_edges() {
+    let tokens = craft_ui::testing::style::tokens(Mode::Dark, Contrast::Standard);
+    let strip = Vec2::new(tokens.size.dialog.button, tokens.size.bar.title);
+    let (shown, log, seen) = (Cell::new(Rect::NOTHING), RefCell::new(Vec::new()), RefCell::new(Seen::default()));
+    let mut show = |ui: &mut Ui| {
+        let overlay = Overlay::dialog().modeless().resizable(true).drag_bounds(DragBounds::TitleVisible);
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content).header(HeaderRegion::new().band(DragBand::Move));
+        let out = Pane { common: Common::new(), props, log: &log }.id_salt("kept dialog").show(ui, |ui, _| {
+            Probe::new(&seen).size(BODY).show(ui);
+        });
+        shown.set(out.output.rect);
+    };
+    let mut frames = Frames::new();
+    frames.idle(4, &mut show);
+    let window = frames.ctx.content_rect();
+    let opened = shown.get();
+    assert!(opened.is_positive() && window.contains_rect(opened), "the dialog opens inside {window:?}: {opened:?}");
+
+    // The bottom right grip sizes it, so the placement keeps a size the user gave it.
+    pointer::drag(&mut frames, opened.right_bottom() - Vec2::splat(3.0), Vec2::new(140.0, 80.0), &mut show);
+    frames.idle(3, &mut show);
+    let resized = shown.get();
+    assert!(
+        resized.width() > opened.width() + SLACK && resized.height() > opened.height() + SLACK,
+        "the grip gives the dialog a size of its own: {opened:?} -> {resized:?}"
+    );
+
+    // The pointer ends well past the window's corner: without the keep, the title row's start ends outside the window.
+    let grab = header_of(resized);
+    pointer::drag(&mut frames, grab, window.right_bottom() + Vec2::splat(300.0) - grab, &mut show);
+    frames.idle(3, &mut show);
+    let moved = shown.get();
+    assert!((moved.size() - resized.size()).abs().max_elem() < SLACK, "the move keeps the resized size: {resized:?} -> {moved:?}");
+    assert!(window.contains(moved.min), "the title row's start stays inside {window:?}: {moved:?}");
+    assert!(moved.left() + strip.x <= window.right() + SLACK, "the title strip ends inside {window:?}: {moved:?}");
+    assert!(moved.top() + strip.y <= window.bottom() + SLACK, "the title strip reaches no lower than {window:?}: {moved:?}");
+    assert!(
+        moved.right() > window.right() + SLACK && moved.bottom() > window.bottom() + SLACK,
+        "the dialog goes past the window's edges at its size: {moved:?} in {window:?}"
+    );
+
+    // The band is what the rule keeps: a drag from the part of the header still inside pushes no further.
+    let again = Pos2::new(window.right() - 8.0, moved.top() + 8.0);
+    pointer::drag(&mut frames, again, Vec2::new(300.0, 200.0), &mut show);
+    frames.idle(3, &mut show);
+    let further = shown.get();
+    assert!((further.min - moved.min).abs().max_elem() < SLACK, "the dialog stays where the rule keeps it: {moved:?} -> {further:?}");
 }
 
 /// Where the layers of the Size trial hang from: with room above it and before it.

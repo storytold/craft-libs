@@ -3,6 +3,7 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
 use craft_theme::{AppSizes, SizeValue};
+use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
 use craft_ui::docking::{
@@ -420,6 +421,163 @@ fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses
     fixture.click(&alpha).settle();
     assert!(iconic(), "the icon of the panel in front collapses the column");
     assert!(!shown(&fixture, "Alpha body"), "and its panel no longer shows");
+}
+
+/// How tall the flyout of [`UnderWindow`]'s Alpha group measures.
+const FLYOUT_HEIGHT: f32 = 300.0;
+
+/// The frames a flyout closed in a pass still shows its group over: its 150 ms `motion.open` exit fade at 1/60 s, which
+/// is nine, and a few to spare. A `settle` runs four.
+const FLYOUT_FADE_FRAMES: usize = 12;
+
+/// Panels for a docked flyout under a floating window: Alpha's group, in the flyout, is a view that measures
+/// [`FLYOUT_HEIGHT`] and records the rect it shows in, this pass; Beta, in the window, shows a button that counts its
+/// clicks.
+struct UnderWindow {
+    flyout: Rc<Cell<Option<Rect>>>,
+    clicks: Rc<Cell<u32>>,
+}
+
+impl DockPanels<u32> for UnderWindow {
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if *panel == 11 {
+            self.clicks.set(self.clicks.get() + Button::new("Beta button").show(ui).clicks);
+        }
+    }
+
+    fn group_view(&mut self, panels: &[u32], _: usize, _: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
+        if !panels.contains(&10) {
+            return None;
+        }
+        Some(match at {
+            GroupAt::Measure(_) => FLYOUT_HEIGHT,
+            GroupAt::Show(rect) => {
+                self.flyout.set(Some(rect));
+                rect.height()
+            }
+        })
+    }
+}
+
+/// A start dock whose column, collapsed to icons, holds Alpha, beside the canvas, and a floating window holding Beta
+/// at `window`.
+fn flyout_dock(window: Option<Rect>) -> Arc<Workspace<u32>> {
+    let side = Column::new(vec![Group::new(vec![10], 0)]).with_iconic(true);
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.4), Node::dock(DockEdge::Start, vec![side]), Node::tabs(vec![1], 0));
+    let windows = window.map(|at| Floating::new(100, Column::new(vec![Group::new(vec![11], 0)]), at)).into_iter().collect();
+    Arc::new(Workspace::new(Layout::new(Some(root), windows)))
+}
+
+/// The rect of the floating window of [`flyout_dock`] over the flyout at `flyout`: it starts 40 points inside the
+/// flyout, so the window's button lies over it, and it reaches past the flyout's foot; at the flyout's own width, the
+/// dock's column, its end edge meets the flyout's, so the window's foot alone lies clear of the flyout.
+fn window_over(flyout: Rect) -> Rect {
+    Rect::from_min_size(flyout.min + Vec2::new(40.0, 30.0), Vec2::new(300.0, 360.0))
+}
+
+/// A collapsed column's flyout stands among the floating windows, for every app, in the order egui keeps for them: a
+/// flyout opened after a window is drawn over it and takes the presses where they overlap, and a press on the window
+/// then brings the window back in front of the flyout. The flyout stays open throughout, and its own presses raise it.
+#[trial]
+fn a_flyout_stands_among_the_floating_windows_in_their_order() {
+    let workspace = Rc::new(RefCell::new(flyout_dock(None)));
+    let (flyout, clicks) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(0)));
+    let mut panels = UnderWindow { flyout: Rc::clone(&flyout), clicks: Rc::clone(&clicks) };
+    let (held, specs, pass_rect) = (Rc::clone(&workspace), Tracked::new(Sides), Rc::clone(&flyout));
+    let mut fixture = Fixture::new(move |ui| {
+        // The cell holds this pass's flyout rect, so a flyout that does not show reads as `None`.
+        pass_rect.set(None);
+        let config = DockConfig::default().native_windows(false);
+        let shown = Bind::given(Arc::clone(&held.borrow()));
+        DockArea::new("Flyout dock", shown, &specs, &mut panels, config).show(ui);
+    });
+    fixture.room(Vec2::new(900.0, 600.0)).settle();
+    let icon = fixture.by_label("Alpha").expect("Alpha's icon").rect.center();
+    fixture.click_at(icon).settle();
+    let open = flyout.get().expect("Alpha's flyout shows its group");
+    // The floating window shows over the flyout. It is raised as the newest layer while the flyout stands there; the
+    // flyout is then closed and opened again, so it is the one opened after the window.
+    let window = window_over(open);
+    *workspace.borrow_mut() = flyout_dock(Some(window));
+    fixture.settle();
+    // The window is there and the flyout too; a point of the window's foot, below the flyout's foot, names the window's
+    // layer. The flyout opens as wide as the dock's column, while the window starts 40 points inside it and is 300
+    // wide, so the window's end edge meets the flyout's: of the window, only its foot lies clear of the flyout.
+    let clear = Pos2::new(open.center().x, open.bottom() + 24.0);
+    assert!(
+        window.contains(clear) && !open.contains(clear),
+        "the window's foot lies in the window and clear of the flyout: {clear:?} in {window:?}, clear of {open:?}"
+    );
+    let ctx = fixture.ctx().clone();
+    let window_layer = ctx.layer_id_at(clear).expect("the floating window shows");
+    let flyout_layer = ctx.layer_id_at(Pos2::new(open.left() + 8.0, open.center().y)).expect("the flyout shows beside the window");
+    assert_ne!(flyout_layer, window_layer, "the flyout and the window are layers of their own: {flyout_layer:?}");
+
+    // Closed and opened again, the flyout is the one opened after the window. A closed flyout keeps showing over the
+    // frames of its exit fade, more than a settle runs, so the icon is clicked again once they have run.
+    fixture.click_at(icon);
+    for _ in 0..FLYOUT_FADE_FRAMES {
+        if flyout.get().is_none() {
+            break;
+        }
+        fixture.frame(Vec::new());
+    }
+    assert!(flyout.get().is_none(), "the icon of the open panel closes its flyout");
+    fixture.click_at(icon).settle();
+    let open = flyout.get().expect("the flyout is open again");
+    let button = fixture.by_label("Beta button").expect("the floating window shows Beta's button").center();
+    assert!(open.contains(button), "the window's button lies over the open flyout: {button:?} in {open:?}");
+    assert_eq!(ctx.layer_id_at(button), Some(flyout_layer), "the flyout opened after the window is on top where they overlap");
+    fixture.click_at(button).settle();
+    assert_eq!(clicks.get(), 0, "and the press there does not reach the window's button");
+
+    // A press on the window where the flyout does not reach raises the window, as a press raises any floating window.
+    assert!(!open.contains(clear), "the window's foot lies clear of the reopened flyout: {clear:?} in {open:?}");
+    fixture.frame(vec![pointer::moved(clear)]).frame(vec![pointer::press(clear)]).frame(vec![pointer::release(clear)]).settle();
+    assert!(flyout.get().is_some(), "the flyout stays open: Auto-Collapse Iconic Panels is off");
+    assert_eq!(ctx.layer_id_at(button), Some(window_layer), "the pressed window is in front of the flyout");
+    fixture.click_at(button).settle();
+    assert_eq!(clicks.get(), 1, "and a press at the button now reaches it");
+}
+
+/// A flyout closed and opened again while its exit fade runs is raised over the window the fade let in front of it. A
+/// flyout stands in the floating windows' order, where egui raises a layer when it first shows and when it is pressed,
+/// and it does neither for a layer that shows again while its area is still up.
+#[trial]
+fn a_flyout_opened_again_during_its_fade_is_above_the_window_over_it() {
+    let workspace = Rc::new(RefCell::new(flyout_dock(None)));
+    let flyout = Rc::new(Cell::new(None));
+    let mut panels = UnderWindow { flyout: Rc::clone(&flyout), clicks: Rc::new(Cell::new(0)) };
+    let (held, specs, pass_rect) = (Rc::clone(&workspace), Tracked::new(Sides), Rc::clone(&flyout));
+    let mut fixture = Fixture::new(move |ui| {
+        // The cell holds this pass's flyout rect, so a flyout that does not show reads as `None`.
+        pass_rect.set(None);
+        let config = DockConfig::default().native_windows(false);
+        let shown = Bind::given(Arc::clone(&held.borrow()));
+        DockArea::new("Flyout dock", shown, &specs, &mut panels, config).show(ui);
+    });
+    fixture.room(Vec2::new(900.0, 600.0)).settle();
+    let icon = fixture.by_label("Alpha").expect("Alpha's icon").rect.center();
+    fixture.click_at(icon).settle();
+    let open = flyout.get().expect("Alpha's flyout shows its group");
+    // A point of the flyout's own top that the floating window covers too.
+    let tab = Pos2::new(open.left() + 60.0, open.top() + 40.0);
+    let ctx = fixture.ctx().clone();
+    let flyout_layer = ctx.layer_id_at(tab).expect("the flyout shows at its tab");
+
+    // The floating window shows over the flyout, as the newest layer, so it is on top where they overlap.
+    *workspace.borrow_mut() = flyout_dock(Some(window_over(open)));
+    fixture.settle();
+    let window_layer = ctx.layer_id_at(tab).expect("the window over the flyout shows");
+    assert_ne!(window_layer, flyout_layer, "the window over the flyout is the layer on top at its tab");
+
+    // Closed, the flyout fades out over the nine frames of its 150 ms fade at 1/60 s rather than at once.
+    fixture.frame(vec![pointer::moved(icon)]).frame(vec![pointer::press(icon)]).frame(vec![pointer::release(icon)]);
+    assert!(flyout.get().is_some(), "the closed flyout still shows while its exit fade runs");
+    // Opened again in the fade, the flyout is the newer layer and takes the top back.
+    fixture.frame(vec![pointer::moved(icon)]).frame(vec![pointer::press(icon)]).frame(vec![pointer::release(icon)]).frame(Vec::new());
+    assert!(flyout.get().is_some(), "the icon opens the flyout again while it fades");
+    assert_eq!(ctx.layer_id_at(tab), Some(flyout_layer), "the flyout opened again during its fade is above the window over it");
 }
 
 #[derive(PlainData)]

@@ -1899,7 +1899,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             DockTargets::<P>::register_room(ui.ctx(), dock, cell);
         }
         let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
-        // Only a docked column's icons are a rail; a floating window's open flyouts.
+        // Only a docked column's icons are a rail; a floating window's open flyouts, which stand in the windows' order.
         let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
         // The width the user gives a column by its inner edge leaves out its card's inset.
         let inset = card.map_or(0.0, |place| scene.sizes.inset(place));

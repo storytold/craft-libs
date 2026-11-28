@@ -170,7 +170,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     if let Some(nudge) = &nudge {
         placed.at += nudge.offset();
     }
-    let tier = overlay::layer_tier(ctx, overlay.rank);
+    let tier = overlay.tier(ctx);
     // A toast or a tooltip shows first at its room, never in egui's hidden sizing pass; a container's layer starts its
     // `Area` at its measured size (`LayerSpec::size`).
     if sized && areas::layer_rect(ctx, area).is_none() {
@@ -270,6 +270,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.exiting = layer.exiting;
     entry.cover = cover;
     entry.region = layer.region;
+    entry.among_windows = overlay.among_windows;
     entry.scoped = scope.is_some();
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
     entry.closes_on_commands = overlay.dismiss.commands;
@@ -319,7 +320,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     let measured = layer.size.map(|size| egui::vec2(size.x.max(min_width), size.y));
     let unplaced = placement(ctx, layer, covers, measured, bounds, anchor);
     let parent = overlay::drawing_parent(ctx);
-    let tier = overlay::layer_tier(ctx, overlay.rank);
+    let tier = overlay.tier(ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
     if overlay.rank.is_modal() && appears {
         overlay::close_popups_outside(ctx, &[layer.id]);
@@ -378,7 +379,7 @@ fn show_in_popup(
     let overlay = layer.overlay;
     let window = ctx.content_rect();
     let area = area_id(layer.id);
-    let tier = overlay::layer_tier(&ctx, overlay.rank);
+    let tier = overlay.tier(&ctx);
     let cover = match overlay.rank {
         Rank::Modal { backdrop } => {
             let scrim = match backdrop {
@@ -546,8 +547,13 @@ pub(crate) fn host_window(ctx: &Context, layer: &Layer<'_>, rect: Rect) -> Layer
     let overlay = layer.overlay;
     let mut memory = recall(layer, ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
-    let mut entry =
-        OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(overlay::layer_tier(ctx, overlay.rank), area_id(layer.id)));
+    let mut entry = OpenEntry::new(
+        layer.id,
+        overlay.rank,
+        overlay.keys,
+        rect,
+        areas::layer_of(overlay::layer_tier(ctx, overlay.rank, overlay.among_windows), area_id(layer.id)),
+    );
     entry.role = overlay.role;
     entry.scoped = scope.is_some();
     entry.window = true;

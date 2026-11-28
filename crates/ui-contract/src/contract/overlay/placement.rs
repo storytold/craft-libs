@@ -267,12 +267,14 @@ pub(super) struct Placed {
 }
 
 /// The pure placement of the anchored forms; the centre or the given position for floats, kept inside the safe rect
-/// within the overlay's bounds (`within_bounds`) by the keep rule moves follow. An anchored layer takes its side by its
-/// size: below its anchor, above when the room below is too short and the room above is larger, and keeps that side
-/// while it stays open, asks for the same side, and the content fits there or that side is the larger. A layer that `covers` its anchor
-/// ([`layer_covers_anchor`]) and fits neither side keeps its height within the bounds and slides over the anchor.
-/// Before its size is known (a popup's first, hidden pass) it takes no side and its body is offered `content_room`, so
-/// the size it measures decides the side.
+/// within the overlay's bounds (`within_bounds`) by the keep rule moves follow (`Overlay::drag_bounds`). A float that
+/// keeps only its title strip inside has the room it would have with the whole of it inside, so a move past an edge
+/// leaves its size as it was. An anchored layer takes its side by its size: below its anchor, above when the room below
+/// is too short and the room above is larger, and keeps that side while it stays open, asks for the same side, and the
+/// content fits there or that side is the larger. A layer that `covers` its anchor ([`layer_covers_anchor`]) and fits
+/// neither side keeps its height within the bounds and slides over the anchor. Before its size is known (a popup's
+/// first, hidden pass) it takes no side and its body is offered `content_room`, so the size it measures decides the
+/// side.
 pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, covers: bool, size: Option<egui::Vec2>, bounds: Rect, anchor: Rect) -> Placed {
     let rtl = layer.env.layer_direction().is_rtl();
     let cap = cap(layer.overlay, bounds, anchor);
@@ -306,8 +308,10 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, covers: bool, size: Op
             let kept = within_bounds(layer.overlay, bounds);
             let size = size.unwrap_or(egui::Vec2::ZERO);
             let min = float.top_left(size).unwrap_or_else(|| kept.center() - size / 2.0);
-            let at = crate::contract::body::keep_inside(Rect::from_min_size(min, size), kept).min;
-            Placed { at, side: None, asked: None, room: (kept.max - at).max(egui::Vec2::ZERO).min(cap) }
+            let rect = Rect::from_min_size(min, size);
+            let at = layer.overlay.drag_bounds.keep(rect, kept, &layer.env.tokens).min;
+            let inside = crate::contract::body::keep_inside(rect, kept).min;
+            Placed { at, side: None, asked: None, room: (kept.max - inside).max(egui::Vec2::ZERO).min(cap) }
         }
     }
 }

@@ -7,7 +7,8 @@ use egui::Context;
 /// Whether the OS may move the running viewport's window from where the pointer is in this pass: what the move bands
 /// of the pass wrote (the body step writes it for every move band of an OS window, `true` only where a press would go
 /// to the band), else what the app wrote with [`set_window_movable`], else true. The runtime sets macOS's
-/// `NSWindow.movable` from it at the end of each window's pass.
+/// `NSWindow.movable` from it at the end of each window's pass. Read between passes, it answers for the window's last
+/// pass.
 pub fn window_movable(ctx: &Context) -> bool {
     viewports::movable(ctx)
 }

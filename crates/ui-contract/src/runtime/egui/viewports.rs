@@ -250,11 +250,15 @@ fn movable_id(viewport: ViewportId) -> egui::Id {
 
 /// Whether the OS may move the running viewport's window from where the pointer is in this pass: what the move bands
 /// of the pass wrote (the body step writes it for every move band of an OS window, `true` only where a press would go
-/// to the band), else what the app wrote with [`write_movable`], else true.
+/// to the band), else what the app wrote with [`write_movable`], else true. Read between passes (by an integration or
+/// a test after the frame), it answers for the viewport's last pass: egui counts a pass when it ends, so there the
+/// pass number has already moved past the pass that wrote the flag.
 #[doc(hidden)]
 pub fn movable(ctx: &Context) -> bool {
-    match movable_record(ctx) {
-        Some((pass, movable)) if pass == pass_number(ctx) => movable,
+    let number = pass_number(ctx);
+    let latest = if crate::runtime::frame::running(ctx).is_some() { Some(number) } else { number.checked_sub(1) };
+    match (movable_record(ctx), latest) {
+        (Some((pass, movable)), Some(latest)) if pass == latest => movable,
         _ => true,
     }
 }

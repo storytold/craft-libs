@@ -94,6 +94,129 @@ fn a_title_bar_in_an_embedded_shell_acts_on_no_window() {
     assert!(!commands.is_empty(), "the window's bar acts on the window");
 }
 
+/// The window commands a title bar with a Home button in its leading content sends for each step list of `gestures`,
+/// in order, given the Home button's centre and a free point of the band.
+fn home_bar_sent(gestures: impl Fn(Pos2, Pos2) -> Vec<Vec<Vec<Event>>>) -> Vec<Vec<ViewportCommand>> {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let bar = Cell::new(Rect::NOTHING);
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            let shown = TitleBar::new().show_titled(
+                ui,
+                Title::new("Landscape.psd"),
+                |ui, _| {
+                    Button::new("Home").show(ui);
+                },
+                |_, _| {},
+            );
+            bar.set(shown.response.rect);
+        })
+    };
+    frame(vec![]);
+    let settled = frame(vec![]);
+    let tree = &settled.trees.iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
+    let home = tree
+        .with_role(Role::BUTTON)
+        .into_iter()
+        .find(|key| tree.name_of(*key) == Some("Home"))
+        .and_then(|key| tree.bounds_of(key))
+        .expect("the bar shows its Home button")
+        .center();
+    // The title is no control: the band lies under it.
+    let band = bar.get().center();
+    gestures(home, band)
+        .into_iter()
+        .map(|steps| {
+            steps
+                .into_iter()
+                .flat_map(|events| frame(events).commands)
+                .map(|(_, command)| command)
+                .filter(|command| matches!(command, ViewportCommand::StartDrag | ViewportCommand::Maximized(_) | ViewportCommand::OuterPosition(_)))
+                .collect()
+        })
+        .collect()
+}
+
+/// A press on a control over the band is the control's: a press-drag that starts on the bar's Home button neither
+/// moves the window nor drags, and a double click on it does not maximize the window. The band used to take the drag
+/// under the button, as a drag-only root under a button in it does, so the drag moved the window and the double click
+/// zoomed it. The free band still moves the window, and its double click still maximizes it.
+#[trial]
+fn a_press_on_a_control_over_the_band_never_moves_or_zooms_the_window() {
+    let sent = home_bar_sent(|home, band| {
+        let drag = |at: Pos2| vec![vec![moved(at)], vec![press(at)], vec![moved(at + vec2(40.0, 0.0))], vec![release(at + vec2(40.0, 0.0))], vec![]];
+        let double = |at: Pos2| vec![vec![moved(at)], vec![press(at)], vec![release(at)], vec![press(at)], vec![release(at)], vec![]];
+        vec![drag(home), double(home), drag(band), double(band)]
+    });
+    let [home_drag, home_double, band_drag, band_double] = &sent[..] else { panic!("four gestures ran: {sent:?}") };
+    assert!(home_drag.is_empty(), "a drag from Home does not move the window: {home_drag:?}");
+    assert!(home_double.is_empty(), "a double click on Home does not maximize the window: {home_double:?}");
+    assert!(band_drag.contains(&ViewportCommand::StartDrag), "a drag of the free band moves the window: {band_drag:?}");
+    assert!(band_double.contains(&ViewportCommand::Maximized(true)), "a double click on the free band maximizes the window: {band_double:?}");
+}
+
+/// The OS may move the window (macOS `NSWindow.movable`) only where a press would go to the bar's free band: not over
+/// the bar's Home button, over the free band yes. The bar runs in a measuring run before its drawn run, as in a
+/// measured container, and the flag reads the same in the pass and after it. Read after the pass, it used to say the
+/// window was movable everywhere: egui had counted the pass by then, so the flag the pass wrote looked stale.
+#[trial]
+fn the_window_is_movable_from_the_free_band_and_not_from_a_control_over_it() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::runtime::measure;
+    use craft_ui::shell::title_bar::window_movable;
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let (bar, in_pass) = (Cell::new(Rect::NOTHING), Cell::new(None));
+    let show = |ui: &mut Ui| {
+        TitleBar::new()
+            .show_titled(
+                ui,
+                Title::new("Landscape.psd"),
+                |ui, _| {
+                    Button::new("Home").show(ui);
+                },
+                |_, _| {},
+            )
+            .response
+            .rect
+    };
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            let ctx = ui.ctx().clone();
+            let builder = egui::UiBuilder::new().sizing_pass().invisible();
+            measure::run(&ctx, || ui.scope_builder(builder, show));
+            bar.set(show(ui));
+            in_pass.set(Some(window_movable(&ctx)));
+        })
+    };
+    frame(vec![]);
+    let settled = frame(vec![]);
+    let tree = &settled.trees.iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
+    let home = tree
+        .with_role(Role::BUTTON)
+        .into_iter()
+        .find(|key| tree.name_of(*key) == Some("Home"))
+        .and_then(|key| tree.bounds_of(key))
+        .expect("the bar shows its Home button")
+        .center();
+    // The title is no control: the band lies under it.
+    let band = bar.get().center();
+    for (at, movable, what) in [(home, false, "over Home"), (band, true, "over the free band"), (home, false, "over Home again")] {
+        frame(vec![moved(at)]);
+        frame(vec![]);
+        assert_eq!(in_pass.get(), Some(movable), "{what}, read in the pass");
+        assert_eq!(window_movable(&windows.ctx), movable, "{what}, read after the pass");
+    }
+}
+
 /// The shell sends the window title once after a change and not again while the viewport reports it; an embedded shell
 /// sends none.
 #[trial]
@@ -410,14 +533,15 @@ fn cursors_over_the_bar(look: craft_ui::contract::MoveBandCursor) -> (Option<cra
     (over(file.center()), over(Pos2::new(help.right() + 40.0, help.center().y)))
 }
 
-/// A title bar's move band shows the open hand by default, also through the menu titles on it, which sense clicks
-/// only; under `MoveBandCursor::Arrow` the band and the titles show the arrow, as an OS title bar does.
+/// A title bar's move band shows the open hand by default over its free band, not over the menu titles on it, which
+/// take the press (they sense clicks only); under `MoveBandCursor::Arrow` the band shows the arrow too, as an OS title
+/// bar does.
 #[trial]
 fn a_move_band_shows_the_arrow_when_the_app_asks() {
     use craft_behavior::{Cursor, CursorIcon};
     use craft_ui::contract::MoveBandCursor;
     let grab = Some(Cursor::System(CursorIcon::Grab));
-    assert_eq!(cursors_over_the_bar(MoveBandCursor::Hand), (grab.clone(), grab), "the hand over the band and the titles on it");
+    assert_eq!(cursors_over_the_bar(MoveBandCursor::Hand), (None, grab), "the hand over the free band and not the titles on it");
     assert_eq!(cursors_over_the_bar(MoveBandCursor::Arrow), (None, None), "the arrow over the band and the titles on it");
 }
 

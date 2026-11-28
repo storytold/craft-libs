@@ -5,6 +5,7 @@ use crate::contract::{ContainerProps, Mount};
 use crate::runtime::egui::areas;
 use crate::runtime::memory::{MemoryStage, SaveKey, sub};
 use crate::runtime::windows::{self};
+use crate::style::UiTokens;
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 
@@ -94,9 +95,11 @@ fn placement_of(ctx: &Context, id: Id, save: Option<&SaveKey>) -> Placement {
 }
 
 /// The placement a layer is shown at: the caller's `placed` rect or `placed_at` position, else the saved or session placement, else for a
-/// floating resizable layer with a default size (`Overlay::size`) that size, within the screen less `screen_inset` on
-/// each side, centred or at the overlay's float position. A saved size and position win over the default. A size with
-/// no position places an anchored layer from its anchor at that size.
+/// floating resizable layer with a default size (`Overlay::size`) that size, within the screen less the tokens'
+/// `space.inset.screen` on each side, centred or at the overlay's float position and kept as `Overlay::drag_bounds`
+/// says. A saved size and position win over the default, and are kept as the rule says too, so a layer the user moved
+/// or resized past an edge keeps what the rule keeps of it inside. A size with no position places an anchored layer
+/// from its anchor at that size.
 ///
 /// While a drag of the layer's move band runs, `moving` is the rect it puts the layer at in this pass
 /// (`WindowMode::running_move`): the layer shows there, within its bounds, at the size the placement gives. The
@@ -108,9 +111,9 @@ pub(crate) fn shown_placement(
     overlay: &crate::contract::Overlay,
     moving: Option<Rect>,
     screen: Rect,
-    screen_inset: f32,
+    tokens: &UiTokens,
 ) -> Placement {
-    let mut placement = resting_placement(ctx, id, save, overlay, screen, screen_inset);
+    let mut placement = resting_placement(ctx, id, save, overlay, screen, tokens);
     if let Some(moving) = moving {
         placement.pos = Some(super::window::kept_in(moving, overlay.bounds).min.into());
     }
@@ -124,26 +127,33 @@ fn resting_placement(
     save: Option<&SaveKey>,
     overlay: &crate::contract::Overlay,
     screen: Rect,
-    screen_inset: f32,
+    tokens: &UiTokens,
 ) -> Placement {
     if let Some(given) = Placement::given(overlay) {
         return given;
     }
     let mut placement = placement_of(ctx, id, save);
+    // The layer centres, and is kept, inside the screen cut to `bounds`; bounds that miss the screen leave it whole.
+    let region = overlay.bounds.map(|bounds| screen.intersect(bounds)).filter(|region| region.is_positive()).unwrap_or(screen);
+    if let Some(size) = placement.size {
+        // A size already stored is the one the layer took (a resize by the user): the keep rule still holds the part of
+        // it the rule keeps inside, as it does while the user moves the layer, so a place a drag left past an edge puts
+        // back what the rule keeps. A layer hung from its anchor keeps no place, so the rule has nothing to keep there.
+        if let (Some(pos), Place::Float(_)) = (placement.pos, &overlay.place) {
+            let rect = Rect::from_min_size(Pos2::from(pos), Vec2::from(size));
+            placement.pos = Some(overlay.drag_bounds.keep(rect, region, tokens).min.into());
+        }
+        return placement;
+    }
     let (Some(default), Place::Float(float), true) = (overlay.size, &overlay.place, overlay.fit == OverlayFit::Resizable) else {
         return placement;
     };
-    if placement.size.is_some() {
-        return placement;
-    }
-    let room = (screen.size() - Vec2::splat(2.0 * screen_inset)).max(Vec2::ZERO);
+    let room = (screen.size() - Vec2::splat(2.0 * tokens.space.inset.screen)).max(Vec2::ZERO);
     let least = overlay.size_limits.min.min(room);
     let size = default.max(least).min(overlay.size_limits.max.unwrap_or(Vec2::INFINITY)).min(room);
-    // The layer centres, and is kept, inside the screen cut to `bounds`; bounds that miss the screen leave it whole.
-    let region = overlay.bounds.map(|bounds| screen.intersect(bounds)).filter(|region| region.is_positive()).unwrap_or(screen);
     // The saved position is the layer's top left; the float's is where its corner sits.
     let pos = placement.pos.map(Pos2::from).or_else(|| float.top_left(size)).unwrap_or_else(|| region.center() - size / 2.0);
-    let pos = super::window::keep_inside(Rect::from_min_size(pos, size), region).min;
+    let pos = overlay.drag_bounds.keep(Rect::from_min_size(pos, size), region, tokens).min;
     placement.pos = Some(pos.into());
     placement.size = Some(size.into());
     placement
@@ -163,12 +173,8 @@ pub(super) fn measure_layer(props: &ContainerProps, id: Id, ui: &Ui) -> areas::L
     let area = sub(id, "area");
     match &props.mount {
         Mount::Viewport { .. } if windows::mount_window(ui.ctx(), id) => ui.layer_id(),
-        Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => {
-            areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), overlay.rank), area)
-        }
-        Mount::FullWindow => {
-            areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), crate::contract::Overlay::full_window(props.focus).rank), area)
-        }
+        Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => areas::layer_of(overlay.tier(ui.ctx()), area),
+        Mount::FullWindow => areas::layer_of(crate::contract::Overlay::full_window(props.focus).tier(ui.ctx()), area),
         _ => ui.layer_id(),
     }
 }

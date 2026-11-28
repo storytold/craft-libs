@@ -6,7 +6,9 @@ use super::dock_column::{
     register_edges, show_bar,
 };
 use super::group::GripMarks;
-use super::{CardInset, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
+use super::{
+    CardInset, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, FlyoutHeight, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag,
+};
 use crate::buttons::{ActiveLook, IconButton};
 use crate::contract::overlay::Anchor;
 use crate::contract::{
@@ -210,9 +212,10 @@ pub struct IconicColumnStyle {
 /// column registers its drop spots with the dock `dock` as an expanded column does: its edges, the seams between its
 /// icon groups, the top and bottom of the stack and each icon group's cells, which join its tabs. The flyout shows
 /// its group through the `view` of [`show_flyouts`](IconicColumn::show_flyouts), with the opened panel active, as tall as the view measures the
-/// group within the room and at least the height of its panels' default heights; a group the user sized keeps that
-/// size. The flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`;
-/// a flyout taller than the room below that top moves up by what it overflows and no further.
+/// group within the room and at least the height of its panels' default heights, which a panel whose
+/// [`FlyoutHeight`] is `Content` leaves to its group docked in a column; a group the user sized keeps that size. The
+/// flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`; a flyout
+/// taller than the room below that top moves up by what it overflows and no further.
 /// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
 /// [`IconicColumnOutput::flyout`], which the host keeps in the group (`flyout_width`, `height`, `flyout_offset`).
 ///
@@ -490,12 +493,15 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
         Plan { bar, cells, names, grips, groups, body }
     }
 
-    /// The height of the flyout of `group`: the group's own height, else what its panels ask for, else the least.
+    /// The height of the flyout of `group`: the group's own height, else the docked default heights of its panels
+    /// whose flyout takes them ([`FlyoutHeight::Docked`]), else the least.
     fn flyout_height(&self, group: &Group<P>, sizes: &DockSizes) -> f32 {
         let content = group
             .panels
             .iter()
-            .filter_map(|panel| (self.spec)(panel).heights.filter(|heights| heights.valid()))
+            .map(|panel| (self.spec)(panel))
+            .filter(|spec| spec.flyout_height == FlyoutHeight::Docked)
+            .filter_map(|spec| spec.heights.filter(|heights| heights.valid()))
             .map(|heights| heights.default + sizes.strip)
             .fold(sizes.strip + sizes.least, f32::max);
         group.height.filter(|height| height.is_finite() && *height > 0.0).unwrap_or(content).max(sizes.strip + sizes.least)

@@ -1,7 +1,7 @@
 //! The `Overlay` data, its presets and builders, its dismissal rules and the placement changes it reports.
 
 use super::opener::{Opener, Trigger};
-use super::place::{Anchor, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, SizeLimits, ViewportShare};
+use super::place::{Anchor, DragBounds, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, SizeLimits, ViewportShare};
 use crate::runtime::access::PopupKind;
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::motion::{MotionSpec, spec};
@@ -10,7 +10,7 @@ use crate::runtime::windows::ResizeEdge;
 use craft_behavior::overlay::{Align, MinWidth, Side};
 use craft_behavior::{GesturePhase, OwnerClass};
 use egui::emath::TSTransform;
-use egui::{Align2, Id, Pos2, Rect, Response, Vec2};
+use egui::{Align2, Context, Id, Pos2, Rect, Response, Vec2};
 use std::borrow::Cow;
 
 /// What a press outside the layer and its anchor does.
@@ -109,6 +109,9 @@ pub struct Overlay {
     pub min_width: MinWidth,
     /// Whether the user may move it.
     pub movable: bool,
+    /// How much of it stays inside the window when the user moves it or it floats at a position (default
+    /// [`DragBounds::Inside`]).
+    pub drag_bounds: DragBounds,
     /// How the user may resize it.
     pub resize: Resize,
     /// Its rank.
@@ -159,6 +162,10 @@ pub struct Overlay {
     pub continue_move: Option<Vec2>,
     /// What the layer is for; a progress window is left out of `any_open`.
     pub role: LayerRole,
+    /// The layer stands among the floating windows, in the order egui keeps for them, whatever its rank: the last of
+    /// them shown, pressed or raised is on top, and the app's own egui windows stack with it. Unset, a `Rank::Popup`
+    /// stands above every window instead; a collapsed dock column's flyout sets it.
+    pub among_windows: bool,
     /// Set only by [`Overlay::full_window`].
     full_window: bool,
 }
@@ -180,6 +187,7 @@ impl Overlay {
             fit,
             min_width: MinWidth::None,
             movable: false,
+            drag_bounds: DragBounds::Inside,
             resize: Resize::NONE,
             rank,
             keys,
@@ -199,6 +207,7 @@ impl Overlay {
             moved_by_app: false,
             continue_move: None,
             role: LayerRole::default(),
+            among_windows: false,
             full_window: false,
         }
     }
@@ -461,10 +470,29 @@ impl Overlay {
         self
     }
 
+    /// Sets how much of the layer stays inside the window when the user moves it ([`DragBounds`]):
+    /// [`DragBounds::TitleVisible`] lets a dialog go past the window's edges with its title band left to grab.
+    pub fn drag_bounds(mut self, bounds: DragBounds) -> Overlay {
+        self.drag_bounds = bounds;
+        self
+    }
+
     /// Sets what the layer is for ([`Overlay::role`]).
     pub fn role(mut self, role: LayerRole) -> Overlay {
         self.role = role;
         self
+    }
+
+    /// Sets whether the layer stands among the floating windows ([`Overlay::among_windows`]).
+    pub fn among_windows(mut self, on: bool) -> Overlay {
+        self.among_windows = on;
+        self
+    }
+
+    /// The egui tier the layer opened now shows in: its rank's, raised to that of the layer it is opened inside, and
+    /// the floating windows' for a layer that stands among them.
+    pub(crate) fn tier(&self, ctx: &Context) -> crate::runtime::egui::areas::Tier {
+        crate::runtime::overlay::layer_tier(ctx, self.rank, self.among_windows)
     }
 
     /// Sets whether the move band moves the OS window the layer is shown in, in place of the layer.

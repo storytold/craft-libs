@@ -1,5 +1,6 @@
 //! Where a layer sits and how it sizes: anchors, places, viewport shares, fit, resize and size limits.
 
+use crate::style::UiTokens;
 use craft_behavior::overlay::{Align, Side};
 use egui::{Align2, Pos2, Rect, Vec2};
 
@@ -57,6 +58,39 @@ impl FloatPlace {
     /// The top left of a layer `size` large whose `corner` sits at `pos`; `None` for a centred layer.
     pub(crate) fn top_left(&self, size: Vec2) -> Option<Pos2> {
         self.pos.map(|pos| pos - self.corner.pos_in_rect(&Rect::from_min_size(Pos2::ZERO, size)).to_vec2())
+    }
+}
+
+/// How much of a floating layer stays inside the window: the whole layer (`Inside`, the default) or a strip of its title.
+///
+/// It holds while the user moves the layer, when the layer is placed at a position, and when it shows at the placement
+/// a pass stored: the window's safe rect, cut to the overlay's [`bounds`](super::Overlay::bounds) when it sets them.
+/// Bounds of the overlay's own still hold the whole layer while the user moves it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DragBounds {
+    /// The whole layer: a move stops where an edge of the layer meets the window's.
+    #[default]
+    Inside,
+    /// A strip of its title: its top edge stays at or below the window's top, and at least `size.bar.title` of its
+    /// height and `size.dialog.button` of its width stay inside, so the user takes it back by its title band. The rest
+    /// may go past the window's edges: a dialog moved mostly aside shows what lies behind it, as InDesign's do. A layer
+    /// smaller than the strip on an axis stays whole inside on that axis.
+    TitleVisible,
+}
+
+impl DragBounds {
+    /// `rect` moved, at its size, the least distance that keeps what this rule keeps of it inside `bounds`.
+    pub(crate) fn keep(self, rect: Rect, bounds: Rect, tokens: &UiTokens) -> Rect {
+        match self {
+            DragBounds::Inside => crate::contract::body::keep_inside(rect, bounds),
+            DragBounds::TitleVisible => {
+                let strip = Vec2::new(tokens.size.dialog.button, tokens.size.bar.title).min(rect.size());
+                let x = rect.min.x.min(bounds.max.x - strip.x).max(bounds.min.x + strip.x - rect.width());
+                let y = rect.min.y.min(bounds.max.y - strip.y).max(bounds.min.y);
+                rect.translate(Pos2::new(x, y) - rect.min)
+            }
+        }
     }
 }
 

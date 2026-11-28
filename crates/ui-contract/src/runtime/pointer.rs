@@ -11,8 +11,8 @@ use crate::runtime::inputs::{self, Input};
 use crate::runtime::sampler;
 use craft_behavior::press::{MULTI_TAP_SLOP, MULTI_TAP_TIME};
 use craft_behavior::{
-    Buttons, MultiTap, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape,
-    Winner, count_clicks, resolve,
+    Buttons, MultiTap, MultiTouch, PartKey, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor,
+    Shape, Winner, count_clicks, resolve,
 };
 use craft_keymap::Mods;
 use craft_theme::HitSizes;
@@ -20,6 +20,10 @@ use egui::{Context, Id, IdMap, IdSet, Pos2, Rect, TouchId, TouchPhase, Vec2, Vie
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// The key of a container's move band, the part a press-drag moves its layer or window by (the body step declares
+/// it). The press winners give it no drag from under a control over it ([`PressWinners`]).
+pub(crate) const MOVE_BAND: PartKey = PartKey::new("move_band");
 
 /// Points one wheel line adds to `PointerFrame.scroll`; scroll owners apply their own notch (the wheel service).
 pub(crate) const WHEEL_LINE_POINTS: f32 = 40.0;
@@ -1005,8 +1009,9 @@ pub(crate) fn made_lookups(ctx: &Context, viewport: ViewportId) -> u32 {
 /// their winning shapes' place in the pass's paint order, top first. The top one takes every kind of press its shape
 /// senses. Under a top shape that only drags (a window's resize grip), the click goes to the first root below whose
 /// shape clicks; under one that only clicks (a button), the drag goes to the first root below whose shape drags, when
-/// that root takes no click anywhere. Under a top shape that clicks and passes its drag (`Sense::PASSES_DRAG`), the
-/// drag goes to the next shape under it that drags: its own root's, else the first root's below.
+/// that root takes no click anywhere and that shape is no move band (`MOVE_BAND`). Under a top shape that clicks and
+/// passes its drag (`Sense::PASSES_DRAG`), the drag goes to the next shape under it that drags: its own root's, else the
+/// first root's below.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct PressWinners {
     pub click: Option<(Winner<Id>, Id)>,
@@ -1370,12 +1375,15 @@ fn winners_of(mut ranked: Vec<Ranked>) -> PressWinners {
                 }
             }
             // Under a top shape that only clicks, the first root below whose shape drags takes the drag, unless the
-            // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it. Under a top
-            // shape that passes its drag, the next shape that drags takes it, in the same root or one below.
+            // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it. A move band
+            // is not: a press on a control over the band (a title bar's Home, a menu title, a caption button) never
+            // moves the window, and its double click never zooms it. Under a top shape that passes its drag, the next
+            // shape that drags takes it, in the same root or one below, a move band too.
             (true, false) => {
                 let passes = winners.click.is_some_and(|(top, _)| top.sense.contains(craft_behavior::Sense::PASSES_DRAG));
                 let root_target = winners.click.is_some_and(|(top, owner)| top.drag_to_root && root != owner);
-                if drags && !root_target && (passes || !(clicks || root_clicks)) {
+                let band = winner.part.is_some_and(|part| part.key == MOVE_BAND);
+                if drags && !root_target && (passes || !(clicks || root_clicks || band)) {
                     winners.drag = Some((winner, root));
                 }
                 break;

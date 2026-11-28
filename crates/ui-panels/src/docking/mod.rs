@@ -45,7 +45,7 @@ pub use panels::{close_requests, open_requests};
 pub use placed::{Placing, placed_rect, with_area_rules};
 pub use root::{DockRoot, DockRootOutput, DockRootStyle};
 pub use sources::{DividerKind, DockSource, SourceKind};
-pub use spec::{DockGrid, DockHeights, PanelDocument, PanelSpec};
+pub use spec::{DockGrid, DockHeights, FlyoutHeight, PanelDocument, PanelSpec};
 pub use splitter::{Splitter, SplitterStyle};
 pub use targets::{CardInset, ColumnCards, DockSizes, DockSpot, DockTargets, GroupDrag, ZoneRule};
 pub use words::DockWords;

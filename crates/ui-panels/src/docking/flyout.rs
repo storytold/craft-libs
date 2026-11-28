@@ -60,6 +60,10 @@ impl Outcome for FlyoutOutput {
 /// The user resizes it by its top and bottom edges, the edge away from the column and the two corners there; the
 /// column side stays. The flyout keeps no rect of its own: each step comes back in [`FlyoutShown::placed`] and the
 /// caller places the next pass from it.
+///
+/// It stands among the floating windows, in their order: a flyout opened after a window is drawn over it and takes
+/// the presses there, and pressing the window brings it back in front. The menus opened from a flyout stand above
+/// every window.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, unregistered)]
 pub struct Flyout {
@@ -120,7 +124,8 @@ impl Flyout {
                     .focus_left(self.auto_collapse)
                     .commands(false),
             )
-            .body_scroll(false);
+            .body_scroll(false)
+            .among_windows(true);
         if bounded { overlay.bounds(self.within) } else { overlay }
     }
 

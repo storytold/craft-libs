@@ -225,7 +225,7 @@ pub type LayerKey = egui::LayerId;
 /// How an overlay layer ranks among egui's orders, bottom to top: the one place the runtime chooses an `Order`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tier {
-    /// Floating windows and panels.
+    /// Floating windows and panels, and the popups that stand among them.
     Window,
     /// Toasts, popups, modals and their chrome.
     Foreground,

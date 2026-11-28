@@ -52,6 +52,19 @@ impl DockHeights {
     }
 }
 
+/// How tall the flyout of a panel in a column collapsed to icons opens while the user has not resized its group. Either
+/// way the flyout is at least as tall as its body measures, within the room below its top.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FlyoutHeight {
+    /// At least the panel's [`DockHeights::default`], the height its group takes docked in a column.
+    #[default]
+    Docked,
+    /// As tall as the body measures, at least the dock's least group height: the panel's [`DockHeights`] size its
+    /// group docked in a column only.
+    Content,
+}
+
 /// How a panel that lays its content in a grid of equal columns (a toolbar) sizes its dock column. The column is a
 /// whole number of content columns wide, its steps ([`Column::steps`](craft_behavior::dock::Column::steps)), and as
 /// tall as the content measures at that width: docked from the top of the dock, floating under the title row. A drag
@@ -211,9 +224,12 @@ pub struct PanelSpec {
     pub icon: Option<IconSpec<'static>>,
     /// Body size limits.
     pub limits: SizeLimits,
-    /// How the panel's group sizes itself in a dock column until the user resizes it. `None` shares the column's
-    /// free height with the column's last open group, which fills it, and with the other groups that have none.
+    /// How the panel's group sizes itself in a dock column until the user resizes it, and under
+    /// [`FlyoutHeight::Docked`] the least height of its flyout. `None` shares the column's free height with the
+    /// column's last open group, which fills it, and with the other groups that have none.
     pub heights: Option<DockHeights>,
+    /// How tall the panel's flyout opens: at least its docked default height, or as tall as its body measures.
+    pub flyout_height: FlyoutHeight,
     /// The size the panel floats at: its width and the most height it takes. `None`: the size of the group it floats
     /// out of, else `FloatSpace`'s default size.
     pub float_size: Option<Vec2>,
@@ -266,6 +282,7 @@ impl PanelSpec {
             icon: None,
             limits: SizeLimits::default(),
             heights: None,
+            flyout_height: FlyoutHeight::Docked,
             float_size: None,
             allow_native: true,
             allow_float_resize: true,
@@ -349,6 +366,13 @@ impl PanelSpec {
     #[must_use]
     pub fn heights(mut self, heights: DockHeights) -> Self {
         self.heights = Some(heights);
+        self
+    }
+
+    /// How tall the panel's flyout opens.
+    #[must_use]
+    pub fn flyout_height(mut self, height: FlyoutHeight) -> Self {
+        self.flyout_height = height;
         self
     }
 

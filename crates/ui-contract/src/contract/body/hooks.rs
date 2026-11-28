@@ -657,7 +657,7 @@ impl BodyHooks<'_> {
             Mount::Layer(_) | Mount::Viewport { .. } => {
                 let placement = overlay_of(props).map_or_else(Placement::default, |overlay| {
                     let screen = crate::contract::overlay::screen_for(&ctx, env, overlay);
-                    shown_placement(&ctx, id, save.as_ref(), overlay, None, screen, env.tokens.space.inset.screen)
+                    shown_placement(&ctx, id, save.as_ref(), overlay, None, screen, &env.tokens)
                 });
                 // A layer the user sized takes that size, at its saved position or where its anchor places it.
                 placement.size.is_some()
