@@ -16,6 +16,8 @@ pub mod browser;
 pub mod cups;
 pub mod spool;
 
+#[cfg(test)]
+pub(crate) mod copies_tests;
 #[cfg(any(test, windows))]
 pub(crate) mod progress;
 #[cfg(any(test, windows))]
@@ -104,12 +106,16 @@ pub enum Scaling {
     ShrinkToFit,
 }
 
+/// The most copies one job may ask for, as the reference print dialog allows: every backend sends at most this many.
+/// CUPS (its `MaxCopies` default), IPP and the Windows drivers take it.
+pub const MOST_COPIES: u32 = 9999;
+
 /// The settings of one print job.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Job {
     /// `None` = the system default printer.
     pub printer: Option<String>,
-    /// Number of copies; clamped to 1..=999 when sent.
+    /// Number of copies; clamped to 1..=[`MOST_COPIES`] when sent.
     pub copies: u32,
     /// Whether copies of a multi-page document come out as complete sets.
     pub collate: bool,
@@ -254,7 +260,7 @@ fn lp_args_for(job: &Job, apple: bool) -> Vec<String> {
     if let Some(p) = &job.printer {
         a.extend(["-d".to_string(), p.clone()]);
     }
-    a.extend(["-n".to_string(), job.copies.clamp(1, 999).to_string()]);
+    a.extend(["-n".to_string(), job.copies.clamp(1, MOST_COPIES).to_string()]);
     a.extend(["-t".to_string(), job.title.clone()]);
     let mut opt = |o: &str| a.extend(["-o".to_string(), o.to_string()]);
     opt(if job.collate { "collate=true" } else { "collate=false" });
@@ -1029,7 +1035,7 @@ fn windows_preview(job: &Job, default: Option<&str>) -> Vec<String> {
     let mut preview = vec![
         "xps-print".into(),
         format!("printer={}", job.printer.as_deref().unwrap_or("(default)")),
-        format!("copies={}", job.copies.clamp(1, 999)),
+        format!("copies={}", job.copies.clamp(1, MOST_COPIES)),
         format!("collate={}", job.collate),
         format!(
             "duplex={}",

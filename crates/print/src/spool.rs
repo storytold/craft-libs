@@ -116,9 +116,9 @@ impl Spool {
     }
 
     /// Prints `pdf` with `job` in a job; the job's id or the failure arrives on the receiver.
-    /// The job's copies are clamped to 1..=999, as [`Job::copies`] documents.
+    /// The job's copies are clamped to 1..=[`MOST_COPIES`](crate::MOST_COPIES), as [`Job::copies`] documents.
     pub fn submit(&self, pdf: Vec<u8>, job: Job) -> Receiver<Result<String, String>> {
-        let job = Job { copies: job.copies.clamp(1, 999), ..job };
+        let job = Job { copies: job.copies.clamp(1, crate::MOST_COPIES), ..job };
         let pending = self.inner.backend.prepare(pdf, job);
         let (sender, receiver) = std::sync::mpsc::channel();
         let done: Done = Arc::new((Mutex::new(Phase::Waiting), Condvar::new()));

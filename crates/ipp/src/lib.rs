@@ -74,6 +74,9 @@ const MAX_REPLY: usize = 16 << 20;
 /// Largest number of attributes taken from a reply.
 const MAX_ATTRIBUTES: usize = 100_000;
 
+/// The most copies a Print-Job asks for, as the reference print dialog allows (and CUPS's `MaxCopies` default).
+pub const MOST_COPIES: u32 = 9999;
+
 pub const OP_PRINT_JOB: u16 = 0x0002;
 pub const OP_CUPS_GET_DEFAULT: u16 = 0x4001;
 pub const OP_CUPS_GET_PRINTERS: u16 = 0x4002;
@@ -684,6 +687,7 @@ pub struct Job<'a> {
     /// Shown in the queue.
     pub title: &'a str,
     pub user: &'a str,
+    /// Sent clamped to 1..=[`MOST_COPIES`].
     pub copies: u32,
     /// The document, as `format` (`application/pdf`).
     pub document: &'a [u8],
@@ -700,7 +704,7 @@ pub fn print_job(endpoint: &Endpoint, job: &Job<'_>) -> Result<u32> {
     r.attr(TAG_MIME, "document-format", job.format.as_bytes());
     if job.copies > 1 {
         r.buf.push(TAG_JOB_GROUP);
-        r.integer("copies", job.copies.clamp(1, 999) as i32);
+        r.integer("copies", job.copies.clamp(1, MOST_COPIES) as i32);
     }
     let mut body = r.end();
     body.extend_from_slice(job.document);

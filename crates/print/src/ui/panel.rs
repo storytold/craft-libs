@@ -14,8 +14,7 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
-/// The most copies one job may ask for.
-pub(super) const MOST_COPIES: u32 = 999;
+pub(super) use crate::MOST_COPIES;
 
 craft_ui::words! {
     /// The words of the print panel.

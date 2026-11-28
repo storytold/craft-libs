@@ -96,7 +96,7 @@ pub(crate) fn ticket_xml_with(job: &Job, landscape: bool, document_only: bool, g
         (true, Grey::Monochrome) => "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Monochrome\"/></psf:Feature>",
         (true, Grey::Grayscale) => "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Grayscale\"/></psf:Feature>",
     };
-    let copies = job.copies.clamp(1, 999);
+    let copies = job.copies.clamp(1, crate::MOST_COPIES);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
@@ -454,7 +454,7 @@ pub(crate) fn offered(capabilities_xml: &str) -> Offered {
 /// Whether a `pages`-page job asks for collated copies.
 #[cfg(windows)]
 pub(crate) fn collated_copies(job: &Job, pages: usize) -> bool {
-    job.collate && job.copies.clamp(1, 999) > 1 && pages > 1
+    job.collate && job.copies.clamp(1, crate::MOST_COPIES) > 1 && pages > 1
 }
 
 /// Whether collated copies are made by repeating the document in one job with one copy on the
@@ -524,7 +524,7 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
             .and_then(|f| f.children().find(|n| n.has_tag_name((NS_PSF, "Option"))))
     };
     let refused = |field: &str| spool_error(format!("the printer's driver did not retain the requested {field}; nothing was sent"));
-    let copies = job.copies.clamp(1, 999);
+    let copies = job.copies.clamp(1, crate::MOST_COPIES);
     if integer(&document, root, "ParameterInit", "JobCopiesAllDocuments") != Some(copies) {
         return Err(refused("copy count"));
     }

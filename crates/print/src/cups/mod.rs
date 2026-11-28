@@ -454,8 +454,8 @@ pub fn submit_as_at(endpoints: &[Server], destination: &Destination, pdf: &[u8],
     if user.len() > MAX_JOB_NAME || user.chars().any(char::is_control) {
         return Err(Error::Spool("invalid CUPS user name".into()));
     }
-    if job.copies == 0 || job.copies > 999 {
-        return Err(Error::Spool("copies must be between 1 and 999".into()));
+    if job.copies == 0 || job.copies > crate::MOST_COPIES {
+        return Err(Error::Spool(format!("copies must be between 1 and {}", crate::MOST_COPIES)));
     }
     let mut last = Error::Spool("no CUPS endpoint selected".into());
     for endpoint in endpoints {
@@ -801,7 +801,7 @@ fn print_job_request_for(authority: &str, path: &str, pdf: &[u8], job: &Job, use
     r.attribute(TAG_NAME, "job-name", truncate_utf8(&job.title, MAX_JOB_NAME).as_bytes());
     r.attribute(TAG_MIME, "document-format", b"application/pdf");
     r.group(GROUP_JOB);
-    r.attribute(TAG_INTEGER, "copies", &job.copies.clamp(1, 999).to_be_bytes());
+    r.attribute(TAG_INTEGER, "copies", &job.copies.clamp(1, crate::MOST_COPIES).to_be_bytes());
     r.attribute(TAG_BOOLEAN, "collate", &[u8::from(job.collate)]);
     if let Some(duplex) = job.duplex {
         r.attribute(
