@@ -495,7 +495,8 @@ pub struct Chart {
     /// Metadata interpretation of retained classic chart XML: 0 is the former reader, 1 is
     /// the first typed-metadata reader, 2 adds stacked marker visibility and secondary-only
     /// axis ownership, 3 retains series IDs, 4 selects reciprocal duplicate-axis partners,
-    /// and 5 retains plot-group membership and the selected axes' metadata.
+    /// 5 retains plot-group membership and selected axes' metadata, and 6 resolves group-owned
+    /// duplicate value-axis elements for all consumers.
     /// Missing fields are version 0. Preserve when editing.
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub raw_metadata_version: u16,
@@ -818,45 +819,55 @@ impl Chart {
     /// Widens `ext` by the points of the stacked and 100 % series in `ser`; returns whether a
     /// 100 % series is among them.
     fn fold_stacked(&self, ser: &[&Series], ext: &mut (f64, f64), kinds: &SeriesKinds<'_>) -> bool {
-        // Resolve each series once. Independent kinds and source groups are separate stacks;
-        // the caller has already selected one value axis. None is the default new-series group.
-        let mut groups = std::collections::HashMap::new();
-        let planned = ser
-            .iter()
-            .map(|s| {
-                let kind = kinds.kind(s);
-                let slot = if kind.stacked() && !kind.percent() {
-                    let next = groups.len();
-                    Some(*groups.entry((kind, s.source_group)).or_insert(next))
-                } else {
-                    None
-                };
-                (*s, kind, slot)
-            })
-            .collect::<Vec<_>>();
-        let mut totals = vec![(0.0_f64, 0.0_f64, false); groups.len()];
+        // Charge actual value slots, including missing values, not nonexistent cells in a
+        // rectangular series-by-longest-vector grid. Imported caches already share a 1M cap;
+        // the 10M work limit also bounds models constructed directly by callers.
+        let mut remaining = 10_000_000;
+        let mut slots_by_group = std::collections::HashMap::new();
+        let mut stack_groups: Vec<Vec<(&Series, usize)>> = Vec::new();
         let mut percent = false;
-        let n = ser.iter().map(|s| s.values.len()).max().unwrap_or(0);
-        let budget = (ser.len() * n).min(10_000_000);
-        let n_clamped = if ser.is_empty() { 0 } else { n.min(budget / ser.len()) };
-        for i in 0..n_clamped {
-            totals.fill((0.0, 0.0, false));
-            for (s, kind, slot) in &planned {
-                let Some(v) = s.values.get(i).copied().flatten().filter(|v| v.is_finite()) else { continue };
-                if kind.percent() {
-                    percent = true;
-                } else if let Some(slot) = slot {
-                    let (positive, negative, present) = &mut totals[*slot];
-                    *present = true;
-                    if v >= 0.0 { *positive += v } else { *negative += v }
-                } else {
-                    widen(ext, v);
+        for s in ser {
+            if remaining == 0 {
+                break;
+            }
+            let slots = s.values.len().min(remaining);
+            remaining -= slots;
+            if slots == 0 {
+                continue;
+            }
+            let kind = kinds.kind(s);
+            if kind.percent() {
+                for value in s.values.iter().take(slots) {
+                    percent |= value.is_some_and(|v| v.is_finite());
+                }
+            } else if kind.stacked() {
+                let next = stack_groups.len();
+                let group = *slots_by_group.entry((kind, s.source_group)).or_insert_with(|| {
+                    stack_groups.push(Vec::new());
+                    next
+                });
+                stack_groups[group].push((*s, slots));
+            } else {
+                for value in s.values.iter().take(slots).flatten().copied().filter(|v| v.is_finite()) {
+                    widen(ext, value);
                 }
             }
-            for &(positive, negative, present) in &totals {
-                if present {
-                    ext.1 = ext.1.max(positive);
-                    ext.0 = ext.0.min(negative);
+        }
+        // Process one stack at a time. Its longest visited prefix cannot exceed the actual
+        // slots charged to that group, so neither allocation nor traversal multiplies group
+        // count by a chart-wide longest vector.
+        for group in stack_groups {
+            let n = group.iter().map(|(_, slots)| *slots).max().unwrap_or(0);
+            let mut totals = vec![(0.0_f64, 0.0_f64); n];
+            for (series, slots) in group {
+                for (i, value) in series.values.iter().take(slots).enumerate() {
+                    let Some(value) = value.filter(|v| v.is_finite()) else { continue };
+                    let (positive, negative) = &mut totals[i];
+                    if value >= 0.0 { *positive += value } else { *negative += value }
+                    // Positive sums only grow and negative sums only fall. Updating the
+                    // extent here also distinguishes a finite zero from an empty slot.
+                    ext.1 = ext.1.max(*positive);
+                    ext.0 = ext.0.min(*negative);
                 }
             }
         }
@@ -1025,7 +1036,7 @@ impl Chart {
             (l, h)
         };
         if self.kind.percent() {
-            return (0.0, 1.0);
+            return (self.y_min.unwrap_or(0.0), self.y_max.unwrap_or(1.0));
         }
         if !self.kind.stacked() {
             for s in &self.series {
