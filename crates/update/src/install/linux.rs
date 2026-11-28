@@ -10,7 +10,7 @@ use crate::version::{self, Version};
 
 use super::{
     App, INSTALLER, InstallSource, Installed, JobPhase, PackageKind, Path, PathBuf, Paths, Record, SHARED_CALL, SYSTEM_BIN_DIRS, Stop, cancelled,
-    find_in, kill_on_cancel, pkexec, process, run_as_root, swap_into_place, tree, turn,
+    find_in, kill_on_cancel, pkexec, process, root_outcome, run_as_root, swap_into_place, tree, turn,
 };
 
 /// apt waits this long for another package tool (a software centre, automatic updates) to
@@ -176,11 +176,11 @@ pub(crate) fn flatpak_bundle_error(output: &std::process::Output) -> Result<(), 
     if output.status.success() {
         return Ok(());
     }
-    // pkexec: 126 = the password prompt was dismissed, 127 = not authorized.
+    // pkexec's own outcomes: the password prompt was dismissed, or no permission was given.
     if matches!(output.status.code(), Some(126 | 127)) {
         let detail = String::from_utf8_lossy(&output.stderr);
         log::warn!("flatpak bundle install ended with {:?}: {}", output.status.code(), detail.trim());
-        return Err(CANCELLED.into());
+        return root_outcome(output.status.code());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let err = stderr.trim();
