@@ -44,7 +44,9 @@ mod values;
 pub use crate::bind_tracked;
 pub use crate::layout::{BodyLayout, RowAlign};
 pub use crate::primitives::FacesCx;
-pub use crate::runtime::access::{Access, FieldLabel, GridPlace, Name, Numeric, Politeness, PopupKind, Role, SetPosition, SubNode, announce};
+pub use crate::runtime::access::{
+    Access, FieldLabel, GridPlace, Name, Numeric, Politeness, PopupKind, Role, RunDirection, SetPosition, SubNode, announce,
+};
 pub use crate::runtime::commands::{CommandSet, Commands};
 pub use crate::runtime::keys::MenuKey;
 pub use crate::runtime::memory::{Remember, Savable, SaveKey, Slot};

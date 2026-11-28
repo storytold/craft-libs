@@ -1,7 +1,7 @@
 //! A finished AccessKit tree update, read by trials without naming AccessKit.
 
 use super::{NodeRole, node_key};
-use crate::runtime::access::{GridPlace, Numeric, Politeness, PopupKind, Role};
+use crate::runtime::access::{GridPlace, Numeric, Politeness, PopupKind, Role, RunDirection};
 use accesskit::{Action, Node, NodeId, TreeUpdate};
 use egui::Id;
 use std::collections::{HashMap, HashSet};
@@ -319,6 +319,18 @@ impl AccessTree {
             .filter(|child| child.role() == accesskit::Role::TextRun)
             .filter_map(|child| child.value().map(str::to_owned))
             .collect()
+    }
+
+    /// A text run's direction, character positions and widths, as AccessKit has them.
+    pub fn run_of(&self, key: NodeKey) -> Option<(RunDirection, Vec<f32>, Vec<f32>)> {
+        let node = self.lookup(NodeId(key.0)).filter(|node| node.role() == accesskit::Role::TextRun)?;
+        let direction = match node.text_direction()? {
+            accesskit::TextDirection::LeftToRight => RunDirection::LeftToRight,
+            accesskit::TextDirection::RightToLeft => RunDirection::RightToLeft,
+            accesskit::TextDirection::TopToBottom => RunDirection::TopToBottom,
+            accesskit::TextDirection::BottomToTop => RunDirection::BottomToTop,
+        };
+        Some((direction, node.character_positions()?.to_vec(), node.character_widths()?.to_vec()))
     }
 
     /// The selection of the text node `id` as the run node and character index of its anchor and focus.

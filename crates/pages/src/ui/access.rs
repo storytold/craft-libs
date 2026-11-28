@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use craft_behavior::{PartKey, PartRef};
-use craft_ui::contract::{Access, GridPlace, Name, Role};
+use craft_ui::contract::{Access, GridPlace, Name, Role, RunDirection};
 use egui::{Pos2, Rect};
 
 use super::view::PlacedPage;
@@ -92,7 +92,7 @@ enum Kind {
     Block(BlockRole),
     List,
     Marker(String),
-    Run { text: String, positions: Vec<f32>, widths: Vec<f32> },
+    Run { text: String, positions: Vec<f32>, widths: Vec<f32>, direction: RunDirection },
 }
 
 /// A node being built.
@@ -216,28 +216,47 @@ impl AccessBuilder {
         Some(at)
     }
 
-    /// One laid-out line's text under `parent`, with each character's screen x and width and the line's screen
-    /// rectangle; word starts are worked out from the text.
+    /// One laid-out line's text under `parent`, in the run's `direction`, with each character's span along that
+    /// direction in screen coordinates (`chars`: its low edge and its advance, so x and width for horizontal text, y
+    /// and height for vertical) and the run's screen rectangle `bounds`; word starts are worked out from the text.
+    /// AccessKit measures positions from the leading edge (the right for right-to-left, the bottom for bottom to
+    /// top), so they are turned around here; a line over [`MAX_RUN`] characters is split into runs, each with the
+    /// part of `bounds` its characters cover.
     // wordcraft: crates/ui-egui/src/a11y.rs:431 `Builder::flush`, :501 `push_char`, :515 `word_starts`.
-    pub fn line(&mut self, parent: AccessNode, text: &str, chars: &[(f32, f32)], line: Rect) -> Option<AccessNode> {
+    pub fn line(&mut self, parent: AccessNode, text: &str, chars: &[(f32, f32)], bounds: Rect, direction: RunDirection) -> Option<AccessNode> {
         let tables = self.built(parent)?.tables;
+        let bounds = if bounds.is_finite() { bounds } else { Rect::from_min_max(Pos2::ZERO, Pos2::ZERO) };
+        let vertical = matches!(direction, RunDirection::TopToBottom | RunDirection::BottomToTop);
+        let reversed = matches!(direction, RunDirection::RightToLeft | RunDirection::BottomToTop);
+        let (low, high) = if vertical { (bounds.top(), bounds.bottom()) } else { (bounds.left(), bounds.right()) };
+        // A character's distance from the leading edge, and its advance.
+        let from_edge = |&(start, size): &(f32, f32)| {
+            let (start, size) = (finite(start), finite(size));
+            if reversed { (high - (start + size), size) } else { (start - low, size) }
+        };
         let text: Vec<char> = text.chars().collect();
         let mut first = None;
         let mut start = 0;
         loop {
             let end = (start + MAX_RUN).min(text.len());
-            let spans: Vec<(f32, f32)> =
-                (start..end).map(|i| chars.get(i).or_else(|| chars.last()).map_or((line.left(), 0.0), |&(x, w)| (finite(x), finite(w)))).collect();
-            let left = spans.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
-            let right = spans.iter().map(|c| c.0 + c.1).fold(f32::NEG_INFINITY, f32::max);
-            let (left, right) = if left.is_finite() && right.is_finite() { (left, right) } else { (line.left(), line.left()) };
-            let bounds = Rect::from_min_max(Pos2::new(left, line.top()), Pos2::new(right.max(left), line.bottom()));
+            let spans: Vec<(f32, f32)> = (start..end).map(|i| chars.get(i).or_else(|| chars.last()).map_or((0.0, 0.0), from_edge)).collect();
+            let near = spans.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+            let far = spans.iter().map(|c| c.0 + c.1).fold(f32::NEG_INFINITY, f32::max);
+            let (near, far) = if near.is_finite() && far.is_finite() { (near, far.max(near)) } else { (0.0, 0.0) };
+            // The part of the run's extent these characters cover, in screen coordinates.
+            let (lo, hi) = if reversed { (high - far, high - near) } else { (low + near, low + far) };
+            let covered = if vertical {
+                Rect::from_min_max(Pos2::new(bounds.left(), lo), Pos2::new(bounds.right(), hi))
+            } else {
+                Rect::from_min_max(Pos2::new(lo, bounds.top()), Pos2::new(hi, bounds.bottom()))
+            };
             let run = Kind::Run {
                 text: text[start..end].iter().collect(),
-                positions: spans.iter().map(|c| c.0 - left).collect(),
+                positions: spans.iter().map(|c| c.0 - near).collect(),
                 widths: spans.iter().map(|c| c.1).collect(),
+                direction,
             };
-            let at = self.push(Some(parent), run, tables, Some(bounds))?;
+            let at = self.push(Some(parent), run, tables, Some(covered))?;
             first.get_or_insert(at);
             if end >= text.len() {
                 return first;
@@ -314,8 +333,8 @@ fn emit(access: &mut Access, built: &AccessBuilder, at: AccessNode) {
     let sub = match &node.kind {
         Kind::List => access.node(part, Role::LIST),
         Kind::Marker(text) => access.node(part, Role::LIST_MARKER).value(text.clone()),
-        Kind::Run { text, positions, widths } => {
-            let sub = access.node(part, Role::TEXT_RUN).text_run(text.clone(), positions.clone(), widths.clone(), false);
+        Kind::Run { text, positions, widths, direction } => {
+            let sub = access.node(part, Role::TEXT_RUN).text_run_in(text.clone(), positions.clone(), widths.clone(), *direction);
             if let Some(bounds) = node.bounds {
                 sub.bounds(bounds);
             }

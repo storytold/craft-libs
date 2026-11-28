@@ -512,7 +512,29 @@ pub(crate) struct RunFacts {
     /// Each character's start offset from the run's left edge, and its advance.
     pub(crate) positions: Vec<f32>,
     pub(crate) widths: Vec<f32>,
-    pub(crate) rtl: bool,
+    pub(crate) direction: RunDirection,
+}
+
+/// The way a text run reads: the edge its character positions are measured from is the run's leading edge (left,
+/// right, top or bottom).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RunDirection {
+    /// Left to right: positions run from the left edge.
+    LeftToRight,
+    /// Right to left: positions run from the right edge.
+    RightToLeft,
+    /// Top to bottom (vertical text): positions run from the top edge.
+    TopToBottom,
+    /// Bottom to top (vertical text): positions run from the bottom edge.
+    BottomToTop,
+}
+
+impl RunDirection {
+    /// The direction of horizontal text.
+    pub fn horizontal(rtl: bool) -> Self {
+        if rtl { Self::RightToLeft } else { Self::LeftToRight }
+    }
 }
 
 /// A node below a component's node, for a part, a cell or a line of a content painter.
@@ -605,7 +627,13 @@ impl SubNode {
     /// is a `TextRun` whatever role it was given, takes its [`bounds`](Self::bounds) as the line's rectangle, and is
     /// a valid end of [`Access::text_selection`].
     pub fn text_run(&mut self, text: impl Into<String>, positions: Vec<f32>, widths: Vec<f32>, rtl: bool) -> &mut Self {
-        self.run = Some(RunFacts { text: text.into(), positions, widths, rtl });
+        self.text_run_in(text, positions, widths, RunDirection::horizontal(rtl))
+    }
+
+    /// [`text_run`](Self::text_run) for any direction, vertical included: `positions` are each character's start
+    /// offset from the run's leading edge (see [`RunDirection`]) and `widths` its advance along the direction.
+    pub fn text_run_in(&mut self, text: impl Into<String>, positions: Vec<f32>, widths: Vec<f32>, direction: RunDirection) -> &mut Self {
+        self.run = Some(RunFacts { text: text.into(), positions, widths, direction });
         self
     }
 
