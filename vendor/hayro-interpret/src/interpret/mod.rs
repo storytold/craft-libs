@@ -599,9 +599,7 @@ fn interpret_window<'a>(
         }
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
-            // PdfCraft patch (68): in a form or an appearance stream, a `Q` with no `q` of that
-            // stream to match is ignored, so it cannot pop the states of the content that drew
-            // it. Page content keeps its old behaviour (`stream_floor` stays 0 there).
+            // A `Q` without a matching `q` in this content cannot pop the caller's state.
             TypedInstruction::RestoreState(_) if context.stream_floor_reached() => {
                 warn!("ignored a `Q` with no matching `q` in its content stream");
             }
@@ -924,6 +922,7 @@ fn interpret_window<'a>(
                 device.begin_marked_content(bmc.0, None);
             }
             TypedInstruction::BeginText(_) => {
+                context.text_clip = Default::default();
                 context.get_mut().text_state.text_matrix = Affine::IDENTITY;
                 context.get_mut().text_state.text_line_matrix = Affine::IDENTITY;
             }
@@ -940,32 +939,12 @@ fn interpret_window<'a>(
                 context.get_mut().text_state.text_matrix = m;
             }
             TypedInstruction::EndText(_) => {
-                let has_outline = context
-                    .get()
-                    .text_state
-                    .clip_paths
-                    .segments()
-                    .next()
-                    .is_some();
-
-                // PdfCraft patch: a glyph shown in a clipping mode that contributes no outline
-                // still clips -- the clip is empty, so nothing paints through it, as a glyph with
-                // an outline clips to its shape. Applying nothing instead left what followed
-                // unmasked. A text object that shows no glyph at all is not this case and leaves
-                // the clipping path alone, and a glyph whose outline is unavailable (Type 3)
-                // leaves the real clip unknown, so both stay unclipped.
-                let state = &context.get().text_state;
-                let empty_clip = state.clip_shown && !state.clip_unsupported;
-
+                let pending = std::mem::take(&mut context.text_clip);
+                let has_outline = pending.path.segments().next().is_some();
+                let empty_clip = pending.shown && !pending.unsupported;
                 if has_outline || empty_clip {
-                    let clip_path = context.get().ctm * context.get().text_state.clip_paths.clone();
-
-                    context.push_clip_path(clip_path, FillRule::NonZero, device);
+                    context.push_clip_path(pending.path, FillRule::NonZero, device);
                 }
-
-                context.get_mut().text_state.clip_paths.truncate(0);
-                context.get_mut().text_state.clip_shown = false;
-                context.get_mut().text_state.clip_unsupported = false;
             }
             TypedInstruction::TextFont(t) => {
                 let name = t.0;
@@ -1202,14 +1181,14 @@ pub fn interpret<'a>(
     let num_states = context.num_states();
 
     context.save_state();
-    let outer_floor = context.enter_stream();
+    let outer = context.enter_stream();
 
     interpret_window(&mut ops, resources, context, device);
 
     while context.num_states() > num_states {
         context.restore_state(device);
     }
-    context.leave_stream(outer_floor);
+    context.leave_stream(outer);
     // PdfCraft patch (18): say that content was skipped, so a truncated page isn't a clean render.
     if crate::context::content_was_truncated() {
         (context.settings.warning_sink)(InterpreterWarning::ContentTruncated);
@@ -1236,6 +1215,7 @@ fn interpret_content<'a>(
     let num_states = context.num_states();
 
     context.save_state();
+    let outer = context.enter_stream();
 
     let mut window = Vec::with_capacity(CONTENT_WINDOW);
     let mut exhausted = false;
@@ -1272,6 +1252,7 @@ fn interpret_content<'a>(
     while context.num_states() > num_states {
         context.restore_state(device);
     }
+    context.leave_stream(outer);
     // PdfCraft patch (18): say that content was skipped, so a truncated page isn't a clean render.
     if cut || content.truncated() || crate::context::content_was_truncated() {
         (context.settings.warning_sink)(InterpreterWarning::ContentTruncated);

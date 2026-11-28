@@ -273,9 +273,28 @@ impl<'a> InterpreterCache<'a> {
     }
 }
 
+/// The clip contributed by the current text object, pending until `ET`.
+#[derive(Default)]
+pub(crate) struct TextClip {
+    /// Glyph outlines in device space, using the transform at each text show.
+    pub(crate) path: BezPath,
+    /// An outline-less glyph still clips. An object that shows no glyph leaves the clip alone.
+    pub(crate) shown: bool,
+    /// A Type 3 glyph may have no available outline, so an otherwise empty clip is unknown.
+    pub(crate) unsupported: bool,
+}
+
+/// The stream-local state to restore when interpretation returns to the caller.
+pub(crate) struct StreamState {
+    floor: usize,
+    text_clip: TextClip,
+}
+
 /// A per-page interpretation context that borrows shared data from an [`InterpreterCache`].
 pub struct Context<'a> {
     states: Vec<State<'a>>,
+    /// Pending glyph outlines belong to a text object and are outside the `q/Q` state stack.
+    pub(crate) text_clip: TextClip,
     path: BezPath,
     sub_path_start: Point,
     last_point: Point,
@@ -291,9 +310,8 @@ pub struct Context<'a> {
     /// a limit was reached, the clip count to return to at its `Q`.
     saved_bytes: usize,
     skipped_saves: Vec<usize>,
-    /// PdfCraft patch (68): the `num_states` at which the nested content stream (a form, an
-    /// appearance, a glyph or pattern cell) being interpreted started, or 0 in page content. A
-    /// `Q` there has no `q` of its own stream to match (see `stream_floor_reached`).
+    /// The graphics-state depth at entry to page or nested content. A `Q` at this depth has
+    /// no matching `q` in the current content.
     stream_floor: usize,
     // PdfCraft patch (63).
     /// This is the content of a luminosity soft mask whose group colour space is `/DeviceCMYK`,
@@ -320,7 +338,6 @@ fn state_bytes(state: &State<'_>) -> usize {
                 .saturating_mul(size_of::<f32>()),
         )
         .saturating_add(state.clips.len().saturating_mul(size_of::<ClipType>()))
-        .saturating_add(state.text_state.clip_paths.elements().len().saturating_mul(size_of::<PathEl>()))
 }
 
 impl<'a> Context<'a> {
@@ -377,6 +394,7 @@ impl<'a> Context<'a> {
             sub_path_start: Point::default(),
             clip: None,
             bbox: vec![bbox],
+            text_clip: TextClip::default(),
             path: BezPath::new(),
             interpreter_cache: cache.clone(),
             ocg_state,
@@ -643,16 +661,19 @@ impl<'a> Context<'a> {
         self.get().graphics_state.stroke_props.clone()
     }
 
-    /// PdfCraft patch (68): starts a nested content stream at the current depth and returns the
-    /// floor of the stream it runs inside, for `leave_stream`.
-    pub(crate) fn enter_stream(&mut self) -> usize {
+    /// Start page or nested content with its own pending text clip and graphics-state floor.
+    pub(crate) fn enter_stream(&mut self) -> StreamState {
         let depth = self.num_states();
-        std::mem::replace(&mut self.stream_floor, depth)
+        StreamState {
+            floor: std::mem::replace(&mut self.stream_floor, depth),
+            text_clip: std::mem::take(&mut self.text_clip),
+        }
     }
 
-    /// PdfCraft patch (68): ends a content stream begun with `enter_stream`.
-    pub(crate) fn leave_stream(&mut self, outer_floor: usize) {
-        self.stream_floor = outer_floor;
+    /// Discard unfinished text clipping before returning to the enclosing content.
+    pub(crate) fn leave_stream(&mut self, outer: StreamState) {
+        self.stream_floor = outer.floor;
+        self.text_clip = outer.text_clip;
     }
 
     /// PdfCraft patch (68): every `q` of the current content stream has been matched, so a `Q`

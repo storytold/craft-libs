@@ -40,8 +40,19 @@ mod device {
     }
 
     fn clips_of(content: &str) -> ClipDevice {
+        clips_with_appearance(content, None)
+    }
+
+    fn clips_with_appearance(content: &str, appearance: Option<&str>) -> ClipDevice {
+        let annots = if appearance.is_some() { "/Annots [6 0 R]" } else { "" };
+        let appearance = appearance.map_or_else(String::new, |ops| {
+            format!(
+                "6 0 obj << /Type /Annot /Subtype /Square /Rect [0 0 30 15] /AP << /N 7 0 R >> >> endobj\n7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 30 15] /Length {} >> stream\n{ops}\nendstream endobj\n",
+                ops.len()
+            )
+        });
         let bytes = format!(
-            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> {annots} >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj\n{appearance}trailer << /Root 1 0 R >>\n%%EOF",
             content.len()
         );
         let pdf = craft_pdf::open_slice(bytes.as_bytes(), None).unwrap();
@@ -96,6 +107,40 @@ mod device {
         let painting = clips_of("q BT 0 Tr /F1 12 Tf 4 4 Td ( ) Tj ET 1 0 0 rg 0 0 40 20 re f Q");
         assert!(painting.clips.is_empty(), "a painting text mode never clips");
         assert_eq!(painting.paths, 1);
+    }
+
+    /// A text object's clip uses every glyph's transform at the show, across inner `q/Q`.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn pending_text_clip_survives_q_and_uses_each_glyph_transform() {
+        let begin = "BT 7 Tr /F1 12 Tf 4 4 Td";
+        let expected = clips_of(&format!("{begin} (H) Tj 16 0 Td (H) Tj ET"));
+        assert_eq!(expected.clips.len(), 1);
+        let nested = clips_of(&format!("{begin} (H) Tj q 1 0 0 1 16 0 cm 0 0 Td (H) Tj Q ET"));
+        assert_eq!(nested.clips, expected.clips);
+        let empty = clips_of(&format!("{begin} q ( ) Tj Q ET"));
+        assert_eq!(empty.clips.len(), 1);
+        assert!(empty.clips[0].is_empty());
+    }
+
+    /// Once `ET` consumes a text clip, a saved graphics state cannot bring it back.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn consumed_text_clip_is_not_restored_at_q() {
+        let clips = clips_of("BT 7 Tr /F1 12 Tf 4 4 Td (H) Tj q ET Q ET");
+        assert_eq!(clips.clips.len(), 1);
+    }
+
+    /// An unterminated text object on the page does not affect appearance drawing.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn unfinished_page_text_clip_stays_out_of_annotation_appearance() {
+        let appearance = Some("ET 1 0 0 rg 0 0 30 15 re f");
+        let clean = clips_with_appearance("", appearance);
+        assert_eq!(clean.paths, 1, "the appearance paints");
+        let malformed = clips_with_appearance("Q BT 7 Tr /F1 12 Tf 4 4 Td (H) Tj q", appearance);
+        assert_eq!(malformed.paths, clean.paths);
+        assert_eq!(malformed.clips, clean.clips);
     }
 }
 
