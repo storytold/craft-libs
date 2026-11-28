@@ -117,6 +117,41 @@ fn opts() -> FlattenDocumentOptions {
     FlattenDocumentOptions { flatten: FlattenOptions { raster_dpi: 72.0, ..FlattenOptions::default() }, ..FlattenDocumentOptions::default() }
 }
 
+#[test]
+fn pdf_entry_points_keep_explicit_sweep_limits() {
+    use craft_prepress::flatten::{
+        FlattenSweepLimits, flatten_document_with_limits, flatten_document_with_limits_and_progress, flatten_page_with_limits,
+    };
+    let settings = SerializeSettings { no_device_cs: false, group_color_space: GroupColorSpace::Cmyk, ..Default::default() };
+    let mut writer = Writer::new(settings, Metadata::default());
+    let mut page = writer.document_mut().start_page_with(PageSettings::from_wh(200.0, 160.0).unwrap());
+    let mut surface = page.surface();
+    rect(&mut surface, 20.0, 20.0, 120.0, 100.0, fill(255, 0, 0, 0));
+    surface.push_opacity(NormalizedF32::new(0.5).unwrap());
+    rect(&mut surface, 70.0, 60.0, 170.0, 130.0, fill(0, 255, 0, 0));
+    surface.pop();
+    surface.finish();
+    page.finish();
+    let source = writer.finish().unwrap();
+    let options = opts();
+    let (_, ordinary) = flatten_document(&source, &options).unwrap();
+    assert_eq!(ordinary.totals.complex_groups, 0);
+    for limits in [FlattenSweepLimits { max_sweep_work: 1, ..Default::default() }, FlattenSweepLimits { max_sweep_units: 1, ..Default::default() }] {
+        let (_, document) = flatten_document_with_limits(&source, &options, &limits).unwrap();
+        assert_eq!(document.totals.complex_groups, 1);
+        let mut progress = Vec::new();
+        let (_, observed) = flatten_document_with_limits_and_progress(&source, &options, &limits, &mut |done, total| {
+            progress.push((done, total));
+        })
+        .unwrap();
+        assert_eq!(observed, document);
+        assert_eq!(progress, [(1, 1)]);
+        let page_options = FlattenPageOptions { flatten: options.flatten, ..Default::default() };
+        let (_, page) = flatten_page_with_limits(&source, 0, &page_options, &limits).unwrap();
+        assert_eq!(page.flatten.complex_groups.len(), 1);
+    }
+}
+
 fn separate(pdf: &[u8], page: usize) -> Plates {
     plates(pdf, page, DPI, &Options::default()).unwrap()
 }

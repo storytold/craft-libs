@@ -30,6 +30,13 @@ use super::{BlendMode, DisplayList, FillItem, FillRule, GroupItem, Item, Paint};
 use crate::ink::{InkColor, InkId, InkSet, Overprint, Process};
 
 /// How [`flatten`] cuts transparent art.
+///
+/// `FlattenOptions` can be initialized with its three fields:
+///
+/// ```
+/// use craft_prepress::flatten::FlattenOptions;
+/// let options = FlattenOptions { sliver: 0.01, max_regions: 5000, raster_dpi: 300.0 };
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FlattenOptions {
     /// Regions narrower than this (in points) are dropped ([`geom::regions_with`]).
@@ -45,6 +52,27 @@ impl Default for FlattenOptions {
     fn default() -> Self {
         // VectorCraft's medium preset (balance 75) allows 10^(75/20), about 5600 regions.
         Self { sliver: geom::DEFAULT_SLIVER, max_regions: 5000, raster_dpi: 300.0 }
+    }
+}
+
+/// These limits bound each region sweep used by [`flatten_with_limits`]. The PDF entry points
+/// with explicit limits also apply them to each even-odd path rebuild during page reading.
+/// A stopped rebuild retains the original path and fill rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlattenSweepLimits {
+    /// The region sweep of one group stops after this many work units. The group then goes to
+    /// [`Flattened::complex`] whole as [`ComplexReason::Degenerate`]. The default is
+    /// [`geom::DEFAULT_MAX_SWEEP_WORK`].
+    pub max_sweep_work: u64,
+    /// The region sweep of one group stops before holding more than this many output units.
+    /// The group then goes to [`Flattened::complex`] whole as [`ComplexReason::Degenerate`].
+    /// The default is [`geom::DEFAULT_MAX_TOPOLOGY_UNITS`].
+    pub max_sweep_units: usize,
+}
+
+impl Default for FlattenSweepLimits {
+    fn default() -> Self {
+        Self { max_sweep_work: geom::DEFAULT_MAX_SWEEP_WORK, max_sweep_units: geom::DEFAULT_MAX_TOPOLOGY_UNITS }
     }
 }
 
@@ -132,6 +160,11 @@ pub enum FlattenError {
 /// an item that does come back unchanged, and so do opaque items with no transparency painted
 /// above them where they paint.
 pub fn flatten(list: &DisplayList, opts: &FlattenOptions) -> Result<Flattened, FlattenError> {
+    flatten_with_limits(list, opts, &FlattenSweepLimits::default())
+}
+
+/// `flatten_with_limits` flattens `list` using `opts` and the region sweep `limits`.
+pub fn flatten_with_limits(list: &DisplayList, opts: &FlattenOptions, limits: &FlattenSweepLimits) -> Result<Flattened, FlattenError> {
     let nan = Rect::new(f64::NAN, f64::NAN, f64::NAN, f64::NAN);
     let bounds: Vec<Rect> = list.items.iter().map(|i| bounds(i).unwrap_or(nan)).collect();
     let transparent: Vec<bool> = list.items.iter().map(is_transparent).collect();
@@ -165,7 +198,7 @@ pub fn flatten(list: &DisplayList, opts: &FlattenOptions) -> Result<Flattened, F
                 out.report.kept += 1;
             }
             Plan::Drop => {}
-            Plan::Emit(g) => flatten_group(list, &members[g], &bounds, &transparent, opts, &mut out)?,
+            Plan::Emit(g) => flatten_group(list, &members[g], &bounds, &transparent, opts, limits, &mut out)?,
         }
     }
     out.report.complex_regions = out.complex.len();
@@ -178,6 +211,7 @@ fn flatten_group(
     bounds: &[Rect],
     transparent: &[bool],
     opts: &FlattenOptions,
+    limits: &FlattenSweepLimits,
     out: &mut Flattened,
 ) -> Result<(), FlattenError> {
     let mut b = Builder::new(&list.inks);
@@ -206,7 +240,7 @@ fn flatten_group(
         out.report.flattened += members.len();
         return Ok(());
     }
-    let regions = match geom::regions_with(&b.shapes, &b.clips, opts.sliver) {
+    let regions = match geom::regions_with_limits(&b.shapes, &b.clips, opts.sliver, limits.max_sweep_work, limits.max_sweep_units) {
         Ok(r) => r,
         Err(GeomError::Degenerate) => {
             // Each member's box is clear of every other group's items.
@@ -1045,5 +1079,25 @@ mod tests {
         });
         let l = list(InkSet::new(), vec![Item::Group(group(0.5, BlendMode::Normal, vec![crowded]))]);
         assert!(flatten(&l, &FlattenOptions::default()).is_err());
+    }
+
+    #[test]
+    fn sweep_limits_send_the_group_to_complex() {
+        let l = list(
+            InkSet::new(),
+            vec![
+                solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(M, 1.0)]),
+                Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(C, 1.0)])])),
+            ],
+        );
+        assert!(flat(&l).report.complex_groups.is_empty());
+
+        for limits in [
+            FlattenSweepLimits { max_sweep_work: 1, ..FlattenSweepLimits::default() },
+            FlattenSweepLimits { max_sweep_units: 1, ..FlattenSweepLimits::default() },
+        ] {
+            let f = flatten_with_limits(&l, &FlattenOptions::default(), &limits).unwrap();
+            assert_eq!(f.report.complex_groups, [ComplexGroup { items: vec![0, 1], reason: ComplexReason::Degenerate }], "{limits:?}");
+        }
     }
 }

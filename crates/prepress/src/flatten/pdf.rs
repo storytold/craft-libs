@@ -43,6 +43,8 @@ use craft_pdf::{OpenError, open_slice};
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Stroke, StrokeOpts};
 
 use super::font::FontCache;
+#[cfg(test)]
+use super::geom;
 use super::shade::{self, Canvas, StopInks};
 use super::{
     BlendMode, DisplayList, FillItem, FillRule, GradientGeometry, GroupItem, ImageItem, ImageSpace, Item, Mask, MaskKind, Paint, PlacedGlyph,
@@ -170,7 +172,7 @@ pub enum ReadError {
 pub fn read_page(pdf: &[u8], page: usize, opts: &ReadOptions) -> Result<(DisplayList, ReadReport), ReadError> {
     let doc = open_slice(pdf, None)?;
     let color = read_color(&doc, page, &opts.fallback)?;
-    read_page_in(&doc, page, opts, color)
+    read_page_in(&doc, page, opts, color, &super::FlattenSweepLimits::default())
 }
 
 /// How a page's process color converts: its output intent's simulation, else `fallback`'s.
@@ -189,7 +191,13 @@ pub(crate) fn read_color(doc: &Pdf, page: usize, fallback: &Fallback) -> Result<
 }
 
 /// [`read_page`] of an open document, with the page's color already read.
-pub(crate) fn read_page_in(doc: &Pdf, page: usize, opts: &ReadOptions, color: ReadColor) -> Result<(DisplayList, ReadReport), ReadError> {
+pub(crate) fn read_page_in(
+    doc: &Pdf,
+    page: usize,
+    opts: &ReadOptions,
+    color: ReadColor,
+    limits: &super::FlattenSweepLimits,
+) -> Result<(DisplayList, ReadReport), ReadError> {
     let (simulation, conversion) = color;
     let pages = doc.pages();
     let p = pages.get(page).ok_or(ReadError::NoPage(page))?;
@@ -220,6 +228,7 @@ pub(crate) fn read_page_in(doc: &Pdf, page: usize, opts: &ReadOptions, color: Re
         masks: HashMap::new(),
         fonts: FontCache::new(),
         scale: f64::from(dpi) / 72.0,
+        sweep_limits: *limits,
     };
 
     let items = catch_unwind(AssertUnwindSafe(|| {
@@ -260,6 +269,7 @@ struct Shared {
     fonts: FontCache,
     /// Raster pixels per point.
     scale: f64,
+    sweep_limits: super::FlattenSweepLimits,
 }
 
 /// How a paint composites: what wraps it in a group of its own.
@@ -344,6 +354,11 @@ fn clip_group((clip, rule): (BezPath, FillRule)) -> GroupItem {
 }
 
 impl<'s, 'a> Reader<'s, 'a> {
+    fn nonzero(&self, path: &BezPath, rule: FillRule) -> (BezPath, FillRule) {
+        let limits = self.shared.sweep_limits;
+        nonzero_within(path, rule, limits.max_sweep_work, limits.max_sweep_units)
+    }
+
     fn new(shared: &'s mut Shared, glyph: bool, bounds: Rect) -> Self {
         Self {
             shared,
@@ -621,7 +636,7 @@ impl<'s, 'a> Reader<'s, 'a> {
     fn area_fill(&mut self, path: BezPath, rule: FillRule, paint: &PdfPaint<'a>, stroke: bool) {
         let PdfPaint::Pattern(pattern) = paint else { return };
         self.flush();
-        let (clip, rule) = nonzero(&path, rule);
+        let (clip, rule) = self.nonzero(&path, rule);
         let (op, big_op, _) = self.overprint;
         let flag = if stroke { big_op } else { op };
         match pattern.as_ref() {
@@ -975,7 +990,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             let mut outline = BezPath::new();
             for item in &items {
                 if let Item::Fill(f) = item {
-                    let (path, rule) = nonzero(&f.path, f.rule);
+                    let (path, rule) = self.nonzero(&f.path, f.rule);
                     if rule != FillRule::NonZero {
                         return None;
                     }
@@ -1016,7 +1031,7 @@ impl<'a> Device<'a> for Reader<'_, 'a> {
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         self.flush();
-        let clip = nonzero(&clip_path.path, fill_rule(clip_path.fill));
+        let clip = self.nonzero(&clip_path.path, fill_rule(clip_path.fill));
         self.frames.push(Frame { kind: FrameKind::Clip, group: clip_group(clip) });
     }
 
@@ -1317,22 +1332,35 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 }
 
 /// `path` filled by `rule`, as a path and the rule it is filled by. An even-odd path is
-/// rebuilt from its boundary as a path filled nonzero; if that fails it is kept closed and
-/// filled even-odd.
+/// rebuilt from its boundary as a path filled nonzero; if that fails, panics, or passes the
+/// flattener's default sweep work or output limit ([`geom::DEFAULT_MAX_SWEEP_WORK`],
+/// [`geom::DEFAULT_MAX_TOPOLOGY_UNITS`]), it is kept closed and filled even-odd. The same fallback
+/// applies when an input subpath fails [`linesweeper::binary_op`]'s automatic-accuracy check.
+#[cfg(test)]
 fn nonzero(path: &BezPath, rule: FillRule) -> (BezPath, FillRule) {
+    nonzero_within(path, rule, geom::DEFAULT_MAX_SWEEP_WORK, geom::DEFAULT_MAX_TOPOLOGY_UNITS)
+}
+
+/// Rebuilds an even-odd path with the sweep stopped after `work_limit` units of work or before
+/// its topology holds more than `output_limit` units. A stopped rebuild keeps the original rule.
+fn nonzero_within(path: &BezPath, rule: FillRule, work_limit: u64, output_limit: usize) -> (BezPath, FillRule) {
     if rule == FillRule::NonZero {
         return (path.clone(), FillRule::NonZero);
     }
     let closed = closed(path);
-    match linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union) {
-        Ok(contours) => {
+    let op = catch_unwind(AssertUnwindSafe(|| {
+        let top = linesweeper::topology::Topology::<i32>::from_paths_with_automatic_limits([(&closed, ())], work_limit, output_limit)?;
+        top.try_contours(|winding| winding % 2 != 0)
+    }));
+    match op {
+        Ok(Ok(contours)) => {
             let mut out = BezPath::new();
             for contour in contours.contours() {
                 out.extend(contour.path.iter());
             }
             (out, FillRule::NonZero)
         }
-        Err(_) => (closed, FillRule::EvenOdd),
+        Ok(Err(_)) | Err(_) => (closed, FillRule::EvenOdd),
     }
 }
 
@@ -1362,6 +1390,119 @@ fn closed(path: &BezPath) -> BezPath {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_reader_uses_explicit_sweep_limits_for_even_odd_clips() {
+        use craft_pdf::write::backend::geom::{PathBuilder, Rect as KRect};
+        use craft_pdf::write::backend::page::PageSettings;
+        use craft_pdf::write::backend::paint::{Fill, FillRule as KFillRule};
+        use craft_pdf::write::{Metadata, Writer};
+        let mut writer = Writer::new(Default::default(), Metadata::default());
+        let mut page = writer.document_mut().start_page_with(PageSettings::from_wh(100.0, 100.0).unwrap());
+        let mut surface = page.surface();
+        let mut clip = PathBuilder::new();
+        clip.push_rect(KRect::from_ltrb(0.0, 0.0, 90.0, 90.0).unwrap());
+        clip.push_rect(KRect::from_ltrb(20.0, 20.0, 70.0, 70.0).unwrap());
+        surface.push_clip_path(&clip.finish().unwrap(), &KFillRule::EvenOdd);
+        let mut paint = PathBuilder::new();
+        paint.push_rect(KRect::from_ltrb(0.0, 0.0, 100.0, 100.0).unwrap());
+        surface.set_fill(Some(Fill::default()));
+        surface.draw_path(&paint.finish().unwrap());
+        surface.pop();
+        surface.finish();
+        page.finish();
+        let bytes = writer.finish().unwrap();
+        let doc = open_slice(&bytes, None).unwrap();
+        let opts = ReadOptions::default();
+        for limits in [
+            super::super::FlattenSweepLimits::default(),
+            super::super::FlattenSweepLimits { max_sweep_work: 1, ..Default::default() },
+            super::super::FlattenSweepLimits { max_sweep_units: 1, ..Default::default() },
+        ] {
+            let color = read_color(&doc, 0, &opts.fallback).unwrap();
+            let (list, _) = read_page_in(&doc, 0, &opts, color, &limits).unwrap();
+            let group = list
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Group(group) if group.clip.is_some() => Some(group),
+                    _ => None,
+                })
+                .unwrap();
+            let expected = if limits == super::super::FlattenSweepLimits::default() { FillRule::NonZero } else { FillRule::EvenOdd };
+            assert_eq!(group.clip_rule, expected, "{limits:?}");
+            let path = group.clip.as_ref().unwrap();
+            let filled = |point| match group.clip_rule {
+                FillRule::NonZero => path.winding(point) != 0,
+                FillRule::EvenOdd => path.winding(point) % 2 != 0,
+            };
+            assert!(filled((10.0, 10.0).into()));
+            assert!(!filled((50.0, 50.0).into()));
+        }
+    }
+
+    #[test]
+    fn even_odd_path_with_inconsistent_windings_is_kept() {
+        // `nonzero` returns a path for this input whether the sweep succeeds or reports
+        // winding numbers that disagree around a point.
+        let path = BezPath::from_svg("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z").unwrap();
+        assert!(!nonzero(&path, FillRule::EvenOdd).0.elements().is_empty());
+    }
+
+    #[test]
+    fn even_odd_holes_stay_open_beside_a_far_point() {
+        // A square with a hole drawn in the same direction, a 0.3 wide sliver and a triangle at
+        // 3e13, which makes the sweep tolerance about 0.43.
+        let mut path = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.0);
+        path.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.0).iter());
+        path.extend(Rect::new(200.0, 0.0, 200.3, 10.0).to_path(0.0).iter());
+        path.move_to((3.0e13, 3.0e13));
+        path.line_to((3.0e13 + 1.0e3, 3.0e13));
+        path.line_to((3.0e13, 3.0e13 + 1.0e3));
+        path.close_path();
+        // The automatic-accuracy check rejects rebuilding the narrow subpath.
+        let swept = linesweeper::binary_op(&path, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
+        assert!(matches!(swept, Err(linesweeper::Error::FeatureBelowTolerance { .. })));
+        let (out, rule) = nonzero(&path, FillRule::EvenOdd);
+        let contains = |point| {
+            let winding = out.winding(point);
+            match rule {
+                FillRule::EvenOdd => winding % 2 != 0,
+                FillRule::NonZero => winding != 0,
+            }
+        };
+        assert!(contains((200.15, 5.0).into()), "the narrow subpath remains filled");
+        assert!(contains((10.0, 10.0).into()));
+        assert!(!contains((50.0, 50.0).into()));
+        assert_eq!(rule, FillRule::EvenOdd);
+        assert_eq!(out, path);
+    }
+
+    #[test]
+    fn even_odd_path_past_the_sweep_work_limit_is_kept() {
+        // 21 stacked copies of one circle: the sweep compares their segments many times over.
+        let circle = kurbo::Circle::new((50.0, 50.0), 40.0).to_path(0.01);
+        let mut path = BezPath::new();
+        for _ in 0..21 {
+            path.extend(circle.iter());
+        }
+        let (kept, rule) = nonzero_within(&path, FillRule::EvenOdd, 1_000, geom::DEFAULT_MAX_TOPOLOGY_UNITS);
+        assert_eq!(kept.elements(), closed(&path).elements());
+        assert_eq!(rule, FillRule::EvenOdd);
+        assert_ne!(nonzero(&path, FillRule::EvenOdd).0.elements(), closed(&path).elements());
+    }
+
+    #[test]
+    fn even_odd_path_past_the_sweep_output_limit_is_kept() {
+        // A square with a hole drawn in the same direction makes 8 output segments.
+        let mut path = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.0);
+        path.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.0).iter());
+        let (kept, rule) = nonzero_within(&path, FillRule::EvenOdd, geom::DEFAULT_MAX_SWEEP_WORK, 4);
+        assert_eq!(kept.elements(), closed(&path).elements());
+        assert_eq!(rule, FillRule::EvenOdd);
+        assert_ne!(kept.winding((50.0, 50.0).into()), 0);
+        assert_eq!(nonzero(&path, FillRule::EvenOdd).0.winding((50.0, 50.0).into()), 0);
+    }
 
     #[test]
     fn even_odd_paths_keep_their_rule_when_the_rebuild_fails() {

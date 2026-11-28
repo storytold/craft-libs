@@ -11,8 +11,6 @@ fn main() {
 }
 
 fn paperjs_tests() -> Vec<Trial> {
-    let mut tests = Vec::new();
-
     // Load all test files
     let test_files = vec![
         ("boolean-test/data/intersection.json", "intersection"),
@@ -20,13 +18,54 @@ fn paperjs_tests() -> Vec<Trial> {
         ("boolean-test/data/subtraction.json", "subtraction"),
     ];
 
-    for (file_path, op_name) in test_files {
-        if let Ok(file_tests) = load_test_file(file_path, op_name) {
-            tests.extend(file_tests);
+    let mut tests = trials_for(&test_files);
+    tests.push(Trial::test("load_errors_are_reported", || {
+        let trials = trials_for(&[("boolean-test/data/missing.json", "missing")]);
+        let names: Vec<&str> = trials.iter().map(Trial::name).collect();
+        if names == ["missing/load"] {
+            Ok(())
+        } else {
+            Err(format!("expected one failing load trial, got {names:?}").into())
         }
-    }
+    }));
+
+    // Craft patch (image distance alpha)
+    tests.push(Trial::test(
+        "pixmap_distance_counts_coverage",
+        pixmap_distance_counts_coverage,
+    ));
 
     tests
+}
+
+fn trials_for(test_files: &[(&str, &str)]) -> Vec<Trial> {
+    let mut tests = Vec::new();
+    for &(file_path, op_name) in test_files {
+        match load_test_file(file_path, op_name) {
+            Ok(file_tests) => tests.extend(file_tests),
+            Err(e) => {
+                let message = format!("cannot load {file_path}: {e}");
+                tests.push(Trial::test(format!("{op_name}/load"), move || {
+                    Err(message.into())
+                }));
+            }
+        }
+    }
+    tests
+}
+
+// Craft patch (image distance alpha)
+/// A filled pixmap and an empty one differ only in alpha: the fill is
+/// opaque black and the empty pixmap is transparent black.
+fn pixmap_distance_counts_coverage() -> Result<(), Failed> {
+    let empty = tiny_skia::Pixmap::new(4, 4).ok_or("Failed to create pixmap")?;
+    let mut filled = empty.clone();
+    filled.fill(tiny_skia::Color::BLACK);
+    let diff = pixmap_distance(&filled, &empty);
+    if diff != 1.0 {
+        return Err(format!("pixmap distance {diff}, expected 1").into());
+    }
+    Ok(())
 }
 
 fn load_test_file(
@@ -151,7 +190,10 @@ fn pixmap_distance(a: &tiny_skia::Pixmap, b: &tiny_skia::Pixmap) -> f32 {
             let rdiff = ac.red().abs_diff(bc.red());
             let gdiff = ac.green().abs_diff(bc.green());
             let bdiff = ac.blue().abs_diff(bc.blue());
-            diff += rdiff.max(gdiff).max(bdiff) as f32 / 255.0;
+            // Craft patch (image distance alpha): the shapes are filled black, so a
+            // covered pixel and an empty one differ only in alpha.
+            let adiff = ac.alpha().abs_diff(bc.alpha());
+            diff += rdiff.max(gdiff).max(bdiff).max(adiff) as f32 / 255.0;
         }
     }
 

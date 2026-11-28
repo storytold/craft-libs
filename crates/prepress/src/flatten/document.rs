@@ -42,7 +42,7 @@ use kurbo::Rect;
 use super::pdf::{ReadColor, ReadError, ReadOptions, read_color, read_page_in};
 use super::raster::{FlattenPageReport, Rasterizer};
 use super::write::{FontMap, WriteError, write_flattened_with_fonts};
-use super::{DisplayList, FlattenError, FlattenOptions, flatten};
+use super::{DisplayList, FlattenError, FlattenOptions, FlattenSweepLimits, flatten_with_limits};
 use crate::cms::CmsConversion;
 use crate::plates::{self, Fallback, pdf_text};
 
@@ -175,13 +175,32 @@ pub enum FlattenDocumentError {
 /// `pdf` with the transparency of every page in [`FlattenDocumentOptions::pages`] flattened, as
 /// one PDF. See the module docs for what carries over.
 pub fn flatten_document(pdf: &[u8], opts: &FlattenDocumentOptions) -> Result<(Vec<u8>, FlattenDocumentReport), FlattenDocumentError> {
-    flatten_document_with_progress(pdf, opts, &mut |_, _| {})
+    flatten_document_with_limits(pdf, opts, &FlattenSweepLimits::default())
+}
+
+/// [`flatten_document`] with explicit sweep work and output limits.
+pub fn flatten_document_with_limits(
+    pdf: &[u8],
+    opts: &FlattenDocumentOptions,
+    limits: &FlattenSweepLimits,
+) -> Result<(Vec<u8>, FlattenDocumentReport), FlattenDocumentError> {
+    flatten_document_with_limits_and_progress(pdf, opts, limits, &mut |_, _| {})
 }
 
 /// [`flatten_document`], calling `progress(done, total)` after each page.
 pub fn flatten_document_with_progress(
     pdf: &[u8],
     opts: &FlattenDocumentOptions,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<(Vec<u8>, FlattenDocumentReport), FlattenDocumentError> {
+    flatten_document_with_limits_and_progress(pdf, opts, &FlattenSweepLimits::default(), progress)
+}
+
+/// [`flatten_document_with_limits`], calling `progress(done, total)` after each page.
+pub fn flatten_document_with_limits_and_progress(
+    pdf: &[u8],
+    opts: &FlattenDocumentOptions,
+    limits: &FlattenSweepLimits,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<(Vec<u8>, FlattenDocumentReport), FlattenDocumentError> {
     let doc = Arc::new(open_slice(pdf, None)?);
@@ -213,9 +232,9 @@ pub fn flatten_document_with_progress(
                 report.other_intents.push(page);
             }
             let p = doc.pages().get(page).ok_or(FlattenDocumentError::Read { page, source: ReadError::NoPage(page) })?;
-            match read_page_in(&doc, page, &opts.read, color.read.clone()) {
+            match read_page_in(&doc, page, &opts.read, color.read.clone(), limits) {
                 Ok((list, read)) => {
-                    let flat = flatten(&list, &opts.flatten).map_err(|source| FlattenDocumentError::Flatten { page, source })?;
+                    let flat = flatten_with_limits(&list, &opts.flatten, limits).map_err(|source| FlattenDocumentError::Flatten { page, source })?;
                     let mut raster = Rasterizer::new(&list, color.settings.clone(), color.condition.clone(), &color.cms, opts.flatten.raster_dpi);
                     let at = |source| FlattenDocumentError::Write { page, source };
                     let settings = page_settings(p, list.page).ok_or(at(WriteError::Page))?;

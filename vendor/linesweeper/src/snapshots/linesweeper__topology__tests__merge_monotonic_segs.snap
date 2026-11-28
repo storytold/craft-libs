@@ -13,14 +13,6 @@ expression: "(top, contours)"
     (),
     (),
   ],
-  open_segs: [
-    [],
-    [],
-    [],
-    [],
-    [],
-    [],
-  ],
   winding: OutputSegVec(
     inner: [
       HalfSegmentWindingNumbers(

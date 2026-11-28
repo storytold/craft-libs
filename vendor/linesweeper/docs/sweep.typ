@@ -640,18 +640,23 @@ Now, if the result of floating point addition or subtraction is subnormal then i
 for any floating-point $x$ and $y$, if $x - y$ and $x + y$ don't overflow then after rounding they
 have relative error at most $epsilon_0$.
 
+// Craft patch (ratio lemma): the finite, nonzero denominator assumption and fl(y_1 - y_0) in the proof.
 #lemma[
-  If $y_0 <= y <= y_1$ are floating-point numbers and $epsilon_0 <= 1/2$ then computing $(y - y_0) / (y_1 - y_0)$
+  If $y_0 <= y <= y_1$ are floating-point numbers with $y_0 < y_1$, $fl(y_1 - y_0)$ is finite
+  and $epsilon_0 <= 1/2$ then computing $(y - y_0) / (y_1 - y_0)$
   the naive way gives an absolute error of
   at most $3 epsilon_0 + 4 epsilon_0^2$.
 ]<lem-ratio-error>
 
 #proof[
-The assumption $y_0 <= y <= y_1$ ensures that $y - y_0$ and $y_1 - y_0$ do not overflow. Therefore
+The assumption that $fl(y_1 - y_0)$ is finite ensures that $y_1 - y_0$ does not overflow, and since
+$0 <= y - y_0 <= y_1 - y_0$, neither does $y - y_0$. (The ordering $y_0 <= y <= y_1$ alone is not
+enough: with $y_0 = -10^308$, $y = 0$ and $y_1 = 10^308$, $fl(y_1 - y_0)$ is infinite and the computed
+ratio is $0$ instead of $1/2$.) Therefore
 
 $
 fl(y - y_0) &= (y - y_0) (1 plus.minus epsilon_0) \
-fl(y + y_0) &= (y + y_0) (1 plus.minus epsilon_0)
+fl(y_1 - y_0) &= (y_1 - y_0) (1 plus.minus epsilon_0)
 $
 and so
 $
@@ -715,7 +720,8 @@ Next, let's analyze the computation of the $y$ intersection point.
 #lemma[
 Suppose we have two segments $alpha$ and $beta$. Set $y_0 = y_0(alpha) or y_0(beta)$ and $y_1 = y_1(alpha) and y_1(beta)$
 (these can be computed exactly). Suppose that we can compute $alpha(y)$ and $beta(y)$ to additive accuracy $epsilon$,
-and assume that $beta(y_0) - alpha(y_0) >= 0$ and
+and assume that the floating-point additions forming the denominator below are finite,
+that $beta(y_0) - alpha(y_0) >= 0$, and
 $
 alpha(y_1) - beta(y_1) > 16/3 (epsilon + 2 epsilon_0 M).
 $
@@ -794,9 +800,11 @@ the maximum absolute value of these inverse-slopes.
 ]
 
 Putting all this together (and handling the "chamfers" yet):
+// Craft patch (ratio lemma): M is a floating-point number, and the proof shows the ratio lemma's assumptions hold.
 #lemma[
-Assume all line segments are inside the square $[-M/2, M/2]^2$,
-and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
+Assume $M$ is a floating-point number, all line segments are inside the square $[-M/2, M/2]^2$,
+and take $delta = 64 epsilon_0 M$. Assume also that the floating-point additions forming the crossing
+denominator in @lem-intersection-height-error are finite. If $epsilon_0 <= 1/4$ then
 
 - We can compute $x$ coordinates of line segments to additive accuracy $delta/8$.
 - If $alpha$ $(3 delta)/4$-crosses $beta$, we can compute a crossing height $hat(y)$ such
@@ -808,11 +816,14 @@ and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
 
 #proof[
 We compute $x$ coordinates by first computing $t = (y - y_0) / (y_1 - y_0)$ (with error at most $3 epsilon_0 + 4 epsilon_0^2$ by
-@lem-ratio-error). Then we apply @lem-convex-combination-error with $epsilon = 3 epsilon_0 + 4 epsilon_0^2$ to see that we
+@lem-ratio-error, which applies because a segment that is not horizontal has $y_0 < y_1$, and $fl(y_1 - y_0)$
+is finite because $0 < y_1 - y_0 <= M$ and $M$ is a floating-point number). Then we apply @lem-convex-combination-error with $epsilon = 3 epsilon_0 + 4 epsilon_0^2$ to see that we
 can compute the horizontal coordinate with error at most $(6 epsilon_0 + 4 epsilon_0^2)M$. If $epsilon_0 <= 1/4$ as we assumed,
 this is at most $7 epsilon_0 M <= delta/8$. This proves the first claim.
 
 For the second claim, we apply @lem-intersection-height-error with $epsilon = (6 epsilon_0 + 4 epsilon_0^2) M$.
+Its denominator additions are finite by the additional assumption. The coordinate bound alone does
+not imply this: each horizontal difference can be as large as $M$, and their sum can be as large as $2 M$.
 With this $epsilon$, $epsilon + 2 epsilon_0 M) <= 9 epsilon_0 M$ and so $16/3 (epsilon + 2 epsilon_0 M) <= 48 epsilon_0 M = (3 delta)/4$.
 Thus, if $alpha$ $(3 delta)/4$-crosses $beta$ then the assumptions of @lem-intersection-height-error are satisfied
 (and in the conclusion, $4 (epsilon + 2 epsilon_0) M <= 36 epsilon_0 M = (9 delta) /16 $.

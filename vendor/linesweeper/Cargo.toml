@@ -29,6 +29,7 @@ repository = "https://github.com/jneem/linesweeper"
 arbitrary = ["dep:arbitrary"]
 debug-svg = ["dep:svg"]
 generators = []
+metrics = []
 slow-asserts = []
 
 [lib]
@@ -37,30 +38,17 @@ path = "src/lib.rs"
 bench = false
 
 [[example]]
-name = "boolean_op"
-path = "examples/boolean_op.rs"
-required-features = ["generators"]
-
-[[example]]
 name = "bus"
 path = "examples/bus.rs"
 
 [[example]]
 name = "curve_metrics"
 path = "examples/curve_metrics.rs"
+required-features = ["metrics"]
 
 [[example]]
 name = "visualize_op"
 path = "examples/visualize_op.rs"
-
-[[example]]
-name = "winding-numbers"
-path = "examples/winding-numbers.rs"
-
-[[test]]
-name = "fonts"
-path = "tests/fonts.rs"
-harness = false
 
 [[test]]
 name = "paperjs"
@@ -70,16 +58,6 @@ harness = false
 [[test]]
 name = "regression"
 path = "tests/regression.rs"
-harness = false
-
-[[test]]
-name = "snapshots"
-path = "tests/snapshots.rs"
-harness = false
-
-[[bench]]
-name = "linebender_logo"
-path = "benches/linebender_logo.rs"
 harness = false
 
 [[bench]]

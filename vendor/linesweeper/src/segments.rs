@@ -1,4 +1,5 @@
 use std::iter::Peekable;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kurbo::BezPath;
 
@@ -30,11 +31,37 @@ pub struct SegVec<T> {
 
 impl_typed_vec!(SegVec, SegIdx, "s");
 
+// Craft patch (comparison cache arena): each arena gets its own number, and
+// a clone gets a new one, so that `ComparisonCache` can tell arenas apart.
+#[derive(Debug, PartialEq, Eq)]
+struct ArenaId(u64);
+
+impl ArenaId {
+    fn fresh() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        ArenaId(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for ArenaId {
+    fn default() -> Self {
+        ArenaId::fresh()
+    }
+}
+
+impl Clone for ArenaId {
+    fn clone(&self) -> Self {
+        ArenaId::fresh()
+    }
+}
+
 /// An arena of segments, each of which is a cubic Bézier.
 ///
 /// Segments are indexed by [`SegIdx`] and can be retrieved by indexing (i.e. with square brackets).
 #[derive(Clone, Default)]
 pub struct Segments {
+    // Craft patch (comparison cache arena): see `ArenaId`.
+    id: ArenaId,
     segs: SegVec<Segment>,
     horizontal_decomps: SegVec<AlmostHorizontalDecomposition>,
     contour_prev: SegVec<Option<SegIdx>>,
@@ -131,10 +158,20 @@ fn pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
     xs.windows(2).map(|pair| (&pair[0], &pair[1]))
 }
 
+// Craft patch (leading ClosePath): `kurbo::segments` panics on a ClosePath that comes before
+// any point, so such ClosePaths are dropped first. They draw nothing.
+pub(crate) fn skip_leading_close_paths(
+    path: impl IntoIterator<Item = kurbo::PathEl>,
+) -> impl Iterator<Item = kurbo::PathEl> {
+    path.into_iter()
+        .skip_while(|el| matches!(el, kurbo::PathEl::ClosePath))
+}
+
 // Craft patch (batch paths): counts calls to `enter_order` in tests.
 #[cfg(test)]
 thread_local! {
-    static ENTER_COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub(crate) static ENTER_COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub(crate) static PREPARED_SEGMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 // Craft patch (batch paths): the order of `Segments::enter`, by entrance
@@ -234,6 +271,12 @@ where
 }
 
 impl Segments {
+    // Craft patch (comparison cache arena): the arena's number, which no
+    // other arena has, a clone included.
+    pub(crate) fn arena_id(&self) -> u64 {
+        self.id.0
+    }
+
     /// The number of segments in this arena.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
@@ -313,6 +356,10 @@ impl Segments {
         }
 
         for (p, q) in pairs(&ps) {
+            // Craft patch (repeated points): skip a point equal to the one before it.
+            if p == q {
+                continue;
+            }
             let (a, b, orient) = if p < q { (p, q, true) } else { (q, p, false) };
             self.push_seg(Segment::straight(*a, *b));
             self.orientation.push(orient);
@@ -358,13 +405,21 @@ impl Segments {
     /// Add a Bézier path to this arena.
     ///
     /// The path can contain multiple subpaths, and each of them must be closed.
+    /// If one of them is not closed, this returns an error and leaves the arena
+    /// unchanged.
     ///
     /// Each call merges the path's entrances and exits into the sorted ones
     /// already in the arena, which moves every existing entry that sorts after
     /// them. To add many paths, call [`Segments::add_bez_paths`] once instead.
     pub fn add_bez_path(&mut self, p: &BezPath) -> Result<(), NonClosedPath> {
         let old_len = self.segs.len();
-        self.add_path_without_updating_enter_exit(p, true)?;
+        // Craft patch (add_bez_path error): segments pushed before the open
+        // subpath was found are removed, so no segment is left with a link
+        // past the end of the arena or without an entrance.
+        if let Err(e) = self.add_path_without_updating_enter_exit(p, true) {
+            self.truncate(old_len);
+            return Err(e);
+        }
         self.update_enter_exit(old_len);
         Ok(())
     }
@@ -421,18 +476,32 @@ impl Segments {
         must_be_closed: bool,
     ) -> Result<(), NonClosedPath> {
         let old_len = self.segs.len();
+        struct UnenteredBatch<'a> {
+            arena: &'a mut Segments,
+            start: usize,
+            complete: bool,
+        }
+        impl Drop for UnenteredBatch<'_> {
+            fn drop(&mut self) {
+                if !self.complete {
+                    self.arena.truncate_unentered(self.start);
+                }
+            }
+        }
+        let mut batch = UnenteredBatch { arena: self, start: old_len, complete: false };
         let mut result = Ok(());
         for p in ps {
-            let path_start = self.segs.len();
-            result = self.add_path_without_updating_enter_exit(p, must_be_closed);
+            let path_start = batch.arena.segs.len();
+            result = batch.arena.add_path_without_updating_enter_exit(p, must_be_closed);
             if result.is_err() {
                 // The failing path's segments are removed, so none is left
                 // linked to an index past the end of the arena.
-                self.truncate_unentered(path_start);
+                batch.arena.truncate_unentered(path_start);
                 break;
             }
         }
-        self.update_enter_exit(old_len);
+        batch.arena.update_enter_exit(old_len);
+        batch.complete = true;
         result
     }
 
@@ -459,7 +528,7 @@ impl Segments {
         };
         while let Some(subpath) = subpaths.next() {
             let old_len = self.segs.len();
-            for seg in kurbo::segments(subpath) {
+            for seg in kurbo::segments(skip_leading_close_paths(subpath)) {
                 let pieces = monotonic_pieces(seg);
                 for monotonic in pieces {
                     self.push_seg(monotonic.piece);
@@ -532,6 +601,8 @@ impl Segments {
     }
 
     fn push_seg(&mut self, seg: Segment) {
+        #[cfg(test)]
+        PREPARED_SEGMENTS.with(|count| count.set(count.get() + 1));
         let decomp = if seg.is_horizontal() {
             AlmostHorizontalDecomposition::default()
         } else {
@@ -539,6 +610,13 @@ impl Segments {
         };
         self.horizontal_decomps.push(decomp);
         self.segs.push(seg);
+    }
+
+    // Craft patch (add_bez_path error): drops every segment at index `len` or
+    // above. `enter` and `exit` are left alone, so this is only for segments
+    // that `update_enter_exit` has not seen yet.
+    fn truncate(&mut self, len: usize) {
+        self.truncate_unentered(len);
     }
 
     /// Construct a segment arena from a single closed polyline.
@@ -608,6 +686,33 @@ impl Segments {
         debug_assert!(!self.segs[idx].is_horizontal());
         &self.horizontal_decomps[idx]
     }
+
+    /// The sweep tolerance to use for these segments when the caller asks for `eps`.
+    ///
+    /// Returns `eps` when it is at least `64 * f64::EPSILON` times the largest
+    /// coordinate magnitude (the scale [`crate::binary_op`] uses), and that
+    /// floor otherwise. The floor replaces an `eps` that is NaN, infinite,
+    /// negative, zero, or too small to tell coordinates of this size apart. It
+    /// is never below 64 times the spacing of subnormal floats.
+    pub(crate) fn usable_eps(&self, eps: f64) -> f64 {
+        let max_coord = self
+            .segs
+            .iter()
+            .map(|(_, seg)| {
+                seg.min_x()
+                    .abs()
+                    .max(seg.max_x().abs())
+                    .max(seg.start().y.abs())
+                    .max(seg.end().y.abs())
+            })
+            .fold(0.0, f64::max);
+        let floor = crate::curve::resolution_floor(max_coord);
+        if eps.is_finite() && eps >= floor {
+            eps
+        } else {
+            floor
+        }
+    }
 }
 
 impl std::ops::Index<SegIdx> for Segments {
@@ -615,6 +720,23 @@ impl std::ops::Index<SegIdx> for Segments {
 
     fn index(&self, index: SegIdx) -> &Self::Output {
         &self.segs[index]
+    }
+}
+
+// Craft patch (repeated points).
+#[cfg(test)]
+mod repeated_point_tests {
+    use super::{SegIdx, Segments};
+
+    #[test]
+    fn add_points_skips_repeated_points() {
+        let mut segments = Segments::default();
+        segments.add_points([(0.0, 0.0), (0.0, 0.0), (1.0, 1.0), (1.0, 1.0), (2.0, 0.0)]);
+        segments.check_invariants();
+        assert_eq!(segments.segs.len(), 2);
+        assert_eq!(segments.contour_prev(SegIdx(0)), None);
+        assert_eq!(segments.contour_next(SegIdx(0)), Some(SegIdx(1)));
+        assert_eq!(segments.contour_next(SegIdx(1)), None);
     }
 }
 
@@ -729,6 +851,36 @@ mod tests {
             segments.split_from_predecessor,
             expected.split_from_predecessor
         );
+    }
+
+    #[test]
+    fn batch_iterator_panic_preserves_the_existing_arena() {
+        for closed in [false, true] {
+            let paths = grid_paths(4, true);
+            let mut arena = Segments::default();
+            arena.add_bez_path(&paths[0]).unwrap();
+            let expected = arena.clone();
+            let mut count = 0;
+            let iter = std::iter::from_fn(|| {
+                count += 1;
+                assert_ne!(count, 3, "iterator panic after two paths");
+                Some(&paths[count])
+            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if closed {
+                    arena.add_bez_paths(iter).unwrap();
+                } else {
+                    arena.add_non_closed_bez_paths(iter).unwrap();
+                }
+            }));
+            assert!(result.is_err());
+            assert_same_arena(&expected, &arena);
+            assert_eq!(arena.input_segs, expected.input_segs);
+            assert_eq!(arena.split_from_predecessor, expected.split_from_predecessor);
+            arena.check_invariants();
+            arena.add_bez_path(&paths[3]).unwrap();
+            arena.check_invariants();
+        }
     }
 
     type Events = Vec<(f64, SegIdx)>;

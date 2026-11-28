@@ -56,9 +56,11 @@ fn squares((x0, y0): (f64, f64), size: f64, offset: f64, slant: f64, count: usiz
 /// non-overlapping squares, and the inner collection of `(n - 1) x (n - 1)`
 /// non-overlapping squares.
 pub fn checkerboard(n: usize) -> (Contours, Contours) {
+    // Craft patch (empty checkerboard): `n - 1` overflows for `n = 0`, so the
+    // inner count saturates at zero.
     (
         squares((0.0, 0.0), 30.0, 40.0, 0.0, n),
-        squares((20.0, 20.0), 30.0, 40.0, 0.0, n - 1),
+        squares((20.0, 20.0), 30.0, 40.0, 0.0, n.saturating_sub(1)),
     )
 }
 
@@ -67,9 +69,10 @@ pub fn checkerboard(n: usize) -> (Contours, Contours) {
 /// Horizontal lines have special handling in the sweep-line algorithm, so
 /// their presence or absence can affect performance.
 pub fn slanted_checkerboard(n: usize) -> (Contours, Contours) {
+    // Craft patch (empty checkerboard).
     (
         squares((0.0, 0.0), 30.0, 40.0, 1.0, n),
-        squares((20.0, 20.0), 30.0, 40.0, 1.0, n - 1),
+        squares((20.0, 20.0), 30.0, 40.0, 1.0, n.saturating_sub(1)),
     )
 }
 
@@ -144,4 +147,22 @@ pub fn star(n: usize) -> (BezPath, BezPath) {
     }
 
     (straight, bent)
+}
+
+// Craft patch (empty checkerboard).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checkerboards_of_size_zero_and_one() {
+        for generate in [checkerboard, slanted_checkerboard] {
+            let (outer, inner) = generate(0);
+            assert!(outer.is_empty() && inner.is_empty());
+            let (outer, inner) = generate(1);
+            assert_eq!((outer.len(), inner.len()), (1, 0));
+            let (outer, inner) = generate(3);
+            assert_eq!((outer.len(), inner.len()), (9, 4));
+        }
+    }
 }
