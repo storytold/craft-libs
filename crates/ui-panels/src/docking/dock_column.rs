@@ -485,7 +485,7 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
         let sizes = cx.style.sizes;
         let plan = column_plan(self.column, self.spec, self.inner(rect, cx.flow.is_rtl(), &sizes), self.bar, &sizes, |_, _| None);
         if self.bar == ColumnBar::Own && self.arrow.shown() {
-            let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
+            let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl(), sizes.reach);
             let name = self.arrow.name(&cx.words::<DockWords>(), true);
             let _ = cx.part(CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
         }

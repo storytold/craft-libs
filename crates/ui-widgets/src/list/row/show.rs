@@ -20,7 +20,7 @@ use crate::primitives::{DocRun, DocText, RectSide, RuleKind, StrokeWidth, TextRu
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::{Label, WordTemplate};
 use crate::style::{DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
-use craft_behavior::{ColumnKey, Metrics, NavShape, PartKey, PartRef, PointerButton, PressPhase, Proposal, Roving, Sense};
+use craft_behavior::{ColumnKey, CursorIcon, Metrics, NavShape, PartKey, PartRef, PointerButton, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::Tone;
 use craft_theme::{Rgba, Stateful, TypeRole, over};
@@ -850,7 +850,9 @@ impl ListRow<'_> {
                 Some(RowPressed::Row) => toggle.row_press,
                 _ => false,
             };
-            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held).inactive(self.toggle_closed(toggle));
+            // A toggle cell is a button: the pointing hand says a click flips it.
+            let part =
+                cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held).inactive(self.toggle_closed(toggle)).cursor(CursorIcon::PointingHand);
             let _ = match tip {
                 Some(tip) => part.tooltip(tip),
                 None => part,

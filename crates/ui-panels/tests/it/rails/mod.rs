@@ -138,6 +138,29 @@ fn the_flyout_checks_the_shown_tool_and_marks_no_other_row() {
     assert_eq!(rings, 0, "no row of the flyout draws an empty ring");
 }
 
+/// While the press that opened the flyout is still held, the row under the pointer lights up as the row a release
+/// there picks, and the light follows the pointer to the next row.
+#[trial]
+fn while_the_opening_press_is_held_the_row_under_the_pointer_lights_up() {
+    use egui::epaint::Shape;
+    let mut held = rig(true);
+    let target = button(&held);
+    let away = egui::Vec2::new(target.rect.width() * 1.5, 0.0);
+    held.fixture.drag_hold_at(target.center(), away);
+    held.fixture.idle(2);
+    let redo = held.fixture.by_label("Redo").expect("the flyout lists Redo");
+    let cut = held.fixture.by_label("Cut").expect("the flyout lists Cut");
+    let lit = |shapes: &[Shape], row: egui::Rect| {
+        shapes.iter().any(|shape| matches!(shape, Shape::Rect(fill) if fill.fill.a() > 0 && fill.rect.contains(row.center()) && fill.rect.height() <= row.height() + 1.0))
+    };
+    held.fixture.frame(vec![moved(redo.center())]);
+    let shapes = held.fixture.frame_shapes_with(vec![]);
+    assert!(lit(&shapes, redo.rect) && !lit(&shapes, cut.rect), "the held pointer over Redo lights Redo alone");
+    held.fixture.frame(vec![moved(cut.center())]);
+    let shapes = held.fixture.frame_shapes_with(vec![]);
+    assert!(lit(&shapes, cut.rect) && !lit(&shapes, redo.rect), "moving on to Cut moves the light");
+}
+
 /// A flyout of a tool low on the rail, too tall for the room under the tool's top, slides up to stay in the window
 /// as PhotoCraft's tool flyouts do, rather than opening upward from the tool as a submenu does.
 #[trial]

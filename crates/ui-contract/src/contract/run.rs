@@ -426,6 +426,7 @@ fn blank_core<'a>(
         texts: None,
         selections: Vec::new(),
         faded: false,
+        held_hover: false,
         node: false,
         fade: None,
         focus_shapes: Vec::new(),
@@ -822,6 +823,17 @@ fn activation_of(ctx: &Context, ui: &Ui, rect: Rect, resolved: &Resolved<'_>, ke
     })
 }
 
+/// Whether the press that opened the popup this component is in is held over it: while the opener keeps the press,
+/// egui hovers nothing else, so the row a release would pick ([`activation_of`]) shows its hover from here.
+fn held_hover(ctx: &Context, ui: &Ui, rect: Rect, resolved: &Resolved<'_>, root_sense: Sense) -> bool {
+    steps::takes_activation(resolved)
+        && root_sense.contains(Sense::CLICK)
+        && crate::runtime::overlay::held_inside(
+            ctx,
+            crate::runtime::egui::areas::layer_to_screen(ctx, ui.layer_id()) * rect.intersect(ui.clip_rect()),
+        )
+}
+
 /// Step 8: the sense of a root, a member of an arena, or a component with nothing to sense.
 fn sense_root(ui: &Ui, member: Option<crate::runtime::env::ArenaId>, spec: RootSpec<'_>, owns_arena: bool) -> sensing::RootResult {
     match member {
@@ -1115,6 +1127,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, (host_at, place): (Option<
     // A key or AccessKit activation of a member reaches its arena root, which names the member.
     let keyed = member.is_some_and(|arena| keys::activated_member(&ctx, arena.0) == Some(id));
     core.activation = activation_of(&ctx, ui, hit, resolved, keyed, root_sense, activation);
+    core.held_hover = held_hover(&ctx, ui, hit, resolved, root_sense);
     core.activated_member = activated_member.or_else(|| arena.then(|| keys::activated_member(&ctx, id)).flatten());
     // A session member with no focused part takes the canvas's and the window's Enter, Escape and arrows first.
     if let Some(arena) = session.filter(|_| !inert && !core.focus.focused) {

@@ -1,7 +1,7 @@
 //! [`MagneticLassoTool`]: an outline that snaps to the edges the app's [`EdgeTracer`] finds.
 
 use craft_behavior::geometry::SelectionOperation;
-use craft_behavior::{CancelReason, Cursor, PaintedCursor, PointerGlyph};
+use craft_behavior::{CancelReason, Cursor, CursorBadge, PaintedCursor, PointerGlyph};
 use craft_keymap::{Key, Mods};
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth, ToolIcon};
@@ -476,7 +476,8 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
     }
 
     /// The width circle under the canvas's precise cursor (`width * zoom`, at least the slop); otherwise the arrow on
-    /// the pointer with the lasso icon beside it and the operation's badge.
+    /// the pointer with the lasso icon beside it and the operation's badge, or the close ring where a click would
+    /// close the outline.
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         let tool = &*self.tool;
         if cx.precise()
@@ -486,7 +487,11 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
             let radius = (f64::from(tool.settings.width.clamp(min, max)) * place.zoom()) as f32;
             return PaintedCursor::circle(radius.max(cx.slop)).into();
         }
+        let closes = |o: &MagneticOutline| {
+            !o.down && cx.pointer.zip(Place::of(cx)).is_some_and(|(pointer, place)| o.near_start(place.doc(pointer.pos), close_radius(&place)))
+        };
         let badge = match &tool.outline {
+            Some(o) if closes(o) => Some(CursorBadge::Close),
             Some(o) => o.operation.badge(),
             None if cx.mods.cmd => None,
             None => SelectionOperation::resolve(tool.bar, cx.mods, self.probe.has_selection()).badge(),

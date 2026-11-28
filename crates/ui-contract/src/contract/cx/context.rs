@@ -194,6 +194,8 @@ pub struct CxCore<'a> {
     /// Not enabled, with `DisabledLook::Faded`: the component and its faces paint their enabled look, which step 13
     /// fades.
     pub(crate) faded: bool,
+    /// The press that opened the popup this row is in is held over the row: it shows its hover.
+    pub(crate) held_hover: bool,
     /// The component has an AccessKit node this pass (step 8), or as a collection member a sub-node under its
     /// collection's: its access data, its members' and its faces' have a reader.
     pub(crate) node: bool,

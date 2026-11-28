@@ -430,3 +430,35 @@ fn a_memoized_layer_that_grows_replays_as_it_runs() {
     let runs = last_frame_memo_runs(&frames.ctx);
     assert!(runs.iter().any(|(name, _, run)| name.contains("HeldLayer") && *run == MemoRun::Replayed), "the grown layer's view replays: {runs:?}");
 }
+
+/// A movable layer hung from its anchor holds no edge: the grips on the edges facing and aligned with the anchor resize
+/// it too, as the free ones do, so every edge and corner the user tries resizes it.
+#[trial]
+fn a_movable_hung_layer_resizes_from_the_edges_at_its_anchor() {
+    let shown = Cell::new(Rect::NOTHING);
+    let log = RefCell::new(Vec::new());
+    let seen = RefCell::new(Seen::default());
+    let mut show = |ui: &mut Ui| {
+        let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(ANCHOR), Side::Below, Align::Start)).resizable(true).movable(true);
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
+        let out = Pane { common: Common::new(), props, log: &log }.id_salt("hung").show(ui, |ui, _| {
+            Probe::new(&seen).size(BODY).show(ui);
+        });
+        shown.set(out.output.rect);
+    };
+    let mut frames = Frames::new();
+    frames.idle(4, &mut show);
+    let start = shown.get();
+    assert!(start.top() >= ANCHOR.bottom() - SLACK, "the layer hangs below its anchor: {start:?}");
+    // The left edge is aligned with the anchor and the top faces it.
+    pointer::drag(&mut frames, Pos2::new(start.left() + 1.0, start.center().y), Vec2::new(-30.0, 0.0), &mut show);
+    frames.idle(3, &mut show);
+    let wider = shown.get();
+    assert!(wider.width() > start.width() + 20.0, "the left grip widened it: {start:?} -> {wider:?}");
+    assert!(wider.left() < start.left() - 20.0, "the left edge moved out: {start:?} -> {wider:?}");
+    pointer::drag(&mut frames, Pos2::new(wider.center().x, wider.top() + 1.0), Vec2::new(0.0, -30.0), &mut show);
+    frames.idle(3, &mut show);
+    let taller = shown.get();
+    assert!(taller.height() > wider.height() + 20.0, "the top grip made it taller: {wider:?} -> {taller:?}");
+    assert!(taller.top() < wider.top() - 20.0, "the top edge moved up: {wider:?} -> {taller:?}");
+}
