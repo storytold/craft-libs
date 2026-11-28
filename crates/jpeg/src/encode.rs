@@ -419,6 +419,34 @@ pub fn encode_baseline(
     sub: ChromaSubsampling,
     app_segments: &[(u8, Vec<u8>)],
 ) -> Result<Vec<u8>, EncodeError> {
+    validate_encode(data, width, height, channels, app_segments)?;
+    Ok(encode(data, width, height, channels, quality, sub, app_segments))
+}
+
+/// Encode the same optimized baseline JPEG as [`encode_baseline`], trading a second DCT pass
+/// for working memory independent of image height. This path is sequential even when the
+/// `parallel` feature is enabled. It retains only one MCU row of conversion planes and writes
+/// directly into the returned encoded buffer: no image-wide tokens or duplicate coded buffer.
+///
+/// Scratch consists of at most `24 * width + 8` floats (odd-width 4:2:0), plus fixed-size coding tables.
+/// The caller still owns the input pixels and the returned JPEG; this is not a cap on output
+/// size or a replacement for the caller's image/admission budget. Geometry, quality, metadata,
+/// Huffman tables and restart boundaries match [`encode_baseline`] byte for byte.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_baseline_low_memory(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    channels: usize,
+    quality: u8,
+    sub: ChromaSubsampling,
+    app_segments: &[(u8, Vec<u8>)],
+) -> Result<Vec<u8>, EncodeError> {
+    validate_encode(data, width, height, channels, app_segments)?;
+    Ok(encode_impl(data, width, height, channels, quality, sub, app_segments, true, true))
+}
+
+fn validate_encode(data: &[u8], width: usize, height: usize, channels: usize, app_segments: &[(u8, Vec<u8>)]) -> Result<(), EncodeError> {
     let fits = width.checked_mul(height).and_then(|n| n.checked_mul(channels)).is_some_and(|n| n <= data.len());
     if !fits || width == 0 || height == 0 || width > 65_535 || height > 65_535 || !matches!(channels, 1 | 3 | 4) {
         return Err(EncodeError::InvalidInput(format!("{width}x{height}, {channels} channels, {} bytes", data.len())));
@@ -426,7 +454,7 @@ pub fn encode_baseline(
     if app_segments.iter().any(|(marker, payload)| !(0xE0..=0xEF).contains(marker) || payload.len() > 65_533) {
         return Err(EncodeError::InvalidInput("APP markers must be 0xE0..=0xEF with payloads no larger than 65533 bytes".into()));
     }
-    Ok(encode(data, width, height, channels, quality, sub, app_segments))
+    Ok(())
 }
 
 /// [`encode`], with optimized Huffman tables or (`optimize` false) the Annex K example tables.
@@ -440,6 +468,21 @@ fn encode_with(
     sub: ChromaSubsampling,
     app_segments: &[(u8, Vec<u8>)],
     optimize: bool,
+) -> Vec<u8> {
+    encode_impl(data, width, height, channels, quality, sub, app_segments, optimize, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_impl(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    channels: usize,
+    quality: u8,
+    sub: ChromaSubsampling,
+    app_segments: &[(u8, Vec<u8>)],
+    optimize: bool,
+    low_memory: bool,
 ) -> Vec<u8> {
     // The public entry takes caller-sized dimensions: refuse (an empty output) what would size an allocation from
     // them or index past `data`, rather than panic or allocate for them.
@@ -509,6 +552,8 @@ fn encode_with(
             planes.push(Plane { w: cw, h: crows.len(), data: cb });
             planes.push(Plane { w: cw, h: crows.len(), data: cr });
         }
+        #[cfg(test)]
+        low_memory_tests::record_planes(planes.iter().map(|p| p.data.len()).sum());
         planes
     };
 
@@ -519,45 +564,58 @@ fn encode_with(
     let (mx, my) = (width.div_ceil(mcu_w), height.div_ceil(mcu_h));
     // restart interval: whole MCU rows per band, ≤ 65535 MCUs, enough bands to keep all cores busy
     let rows_per_band = (my / 64).clamp(1, (65_535 / mx.max(1)).max(1));
-    let bands: Vec<usize> = (0..my.div_ceil(rows_per_band)).collect();
+    let num_bands = my.div_ceil(rows_per_band);
+    let bands: Vec<usize> = if low_memory { Vec::new() } else { (0..num_bands).collect() };
     // first pass: each band's quantized blocks as symbols, with their counts per table (DC
     // prediction restarts per band, as the restart markers say)
-    let tokenize_band = |band: &usize| -> (Vec<Token>, [Freq; 4]) {
+    let visit_band = |band: &usize, emit: &mut dyn FnMut(&[i16; 64], &mut i32, bool)| {
         let (mut blk, mut q) = ([0f32; 64], [0i16; 64]);
-        let (mut tokens, mut freq) = (Vec::new(), [[0u64; 256]; 4]);
         let mut pred = [0i32; 3];
         let (m0, m1) = (band * rows_per_band, ((band + 1) * rows_per_band).min(my));
-        // the band's planes, its MCU row `m0` at their top (blocks past the image's bottom repeat its last row,
-        // which is the band's last row then)
-        let planes = convert(m0 * mcu_h..(m1 * mcu_h).min(height), m0 * 8..(m1 * 8).min(ch));
         for mcu_y in m0..m1 {
-            let mcu_y = mcu_y - m0;
+            // Convert only the current MCU row. DC predictors still span the original band,
+            // so its symbols/restart decisions are identical to whole-band conversion.
+            let planes = convert(mcu_y * mcu_h..((mcu_y + 1) * mcu_h).min(height), mcu_y * 8..((mcu_y + 1) * 8).min(ch));
             for mcu_x in 0..mx {
                 for vy in 0..vs {
                     for hx in 0..hs {
-                        planes[0].block(mcu_x * hs + hx, mcu_y * vs + vy, &mut blk);
+                        planes[0].block(mcu_x * hs + hx, vy, &mut blk);
                         fdct_quant(&blk, &rl, &mut q);
-                        tokenize_block(&q, &mut pred[0], false, &mut tokens, &mut freq);
+                        emit(&q, &mut pred[0], false);
                     }
                 }
                 if !gray {
                     for (plane, pred) in planes.iter().zip(pred.iter_mut()).take(3).skip(1) {
-                        plane.block(mcu_x, mcu_y, &mut blk);
+                        plane.block(mcu_x, 0, &mut blk);
                         fdct_quant(&blk, &rc, &mut q);
-                        tokenize_block(&q, pred, true, &mut tokens, &mut freq);
+                        emit(&q, pred, true);
                     }
                 }
             }
         }
+    };
+    let tokenize_band = |band: &usize| -> (Vec<Token>, [Freq; 4]) {
+        let (mut tokens, mut freq) = (Vec::new(), [[0u64; 256]; 4]);
+        visit_band(band, &mut |q, pred, chroma| tokenize_block(q, pred, chroma, &mut tokens, &mut freq));
+        #[cfg(test)]
+        low_memory_tests::record_tokens(tokens.len());
         (tokens, freq)
     };
     #[cfg(feature = "parallel")]
-    let tokenized: Vec<(Vec<Token>, [Freq; 4])> = bands.par_iter().map(tokenize_band).collect();
+    let tokenized: Vec<(Vec<Token>, [Freq; 4])> = if low_memory { Vec::new() } else { bands.par_iter().map(tokenize_band).collect() };
     #[cfg(not(feature = "parallel"))]
-    let tokenized: Vec<(Vec<Token>, [Freq; 4])> = bands.iter().map(tokenize_band).collect();
+    let tokenized: Vec<(Vec<Token>, [Freq; 4])> = if low_memory { Vec::new() } else { bands.iter().map(tokenize_band).collect() };
     // the tables: DC luma, AC luma, DC chroma, AC chroma
     let tables: [([u8; 16], Vec<u8>); 4] = if optimize {
         let mut total = [[0u64; 256]; 4];
+        if low_memory {
+            for band in 0..num_bands {
+                visit_band(&band, &mut |q, pred, chroma| {
+                    let base = if chroma { 2 } else { 0 };
+                    block_symbols(q, pred, |ac, symbol, _, _| total[base + ac as usize][symbol & 0xFF] += 1);
+                });
+            }
+        }
         for (_, f) in &tokenized {
             for (t, f) in total.iter_mut().zip(f) {
                 for (t, f) in t.iter_mut().zip(f) {
@@ -577,9 +635,9 @@ fn encode_with(
     let huff = tables.each_ref().map(|(bits, vals)| Huff::new(bits, vals));
     // second pass: code the symbols
     #[cfg(feature = "parallel")]
-    let coded: Vec<Vec<u8>> = tokenized.into_par_iter().map(|(t, _)| write_tokens(&t, &huff)).collect();
+    let coded: Vec<Vec<u8>> = if low_memory { Vec::new() } else { tokenized.into_par_iter().map(|(t, _)| write_tokens(&t, &huff)).collect() };
     #[cfg(not(feature = "parallel"))]
-    let coded: Vec<Vec<u8>> = tokenized.into_iter().map(|(t, _)| write_tokens(&t, &huff)).collect();
+    let coded: Vec<Vec<u8>> = if low_memory { Vec::new() } else { tokenized.into_iter().map(|(t, _)| write_tokens(&t, &huff)).collect() };
 
     // headers
     let mut out = Vec::with_capacity(coded.iter().map(Vec::len).sum::<usize>() + 4096);
@@ -617,7 +675,7 @@ fn encode_with(
         dht(&mut out, 0x11, acb, acv);
     }
     let interval = (rows_per_band * mx) as u16;
-    if coded.len() > 1 {
+    if num_bands > 1 {
         segment(&mut out, 0xDD, &interval.to_be_bytes());
     }
     if gray {
@@ -625,11 +683,32 @@ fn encode_with(
     } else {
         segment(&mut out, 0xDA, &[3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]);
     }
-    let last = coded.len().saturating_sub(1);
-    for (i, c) in coded.iter().enumerate() {
-        out.extend_from_slice(c);
-        if i < last {
-            out.extend_from_slice(&[0xFF, 0xD0 + (i % 8) as u8]);
+    if low_memory {
+        let last = num_bands.saturating_sub(1);
+        for i in 0..num_bands {
+            // Continue directly in the final buffer, resetting entropy bits at the same band
+            // boundaries as the retained-token path. Only the output grows with image height.
+            let mut bits = Bits { out, acc: 0, n: 0 };
+            visit_band(&i, &mut |q, pred, chroma| {
+                let base = if chroma { 2 } else { 0 };
+                block_symbols(q, pred, |ac, symbol, extra, n| {
+                    let (code, len) = huff[base + ac as usize].code[symbol & 0xFF];
+                    bits.put(code as u32, len as u32);
+                    bits.put(extra & 0xFFFF, n & 0xF);
+                });
+            });
+            out = bits.finish();
+            if i < last {
+                out.extend_from_slice(&[0xFF, 0xD0 + (i % 8) as u8]);
+            }
+        }
+    } else {
+        let last = coded.len().saturating_sub(1);
+        for (i, c) in coded.iter().enumerate() {
+            out.extend_from_slice(c);
+            if i < last {
+                out.extend_from_slice(&[0xFF, 0xD0 + (i % 8) as u8]);
+            }
         }
     }
     out.extend_from_slice(&[0xFF, 0xD9]);
@@ -877,3 +956,7 @@ mod tests {
         assert!(psnr(&src, &px) > 35.0);
     }
 }
+
+#[cfg(test)]
+#[path = "encode_low_memory_tests.rs"]
+mod low_memory_tests;

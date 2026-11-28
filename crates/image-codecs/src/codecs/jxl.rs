@@ -150,6 +150,81 @@ pub(crate) fn encode(image: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
     .unwrap_or_else(|_| Err(CodecError::encode(F, "the JPEG XL encoder failed")))
 }
 
+/// The reason given when this build has no JPEG XL decoder.
+#[cfg(not(feature = "jxl"))]
+pub(crate) const NOT_IN_BUILD: &str = "JPEG XL support isn't included in this build";
+
+#[cfg(not(feature = "jxl"))]
+pub(crate) fn decode(_bytes: &[u8], _limits: &crate::options::Limits) -> Result<Image, CodecError> {
+    Err(CodecError::unsupported(F, NOT_IN_BUILD))
+}
+
+#[cfg(feature = "jxl")]
+fn decode_err(e: craft_jxl::Error) -> CodecError {
+    use craft_jxl::Error as E;
+    match e {
+        E::Malformed(what) | E::Encode(what) => CodecError::malformed(F, what),
+        E::LimitExceeded(what) => CodecError::LimitExceeded(what),
+        E::PixelLimitExceeded { width, height, max_pixels } => {
+            CodecError::LimitExceeded(format!("{width}×{height} pixels exceed max_pixels {max_pixels}"))
+        }
+        E::InvalidImage(what) => CodecError::InvalidImage(what),
+        E::Unsupported(what) => CodecError::unsupported(F, what),
+    }
+}
+
+/// Decodes the first frame. The codestream's orientation is already applied to the pixels, so the
+/// Exif and XMP orientation are rewritten to 1 (the same promise as HEIF without `keep_orientation`).
+#[cfg(feature = "jxl")]
+pub(crate) fn decode(bytes: &[u8], limits: &crate::options::Limits) -> Result<Image, CodecError> {
+    let options = craft_jxl::DecodeLimits { max_pixels: limits.max_pixels, max_tracked_bytes: Some(limits.max_alloc), max_input_bytes: usize::MAX };
+    let decoded = craft_jxl::decode(bytes, options).map_err(decode_err)?;
+    let layout = match decoded.layout {
+        craft_jxl::Layout::Gray => ChannelLayout::Gray,
+        craft_jxl::Layout::GrayAlpha => ChannelLayout::GrayA,
+        craft_jxl::Layout::Rgb => ChannelLayout::Rgb,
+        craft_jxl::Layout::Rgba => ChannelLayout::Rgba,
+    };
+    let sample = match (decoded.float_samples, decoded.bit_depth) {
+        (true, _) => SampleType::F32,
+        (false, 0..=8) => SampleType::U8,
+        (false, _) => SampleType::U16,
+    };
+    limits.check(decoded.width, decoded.height, layout, sample)?;
+    let mut pixels = decoded.pixels;
+    if decoded.pixels_premultiplied {
+        unpremultiply(&mut pixels, layout);
+    }
+    let mut image = Image::from_normalized(decoded.width, decoded.height, layout, sample, &pixels)?;
+    image.icc = Some(decoded.rendered_icc).filter(|icc| !icc.is_empty()).or(decoded.metadata.icc);
+    if image.icc.is_none() {
+        image.cicp = decoded.rendered_cicp.map(|[primaries, transfer, matrix, range]| crate::cicp::Cicp {
+            primaries: u16::from(primaries),
+            transfer: u16::from(transfer),
+            matrix: u16::from(matrix),
+            full_range: range != 0,
+        });
+    }
+    image.meta.exif = decoded.metadata.exif.map(|e| crate::orientation::upright_exif(&e).into_owned());
+    // An XMP packet is UTF-8 text; bytes that are not are dropped rather than guessed at.
+    image.meta.xmp = decoded.metadata.xmp.and_then(|x| String::from_utf8(x).ok()).map(|x| crate::orientation::upright_xmp(&x).into_owned());
+    Ok(image)
+}
+
+/// Divides colour by alpha where alpha is not zero (JPEG XL can keep colour associated with alpha).
+#[cfg(feature = "jxl")]
+fn unpremultiply(pixels: &mut [f32], layout: ChannelLayout) {
+    if !layout.has_alpha() {
+        return;
+    }
+    for px in pixels.chunks_exact_mut(layout.channels()) {
+        let Some((alpha, colour)) = px.split_last_mut().map(|(a, c)| (*a, c)) else { continue };
+        if alpha > 0.0 {
+            colour.iter_mut().for_each(|c| *c /= alpha);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

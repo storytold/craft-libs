@@ -1,6 +1,6 @@
 use super::hammer;
 use crate::obj::{material_names, read, read_mtl, sibling_name, write, write_mtl};
-use crate::{AlphaMode, Corner, Error, Limits, Material, Mesh, NONE, Part, Scene, no_external};
+use crate::{AlphaMode, Corner, Error, Image, Limits, Material, Mesh, NONE, Part, Scene, TextureRef, no_external};
 
 /// A unit cube with texture coordinates, normals, two materials and one face written with
 /// negative references.
@@ -52,15 +52,6 @@ fn cube_with_its_material_library() {
     // The negative references of the last face name the same vertices as positive ones would.
     let last: Vec<u32> = m.parts[1].faces().last().unwrap().iter().map(|c| c.position).collect();
     assert_eq!(last, [4, 5, 1, 0]);
-}
-
-#[test]
-fn a_library_that_is_not_supplied_leaves_named_defaults() {
-    let s = parse(CUBE.as_bytes()).unwrap();
-    assert_eq!(s.external, ["cube.mtl"]);
-    assert_eq!(s.warnings.len(), 1);
-    assert_eq!(s.materials.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Red", "Gold"]);
-    assert_eq!(s.materials[0].base_color, [0.8, 0.8, 0.8, 1.0]);
 }
 
 #[test]
@@ -372,4 +363,15 @@ fn group_boundaries_keep_repeated_names_separate() {
     let scene = crate::obj::read_with_options(input, &Limits::default(), &mut no_external, &options).unwrap();
     assert_eq!(scene.meshes.len(), 2);
     assert!(scene.meshes.iter().all(|m| m.name == "Same"));
+}
+
+#[test]
+fn write_with_mtl_links_library_and_clearcoat_maps() {
+    let mut scene = cube();
+    scene.images = vec![Image { uri: Some("coat.png".into()), ..Image::default() }];
+    scene.materials[0].clearcoat_texture = Some(TextureRef { image: 0, ..TextureRef::default() });
+    scene.materials[0].clearcoat_roughness_texture = Some(TextureRef { image: 0, ..TextureRef::default() });
+    let (obj, mtl) = crate::obj::write_with_mtl(&scene, "cube.mtl", &Limits::default()).unwrap();
+    assert!(obj.contains("mtllib cube.mtl\n"));
+    assert!(mtl.contains("map_Pc coat.png\n") && mtl.contains("map_Pcr coat.png\n"), "{mtl}");
 }

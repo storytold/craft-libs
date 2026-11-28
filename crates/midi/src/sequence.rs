@@ -54,6 +54,17 @@ pub struct CtrlEvent {
     pub value: i32,
 }
 
+/// A source SMF SysEx packet. `status` distinguishes F0 from F7 continuation/escape events.
+/// `data` is the exact length-delimited payload, including a terminating F7 when present.
+/// Packets are retained separately: joining them would lose their timing and escape semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SysExEvent {
+    pub tick: i64,
+    pub status: u8,
+    pub data: Vec<u8>,
+}
+
 /// The MIDI content of a region or track.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -62,6 +73,9 @@ pub struct Sequence {
     pub notes: Vec<Note>,
     /// Controller events, sorted by tick after [`Sequence::sort`].
     pub ctrls: Vec<CtrlEvent>,
+    /// SysEx packets, stably sorted by tick. Absent in older serialized sequences.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    pub sysex: Vec<SysExEvent>,
 }
 
 fn kind_key(k: CtrlKind) -> (u8, u8) {
@@ -75,22 +89,19 @@ fn kind_key(k: CtrlKind) -> (u8, u8) {
 }
 
 impl Sequence {
-    /// Sorts notes by `(start, pitch, channel, length, velocity)` and controller events by tick
+    /// Sorts notes by `(start, pitch, channel, length, velocity)` and controller/SysEx events by tick
     /// (stable, so same-tick events keep their order).
     pub fn sort(&mut self) {
         self.notes.sort_by_key(|a| (a.start, a.pitch, a.channel, a.length, a.velocity));
         self.ctrls.sort_by_key(|c| c.tick);
+        self.sysex.sort_by_key(|e| e.tick);
     }
 
-    /// The last tick covered by any note end or controller event (0 when empty).
+    /// The last tick covered by any note end, controller or SysEx packet (0 when empty).
     pub fn end_tick(&self) -> i64 {
         let n = self.notes.iter().map(Note::end).max();
         let c = self.ctrls.iter().map(|c| c.tick).max();
-        match (n, c) {
-            (Some(a), Some(b)) => a.max(b),
-            (Some(a), None) | (None, Some(a)) => a,
-            (None, None) => 0,
-        }
+        n.into_iter().chain(c).chain(self.sysex.iter().map(|e| e.tick)).max().unwrap_or(0)
     }
 
     /// Notes whose start lies in the half-open range `[start, end)`.

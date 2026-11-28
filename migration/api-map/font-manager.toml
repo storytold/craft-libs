@@ -1,0 +1,303 @@
+# API map of the "Font manager" family (picker, Glyphs panel, axis sliders, Missing Fonts dialog): old path to new
+# path and setter renames. The panel is mapped in `font-manager-panel.toml` and `font-manager-panel-parts.toml`.
+
+family = "Font manager"
+new_module = "craft_font_manager"
+
+[[type]]
+name = "FontPicker"
+old = "craft_font_manager::picker::FontPicker"
+new = "craft_font_manager::picker::FontPicker"
+status = "replaced"
+note = "A component on the dropdown preset: `FontPicker::new(label, Bind<String>, &Arc<Catalog>)` with `settings(Bind<FontPickerSettings>)` and `filters(Bind<FontFilters>)`, shown with `show(ui)`; it records a pick as recent itself."
+
+[[type]]
+name = "FontPickerResponse"
+old = "craft_font_manager::picker::FontPickerResponse"
+new = ""
+status = "removed"
+note = "Replaced by `FontPickerOutput`."
+
+[[type]]
+name = "FontPickerOutput"
+old = ""
+new = "craft_font_manager::picker::FontPickerOutput"
+status = "replaced"
+note = "`edit: EditResponse<String>`, `picked`, `preview`."
+
+[[type]]
+name = "FontPickerLabels"
+old = "craft_font_manager::picker::FontPickerLabels"
+new = ""
+status = "removed"
+note = "Replaced by `FontPickerWords`, read from the environment."
+
+[[type]]
+name = "FontPickerWords"
+old = ""
+new = "craft_font_manager::picker::FontPickerWords"
+status = "replaced"
+note = "The picker words set, `Env::words::<FontPickerWords>()`."
+
+[[type]]
+name = "FontPreviewSize"
+old = "craft_font_manager::picker::FontPreviewSize"
+new = "craft_font_manager::picker::FontPreviewSize"
+status = "replaced"
+note = "`thumb() -> ThumbSize` replaces `points()`: the sample is a row thumbnail; the three largest sizes share the largest thumbnail."
+
+[[type]]
+name = "FontPickerSettings"
+old = "craft_font_manager::picker::FontPickerSettings"
+new = "craft_font_manager::picker::FontPickerSettings"
+status = "same"
+
+[[type]]
+name = "FontFilters"
+old = "craft_font_manager::picker::FontFilters"
+new = "craft_font_manager::picker::FontFilters"
+status = "same"
+
+[[type]]
+name = "FontClass"
+old = "craft_font_manager::picker::FontClass"
+new = "craft_font_manager::picker::FontClass"
+status = "same"
+
+[[type]]
+name = "FamilyRow"
+old = "craft_font_manager::picker::FamilyRow"
+new = "craft_font_manager::picker::FamilyRow"
+status = "same"
+
+[[type]]
+name = "GlyphsPanel"
+old = "craft_font_manager::glyphs::GlyphsPanel"
+new = "craft_font_manager::glyphs::GlyphsPanel"
+status = "replaced"
+note = "A pattern: `GlyphsPanel::new(label, &dyn GlyphSource, Bind<String>, Bind<String>, Bind<GlyphsPanelSettings>)` with `families`, `styles` and `editing`, shown with `show(ui)`; the grid is a `TileGrid` of tiles."
+
+[[type]]
+name = "GlyphsPanelResponse"
+old = "craft_font_manager::glyphs::GlyphsPanelResponse"
+new = ""
+status = "removed"
+note = "Replaced by `GlyphsPanelOutput`."
+
+[[type]]
+name = "GlyphsPanelOutput"
+old = ""
+new = "craft_font_manager::glyphs::GlyphsPanelOutput"
+status = "replaced"
+note = "`response`, `insert`, `font_changed`."
+
+[[type]]
+name = "GlyphsLabels"
+old = "craft_font_manager::glyphs::GlyphsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `GlyphsWords`, read from the environment."
+
+[[type]]
+name = "GlyphsWords"
+old = ""
+new = "craft_font_manager::glyphs::GlyphsWords"
+status = "replaced"
+note = "The Glyphs panel words set; `category_name` keeps its place."
+
+[[type]]
+name = "GlyphsPanelSettings"
+old = "craft_font_manager::glyphs::GlyphsPanelSettings"
+new = "craft_font_manager::glyphs::GlyphsPanelSettings"
+status = "replaced"
+note = "`zoom` is the tile zoom factor on the medium thumbnail (`glyphs::ZOOM`), not a size in points."
+
+[[type]]
+name = "GlyphSource"
+old = "craft_font_manager::glyphs::GlyphSource"
+new = "craft_font_manager::glyphs::GlyphSource"
+status = "same"
+
+[[type]]
+name = "AxisSliders"
+old = "craft_font_manager::axes::AxisSliders"
+new = "craft_font_manager::axes::AxisSliders"
+status = "replaced"
+note = "A pattern: `AxisSliders::new(label, &[FontAxis], Bind<AxisValues>)` with `instances` and `drawn`, shown with `show(ui)`; one `SliderField` per axis in a `FieldGroup`."
+
+[[type]]
+name = "AxisSlidersResponse"
+old = "craft_font_manager::axes::AxisSlidersResponse"
+new = ""
+status = "removed"
+note = "Replaced by `AxisSlidersOutput`: the folded `edit` of the values and the picked `instance`."
+
+[[type]]
+name = "AxisSlidersOutput"
+old = ""
+new = "craft_font_manager::axes::AxisSlidersOutput"
+status = "replaced"
+note = "`response`, `edit: Option<EditEvent<AxisValues>>`, `instance`."
+
+[[type]]
+name = "AxisSlidersLabels"
+old = "craft_font_manager::axes::AxisSlidersLabels"
+new = ""
+status = "removed"
+note = "Replaced by `AxisSlidersWords`, read from the environment."
+
+[[type]]
+name = "AxisSlidersWords"
+old = ""
+new = "craft_font_manager::axes::AxisSlidersWords"
+status = "replaced"
+note = "The axis sliders words set."
+
+[[type]]
+name = "MissingFontsDialog"
+old = "craft_font_manager::missing::MissingFontsDialog"
+new = "craft_font_manager::missing::MissingFontsDialog"
+status = "replaced"
+note = "A `StackDialog` whose `show` takes `&mut Ui` and the `DialogStack`; content sizing, no width."
+
+[[type]]
+name = "MissingFontsLabels"
+old = "craft_font_manager::missing::MissingFontsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `MissingFontsWords`, read from the environment; `missing_font_warnings` takes `&MissingFontsWords`."
+
+[[type]]
+name = "MissingFontsWords"
+old = ""
+new = "craft_font_manager::missing::MissingFontsWords"
+status = "replaced"
+note = "The Missing Fonts dialog words set; the message is a `count` row."
+
+[[type]]
+name = "MissingFontsResult"
+old = "craft_font_manager::missing::MissingFontsResult"
+new = "craft_font_manager::missing::MissingFontsResult"
+status = "same"
+
+[[type]]
+name = "MESSAGE"
+old = "craft_font_manager::missing::MESSAGE"
+new = ""
+status = "removed"
+note = "The count word is the `message` row of `MissingFontsWords`."
+
+[[type]]
+name = "stories"
+old = "craft_font_manager::ui::stories"
+new = ""
+status = "removed"
+note = "Stories register themselves through `#[story]` in each type module and the crate testing module."
+
+[[type]]
+name = "WORDS"
+old = "craft_font_manager::ui::WORDS"
+new = ""
+status = "removed"
+note = "The words are `words!` sets read from the environment."
+
+[[type]]
+name = "COUNTS"
+old = "craft_font_manager::ui::COUNTS"
+new = ""
+status = "removed"
+note = "The count words are `count` rows of the sets."
+
+[[type]]
+name = "COMPONENTS"
+old = "craft_font_manager::ui::COMPONENTS"
+new = ""
+status = "removed"
+note = "The components index lists the registered types."
+
+[[setter]]
+type = "FontPicker"
+old = "new(id_salt, &catalog, &mut family)"
+new = "new(label, Bind::bound(&mut family), &catalog)"
+
+[[setter]]
+type = "FontPicker"
+old = "settings(&mut FontPickerSettings)"
+new = "settings(Bind::bound(&mut settings))"
+
+[[setter]]
+type = "FontPicker"
+old = "filters(&mut FontFilters)"
+new = "filters(Bind::bound(&mut filters))"
+
+[[setter]]
+type = "FontPicker"
+old = "width(f32)"
+new = ""
+note = "The width comes from the flow."
+
+[[setter]]
+type = "FontPicker"
+old = "list_height(f32)"
+new = ""
+note = "The popup caps the list; it has no height of its own."
+
+[[setter]]
+type = "FontPicker"
+old = "labels(FontPickerLabels)"
+new = ""
+note = "The words come from the environment: `Env::words::<FontPickerWords>()`."
+
+[[setter]]
+type = "FontPicker"
+old = "language(code)"
+new = ""
+note = "The language is the host language, read from the environment."
+
+[[setter]]
+type = "FontPicker"
+old = "rows(query)"
+new = "family_rows(&catalog, query, settings, &filters, current, language)"
+note = "A function of the module: it needs no picker."
+
+[[setter]]
+type = "GlyphsPanel"
+old = "new(id_salt, source, &mut family, &mut style, &mut settings)"
+new = "new(label, source, Bind::bound(&mut family), Bind::bound(&mut style), Bind::bound(&mut settings))"
+
+[[setter]]
+type = "GlyphsPanel"
+old = "labels(GlyphsLabels)"
+new = ""
+note = "The words come from the environment: `Env::words::<GlyphsWords>()`."
+
+[[setter]]
+type = "AxisSliders"
+old = "new(id_salt, &axes, &mut values)"
+new = "new(label, &axes, Bind::bound(&mut values))"
+
+[[setter]]
+type = "MissingFontsDialog"
+old = "show(&Context, &DialogStack)"
+new = "show(&mut Ui, &DialogStack)"
+
+# The store and index types the crate hands to hosts are `#[non_exhaustive]`; a host builds them through constructors.
+[[setter]]
+type = "RemoveRequest"
+old = "RemoveRequest { family, files, whole }"
+new = "RemoveRequest::new(family, files, whole)"
+
+[[setter]]
+type = "Progress"
+old = "Progress { done, total }"
+new = "Progress::new(done, total)"
+
+[[setter]]
+type = "Downloaded"
+old = "Downloaded { path, bytes }"
+new = "Downloaded::new(path, bytes)"
+
+[[setter]]
+type = "StoreError"
+old = "StoreError(message)"
+new = "StoreError::new(message)"

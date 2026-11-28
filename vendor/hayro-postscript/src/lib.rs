@@ -60,6 +60,30 @@ impl<'a> Scanner<'a> {
         object::read(&mut self.reader)
     }
 
+    /// Parse the next object, stepping over an unreadable token if parsing fails.
+    pub fn parse_object_or_skip(&mut self) -> Result<Object<'a>> {
+        // The whitespace and comments before the token are not the token: skipped first, they
+        // don't count as progress, so a token after a space fails once, not twice.
+        object::skip_whitespace_and_comments(&mut self.reader);
+        let start = self.reader.offset();
+        // `object::read` reads a token starting with one of these bytes as a number.
+        let number = matches!(
+            self.reader.peek_byte(),
+            Some(b'.' | b'+' | b'-' | b'0'..=b'9')
+        );
+        let read = object::read(&mut self.reader);
+        // A number read stops at the first byte that can't be part of a number, which may be
+        // inside the token; the rest of the token goes with it.
+        if read.is_err() && number {
+            self.reader.forward_while(reader::is_regular);
+        }
+        if read.is_err() && self.reader.offset() <= start {
+            self.reader
+                .jump(start.saturating_add(1).min(self.reader.data.len()));
+        }
+        read
+    }
+
     /// Parse the next object as a [`Number`].
     pub fn parse_number(&mut self) -> Result<Number> {
         match self.parse_object()? {
@@ -175,5 +199,60 @@ endcmap"#;
     fn wrong_type_is_error() {
         let mut scanner = Scanner::new(b"42 ");
         assert!(scanner.parse_name().is_err());
+    }
+    #[test]
+    fn parse_object_or_skip_steps_over_an_unreadable_token() {
+        let mut s = Scanner::new(b"/A> /B % note\n > /C");
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"A", true)))
+        );
+        assert!(s.parse_object_or_skip().is_err());
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"B", true)))
+        );
+        assert!(s.parse_object_or_skip().is_err());
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"C", true)))
+        );
+        assert!(s.at_end());
+    }
+
+    #[test]
+    fn parse_object_or_skip_skips_the_rest_of_an_unreadable_number() {
+        let mut s = Scanner::new(b"1beginbfchar 2.5.3x 16#zz! -x /C");
+        for _ in 0..4 {
+            assert!(s.parse_object_or_skip().is_err());
+        }
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"C", true)))
+        );
+        assert!(s.at_end());
+    }
+
+    #[test]
+    fn parse_object_or_skip_does_not_read_a_failed_read_again() {
+        let mut s = Scanner::new(b"/A (((( x");
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"A", true)))
+        );
+        assert!(s.parse_object_or_skip().is_err());
+        assert!(s.at_end());
+    }
+
+    #[test]
+    fn parse_object_or_skip_stays_at_the_end() {
+        for input in [&b""[..], b"  ", b">"] {
+            let mut s = Scanner::new(input);
+            for _ in 0..3 {
+                assert!(s.parse_object_or_skip().is_err());
+                assert!(s.reader.offset() <= input.len());
+            }
+            assert!(s.at_end());
+        }
     }
 }

@@ -176,19 +176,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn all_ones_carry() {
-        let mut e = BoolEncoder::new();
-        for _ in 0..5000 {
-            e.write(true, 1);
-        }
-        let d = e.finish();
-        let mut dec = Dec::new(&d);
-        for _ in 0..5000 {
-            assert!(dec.read(1));
-        }
-    }
-
     /// The encoder as it was before the carry run was tracked: a carry rescans the bytes.
     struct Scan {
         out: Vec<u8>,

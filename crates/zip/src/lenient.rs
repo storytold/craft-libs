@@ -170,16 +170,21 @@ fn recover_zip64_record(data: &[u8], loc: usize, disk_entries: u64, total: u64, 
 
 /// Parse the central directory, keeping at most `max_entries`.
 pub fn parse(data: &[u8], max_entries: usize) -> Result<ZipArchive, ZipError> {
-    parse_directory(data, max_entries, None)
+    parse_directory(data, max_entries, None, None)
 }
 
 /// Search the validated directory while retaining only the requested entry.
 pub fn has_entry(data: &[u8], name: &str) -> bool {
-    parse_directory(data, 1, Some(name)).is_ok_and(|archive| !archive.entries.is_empty())
+    parse_directory(data, 1, Some(name), None).is_ok_and(|archive| !archive.entries.is_empty())
 }
 
 /// List directory entries, optionally retaining only a matching decoded name.
-fn parse_directory(data: &[u8], max_entries: usize, name_filter: Option<&str>) -> Result<ZipArchive, ZipError> {
+fn parse_directory(
+    data: &[u8],
+    max_entries: usize,
+    name_filter: Option<&str>,
+    mut raw_records: Option<&mut Vec<(usize, Vec<u8>)>>,
+) -> Result<ZipArchive, ZipError> {
     let r = Reader::new(data);
     let eocd = find_eocd(data).ok_or(ZipError::NotZip)?;
     let mut disk = u32::from(r.u16_le(eocd + 4).ok_or(ZipError::Truncated("end record"))?);
@@ -348,6 +353,9 @@ fn parse_directory(data: &[u8], max_entries: usize, name_filter: Option<&str>) -
         }
         if entry_disk != 0 {
             return Err(ZipError::Unsupported("multi-volume ZIP archives".into()));
+        }
+        if let Some(records) = raw_records.as_deref_mut() {
+            records.push((pos, name_bytes.to_vec()));
         }
         let name = unicode_name.map(str::to_owned).unwrap_or_else(|| decode_name(name_bytes, flags)).replace('\\', "/");
         if name_filter.is_none_or(|wanted| wanted == name) {

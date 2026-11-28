@@ -1,0 +1,35 @@
+# Rule: in a fx-map a quadrant's child k (0..3) at depth d (the first quadrant's children are at depth 1) takes k + 1 steps
+# of the depth's generator (quadrant_depth_d in lcg_draws.tsv) from its parent's state; a child left out still counts.
+# Depths past 16 use depth 16's generator (not measured past 16: a guard of ours).
+# Source: measurement "Random numbers: solved, from rendered images only" (the depth table, measured to depth 16).
+# Tolerance: exact.
+# Columns: parent = the parent's state; depth = d; child = k; state = the child's state.
+parent	depth	child	state
+0	1	0	52627
+0	1	3	5706089
+0	2	1	2704455
+0	6	2	12367781
+0	9	0	52321
+0	16	3	15518371
+0	20	1	2452451
+1	1	0	1744041
+1	1	3	10110073
+1	2	1	3208299
+1	6	2	364642
+1	9	0	3959049
+1	16	3	14801571
+1	20	1	10505763
+1193046	1	0	4773623
+1193046	1	3	6912201
+1193046	2	1	901215
+1193046	6	2	8776483
+1193046	9	0	11111633
+1193046	16	3	8399523
+1193046	20	1	14839139
+16777215	1	0	15138429
+16777215	1	3	1302105
+16777215	2	1	2200611
+16777215	6	2	7593704
+16777215	9	0	12922809
+16777215	16	3	16235171
+16777215	20	1	11176355

@@ -1,0 +1,362 @@
+//! The regions of a body: a filling body placed from this pass's header and footer.
+
+use craft_behavior::Sense;
+use craft_ui::contract::{
+    BodyCx, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, HeaderRegion, Role, ShowContainer as _, Sizing,
+};
+use craft_ui::style::StyleCx;
+use craft_ui::testing::layout::allocate;
+use craft_ui::testing::{Frames, trial};
+use craft_ui_test_kit::body::Slab;
+use craft_ui_test_kit::contract::PlainStyle;
+use egui::{Pos2, Rect, Response, Ui, Vec2};
+use std::cell::RefCell;
+
+const AREA: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(410.0, 210.0) };
+
+/// The rects the regions of a `Regioned` took.
+#[derive(Clone, Copy, Default)]
+struct Took {
+    header: Option<Rect>,
+    body: Option<Rect>,
+    end: Option<Rect>,
+    footer: Option<Rect>,
+}
+
+/// A container whose header, end region and footer each fill a block of the size given (nothing for `None`).
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct Regioned<'a> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    header: Option<Vec2>,
+    end: Vec2,
+    footer: Vec2,
+    /// How many blocks of its size the header and the footer each stack.
+    rows: usize,
+    took: &'a RefCell<Took>,
+}
+
+impl Component for Regioned<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: RegionedStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Regioned<'_> {
+    fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        self.took.borrow_mut().header = self.header.and_then(|size| stacked(ui, size, self.rows));
+    }
+
+    fn end(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        self.took.borrow_mut().end = Some(allocate(ui, self.end));
+    }
+
+    fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        self.took.borrow_mut().footer = stacked(ui, self.footer, self.rows);
+    }
+}
+
+/// Shows a filling `Regioned` at `AREA` with `props` for one frame and returns what its regions took in the frame's
+/// first pass, before any discard pass: no region has a size from an earlier pass then.
+/// `rows` blocks of `size`, one under the other: the rect they cover.
+fn stacked(ui: &mut Ui, size: Vec2, rows: usize) -> Option<Rect> {
+    (0..rows).map(|_| allocate(ui, size)).reduce(|a, b| a.union(b))
+}
+
+fn first_pass(props: ContainerProps, header: Option<Vec2>) -> Took {
+    let took = RefCell::new(Took::default());
+    let passes = RefCell::new(Vec::new());
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), |ui| {
+        let shown = Regioned {
+            common: Common::new(),
+            props: props.clone(),
+            header,
+            end: Vec2::new(80.0, 40.0),
+            footer: Vec2::new(70.0, 16.0),
+            rows: 1,
+            took: &took,
+        }
+        .show_at(ui, AREA, |_, cx| cx.rect);
+        took.borrow_mut().body = shown.inner;
+        passes.borrow_mut().push(*took.borrow());
+    });
+    passes.into_inner().first().copied().expect("the frame ran a pass")
+}
+
+// Edges snap to whole pixels, so a rectangle may overhang its neighbour by half a point.
+const EDGE_SLACK: f32 = 0.5;
+
+#[trial]
+fn a_filling_body_lies_between_its_header_and_its_footer_in_the_first_pass() {
+    let props = ContainerProps::new().sizing(Sizing::Fill).header(HeaderRegion::new()).footer(FooterRegion::new());
+    let took = first_pass(props, Some(Vec2::new(100.0, 20.0)));
+    let (header, body, footer) = (took.header.unwrap(), took.body.unwrap(), took.footer.unwrap());
+    assert!(body.min.y >= header.max.y - EDGE_SLACK, "the body starts under the header: {header:?} {body:?}");
+    assert!(body.max.y <= footer.min.y + EDGE_SLACK, "the body ends at the footer's top: {body:?} {footer:?}");
+    assert!(footer.max.y <= AREA.max.y + EDGE_SLACK, "the footer lies inside the container, at its foot: {footer:?}");
+}
+
+/// A footer inset keeps the footer's content off the sides and the foot of a container without padding (a
+/// full-window dialog's buttons), under the body.
+#[trial]
+fn a_footer_inset_keeps_the_footer_off_the_sides_and_the_foot() {
+    use craft_ui::contract::Pad;
+    let footer_of = |footer: FooterRegion| {
+        let took = first_pass(ContainerProps::new().sizing(Sizing::Fill).footer(footer), None);
+        (took.body.unwrap(), took.footer.unwrap())
+    };
+    let (_, flush) = footer_of(FooterRegion::new());
+    let (body, inset) = footer_of(FooterRegion::new().inset(Pad::Regular));
+    assert!(inset.min.x > flush.min.x + EDGE_SLACK, "the inset moves the footer off the start side: {flush:?} {inset:?}");
+    assert!(inset.max.y < flush.max.y - EDGE_SLACK, "the inset lifts the footer off the foot: {flush:?} {inset:?}");
+    assert!(inset.max.y <= AREA.max.y + EDGE_SLACK, "the inset footer stays inside the container: {inset:?}");
+    assert!(body.max.y <= inset.min.y + EDGE_SLACK, "the body ends above the inset footer: {body:?} {inset:?}");
+}
+
+/// A row body beside an inline header and before an end region is measured in the line they leave, as it is shown:
+/// a wrapping text there shows on one line while the line has room for it, between the header and the end region.
+#[trial]
+fn a_row_body_between_an_inline_header_and_an_end_region_measures_in_the_line_they_leave() {
+    use craft_ui::contract::{BodyLayout, EndRegion, Show as _};
+    use craft_ui::display::Text;
+    use egui::UiBuilder;
+    const WORDS: &str = "File  Edit  Image";
+    let props =
+        ContainerProps::new().sizing(Sizing::FillWidth).layout(BodyLayout::row()).header(HeaderRegion::new().inline(true)).end(EndRegion::new());
+    let took = RefCell::new(Took::default());
+    let (text, alone) = (RefCell::new(Rect::NOTHING), RefCell::new(Rect::NOTHING));
+    let show = |ui: &mut Ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(AREA), |ui| {
+            let bar = Regioned {
+                common: Common::new(),
+                props: props.clone(),
+                header: Some(Vec2::new(40.0, 20.0)),
+                end: Vec2::new(80.0, 20.0),
+                footer: Vec2::ZERO,
+                rows: 1,
+                took: &took,
+            };
+            bar.show(ui, |ui, _| *text.borrow_mut() = Text::new(WORDS).show(ui).rect);
+        });
+        ui.scope_builder(UiBuilder::new().max_rect(AREA.translate(Vec2::new(0.0, 300.0))), |ui| *alone.borrow_mut() = Text::new(WORDS).show(ui).rect);
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, show);
+    frames.frame(Vec::new(), show);
+    let (text, alone, took) = (*text.borrow(), *alone.borrow(), *took.borrow());
+    let (header, end) = (took.header.unwrap(), took.end.unwrap());
+    assert!((text.height() - alone.height()).abs() <= EDGE_SLACK, "the text shows on one line: {text:?}, alone {alone:?}");
+    assert!(
+        text.min.x >= header.max.x - EDGE_SLACK && text.max.x <= end.min.x + EDGE_SLACK,
+        "the text lies between {header:?} and {end:?}: {text:?}"
+    );
+}
+
+/// The content of a body on a line it shares with an inline header or an end region sits on that line's centre, as the
+/// end region's does: a title bar's leading text, its title and its trailing text share one centre line with the
+/// caption buttons, and a bulk-edit row's check box and field share one.
+#[trial]
+fn a_body_on_a_line_it_shares_sits_on_the_lines_centre() {
+    use craft_ui::contract::Role;
+    use craft_ui::contract::{Bind, Show as _};
+    use craft_ui::display::Text;
+    use craft_ui::sections::GroupBox;
+    use craft_ui::shell::{Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
+    use craft_ui::testing::Fixture;
+    use craft_ui::text::NumberField;
+    let centre = |fixture: &Fixture, label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown")).rect.center().y;
+    let mut bar = Fixture::new(|ui| {
+        let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let _ = TitleBar::new().frame(frame).show_titled(
+            ui,
+            Title::new("Landscape.psd"),
+            |ui, _| {
+                Text::new("File  Edit").show(ui);
+            },
+            |ui, _| {
+                Text::new("Share").show(ui);
+            },
+        );
+    });
+    bar.idle(4);
+    let line = bar.by_role(Role::BUTTON).first().expect("the caption buttons are shown").rect.center().y;
+    for label in ["File  Edit", "Landscape.psd", "Share"] {
+        assert!((centre(&bar, label) - line).abs() <= EDGE_SLACK, "{label} is centred on the bar's line");
+    }
+    let mut row = Fixture::new(|ui| {
+        let mut apply = true;
+        GroupBox::apply("Apply", Bind::bound(&mut apply)).show(ui, |ui, _| {
+            NumberField::new("Opacity", Bind::given(Some(80.0))).show(ui);
+        });
+    });
+    row.idle(4);
+    let check = row.by_role(Role::CHECK_BOX).first().expect("the check box is shown").rect.center().y;
+    assert!((centre(&row, "Opacity") - check).abs() <= EDGE_SLACK, "the field and the check box share a centre line");
+}
+
+/// A footer of several rows, in a container whose parent spaces its own children differently: the container is as
+/// tall as its footer takes when shown, so nothing in the footer lies past its edge (where an enclosing clip cuts it).
+#[trial]
+fn a_footer_of_several_rows_lies_inside_its_container_whatever_the_parent_spacing() {
+    let took = RefCell::new(Took::default());
+    let shown = RefCell::new(Rect::NOTHING);
+    let show = |ui: &mut Ui| {
+        Slab::new(ContainerProps::new().body_gap(Gap::Section)).show_at(ui, AREA, |ui, _| {
+            let regioned = Regioned {
+                common: Common::new(),
+                props: ContainerProps::new().footer(FooterRegion::new()),
+                header: None,
+                end: Vec2::ZERO,
+                footer: Vec2::new(70.0, 16.0),
+                rows: 3,
+                took: &took,
+            };
+            *shown.borrow_mut() = regioned.show(ui, |ui, _| allocate(ui, Vec2::new(70.0, 16.0))).output.rect;
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, show);
+    let (footer, rect) = (took.borrow().footer.expect("the footer ran"), *shown.borrow());
+    assert!(footer.max.y <= rect.max.y + EDGE_SLACK, "the footer {footer:?} lies inside its container {rect:?}");
+}
+
+/// A stacked header of several rows, in a container whose parent spaces its own children differently: the body
+/// starts under the header's last row, as the header is placed by the height it measured.
+#[trial]
+fn a_header_of_several_rows_lies_above_the_body_whatever_the_parent_spacing() {
+    let took = RefCell::new(Took::default());
+    let body = RefCell::new(None);
+    let show = |ui: &mut Ui| {
+        Slab::new(ContainerProps::new().body_gap(Gap::Section)).show_at(ui, AREA, |ui, _| {
+            let regioned = Regioned {
+                common: Common::new(),
+                props: ContainerProps::new().header(HeaderRegion::new()),
+                header: Some(Vec2::new(70.0, 16.0)),
+                end: Vec2::ZERO,
+                footer: Vec2::ZERO,
+                rows: 3,
+                took: &took,
+            };
+            *body.borrow_mut() = regioned.show(ui, |ui, _| allocate(ui, Vec2::new(70.0, 16.0))).inner;
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, show);
+    let (header, body) = (took.borrow().header.expect("the header ran"), body.borrow().expect("the body ran"));
+    assert!(body.min.y >= header.max.y - EDGE_SLACK, "the body {body:?} starts under the header {header:?}");
+}
+
+/// An end region with a rule is set off from the body by a line along its edge toward the body, the full region's
+/// height; without one nothing marks that edge.
+#[trial]
+fn an_end_region_with_a_rule_has_a_line_along_its_edge_toward_the_body() {
+    use craft_ui::contract::EndRegion;
+    let edge_lines = |rule: bool| {
+        let props = ContainerProps::new().sizing(Sizing::Fill).end(EndRegion::new().full_height(true).rule(rule));
+        let took = RefCell::new(Took::default());
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            Regioned {
+                common: Common::new(),
+                props: props.clone(),
+                header: None,
+                end: Vec2::new(80.0, 40.0),
+                footer: Vec2::ZERO,
+                rows: 1,
+                took: &took,
+            }
+            .show_at(ui, AREA, |_, _| ());
+        };
+        frames.idle(2, &mut show);
+        let shapes = frames.frame_shapes(&mut show);
+        let end = took.borrow().end.expect("the end region took its block");
+        shapes
+            .iter()
+            .map(egui::Shape::visual_bounding_rect)
+            .filter(|line| line.is_finite() && line.width() <= 2.0 && line.height() >= AREA.height() / 2.0 && line.center().x <= end.min.x + 2.0)
+            .count()
+    };
+    assert!(edge_lines(true) > edge_lines(false), "the rule draws a line along the end region's edge toward the body");
+}
+
+/// The rules between the regions (above and under the header, over the footer, before the end region) each take a
+/// band of their own: no rule shares a pixel with the header's, body's, footer's or end region's content, at 1x or 2x,
+/// and a rule is as wide in points at 2x as at 1x.
+#[trial]
+fn region_rules_take_their_own_band_at_every_scale() {
+    use craft_ui::contract::EndRegion;
+    use egui::Shape;
+    let rules_at = |pixels_per_point: f32| {
+        let props = ContainerProps::new()
+            .sizing(Sizing::Fill)
+            .header(HeaderRegion::new().rule(true).rule_above(true))
+            .footer(FooterRegion::new().rule(true))
+            .end(EndRegion::new().full_height(true).rule(true));
+        let took = RefCell::new(Took::default());
+        let mut frames = Frames::new();
+        frames.pixels_per_point(pixels_per_point);
+        let mut show = |ui: &mut Ui| {
+            let shown = Regioned {
+                common: Common::new(),
+                props: props.clone(),
+                header: Some(Vec2::new(100.0, 20.0)),
+                end: Vec2::new(80.0, 40.0),
+                footer: Vec2::new(70.0, 16.0),
+                rows: 1,
+                took: &took,
+            }
+            .show_at(ui, AREA, |_, cx| cx.rect);
+            took.borrow_mut().body = shown.inner;
+        };
+        frames.idle(2, &mut show);
+        let shapes = frames.frame_shapes(&mut show);
+        // Each rule's band: the segment's run, as wide across it as its stroke.
+        let bands: Vec<(Rect, f32)> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::LineSegment { points: [a, b], stroke } => {
+                    let half = stroke.width / 2.0;
+                    let run = Rect::from_two_pos(*a, *b);
+                    let across = if (a.y - b.y).abs() <= (a.x - b.x).abs() { Vec2::new(0.0, half) } else { Vec2::new(half, 0.0) };
+                    Some((run.expand2(across), stroke.width))
+                }
+                _ => None,
+            })
+            .collect();
+        let took = *took.borrow();
+        let regions = [("header", took.header), ("body", took.body), ("footer", took.footer), ("end", took.end)];
+        for (band, _) in &bands {
+            for (name, region) in regions {
+                let region = region.unwrap_or_else(|| panic!("the {name} ran"));
+                let shared = band.intersect(region);
+                assert!(
+                    shared.width() <= 1e-3 || shared.height() <= 1e-3,
+                    "at {pixels_per_point}x a rule {band:?} lies over the {name}'s content {region:?}"
+                );
+            }
+        }
+        bands
+    };
+    let (one, two) = (rules_at(1.0), rules_at(2.0));
+    assert!(one.len() >= 4 && two.len() == one.len(), "the four rules draw at both scales: {} and {}", one.len(), two.len());
+    for ((_, at_one), (_, at_two)) in one.iter().zip(&two) {
+        assert!((at_one - at_two).abs() < 1e-3, "a rule is {at_one} pt wide at 1x and {at_two} pt at 2x");
+    }
+}

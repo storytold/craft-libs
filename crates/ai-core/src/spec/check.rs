@@ -21,6 +21,7 @@ use crate::payload::validate_media_type;
 pub struct SpecError {
     /// Where in the spec, such as `flow.submit.call.path`.
     pub at: String,
+    /// What is wrong and what to do about it, in plain words.
     pub why: String,
 }
 

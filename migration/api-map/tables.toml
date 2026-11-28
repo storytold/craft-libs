@@ -1,0 +1,272 @@
+# API map of the "Tables" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Tables"
+new_module = "craft_ui::table"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Table"
+old = "craft_ui::list::table::Table"
+new = "craft_ui::table::Table"
+status = "moved"
+note = "A collection: `Table::new(label, columns: Vec<ColumnSpec>)`, shown with `show_items(ui, &source, |key, icx| ListRow::new(name).cells(icx.cells()).cell(column, text))`; the output is `CollectionResponse<K, RowEvent>`. The key type is the source's, not the old `rows: &O` plus a row-info list. The app sorts its rows (`craft_ui::table::sort_rows` orders them by a `ColumnSort`) and passes the order with `sort(..)`."
+
+[[type]]
+name = "TableColumn"
+old = "craft_ui::list::table::TableColumn"
+new = ""
+status = "removed"
+note = "Replaced by `ColumnSpec` (`craft_ui::contract::ColumnSpec`); see its entry."
+
+[[type]]
+name = "ColumnSpec"
+old = ""
+new = "craft_ui::contract::ColumnSpec"
+status = "replaced"
+note = "`ColumnSpec::new(ColumnKey::new(\"name\"), header, ColumnWidth::..)` with `sortable()`, `resizable()`, `movable()`, `frozen()` and `kind(..)`; the key is a `ColumnKey`, not a generic `C`. `min_width`, `initial_width`, `first_order`, `tip`, `hideable` and `numeric` have no setter: widths are `ColumnWidth` (`Fixed`, `Controls`, `Fill`, `Content`) and the user's resizes are the header's memory; the next sort order is the header's; a numeric cell is `ListRow::cell` text."
+
+[[type]]
+name = "TableLayout"
+old = "craft_ui::list::table::TableLayout"
+new = ""
+status = "replaced"
+note = "Column order, widths and the saved layout are the header row's memory under the table's id. Hidden columns are the app's: it passes only the columns it shows (a header menu request, `CollectionEvent::HeaderMenu`, asks the app to open its `Menu`). The sort is `ColumnSort` in `Table::sort`."
+
+[[type]]
+name = "TableSort"
+old = "craft_ui::list::table::TableSort"
+new = ""
+status = "removed"
+note = "Replaced by `ColumnSort` (`craft_ui::contract::ColumnSort`); see its entry."
+
+[[type]]
+name = "ColumnSort"
+old = ""
+new = "craft_ui::contract::ColumnSort"
+status = "replaced"
+note = "`ColumnSort::new(key, descending)`, `ascending(key)`, `descending(key)`; `TableSort::apply` is `craft_ui::table::sort_rows`; `TableSort::clicked` is the header's next order in `ColumnEvent::Sort`."
+
+[[type]]
+name = "SortOrder"
+old = "craft_ui::list::table::SortOrder"
+new = ""
+status = "replaced"
+note = "`ColumnSort.descending` (a bool)."
+
+[[type]]
+name = "TableStyle"
+old = "craft_ui::list::table::TableStyle"
+new = "craft_ui::table::TableStyle"
+status = "moved"
+note = "A `ComponentStyle` with no look of its own: the header's and rows' looks are the contract's and `ListRow`'s. `Table::style(tokens)` and the 17 fields are gone."
+
+[[type]]
+name = "TableLabels"
+old = "craft_ui::list::table::TableLabels"
+new = ""
+status = "replaced"
+note = "The header row's own words (sort state, resize grips) and the header menu's text belong to the contract and the app's `Menu`."
+
+[[type]]
+name = "TableOutput"
+old = "craft_ui::list::table::TableOutput"
+new = ""
+status = "removed"
+note = "Replaced by `CollectionResponse` (`craft_ui::contract::CollectionResponse`); see its entry."
+
+[[type]]
+name = "CollectionResponse"
+old = ""
+new = "craft_ui::contract::CollectionResponse"
+status = "replaced"
+note = "`CollectionResponse<K, RowEvent>`: `ColumnEvent::Sort` (the next order), `Resized`, `Moved`, `CollectionEvent::Selection`, `Activate`, `ContextMenu`, `HeaderMenu`, `Open`, `Reorder`, `Rename`. `drop_target` is the drop mark the item step paints."
+
+[[type]]
+name = "TableEvent"
+old = "craft_ui::list::table::TableEvent"
+new = ""
+status = "removed"
+note = "Replaced by `CollectionEvent` (`craft_ui::contract::CollectionEvent`); see its entry."
+
+[[type]]
+name = "CollectionEvent"
+old = ""
+new = "craft_ui::contract::CollectionEvent"
+status = "replaced"
+note = "`Sort` and `Layout` are `CollectionEvent::Column(ColumnEvent)`; `Unsorted` is the app removing a hidden column's sort; the rest map to the same-named events."
+
+[[type]]
+name = "CellContext"
+old = "craft_ui::list::table::CellContext"
+new = ""
+status = "replaced"
+note = "The cell closure is gone: a row is a `ListRow` built in the item closure, with `.cell(column, text)` per content column and `.toggle(ToggleCell::..)` per toggle column. Selection, ink and the rename field are the row's and the collection's."
+
+[[type]]
+name = "MetadataTable"
+old = "craft_ui::list::metadata::MetadataTable"
+new = "craft_ui::table::MetadataTable"
+status = "moved"
+note = "a pattern over Table; show(ui) is an inherent method of the pattern"
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[setter]]
+type = "Table"
+old = "new(id_salt, label, columns, layout, rows)"
+new = "new(label, columns)"
+note = "The id comes from `.id(..)` (`Props`); the layout, the rows and the columns' state are not arguments: rows come from `show_items`, widths and order are the header's memory."
+
+[[setter]]
+type = "Table"
+old = "selection(&mut Selection<K>)"
+new = "selection(Bind::bound(&mut selection))"
+
+[[setter]]
+type = "Table"
+old = "mode(SelectionMode)"
+new = "select(SelectMode)"
+
+[[setter]]
+type = "Table"
+old = "movable(bool)"
+new = "ColumnSpec::movable()"
+note = "Per column."
+
+[[setter]]
+type = "Table"
+old = "max_height(f32)"
+new = "sizing(Sizing::Content)"
+note = "A content-sized table is as tall as its rows up to the room it has."
+
+[[setter]]
+type = "Table"
+old = "labels(TableLabels)"
+new = ""
+note = "Removed: the contract's words."
+
+[[setter]]
+type = "Table"
+old = "tree(row_name)"
+new = "tree(true)"
+note = "Rows are `ListRow`s with `.depth(icx.depth).group(open)` over an `OpenSet`; the disclosure names come from the row."
+
+[[setter]]
+type = "Table"
+old = "row_name(f)"
+new = ""
+note = "Removed: the row's label names it."
+
+[[setter]]
+type = "Table"
+old = "reorder(Reorder)"
+new = "reorder(ReorderRule)"
+
+[[setter]]
+type = "Table"
+old = "renamable(column)"
+new = "rename(true)"
+note = "The editor opens over the row's label."
+
+[[setter]]
+type = "Table"
+old = "can_rename(column, f)"
+new = "can_rename(f)"
+
+[[setter]]
+type = "Table"
+old = "start_rename(key)"
+new = ""
+note = "The rename command or F2 starts a rename."
+
+[[setter]]
+type = "Table"
+old = "thumbnails(ThumbSize)"
+new = ""
+note = "A thumbnail is `ListRow::thumb(..)` in the row."
+
+[[setter]]
+type = "Table"
+old = "tree_text(TreeText)"
+new = ""
+note = "Removed: `ListWords` names the disclosure."
+
+[[setter]]
+type = "Table"
+old = "striped(bool)"
+new = "striped(bool)"
+note = "The item reads `icx.row.striped` and gives it to `ListRow::striped`."
+
+[[setter]]
+type = "Table"
+old = "show(ui, cell)"
+new = "show_items(ui, &source, item)"
+note = "The item closure returns a `ListRow` per key."
+
+# MetadataTable (tables-b).
+
+[[type]]
+name = "MetadataTableOutput"
+old = "craft_ui::list::metadata::MetadataTableOutput"
+new = "craft_ui::table::MetadataTableOutput"
+status = "moved"
+note = "response becomes table (CollectionResponse); chosen_changed is a method; checked lists the changed keys"
+
+[[type]]
+name = "MetadataRow"
+old = "craft_ui::list::metadata::MetadataRow"
+new = "craft_ui::table::MetadataRow"
+status = "moved"
+note = "key and locked are derived setters; matches(query) is new"
+
+[[type]]
+name = "MetadataGroup"
+old = "craft_ui::list::metadata::MetadataGroup"
+new = "craft_ui::table::MetadataGroup"
+status = "moved"
+note = "non_exhaustive: build with MetadataGroup::new(name, rows)"
+
+[[type]]
+name = "MetadataStyle"
+old = "craft_ui::list::metadata::MetadataStyle"
+new = ""
+status = "removed"
+note = "sizes and colours come from Table, ListRow and the tokens; the pattern has no style"
+
+[[type]]
+name = "MetadataLabels"
+old = "craft_ui::list::metadata::MetadataLabels"
+new = ""
+status = "removed"
+note = "the words are installed words (MetadataWords)"
+
+[[type]]
+name = "filter_metadata"
+old = "craft_ui::list::metadata::filter_metadata"
+new = ""
+status = "removed"
+note = "use MetadataRow::matches(query); the table filters its own rows"
+
+[[setter]]
+type = "MetadataTable"
+old = "new(id_salt, &[MetadataGroup])"
+new = "new(label, &[MetadataGroup])"
+
+[[setter]]
+type = "MetadataTable"
+old = "max_height(f32)"
+new = ""
+note = "removed: the table sizes by Sizing and the room it is given"
+
+[[setter]]
+type = "MetadataTable"
+old = "labels(MetadataLabels)"
+new = ""
+note = "removed: installed words"

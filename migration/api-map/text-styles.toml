@@ -1,0 +1,275 @@
+# API map of the "Text styles, links and spelling" family: old path to new path and setter renames.
+
+family = "Text styles, links and spelling"
+new_module = "craft_text::ui"
+
+[[type]]
+name = "TextStylesPanel"
+old = "craft_text::ui::style_panel::TextStylesPanel"
+new = "craft_text::ui::style_panel::TextStylesPanel"
+status = "same"
+note = "A pattern: `TextStylesPanel::new(label, kind, rows, Bind<Selection<u64>>)` with `current(id, overridden)`, `target`, `text_selected`, `highlighting`; `show(ui) -> TextStylesPanelOutput`. The list, the footer and the panel menu are craft-ui parts; `TextStylesPanel::panel_rows()` gives the panel menu rows."
+
+[[type]]
+name = "TextStylesPanelOutput"
+old = "craft_text::ui::style_panel::TextStylesPanelOutput"
+new = "craft_text::ui::style_panel::TextStylesPanelOutput"
+status = "same"
+note = "`response`, `action: Option<TextStyleAction>` (one action per pass, not a list) and `status: Option<Label>`."
+
+[[type]]
+name = "TextStylesState"
+old = "craft_text::ui::style_panel::TextStylesState"
+new = ""
+status = "removed"
+note = "The row the footer acts on is the lead of the `Selection<u64>` bound to the panel."
+
+[[type]]
+name = "TextStyleAction"
+old = "craft_text::ui::style_panel::TextStyleAction"
+new = "craft_text::ui::style_panel::TextStyleAction"
+status = "same"
+note = "Variants are `non_exhaustive`; build `Apply` with `TextStyleAction::apply(id, clear_overrides)`."
+
+[[type]]
+name = "TextStyleRow"
+old = "craft_text::ui::style_panel::TextStyleRow"
+new = "craft_text::ui::style_panel::TextStyleRow"
+status = "same"
+note = "Built with `TextStyleRow::new(id, name)`."
+
+[[type]]
+name = "TextStyleKind"
+old = "craft_text::ui::style_panel::TextStyleKind"
+new = "craft_text::ui::style_panel::TextStyleKind"
+status = "same"
+
+[[type]]
+name = "TextStyleCommand"
+old = ""
+new = "craft_text::ui::style_panel::TextStyleCommand"
+status = "replaced"
+note = "The panel menu and chord commands (`#[derive(CommandSet)]`, scope `textStyles`): Clear Override, Redefine, New, Duplicate, Delete, Options, Select Unused. The panel publishes each state every pass."
+
+[[type]]
+name = "panel_menu"
+old = "craft_text::ui::style_panel::panel_menu"
+new = ""
+status = "removed"
+note = "`TextStylesPanel::panel_rows()` returns `PanelRow::Command` rows for the host's `DockPanels::panel_rows`; the states come from the command set."
+
+[[type]]
+name = "panel_rows"
+old = ""
+new = "craft_text::ui::style_panel::panel_rows"
+status = "replaced"
+note = "`TextStylesPanel::panel_rows() -> Vec<PanelRow>`."
+
+[[type]]
+name = "run_command"
+old = "craft_text::ui::style_panel::run_command"
+new = ""
+status = "removed"
+note = "A panel menu command reaches the panel as `take_command::<TextStyleCommand>()` and comes back as `TextStylesPanelOutput::action`."
+
+[[type]]
+name = "TextStylesLabels"
+old = "craft_text::ui::style_panel::TextStylesLabels"
+new = ""
+status = "removed"
+note = "`TextStylesWords`, read from the env."
+
+[[type]]
+name = "TextStylesWords"
+old = ""
+new = "craft_text::ui::style_panel::TextStylesWords"
+status = "replaced"
+note = "The panel's words (`WordSet`)."
+
+[[type]]
+name = "StylePickerLabels"
+old = "craft_text::ui::style_panel::StylePickerLabels"
+new = ""
+status = "removed"
+note = "`PresetPicker` has its own words."
+
+[[type]]
+name = "StyleChip"
+old = "craft_text::ui::style_panel::StyleChip"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::patterns::presets::PresetPicker` over `style_rows`: chip, popover, search, list and grid views."
+
+[[type]]
+name = "StyleChipResponse"
+old = "craft_text::ui::style_panel::StyleChipResponse"
+new = ""
+status = "removed"
+note = "`PresetPickerOutput { edit, picked, events }`."
+
+[[type]]
+name = "StylePickerStyle"
+old = "craft_text::ui::style_panel::StylePickerStyle"
+new = ""
+status = "removed"
+note = "The picker's measures belong to `PresetPicker`."
+
+[[type]]
+name = "StylePickerView"
+old = "craft_text::ui::style_panel::StylePickerView"
+new = ""
+status = "removed"
+note = "`PresetView` in `PresetState`."
+
+[[type]]
+name = "NamedStyleRow"
+old = "craft_text::ui::style_panel::NamedStyleRow"
+new = "craft_text::ui::style_panel::NamedStyleRow"
+status = "same"
+note = "Built with `NamedStyleRow::new(id, name, preview).meta(..)`."
+
+[[type]]
+name = "StylePreview"
+old = "craft_text::ui::style_panel::StylePreview"
+new = "craft_text::ui::style_panel::StylePreview"
+status = "same"
+note = "`Color` holds `craft_theme::Rgba`; `Sample` holds the text and a `TypeRole`; `Icon` holds an `IconId`."
+
+[[type]]
+name = "style_rows"
+old = ""
+new = "craft_text::ui::style_panel::style_rows"
+status = "replaced"
+note = "`style_rows(&[NamedStyleRow]) -> Vec<PresetRow<PresetKey<u64>>>`: styles with no folder first, then each folder as a group row; the keys are `PresetKey::Item(id)` and `PresetKey::group([folder])`."
+
+[[type]]
+name = "HyperlinkDialog"
+old = "craft_text::ui::hyperlink::HyperlinkDialog"
+new = "craft_text::ui::hyperlink::HyperlinkDialog"
+status = "same"
+note = "A pattern on `Dialog` and a `StackDialog`: `show(&mut self, ui) -> HyperlinkOutput`; Remove Link is a footer button."
+
+[[type]]
+name = "HyperlinkAnswer"
+old = "craft_text::ui::hyperlink::HyperlinkAnswer"
+new = "craft_text::ui::hyperlink::HyperlinkAnswer"
+status = "same"
+note = "Variants are `non_exhaustive`; build `Set` with `HyperlinkAnswer::set(link, text)`."
+
+[[type]]
+name = "HyperlinkOutput"
+old = ""
+new = "craft_text::ui::hyperlink::HyperlinkOutput"
+status = "replaced"
+note = "`response`, `closed` and `answer`."
+
+[[type]]
+name = "Hyperlink"
+old = "craft_text::ui::hyperlink::Hyperlink"
+new = "craft_text::ui::hyperlink::Hyperlink"
+status = "same"
+note = "Built with `Hyperlink::new(target).tooltip(..)`."
+
+[[type]]
+name = "LinkTarget"
+old = "craft_text::ui::hyperlink::LinkTarget"
+new = "craft_text::ui::hyperlink::LinkTarget"
+status = "same"
+note = "Build `Email` with `LinkTarget::email(address, subject)`."
+
+[[type]]
+name = "CurrentLink"
+old = "craft_text::ui::hyperlink::CurrentLink"
+new = "craft_text::ui::hyperlink::CurrentLink"
+status = "same"
+
+[[type]]
+name = "HyperlinkLabels"
+old = "craft_text::ui::hyperlink::HyperlinkLabels"
+new = ""
+status = "removed"
+note = "`HyperlinkWords`, read from the env."
+
+[[type]]
+name = "HyperlinkWords"
+old = ""
+new = "craft_text::ui::hyperlink::HyperlinkWords"
+status = "replaced"
+note = "The dialog's words (`WordSet`)."
+
+[[type]]
+name = "CheckSpellingDialog"
+old = "craft_text::ui::spelling::CheckSpellingDialog"
+new = "craft_text::ui::spelling::CheckSpellingDialog"
+status = "same"
+note = "A pattern on `Dialog` and a `StackDialog`: `show(&mut self, ui) -> SpellingOutput`; `take_action`, `set_items`, `all_layers_checked` and `ignored` are unchanged."
+
+[[type]]
+name = "SpellingOutput"
+old = ""
+new = "craft_text::ui::spelling::SpellingOutput"
+status = "replaced"
+note = "`response` and `closed`."
+
+[[type]]
+name = "SpellingItem"
+old = "craft_text::ui::spelling::SpellingItem"
+new = "craft_text::ui::spelling::SpellingItem"
+status = "same"
+note = "Built with `SpellingItem::new(object, range, word, suggestions)`."
+
+[[type]]
+name = "SpellingAction"
+old = "craft_text::ui::spelling::SpellingAction"
+new = "craft_text::ui::spelling::SpellingAction"
+status = "same"
+note = "Variants are `non_exhaustive`."
+
+[[type]]
+name = "SpellingSettings"
+old = "craft_text::ui::spelling::SpellingSettings"
+new = "craft_text::ui::spelling::SpellingSettings"
+status = "same"
+
+[[type]]
+name = "CheckSpellingLabels"
+old = "craft_text::ui::spelling::CheckSpellingLabels"
+new = ""
+status = "removed"
+note = "`CheckSpellingWords`, read from the env."
+
+[[type]]
+name = "CheckSpellingWords"
+old = ""
+new = "craft_text::ui::spelling::CheckSpellingWords"
+status = "replaced"
+note = "The dialog's words (`WordSet`)."
+
+[[setter]]
+type = "TextStylesPanel"
+old = "new(id_salt, kind, rows, &mut TextStylesState)"
+new = "new(label, kind, rows, Bind<Selection<u64>>)"
+
+[[setter]]
+type = "TextStylesPanel"
+old = "labels(TextStylesLabels)"
+new = ""
+note = "The words come from the env."
+
+[[setter]]
+type = "TextStylesPanel"
+old = "highlighted(&mut Selection<u64>)"
+new = "highlighting(bool)"
+note = "The selection bound to `new` is the highlight."
+
+[[setter]]
+type = "HyperlinkDialog"
+old = "labels(HyperlinkLabels)"
+new = ""
+note = "The words come from the env."
+
+[[setter]]
+type = "HyperlinkDialog"
+old = "highlight_click(bool)"
+new = "highlight_click(bool)"
+

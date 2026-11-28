@@ -339,6 +339,9 @@ pub(crate) struct Props {
     pub(crate) posrelv: Option<u32>,
     /// Distance from wrapped text (left, top, right, bottom), EMUs.
     pub(crate) wrap_dist: [Option<u32>; 4],
+    /// `fLayoutInCell` of the Group Shape Boolean Properties, when its use bit is set: Layout in
+    /// table cell (None = the default, on).
+    pub(crate) layout_in_cell: Option<bool>,
     /// `wzDescription`: the alternative text.
     pub(crate) alt: String,
 }
@@ -391,6 +394,9 @@ impl Props {
                 0x0390 => self.posrelh = Some(op),
                 0x0391 => self.posv = Some(op),
                 0x0392 => self.posrelv = Some(op),
+                // Group Shape Boolean Properties: fLayoutInCell (bit 15) is valid when
+                // fUsefLayoutInCell (bit 31) is set.
+                0x03BF if op & (1 << 31) != 0 => self.layout_in_cell = Some(op & (1 << 15) != 0),
                 _ => {}
             }
         }

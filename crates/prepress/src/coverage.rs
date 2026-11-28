@@ -47,7 +47,9 @@ pub struct Stats {
 /// The pixels whose TAC is over a limit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Above {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
     /// One entry per pixel, row-major: `true` where the TAC is over the limit.
     pub mask: Vec<bool>,
@@ -58,9 +60,13 @@ pub struct Above {
 /// A connected group of pixels over the limit (4-connected), with its bounding box in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Region {
+    /// Left edge of the bounding box, in pixels.
     pub x: u32,
+    /// Top edge of the bounding box, in pixels.
     pub y: u32,
+    /// Width of the bounding box in pixels.
     pub width: u32,
+    /// Height of the bounding box in pixels.
     pub height: u32,
     /// The pixels over the limit in the region.
     pub pixels: u32,
@@ -286,22 +292,5 @@ pub(crate) mod tests {
         over.paint(&mut rgb, [255, 0, 255]);
         assert_eq!(&rgb[..6], [255, 0, 255, 255, 0, 255]);
         assert_eq!(&rgb[6..9], [0, 0, 0]);
-    }
-
-    #[test]
-    fn regions_join_four_connected_pixels_and_keep_the_largest() {
-        // A ring around an unmarked center is one region; the diagonal neighbor is another.
-        #[rustfmt::skip]
-        let mask = vec![
-            true,  true,  true,  false,
-            true,  false, true,  false,
-            true,  true,  true,  false,
-            false, false, false, true,
-        ];
-        let above = Above { width: 4, height: 4, count: 9, mask };
-        assert_eq!(above.regions(), [Region { x: 0, y: 0, width: 3, height: 3, pixels: 8 }, Region { x: 3, y: 3, width: 1, height: 1, pixels: 1 }]);
-        let empty = Plates { width: 0, height: 0, planes: Vec::new(), ..synthetic(0, 0, [0.0; 3], Default::default()) };
-        assert_eq!(empty.stats(&[]).max_total_at, None);
-        assert!(empty.above(10.0, &[]).regions().is_empty());
     }
 }

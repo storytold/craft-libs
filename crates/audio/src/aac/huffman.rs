@@ -274,33 +274,6 @@ pub fn write_spectral(bw: &mut BitWriter, cb: u8, vals: &[i32]) {
 mod tests {
     use super::*;
 
-    fn check_complete(codes: &[(u32, u8)]) {
-        // Kraft sum exactly one and prefix-free.
-        let max = codes.iter().map(|c| c.1).max().unwrap() as u32;
-        let mut kraft = 0u64;
-        for &(_, l) in codes {
-            kraft += 1u64 << (max - l as u32);
-        }
-        assert_eq!(kraft, 1u64 << max);
-        for (i, &(ci, li)) in codes.iter().enumerate() {
-            for (j, &(cj, lj)) in codes.iter().enumerate() {
-                if i != j && li <= lj {
-                    assert_ne!(cj >> (lj - li), ci, "codeword {i} is a prefix of {j}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn codebooks_are_complete_prefix_codes() {
-        check_complete(&SCALEFACTOR);
-        assert_eq!(SCALEFACTOR[60], (0, 1));
-        for b in &BOOKS {
-            assert_eq!(b.codes.len() as u32, b.modulo.pow(b.dim as u32));
-            check_complete(b.codes);
-        }
-    }
-
     /// Every codeword, followed by arbitrary bits, decodes to its own symbol and length.
     #[test]
     fn lut_decodes_every_codeword() {
@@ -322,64 +295,6 @@ mod tests {
         }
     }
 
-    /// A codeword cut off by the end of the data is `Eof`, also at an unaligned position.
-    #[test]
-    fn truncated_codeword_is_eof() {
-        for (i, lut) in luts().iter().enumerate() {
-            let codes: &[(u32, u8)] = if i == 0 { &SCALEFACTOR } else { BOOKS[i - 1].codes };
-            let &(code, len) = codes.iter().max_by_key(|c| c.1).unwrap();
-            for lead in 0..8u32 {
-                let mut bw = BitWriter::new();
-                bw.write_bits(0, lead);
-                bw.write_bits(code, len as u32);
-                let total = lead as usize + len as usize;
-                let data = bw.finish();
-                // drop the last byte if that cuts the codeword, else the codeword is whole
-                let short = &data[..data.len() - 1];
-                let mut br = BitReader::new(short);
-                br.skip(lead as usize).unwrap();
-                let r = lut.decode(&mut br);
-                if short.len() * 8 < total {
-                    assert!(matches!(r, Err(Error::Eof)), "book {i} lead {lead}");
-                } else {
-                    assert!(r.is_ok());
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn spectral_roundtrip_every_book() {
-        for cb in 1..=11u8 {
-            let b = book(cb);
-            let lim = if cb == 11 { 8191 } else { b.lav as i32 };
-            let mut vals = Vec::new();
-            let mut seed = 12345u32;
-            for _ in 0..400 {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                let r = (seed >> 8) as i32;
-                let v = if cb == 11 && r % 3 == 0 { r % (lim + 1) } else { r % (b.lav.min(16) as i32 + 1) };
-                let v = v.min(lim);
-                vals.push(if b.signed || r & 1 == 0 { v } else { -v });
-            }
-            if b.signed {
-                for v in vals.iter_mut() {
-                    *v = (*v).clamp(-(b.lav as i32), b.lav as i32);
-                }
-            }
-            let mut bw = BitWriter::new();
-            write_spectral(&mut bw, cb, &vals);
-            assert_eq!(bw.bit_len() as u32, count_bits(cb, &vals));
-            let data = bw.finish();
-            let mut br = BitReader::new(&data);
-            let mut out = vec![0i32; vals.len()];
-            for c in out.chunks_mut(b.dim) {
-                decode_spectral(&mut br, cb, c).unwrap();
-            }
-            assert_eq!(out, vals, "codebook {cb}");
-        }
-    }
-
     #[test]
     fn pair_count_matches_single_count() {
         let mut seed = 99u32;
@@ -396,19 +311,6 @@ mod tests {
                 }
                 assert_eq!(count_bits_pair(cb, &vals), (count_bits(cb, &vals), count_bits(cb + 1, &vals)), "codebook {cb}");
             }
-        }
-    }
-
-    #[test]
-    fn scalefactor_roundtrip() {
-        let mut bw = BitWriter::new();
-        for d in -60..=60 {
-            write_sf(&mut bw, d);
-        }
-        let data = bw.finish();
-        let mut br = BitReader::new(&data);
-        for d in -60..=60 {
-            assert_eq!(decode_sf(&mut br).unwrap(), d);
         }
     }
 }

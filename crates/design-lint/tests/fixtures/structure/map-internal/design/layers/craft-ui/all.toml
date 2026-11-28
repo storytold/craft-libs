@@ -1,0 +1,6 @@
+config_version = 1
+
+[[module]]
+path = "contract"
+layer = 4
+internal = [5, 6]

@@ -1,0 +1,269 @@
+//! A collection's columns: kinds, specs, alignment, toggle columns and the sort.
+
+pub use crate::runtime::env::ColumnAlign;
+use crate::runtime::env::Label;
+use craft_behavior::{ColumnKey, ColumnWidth};
+use craft_keymap::Chord;
+
+/// A toggle column: its cells flip by click, and a drag across them sweeps one value over all of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ToggleColumn {
+    /// A drag across the cells sets them all to the first cell's new value.
+    pub sweepable: bool,
+    /// Turning a cell on turns every other cell of the column off (solo).
+    pub exclusive: bool,
+    /// A chord that flips the column on the selected rows (or the lead's row) while the collection has focus, as one
+    /// gesture: the app's command for it where it has one (PhotoCraft's Hide Layers on the eye column).
+    pub key: Option<Chord>,
+}
+
+impl ToggleColumn {
+    /// A sweepable toggle column (eye, lock, mute).
+    pub const fn sweepable() -> Self {
+        ToggleColumn { sweepable: true, exclusive: false, key: None }
+    }
+
+    /// An exclusive toggle column: one cell is on at a time, and a drag does not sweep.
+    pub const fn exclusive() -> Self {
+        ToggleColumn { sweepable: false, exclusive: true, key: None }
+    }
+
+    /// The column with `chord` as its key.
+    #[must_use]
+    pub const fn key(mut self, chord: Chord) -> Self {
+        self.key = Some(chord);
+        self
+    }
+}
+
+/// The user's column arrangement: the order of the columns, the widths the user set and the hidden columns. Bound and
+/// unbound headers store the same type.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ColumnLayout {
+    /// The columns in the order shown.
+    pub order: Vec<ColumnKey>,
+    /// The widths the user set, by column.
+    pub widths: Vec<(ColumnKey, f32)>,
+    /// The columns the user hid.
+    pub hidden: Vec<ColumnKey>,
+}
+
+/// What a column's cells are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColumnKind {
+    /// Content the item paints.
+    Content,
+    /// A toggle the collection flips.
+    Toggle(ToggleColumn),
+}
+
+/// One column of a collection.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ColumnSpec {
+    /// The column's stable key.
+    pub key: ColumnKey,
+    /// The header text.
+    pub header: Label,
+    /// How wide the column is.
+    pub width: ColumnWidth,
+    /// The user can drag the header's edge.
+    pub resizable: bool,
+    /// Activating the header reports `Sort`.
+    pub sortable: bool,
+    /// The user can move the column.
+    pub movable: bool,
+    /// The column stays in view while the others scroll.
+    pub frozen: bool,
+    /// What the cells are.
+    pub kind: ColumnKind,
+    /// Where the cells' content sits in the column.
+    pub align: ColumnAlign,
+    /// The cells' figures are tabular, so a column of numbers lines up.
+    pub tabular: bool,
+    /// The first press on the header sorts descending: sizes, dates and ratings, where the largest comes first.
+    pub first_descending: bool,
+    /// The icon the column's cells show: the name of a cell that has no header text.
+    pub icon: Option<craft_behavior::IconId>,
+    /// The header's tooltip: the column's long name where the header text abbreviates it. Without one the header shows
+    /// the header row's help.
+    pub tip: Option<Label>,
+    /// The most of the collection's width a `Content` column takes, as a share: a name column as wide as its widest
+    /// name, at most a third of the table.
+    pub max_share: Option<f32>,
+    /// The least width of a `Content` column, whatever its cells hold: a list's name column at least as wide as the
+    /// names the field beside it holds.
+    pub min_width: f32,
+    /// The header menu has a check for the column, so the user can hide it. A column that can't be hidden always shows.
+    pub hideable: bool,
+    /// A remove control at the header's end, which reports `ColumnEvent::Removed`.
+    pub remove: Option<ColumnRemove>,
+}
+
+/// The remove control of a column's header.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ColumnRemove {
+    /// The control's accessible name.
+    pub name: Label,
+    /// Whether the control can be pressed.
+    pub enabled: bool,
+}
+
+impl ColumnSpec {
+    /// The column gets a remove control named `name` at its header's end, disabled unless `enabled`.
+    #[must_use]
+    pub fn removable(mut self, name: impl Into<Label>, enabled: bool) -> Self {
+        self.remove = Some(ColumnRemove { name: name.into(), enabled });
+        self
+    }
+
+    /// A content column with a header and a width; the other settings off.
+    pub fn new(key: ColumnKey, header: impl Into<Label>, width: ColumnWidth) -> Self {
+        ColumnSpec {
+            key,
+            header: header.into(),
+            width,
+            resizable: false,
+            sortable: false,
+            movable: false,
+            frozen: false,
+            kind: ColumnKind::Content,
+            align: ColumnAlign::Start,
+            tabular: false,
+            first_descending: false,
+            icon: None,
+            tip: None,
+            max_share: None,
+            min_width: 0.0,
+            hideable: false,
+            remove: None,
+        }
+    }
+
+    /// A toggle column as wide as a toggle cell, with a header; the other settings off.
+    pub fn toggle(key: ColumnKey, header: impl Into<Label>, toggle: ToggleColumn) -> Self {
+        ColumnSpec::new(key, header, ColumnWidth::Toggle).kind(ColumnKind::Toggle(toggle))
+    }
+
+    /// Activating the header sorts.
+    #[must_use]
+    pub fn sortable(mut self) -> Self {
+        self.sortable = true;
+        self
+    }
+
+    /// The user can resize the column.
+    #[must_use]
+    pub fn resizable(mut self) -> Self {
+        self.resizable = true;
+        self
+    }
+
+    /// The user can move the column.
+    #[must_use]
+    pub fn movable(mut self) -> Self {
+        self.movable = true;
+        self
+    }
+
+    /// The column stays in view.
+    #[must_use]
+    pub fn frozen(mut self) -> Self {
+        self.frozen = true;
+        self
+    }
+
+    /// The column's cell kind.
+    #[must_use]
+    pub fn kind(mut self, kind: ColumnKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// The cells' content sits at `align`.
+    #[must_use]
+    pub fn align(mut self, align: ColumnAlign) -> Self {
+        self.align = align;
+        self
+    }
+
+    /// A column of numbers: content at the end edge, tabular figures.
+    #[must_use]
+    pub fn numeric(mut self) -> Self {
+        self.align = ColumnAlign::End;
+        self.tabular = true;
+        self
+    }
+
+    /// The user can hide the column from the header menu.
+    #[must_use]
+    pub fn hideable(mut self) -> Self {
+        self.hideable = true;
+        self
+    }
+
+    /// A `Content` column takes at most `share` of the collection's width.
+    #[must_use]
+    pub fn at_most(mut self, share: f32) -> Self {
+        self.max_share = Some(share);
+        self
+    }
+
+    /// A `Content` column is at least `width` wide.
+    #[must_use]
+    pub fn at_least(mut self, width: f32) -> Self {
+        self.min_width = width;
+        self
+    }
+
+    /// The header's tooltip.
+    #[must_use]
+    pub fn tip(mut self, tip: impl Into<Label>) -> Self {
+        self.tip = Some(tip.into());
+        self
+    }
+
+    /// The icon the column's cells show. A cell of a column with no header text is named after it.
+    #[must_use]
+    pub fn icon(mut self, icon: craft_behavior::IconId) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// The first press on the header sorts descending.
+    #[must_use]
+    pub fn first_descending(mut self) -> Self {
+        self.first_descending = true;
+        self
+    }
+}
+
+/// The column the rows are sorted by and the direction: the app's value, which it changes on `ColumnEvent::Sort`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ColumnSort {
+    /// The sorted column.
+    pub key: ColumnKey,
+    /// The order is descending.
+    pub descending: bool,
+}
+
+impl ColumnSort {
+    /// Rows sorted by `key`, descending when `descending`.
+    pub const fn new(key: ColumnKey, descending: bool) -> Self {
+        ColumnSort { key, descending }
+    }
+
+    /// Rows sorted by `key`, ascending.
+    pub const fn ascending(key: ColumnKey) -> Self {
+        ColumnSort { key, descending: false }
+    }
+
+    /// Rows sorted by `key`, descending.
+    pub const fn descending(key: ColumnKey) -> Self {
+        ColumnSort { key, descending: true }
+    }
+}

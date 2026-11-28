@@ -458,7 +458,7 @@ struct NotesMasterWrite {
 fn notes_master_write(p: &Presentation) -> Option<NotesMasterWrite> {
     let nm = p.notes_master.as_deref();
     let kept = nm.filter(|m| !m.shapes.is_empty());
-    let has_notes = p.slides.iter().any(|s| !s.notes.is_empty());
+    let has_notes = p.slides.iter().any(|s| !s.notes.is_empty() || s.has_notes_slide);
     if !has_notes && nm.is_none() {
         return None;
     }
@@ -694,7 +694,7 @@ pub fn export(p: &Presentation, defaults: &dyn Defaults, main_ct: &str) -> Resul
         if let Some(lp) = layout_parts.get(&s.layout) {
             so.rels.add("slideLayout", &craft_opc::relative(&sname, lp), false);
         }
-        if !s.notes.is_empty() {
+        if !s.notes.is_empty() || s.has_notes_slide {
             let nname = format!("ppt/notesSlides/notesSlide{}.xml", i + 1);
             so.rels.add("notesSlide", &craft_opc::relative(&sname, &nname), false);
             let mut no = Out::new(&nname);
@@ -1360,7 +1360,7 @@ fn app_xml(p: &Presentation, application: &str) -> Vec<u8> {
         .open();
     w.leaf("Application", &[], application);
     w.leaf("Slides", &[], &p.slides.len().to_string());
-    w.leaf("Notes", &[], &p.slides.iter().filter(|s| !s.notes.is_empty()).count().to_string());
+    w.leaf("Notes", &[], &p.slides.iter().filter(|s| !s.notes.is_empty() || s.has_notes_slide).count().to_string());
     w.leaf("HiddenSlides", &[], &p.slides.iter().filter(|s| s.hidden).count().to_string());
     if !p.props.company.is_empty() {
         w.leaf("Company", &[], &p.props.company);

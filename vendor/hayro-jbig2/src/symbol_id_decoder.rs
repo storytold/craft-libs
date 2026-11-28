@@ -16,10 +16,7 @@ impl SymbolIdDecoder {
         // than twice the maximum symbol ID."
         let num_contexts = 1_usize << code_len;
 
-        Self {
-            contexts: vec![ArithmeticDecoderContext::default(); num_contexts],
-            code_len,
-        }
+        Self { contexts: vec![ArithmeticDecoderContext::default(); num_contexts], code_len }
     }
 
     #[inline(always)]

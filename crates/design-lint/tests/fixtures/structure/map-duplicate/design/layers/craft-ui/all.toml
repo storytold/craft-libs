@@ -1,0 +1,9 @@
+config_version = 1
+
+[[module]]
+path = "shell"
+layer = 7
+
+[[module]]
+path = "shell"
+layer = 6

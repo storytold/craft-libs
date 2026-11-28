@@ -11,6 +11,62 @@ use crate::error::Result;
 use crate::io::Reader;
 use crate::layer::LayerRecord;
 
+/// Write the legacy brit block with raw signed brightness and contrast values.
+///
+/// The seven-byte payload retains the reserved value 127 and legacy flag 0.
+/// Values are not clamped or normalized; external tagged-block padding is not included.
+pub fn brightness_contrast_block(brightness: i16, contrast: i16) -> crate::tagged::TaggedBlock {
+    let mut data = Vec::with_capacity(7);
+    for value in [brightness, contrast, 127] {
+        data.extend_from_slice(&value.to_be_bytes());
+    }
+    data.push(0);
+    crate::tagged::TaggedBlock::new(*b"brit", data)
+}
+
+/// Write the version-1 expA block without normalizing its raw floating-point values.
+///
+/// All f32 bits, including NaN payloads and signed zero, are preserved in the
+/// fourteen-byte payload. External tagged-block padding is not included.
+pub fn exposure_block(exposure: f32, offset: f32, gamma: f32) -> crate::tagged::TaggedBlock {
+    let mut data = Vec::with_capacity(14);
+    data.extend_from_slice(&1u16.to_be_bytes());
+    for value in [exposure, offset, gamma] {
+        data.extend_from_slice(&value.to_be_bytes());
+    }
+    crate::tagged::TaggedBlock::new(*b"expA", data)
+}
+
+/// Write a version-2 hue2 master adjustment from raw signed values.
+///
+/// Colorize is off, its three values are zero, and all six unused 24-byte
+/// color-range records are zero. The payload is exactly 160 bytes, without padding.
+pub fn hue_saturation_block(hue: i16, saturation: i16, lightness: i16) -> crate::tagged::TaggedBlock {
+    let mut data = vec![0, 2, 0, 0];
+    for value in [0i16, 0, 0, hue, saturation, lightness] {
+        data.extend_from_slice(&value.to_be_bytes());
+    }
+    data.resize(160, 0);
+    crate::tagged::TaggedBlock::new(*b"hue2", data)
+}
+
+/// Write a version-2 levl composite record followed by 28 default records.
+///
+/// All fields are raw signed values; gamma_hundredths is already converted by
+/// the caller. No clamping or normalization is applied. The payload is 292 bytes.
+pub fn levels_block(in_black: i16, in_white: i16, out_black: i16, out_white: i16, gamma_hundredths: i16) -> crate::tagged::TaggedBlock {
+    let mut data = vec![0, 2];
+    for value in [in_black, in_white, out_black, out_white, gamma_hundredths] {
+        data.extend_from_slice(&value.to_be_bytes());
+    }
+    for _ in 0..28 {
+        for value in [0i16, 255, 0, 255, 100] {
+            data.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+    crate::tagged::TaggedBlock::new(*b"levl", data)
+}
+
 /// The adjustment a layer applies.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Adjustment {
@@ -181,6 +237,43 @@ mod tests {
     use crate::descriptor::Value;
     use crate::io::WriteExt;
     use crate::tagged::TaggedBlock;
+
+    #[test]
+    fn raw_adjustment_writers_preserve_exact_payloads() {
+        let block = brightness_contrast_block(i16::MIN, i16::MAX);
+        assert_eq!(block.key, *b"brit");
+        assert_eq!(block.data, [0x80, 0, 0x7f, 0xff, 0, 0x7f, 0]);
+        assert_eq!(brightness_contrast_block(-1, 0).data, [0xff, 0xff, 0, 0, 0, 0x7f, 0]);
+        let block = exposure_block(0.0, -0.0, f32::INFINITY);
+        assert_eq!(block.key, *b"expA");
+        assert_eq!(block.data, [0, 1, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x7f, 0x80, 0, 0]);
+        assert_eq!(
+            exposure_block(f32::NEG_INFINITY, f32::from_bits(0x7fc1_2345), f32::from_bits(0xffc5_4321)).data,
+            [0, 1, 0xff, 0x80, 0, 0, 0x7f, 0xc1, 0x23, 0x45, 0xff, 0xc5, 0x43, 0x21]
+        );
+        assert_eq!(exposure_block(1.0, -2.5, 0.125).data, [0, 1, 0x3f, 0x80, 0, 0, 0xc0, 0x20, 0, 0, 0x3e, 0, 0, 0]);
+    }
+
+    #[test]
+    fn hue_and_levels_writers_preserve_complete_raw_records() {
+        let hue = hue_saturation_block(i16::MIN, i16::MAX, -1);
+        let mut expected = vec![0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0x7f, 0xff, 0xff, 0xff];
+        expected.extend([0; 144]);
+        assert_eq!(hue.key, *b"hue2");
+        assert_eq!(hue.data, expected);
+        let mut zero_hue = vec![0; 160];
+        zero_hue[1] = 2;
+        assert_eq!(hue_saturation_block(0, 0, 0).data, zero_hue);
+
+        let levels = levels_block(i16::MIN, i16::MAX, -1, 0, -13);
+        let mut expected = vec![0, 2, 0x80, 0, 0x7f, 0xff, 0xff, 0xff, 0, 0, 0xff, 0xf3];
+        expected.extend([0, 0, 0, 255, 0, 0, 0, 255, 0, 100].repeat(28));
+        assert_eq!(levels.key, *b"levl");
+        assert_eq!(levels.data, expected);
+        let mut zeros = vec![0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        zeros.extend([0, 0, 0, 255, 0, 0, 0, 255, 0, 100].repeat(28));
+        assert_eq!(levels_block(0, 0, 0, 0, 0).data, zeros);
+    }
 
     fn layer(blocks: Vec<([u8; 4], Vec<u8>)>) -> LayerRecord {
         LayerRecord { blocks: blocks.into_iter().map(|(k, d)| TaggedBlock::new(k, d)).collect(), ..Default::default() }

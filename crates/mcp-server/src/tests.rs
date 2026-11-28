@@ -48,6 +48,63 @@ fn serve_with<T: Tools>(tools: T, lines: &[Value]) -> (Server<T>, Vec<Value>) {
     (s, replies)
 }
 
+fn malformed_version_messages() -> Vec<Value> {
+    let mut messages = Vec::new();
+    for version in [None, Some(Value::Null), Some(json!("1.0")), Some(json!(2.0)), Some(json!(true)), Some(json!([])), Some(json!({}))] {
+        for mut message in [
+            json!({"id": 1, "method": "tools/call", "params": {"name": "echo", "arguments": {"text": "changed"}}}),
+            json!({"method": "notifications/initialized"}),
+        ] {
+            if let Some(version) = &version {
+                message["jsonrpc"] = version.clone();
+            }
+            messages.push(message);
+        }
+    }
+    messages
+}
+
+fn invalid_version_reply() -> Value {
+    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "`jsonrpc` must be \"2.0\""}})
+}
+
+/// Invalid envelopes are refused before listing or calling tools or changing lifecycle state.
+#[test]
+fn invalid_jsonrpc_versions_never_dispatch() {
+    for message in malformed_version_messages() {
+        let mut s = Server::new(info(), Echo::default());
+        let response = s.handle(message.clone()).unwrap();
+        assert_eq!(response, invalid_version_reply(), "{message}");
+        assert!(s.tools().log.is_empty(), "{message}");
+        assert!(!s.is_initialized(), "{message}");
+    }
+}
+
+/// The stdio entry point validates every envelope and still leaves valid notifications unanswered.
+#[test]
+fn stdio_refuses_invalid_jsonrpc_versions() {
+    let messages = malformed_version_messages();
+    let (mut s, replies) = serve(&messages);
+    assert_eq!(replies, vec![invalid_version_reply(); messages.len()]);
+    assert!(s.tools().log.is_empty());
+    assert!(!s.is_initialized());
+    assert_eq!(reply(&mut s, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"})), None);
+    assert!(s.is_initialized());
+}
+
+/// Batch dispatch uses the same validation while continuing to answer valid requests.
+#[test]
+fn batches_refuse_invalid_jsonrpc_versions() {
+    let mut messages = malformed_version_messages();
+    let mut expected = vec![invalid_version_reply(); messages.len()];
+    messages.push(ping(9));
+    expected.push(json!({"jsonrpc": "2.0", "id": 9, "result": {}}));
+    let mut s = Server::new(info(), Echo::default());
+    assert_eq!(reply(&mut s, &Value::Array(messages)), Some(Value::Array(expected)));
+    assert!(s.tools().log.is_empty());
+    assert!(!s.is_initialized());
+}
+
 /// A registered tool is listed and called over the stdio transport, with no engine behind it.
 #[test]
 fn a_registered_tool_is_served_over_stdio() {

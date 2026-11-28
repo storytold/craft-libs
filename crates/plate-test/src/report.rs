@@ -18,10 +18,13 @@ use crate::reference::{self, Context};
 use crate::scene::{Level, PROCESS, Scene};
 use crate::{Error, gs, structure};
 
+/// Outcome of one scene, taking its `pending` field into account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Status {
+    #[allow(missing_docs)]
     Pass,
+    #[allow(missing_docs)]
     Fail,
     /// A pending scene fails, as it should until its task lands.
     ExpectedFail,
@@ -51,16 +54,22 @@ impl Status {
     }
 }
 
+/// The result for one scene: how it was written and how its plates were judged.
 #[derive(Debug, Clone, Serialize)]
 pub struct SceneResult {
+    #[allow(missing_docs)]
     pub id: String,
+    #[allow(missing_docs)]
     pub title: String,
+    /// The scene's `pending` field: the task that makes it writable.
     pub pending: Option<String>,
+    #[allow(missing_docs)]
     pub status: Status,
     /// What the writer left out or skipped.
     pub notes: Vec<String>,
     /// Why the scene was not written or judged.
     pub error: Option<String>,
+    #[allow(missing_docs)]
     pub judgement: Option<Judgement>,
     /// The flattened page's result, from [`run_flattened`].
     pub flattened: Option<FlatResult>,
@@ -75,17 +84,23 @@ pub struct FlatResult {
     pub transparency: Vec<String>,
     /// Time spent in the flattener.
     pub millis: f64,
+    #[allow(missing_docs)]
     pub error: Option<String>,
+    #[allow(missing_docs)]
     pub judgement: Option<Judgement>,
 }
 
 /// Flattens a scene's PDF: the flattened PDF, or why it failed.
 pub type Flatten<'a> = &'a dyn Fn(&[u8]) -> Result<Vec<u8>, String>;
 
+/// Results of a run over a set of scenes.
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
+    /// Ghostscript version the plates were separated with.
     pub ghostscript: String,
+    /// Separation resolution in dpi.
     pub resolution: f32,
+    #[allow(missing_docs)]
     pub scenes: Vec<SceneResult>,
 }
 

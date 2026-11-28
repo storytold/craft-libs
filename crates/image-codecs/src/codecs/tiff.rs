@@ -257,6 +257,11 @@ macro_rules! custom_colortype {
 
 use PhotometricInterpretation as PI;
 
+/// Encode plain classic RGBA16 TIFF for callers that need the legacy file layout.
+pub fn encode_plain_rgba16(width: u32, height: u32, samples: &[u16]) -> Result<Vec<u8>, CodecError> {
+    craft_tiff::plain::encode_rgba16(width, height, samples).map_err(|error| CodecError::encode(F, error))
+}
+
 mod bands;
 mod decode;
 mod encode;

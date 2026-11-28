@@ -137,29 +137,3 @@ pub fn sf_gain(sf: i32) -> f32 {
 fn sf_gain_exact(sf: i32) -> f32 {
     (0.25 * (sf as f64 - 100.0)).exp2() as f32
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn band_tables_are_monotonic_and_complete() {
-        for i in 0..13u8 {
-            let l = swb_offsets_long(i);
-            assert_eq!(*l.last().unwrap(), 1024);
-            assert!(l.windows(2).all(|w| w[0] < w[1] && (w[1] - w[0]) % 4 == 0));
-            let s = swb_offsets_short(i);
-            assert_eq!(*s.last().unwrap(), 128);
-            assert!(s.windows(2).all(|w| w[0] < w[1] && (w[1] - w[0]) % 4 == 0));
-            assert!(tns_max_bands(i, false) < l.len());
-            assert!(tns_max_bands(i, true) < s.len());
-        }
-        assert_eq!(swb_offsets_long(3).len() - 1, 49);
-        assert_eq!(swb_offsets_long(5).len() - 1, 51);
-        assert_eq!(swb_offsets_long(0).len() - 1, 41);
-        assert_eq!(swb_offsets_long(2).len() - 1, 47);
-        assert_eq!(swb_offsets_long(6).len() - 1, 47);
-        assert_eq!(swb_offsets_long(8).len() - 1, 43);
-        assert_eq!(swb_offsets_long(11).len() - 1, 40);
-    }
-}

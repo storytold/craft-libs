@@ -42,7 +42,7 @@ fn layout(p: &Params) -> Result<Layout, String> {
 
 /// Undoes the predictor named by `p.predictor` (1 = identity). `rows` is the height of the image
 /// `data` is the samples of, if it is: with a PNG predictor, data of exactly `rows` rows without
-/// their filter-type bytes ([`untagged`]) is given back as it is, as a [`Failure`] whose partial
+/// their filter-type bytes (`untagged`) is given back as it is, as a [`Failure`] whose partial
 /// output is all of it, so that tolerant decoding takes the samples and reports the repair, and
 /// strict decoding refuses them.
 pub fn decode(p: &Params, data: Vec<u8>, name: &'static str, rows: Option<usize>) -> Step {

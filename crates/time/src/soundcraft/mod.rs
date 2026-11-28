@@ -2,7 +2,7 @@
 //!
 //! Every position in a session is an absolute sample index (`i64`) at the session sample rate.
 //! This crate converts those positions to and from the five Pro Tools-style timebases
-//! (Bars|Beats, Min:Secs, Timecode, Feet+Frames, Samples) through a [`TempoMap`], and computes
+//! (Bars|Beats, Min:Secs, Timecode, Feet+Frames, Samples) through a `TempoMap`, and computes
 //! grid lines and snapping for the Grid / Nudge values.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

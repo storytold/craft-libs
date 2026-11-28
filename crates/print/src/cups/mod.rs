@@ -14,8 +14,9 @@
 //! promise bounded completion for arbitrary named hosts/Unix listeners. No detached timeout
 //! thread is spawned; callers needing cancellation must supply a separately bounded transport.
 
-#[cfg(all(test, unix))]
-mod tests;
+#[cfg(test)]
+#[cfg(unix)]
+pub(crate) mod tests;
 
 use super::{Duplex, Error, Job, Printer, Scaling};
 use std::io::{Read, Write};
@@ -68,7 +69,9 @@ static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 /// How the scheduler is reached: its unix socket, else its loopback port.
 #[derive(Clone, Debug)]
 pub enum Server {
+    /// The scheduler's unix socket.
     Unix(PathBuf),
+    /// The scheduler's loopback port.
     Tcp(SocketAddr),
     /// A caller-authorized host. DNS is resolved once for each connection attempt.
     Named(String, u16),
@@ -209,7 +212,19 @@ enum Stream {
     Tcp(TcpStream),
 }
 
-impl Stream {
+/// A connection a [`DeadlineReader`] drives: before each read and write it is given the time
+/// left as its timeout.
+trait Connection: Read + Write {
+    fn set_timeouts(&self, timeout: Duration) -> std::io::Result<()>;
+
+    /// One read after [`Self::set_timeouts`] failed with `error`: by default that error.
+    fn read_without_timeout(&mut self, error: std::io::Error, buf: &mut [u8]) -> std::io::Result<usize> {
+        let _ = buf;
+        Err(error)
+    }
+}
+
+impl Connection for Stream {
     fn set_timeouts(&self, timeout: Duration) -> std::io::Result<()> {
         let (read, write) = match self {
             #[cfg(unix)]
@@ -217,6 +232,23 @@ impl Stream {
             Stream::Tcp(s) => (s.set_read_timeout(Some(timeout)), s.set_write_timeout(Some(timeout))),
         };
         read.and(write)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn read_without_timeout(&mut self, error: std::io::Error, buf: &mut [u8]) -> std::io::Result<usize> {
+        // Darwin rejects timeout updates on a disconnected Unix socket even
+        // when a complete reply is still buffered. Never fall back to a
+        // blocking read: drain at most this buffer, or fail on WouldBlock.
+        // Every subsequent read rechecks the same absolute deadline.
+        if error.raw_os_error() == Some(22)
+            && let Stream::Unix(stream) = self
+        {
+            stream.set_nonblocking(true)?;
+            let result = stream.read(buf);
+            let restored = stream.set_nonblocking(false);
+            return result.and_then(|count| restored.map(|()| count));
+        }
+        Err(error)
     }
 }
 
@@ -255,6 +287,7 @@ pub fn printers() -> Result<Vec<Printer>, Error> {
     printers_at(&endpoints())
 }
 
+/// [`printers`] from the given scheduler endpoints.
 pub fn printers_at(endpoints: &[Server]) -> Result<Vec<Printer>, Error> {
     let queues = discover(endpoints, OPERATION_CUPS_GET_PRINTERS)?;
     let default = discover(endpoints, OPERATION_CUPS_GET_DEFAULT).ok().and_then(|names| names.into_iter().next());
@@ -317,7 +350,9 @@ pub(crate) fn print_job_at(endpoints: &[Server], pdf: &[u8], job: &Job) -> Resul
 /// explicit rather than guessing it from a name shared by a printer and a class.
 #[derive(Clone, Debug)]
 pub struct Destination {
+    /// The queue or class name.
     pub name: String,
+    /// Whether the destination is a class rather than a printer queue.
     pub is_class: bool,
 }
 
@@ -387,11 +422,17 @@ pub fn default_at(endpoints: &[Server]) -> Result<Option<String>, Error> {
 /// Metadata from one CUPS printer group, without losing which fields belong together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Queue {
+    /// The queue name (`printer-name`).
     pub name: String,
+    /// The description the queue shows (`printer-info`).
     pub info: String,
+    /// The IPP `printer-state` value.
     pub state: u32,
+    /// Whether the queue accepts new jobs (`printer-is-accepting-jobs`).
     pub accepting_jobs: bool,
+    /// Whether this is the scheduler's default destination.
     pub is_default: bool,
+    /// Whether the queue is a class rather than a printer.
     pub is_class: bool,
 }
 impl Default for Queue {
@@ -499,7 +540,7 @@ pub(crate) fn post(endpoints: &[Server], path: &str, body: &[u8], timeout: Durat
 
 /// Send one IPP request and read the reply's body.
 fn exchange(stream: &mut Stream, authority: &str, path: &str, body: &[u8], timeout: Duration) -> Result<Vec<u8>, Error> {
-    let mut stream = DeadlineReader { stream, end: Instant::now() + timeout };
+    let mut stream = DeadlineReader { stream, end: Instant::now() + timeout, now: &Instant::now };
     let head = format!(
         "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
@@ -514,16 +555,18 @@ fn exchange(stream: &mut Stream, authority: &str, path: &str, body: &[u8], timeo
     Ok(reply)
 }
 
-/// One absolute deadline shared by request writes and reply reads after connection.
-struct DeadlineReader<'a> {
-    stream: &'a mut Stream,
+/// One absolute deadline shared by request writes and reply reads after connection, kept
+/// against the time `now` reads.
+struct DeadlineReader<'a, S = Stream> {
+    stream: &'a mut S,
     end: Instant,
+    now: &'a dyn Fn() -> Instant,
 }
-impl Write for DeadlineReader<'_> {
+impl<S: Connection> Write for DeadlineReader<'_, S> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let left = self
             .end
-            .checked_duration_since(Instant::now())
+            .checked_duration_since((self.now)())
             .filter(|d| !d.is_zero())
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "CUPS exchange deadline exceeded"))?;
         self.stream.set_timeouts(left)?;
@@ -541,30 +584,15 @@ fn validate_reply_identity(request: &[u8], reply: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-impl Read for DeadlineReader<'_> {
+impl<S: Connection> Read for DeadlineReader<'_, S> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let left = self
             .end
-            .checked_duration_since(Instant::now())
+            .checked_duration_since((self.now)())
             .filter(|d| !d.is_zero())
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "CUPS reply deadline exceeded"))?;
-        #[cfg(not(target_os = "macos"))]
-        self.stream.set_timeouts(left)?;
-        #[cfg(target_os = "macos")]
         if let Err(error) = self.stream.set_timeouts(left) {
-            // Darwin rejects timeout updates on a disconnected Unix socket even
-            // when a complete reply is still buffered. Never fall back to a
-            // blocking read: drain at most this buffer, or fail on WouldBlock.
-            // Every subsequent read rechecks the same absolute deadline above.
-            if error.raw_os_error() == Some(22)
-                && let Stream::Unix(stream) = self.stream
-            {
-                stream.set_nonblocking(true)?;
-                let result = stream.read(buf);
-                let restored = stream.set_nonblocking(false);
-                return result.and_then(|count| restored.map(|()| count));
-            }
-            return Err(error);
+            return self.stream.read_without_timeout(error, buf);
         }
         self.stream.read(buf)
     }

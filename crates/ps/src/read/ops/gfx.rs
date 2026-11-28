@@ -35,6 +35,7 @@ pub fn initgraphics(ip: &mut Interp) -> R {
 pub fn save(ip: &mut Interp) -> R {
     ip.gsave()?;
     ip.saves.push(ip.gstack.len());
+    ip.journal_marks.push(ip.journal.len());
     let n = ip.saves.len();
     ip.push(Obj::Save(n))
 }
@@ -45,7 +46,12 @@ pub fn restore(ip: &mut Interp) -> R {
         return err("invalidrestore");
     }
     let depth = ip.saves.get(n - 1).copied().unwrap_or(0);
+    let mark = ip.journal_marks.get(n - 1).copied().unwrap_or(0);
     ip.saves.truncate(n - 1);
+    ip.journal_marks.truncate(n - 1);
+    for (dict, key, old) in ip.journal.drain(mark..).rev() {
+        dict.restore_entry(key, old);
+    }
     // Back to the state saved with it (save did a gsave, leaving `depth` states stacked).
     while ip.gstack.len() >= depth.max(1) {
         let Some(g) = ip.gstack.pop() else { break };

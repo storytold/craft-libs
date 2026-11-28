@@ -268,6 +268,10 @@ fn flat_opc_limits_count_what_is_not_kept() {
     assert!(limited(&r#"<pkg:part pkg:name="/word/media/dot.png"><pkg:binaryData>AA==</pkg:binaryData></pkg:part>"#.repeat(20_000)));
     assert!(limited(&"<x/>".repeat(20_000)));
     // A part nothing reads, one element over what the XML tree reader takes in a part (8 000 000).
+    // Millions of elements: nightly only; the checks above prove the same counting at the gate.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     assert!(limited(&format!(r#"<pkg:part pkg:name="/word/unused.xml"><pkg:xmlData><r>{}</r></pkg:xmlData></pkg:part>"#, "<y/>".repeat(8_000_000))));
 }
 

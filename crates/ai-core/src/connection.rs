@@ -21,6 +21,7 @@ use crate::model::ModelInfo;
 pub enum Locality {
     /// Loopback server or in-process model: nothing leaves the machine.
     Local,
+    /// The model runs on another machine. Consent applies.
     Remote,
 }
 
@@ -30,17 +31,22 @@ pub enum Locality {
 pub enum Auth {
     /// No credentials (a local model, an open local server).
     None,
+    /// Authenticates with a stored key, sent in a header (see `Connection::key_header`).
     ApiKey {
+        /// Locator of the key.
         secret: SecretRef,
     },
     /// An official subscription route (for example the Codex app-server). `route` names it.
     Subscription {
+        /// Name of the subscription route.
         route: String,
+        /// Locator of the credential for the route.
         secret: SecretRef,
     },
 }
 
 impl Auth {
+    /// The secret locator this authentication uses, or `None` when it needs no credentials.
     pub fn secret_ref(&self) -> Option<&SecretRef> {
         match self {
             Self::None => None,
@@ -53,28 +59,38 @@ impl Auth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Billing {
+    /// No charge.
     Free,
     /// Pay per use, billed separately.
     Metered,
     /// Covered by an existing subscription's allowance.
     SubscriptionAllowance,
+    /// The cost is not known.
     Unknown,
 }
 
 /// A saved connection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Connection {
+    #[allow(missing_docs)]
     pub id: ConnectionId,
+    /// Name shown to the user.
     pub label: String,
     /// Which adapter talks to it, such as `http`, `openai`, `fal`, `comfyui`, `onnx`.
     pub provider: String,
+    /// Server address, such as `https://host:port`. `None` for an in-process or route-only connection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// Whether data stays on this machine. `validate` checks it against `endpoint`.
     pub locality: Locality,
+    /// How the connection authenticates.
     pub auth: Auth,
+    /// Who pays for use.
     pub billing: Billing,
+    /// Models this connection offers. Ids must be unique.
     #[serde(default)]
     pub models: Vec<ModelInfo>,
+    /// When false, the connection is kept but not offered for use. Defaults to true.
     #[serde(default = "yes")]
     pub enabled: bool,
     /// Header that carries the key, for a server that does not use `Authorization: Bearer`.
@@ -138,7 +154,9 @@ pub fn check_key_header(name: &str) -> Result<(), &'static str> {
 /// Why a connection was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionError {
+    /// The provider name is not a valid id.
     Provider(IdError),
+    /// The endpoint cannot be parsed.
     Endpoint(IdError),
     /// Labelled `Local` but the endpoint is not loopback.
     LocalButNotLoopback,
@@ -146,7 +164,9 @@ pub enum ConnectionError {
     RemoteButLoopback,
     /// No endpoint, labelled `Local`, yet it uses credentials. Such a route sends data away.
     LocalWithoutEndpointNeedsNoAuth,
+    /// The label is empty or only whitespace.
     EmptyLabel,
+    /// Two models share this id.
     DuplicateModel(String),
     /// A key header name that is not allowed, or a header named for a connection with no key.
     KeyHeader(&'static str),
@@ -211,6 +231,7 @@ impl Connection {
         Ok(())
     }
 
+    /// The model with this id, if the connection lists it.
     pub fn model(&self, id: &crate::ids::ModelId) -> Option<&ModelInfo> {
         self.models.iter().find(|m| &m.id == id)
     }
@@ -233,90 +254,5 @@ pub(crate) mod fixtures {
             enabled: true,
             key_header: None,
         }
-    }
-
-    pub fn local(id: &str) -> Connection {
-        Connection {
-            endpoint: Some("http://127.0.0.1:8188".into()),
-            locality: Locality::Local,
-            auth: Auth::None,
-            billing: Billing::Free,
-            ..remote(id)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::fixtures::{local, remote};
-    use super::*;
-
-    #[test]
-    fn good_connections_validate() {
-        assert!(remote("a").validate().is_ok());
-        assert!(local("b").validate().is_ok());
-    }
-
-    #[test]
-    fn a_remote_host_cannot_be_labelled_local() {
-        let mut c = remote("a");
-        c.locality = Locality::Local;
-        assert_eq!(c.validate(), Err(ConnectionError::LocalButNotLoopback));
-    }
-
-    #[test]
-    fn the_userinfo_trick_cannot_make_a_remote_host_local() {
-        let mut c = local("a");
-        c.endpoint = Some("http://127.0.0.1@evil.example/".into());
-        assert!(matches!(c.validate(), Err(ConnectionError::Endpoint(_))));
-    }
-
-    #[test]
-    fn loopback_labelled_remote_is_flagged() {
-        let mut c = local("a");
-        c.locality = Locality::Remote;
-        assert_eq!(c.validate(), Err(ConnectionError::RemoteButLoopback));
-    }
-
-    #[test]
-    fn subscription_route_without_endpoint_cannot_be_local() {
-        let mut c = remote("codex");
-        c.endpoint = None;
-        c.auth = Auth::Subscription { route: "codex-app-server".into(), secret: SecretRef::new("s").unwrap() };
-        c.locality = Locality::Local;
-        assert_eq!(c.validate(), Err(ConnectionError::LocalWithoutEndpointNeedsNoAuth));
-        c.locality = Locality::Remote;
-        assert!(c.validate().is_ok());
-    }
-
-    #[test]
-    fn in_process_model_can_be_local_without_endpoint() {
-        let mut c = local("onnx");
-        c.endpoint = None;
-        assert!(c.validate().is_ok());
-    }
-
-    #[test]
-    fn duplicate_models_and_empty_labels_are_refused() {
-        let mut c = remote("a");
-        let m = ModelInfo::new(crate::ids::ModelId::new("m").unwrap(), "M");
-        c.models = vec![m.clone(), m];
-        assert!(matches!(c.validate(), Err(ConnectionError::DuplicateModel(_))));
-        let mut c = remote("b");
-        c.label = "  ".into();
-        assert_eq!(c.validate(), Err(ConnectionError::EmptyLabel));
-    }
-
-    #[test]
-    fn serialized_form_holds_a_reference_not_a_secret() {
-        let json = serde_json::to_string(&remote("a")).unwrap();
-        assert!(json.contains("\"secret\":\"secret-a\""));
-        assert!(!json.to_lowercase().contains("sk-"));
-    }
-
-    #[test]
-    fn json_round_trip() {
-        let c = remote("a");
-        assert_eq!(serde_json::from_str::<Connection>(&serde_json::to_string(&c).unwrap()).unwrap(), c);
     }
 }

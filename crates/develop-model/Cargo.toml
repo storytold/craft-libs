@@ -1,0 +1,21 @@
+[package]
+name = "craft-develop-model"
+description = "Raw develop settings as data: the non-destructive edit model (white balance, tone, colour, detail, optics, geometry, masks), control specs with ranges and defaults, process versions, presets, and the mapping to and from Camera Raw's crs: settings."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-geom = { workspace = true }
+craft-metadata = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+miniz_oxide = "0.9"
+
+[dev-dependencies]
+proptest = { workspace = true }

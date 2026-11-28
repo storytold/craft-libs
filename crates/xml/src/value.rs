@@ -46,34 +46,3 @@ pub fn to_i32_lossy(s: &str) -> Option<i32> {
 pub fn to_u32_lossy(s: &str) -> Option<u32> {
     to_i64_lossy(s).map(|v| v.clamp(0, i64::from(u32::MAX)) as u32)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strict_and_lossy_numbers() {
-        assert_eq!(to_u32(" 42 "), Some(42));
-        assert_eq!((to_u32("-1"), to_u32("1.5"), to_u32("4294967296"), to_u32("")), (None, None, None, None));
-        assert_eq!((to_i32("-7"), to_i64("-9000000000")), (Some(-7), Some(-9_000_000_000)));
-        assert_eq!((to_f64("2.5"), to_f64("NaN"), to_f64("inf"), to_f64("-inf"), to_f64("x")), (Some(2.5), None, None, None, None));
-        assert_eq!(
-            (to_i64_lossy("12.9"), to_i64_lossy("-12.9"), to_i64_lossy("1e30"), to_i64_lossy("NaN")),
-            (Some(12), Some(-12), Some(9_000_000_000_000_000_000), None)
-        );
-        assert_eq!((to_i32_lossy("99999999999"), to_u32_lossy("-5"), to_u32_lossy("99999999999")), (Some(i32::MAX), Some(0), Some(u32::MAX)));
-    }
-
-    #[test]
-    fn boolean_spellings() {
-        for t in ["1", "true", "on", "t", " true "] {
-            assert_eq!(to_bool(t), Some(true), "{t}");
-        }
-        for f in ["0", "false", "off", "f"] {
-            assert_eq!(to_bool(f), Some(false), "{f}");
-        }
-        for other in ["", "TRUE", "yes", "2"] {
-            assert_eq!(to_bool(other), None, "{other}");
-        }
-    }
-}

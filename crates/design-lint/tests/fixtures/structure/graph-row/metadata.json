@@ -1,0 +1,36 @@
+{
+ "packages": [
+  {
+   "name": "craft-theme",
+   "features": {},
+   "dependencies": [
+    {
+     "name": "craft-host",
+     "kind": null,
+     "optional": false
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/theme/src/lib.rs"
+    }
+   ]
+  },
+  {
+   "name": "craft-host",
+   "features": {},
+   "dependencies": [],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/host/src/lib.rs"
+    }
+   ]
+  }
+ ]
+}

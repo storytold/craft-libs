@@ -164,6 +164,11 @@ impl Decoder {
         self.draft = on;
     }
 
+    #[cfg(test)]
+    pub(crate) fn draft(&self) -> bool {
+        self.draft
+    }
+
     /// Decode one chunk (a frame or a superframe, as stored in one IVF / WebM / MP4 sample).
     /// Returns the pictures finished so far, in order; each carries the `pts` of the chunk that
     /// showed it. With frame threads a picture may come out of a later call or [`Self::flush`].
@@ -1069,28 +1074,4 @@ fn store_fits(width: u32, height: u32, color: &crate::vp9::decode::header::Color
         bytes_per_sample: 2,
     };
     shape.fits(pictures as u64, budget)
-}
-
-#[cfg(test)]
-mod budget_tests {
-    use super::*;
-    use crate::budget::DECODE_MEMORY_BUDGET;
-
-    fn c420() -> crate::vp9::decode::header::ColorConfig {
-        crate::vp9::decode::header::ColorConfig { subsampling_x: true, subsampling_y: true, ..Default::default() }
-    }
-
-    #[test]
-    fn the_axis_maximum_is_over_budget_and_4k_is_not() {
-        assert!(!store_fits(16384, 16384, &c420(), 8 + 1 + 1 + 2, DECODE_MEMORY_BUDGET));
-        assert!(store_fits(3840, 2160, &c420(), 8 + 1 + 8 + 2, DECODE_MEMORY_BUDGET));
-    }
-
-    #[test]
-    fn exact_budget_boundary_and_reference_count() {
-        let one = (64 * 64 + 2 * 32 * 32) * 2;
-        assert!(store_fits(10, 10, &c420(), 11, 11 * one));
-        assert!(!store_fits(10, 10, &c420(), 11, 11 * one - 1));
-        assert!(!store_fits(10, 10, &c420(), 12, 11 * one));
-    }
 }

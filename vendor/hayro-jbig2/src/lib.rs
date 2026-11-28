@@ -73,15 +73,9 @@ mod symbol_id_decoder;
 mod pdfcraft_tests;
 
 use error::bail;
-pub use error::{
-    DecodeError, FormatError, HuffmanError, OverflowError, ParseError, RegionError, Result,
-    SegmentError, SymbolError, TemplateError,
-};
+pub use error::{DecodeError, FormatError, HuffmanError, OverflowError, ParseError, RegionError, Result, SegmentError, SymbolError, TemplateError};
 
-use crate::file::{
-    FileOrganization, SegmentCount, after_file_header, parse_segments_random_access,
-    parse_segments_sequential,
-};
+use crate::file::{FileOrganization, SegmentCount, after_file_header, parse_segments_random_access, parse_segments_sequential};
 use bitmap::Bitmap;
 use decode::CombinationOperator;
 use decode::generic;
@@ -161,10 +155,7 @@ impl<'a> Image<'a> {
             .max();
 
         // Find and parse page information to extract dimensions.
-        let page_info_seg = segments
-            .iter()
-            .find(|s| s.header.segment_type == SegmentType::PageInformation)
-            .ok_or(FormatError::MissingPageInfo)?;
+        let page_info_seg = segments.iter().find(|s| s.header.segment_type == SegmentType::PageInformation).ok_or(FormatError::MissingPageInfo)?;
 
         let mut reader = Reader::new(page_info_seg.data);
         let page_info = parse_page_information(&mut reader)?;
@@ -172,23 +163,14 @@ impl<'a> Image<'a> {
         // "A page's bitmap height may be declared in its page information segment
         // to be unknown (by specifying a height of 0xFFFFFFFF). In this case, the
         // page must be striped." (7.4.8.2)
-        let height = if page_info.height == 0xFFFF_FFFF {
-            height_from_stripes.ok_or(FormatError::UnknownPageHeight)?
-        } else {
-            page_info.height
-        };
+        let height = if page_info.height == 0xFFFF_FFFF { height_from_stripes.ok_or(FormatError::UnknownPageHeight)? } else { page_info.height };
 
         if page_info.width == 0 || height == 0 {
             bail!(FormatError::EmptyPage);
         }
         bitmap::check_page_size(page_info.width, height)?;
 
-        Ok(Self {
-            segments,
-            width: page_info.width,
-            height,
-            height_from_stripes,
-        })
+        Ok(Self { segments, width: page_info.width, height, height_from_stripes })
     }
 
     /// The width of the image in pixels.
@@ -345,17 +327,9 @@ fn decode_segments(
     work_left: &mut u64,
 ) -> Result<()> {
     // Find and parse page information segment first.
-    if let Some(page_info) = segments
-        .iter()
-        .find(|s| s.header.segment_type == SegmentType::PageInformation)
-    {
+    if let Some(page_info) = segments.iter().find(|s| s.header.segment_type == SegmentType::PageInformation) {
         let mut reader = Reader::new(page_info.data);
-        init_page(
-            &mut reader,
-            height_from_stripes,
-            &mut decoder_ctx.page_state,
-            &mut decoder_ctx.page_bitmap,
-        )?;
+        init_page(&mut reader, height_from_stripes, &mut decoder_ctx.page_state, &mut decoder_ctx.page_bitmap)?;
     } else {
         bail!(FormatError::MissingPageInfo);
     }
@@ -406,13 +380,8 @@ fn decode_segments(
                 charge_work(work_left, input_symbols.len() as u64)?;
 
                 // Collect Huffman tables from referred table segments.
-                let referred_tables: Vec<HuffmanTable> = seg
-                    .header
-                    .referred_to_segments
-                    .iter()
-                    .filter_map(|&num| page_state.get_huffman_table(num))
-                    .cloned()
-                    .collect();
+                let referred_tables: Vec<HuffmanTable> =
+                    seg.header.referred_to_segments.iter().filter_map(|&num| page_state.get_huffman_table(num)).cloned().collect();
 
                 // Get retained contexts from the last referred symbol dictionary (7.4.2.2 step 3).
                 let retained_contexts = seg
@@ -442,13 +411,8 @@ fn decode_segments(
                 // Collect Huffman tables from referred table segments.
                 // "These user-supplied Huffman decoding tables may be supplied either
                 // as a Tables segment..." (7.4.3.1.6)
-                let referred_tables: Vec<HuffmanTable> = seg
-                    .header
-                    .referred_to_segments
-                    .iter()
-                    .filter_map(|&num| page_state.get_huffman_table(num))
-                    .cloned()
-                    .collect();
+                let referred_tables: Vec<HuffmanTable> =
+                    seg.header.referred_to_segments.iter().filter_map(|&num| page_state.get_huffman_table(num)).cloned().collect();
 
                 let header = text::parse(&mut reader, symbols.len() as u32)?;
                 charge_work(work_left, bitmap::copy_work(header.region_info.width, header.region_info.height))?;
@@ -457,29 +421,10 @@ fn decode_segments(
                     charge_work(work_left, (symbols.len() as u64).saturating_mul(bitmap::HUFFMAN_LINE_WORK))?;
                 }
 
-                if page_state.can_decode_directly(
-                    page_bitmap,
-                    &header.region_info,
-                    header.flags.default_pixel,
-                ) {
-                    text::decode_into(
-                        &header,
-                        &symbols,
-                        &referred_tables,
-                        &page_state.standard_tables,
-                        page_bitmap,
-                        scratch_buffers,
-                        work_left,
-                    )?;
+                if page_state.can_decode_directly(page_bitmap, &header.region_info, header.flags.default_pixel) {
+                    text::decode_into(&header, &symbols, &referred_tables, &page_state.standard_tables, page_bitmap, scratch_buffers, work_left)?;
                 } else {
-                    let region = text::decode(
-                        &header,
-                        &symbols,
-                        &referred_tables,
-                        &page_state.standard_tables,
-                        scratch_buffers,
-                        work_left,
-                    )?;
+                    let region = text::decode(&header, &symbols, &referred_tables, &page_state.standard_tables, scratch_buffers, work_left)?;
                     page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
@@ -490,13 +435,8 @@ fn decode_segments(
                 charge_work(work_left, symbols.len() as u64)?;
 
                 // Collect Huffman tables from referred table segments.
-                let referred_tables: Vec<HuffmanTable> = seg
-                    .header
-                    .referred_to_segments
-                    .iter()
-                    .filter_map(|&num| page_state.get_huffman_table(num))
-                    .cloned()
-                    .collect();
+                let referred_tables: Vec<HuffmanTable> =
+                    seg.header.referred_to_segments.iter().filter_map(|&num| page_state.get_huffman_table(num)).cloned().collect();
 
                 let header = text::parse(&mut reader, symbols.len() as u32)?;
                 charge_work(work_left, bitmap::copy_work(header.region_info.width, header.region_info.height))?;
@@ -504,14 +444,7 @@ fn decode_segments(
                     // Its symbol ID table has a line for each symbol.
                     charge_work(work_left, (symbols.len() as u64).saturating_mul(bitmap::HUFFMAN_LINE_WORK))?;
                 }
-                let region = text::decode(
-                    &header,
-                    &symbols,
-                    &referred_tables,
-                    &page_state.standard_tables,
-                    scratch_buffers,
-                    work_left,
-                )?;
+                let region = text::decode(&header, &symbols, &referred_tables, &page_state.standard_tables, scratch_buffers, work_left)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::ImmediateHalftoneRegion | SegmentType::ImmediateLosslessHalftoneRegion => {
@@ -525,11 +458,7 @@ fn decode_segments(
                 let header = halftone::parse(&mut reader)?;
                 charge_work(work_left, halftone::work(&header, pattern_dict))?;
 
-                if page_state.can_decode_directly(
-                    page_bitmap,
-                    &header.region_info,
-                    header.flags.initial_pixel_color,
-                ) {
+                if page_state.can_decode_directly(page_bitmap, &header.region_info, header.flags.initial_pixel_color) {
                     halftone::decode_into(&header, pattern_dict, page_bitmap, scratch_buffers)?;
                 } else {
                     let region = halftone::decode(&header, pattern_dict, scratch_buffers)?;
@@ -552,11 +481,7 @@ fn decode_segments(
             }
             SegmentType::IntermediateGenericRefinementRegion => {
                 // Same logic as immediate refinement, but store result instead of combining.
-                let referred_segment = seg
-                    .header
-                    .referred_to_segments
-                    .first()
-                    .and_then(|&num| page_state.get_referred_segment(num));
+                let referred_segment = seg.header.referred_to_segments.first().and_then(|&num| page_state.get_referred_segment(num));
 
                 let header = generic_refinement::parse(&mut reader)?;
                 charge_work(work_left, region_work(&header.region_info))?;
@@ -572,18 +497,13 @@ fn decode_segments(
                 let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
-            SegmentType::ImmediateGenericRefinementRegion
-            | SegmentType::ImmediateLosslessGenericRefinementRegion => {
+            SegmentType::ImmediateGenericRefinementRegion | SegmentType::ImmediateLosslessGenericRefinementRegion => {
                 // "3) Determine the buffer associated with the region segment that
                 // this segment refers to." (7.4.7.5)
                 //
                 // With no region segment referred to, the reference is the page restricted to
                 // this segment's area (7.4.7.4).
-                let referred_segment = seg
-                    .header
-                    .referred_to_segments
-                    .first()
-                    .and_then(|&num| page_state.get_referred_segment(num));
+                let referred_segment = seg.header.referred_to_segments.first().and_then(|&num| page_state.get_referred_segment(num));
 
                 let header = generic_refinement::parse(&mut reader)?;
                 charge_work(work_left, region_work(&header.region_info))?;
@@ -591,12 +511,7 @@ fn decode_segments(
                 if let Some(referred_segment) = referred_segment
                     && page_state.can_decode_directly(page_bitmap, &header.region_info, false)
                 {
-                    generic_refinement::decode_into(
-                        &header,
-                        referred_segment,
-                        page_bitmap,
-                        scratch_buffers,
-                    )?;
+                    generic_refinement::decode_into(&header, referred_segment, page_bitmap, scratch_buffers)?;
                 } else {
                     // PdfCraft patch: a refinement of the page refines its area (`Bitmap::area`).
                     let area;
@@ -639,8 +554,7 @@ const ENTRY_WORDS: u64 = 32;
 /// square region of typical rows), and a few kilobytes could exhaust memory. A segment being
 /// decoded takes more for a while, within its own bounds: the page bitmap isn't counted, nor is
 /// what a region or a grid uses until it is stored or freed.
-const MAX_RETAINED_WORDS: u64 =
-    2 * (bitmap::MAX_PIXELS / bitmap::WORD_BITS as u64 + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS);
+const MAX_RETAINED_WORDS: u64 = 2 * (bitmap::MAX_PIXELS / bitmap::WORD_BITS as u64 + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS);
 
 /// PdfCraft patch: the most symbols one segment may refer to, 2^20, far beyond the 65,535 a
 /// dictionary may export. References may repeat, so each names the same symbols again: without
@@ -683,12 +597,7 @@ impl PageState {
     }
 
     /// Check if an immediate region can be decoded directly into the page bitmap.
-    fn can_decode_directly(
-        &self,
-        page_bitmap: &Bitmap,
-        region_info: &decode::RegionSegmentInfo,
-        region_default_pixel: bool,
-    ) -> bool {
+    fn can_decode_directly(&self, page_bitmap: &Bitmap, region_info: &decode::RegionSegmentInfo, region_default_pixel: bool) -> bool {
         if !self.page_pristine {
             return false;
         }
@@ -740,10 +649,7 @@ impl PageState {
 
     /// Look up a referred segment by number.
     fn get_referred_segment(&self, segment_number: u32) -> Option<&Bitmap> {
-        self.referred_segments
-            .binary_search_by_key(&segment_number, |(num, _)| *num)
-            .ok()
-            .map(|idx| &self.referred_segments[idx].1)
+        self.referred_segments.binary_search_by_key(&segment_number, |(num, _)| *num).ok().map(|idx| &self.referred_segments[idx].1)
     }
 
     /// Store a decoded pattern dictionary for later reference.
@@ -755,10 +661,7 @@ impl PageState {
 
     /// Look up a pattern dictionary by segment number.
     fn get_pattern_dictionary(&self, segment_number: u32) -> Option<&PatternDictionary> {
-        self.pattern_dictionaries
-            .binary_search_by_key(&segment_number, |(num, _)| *num)
-            .ok()
-            .map(|idx| &self.pattern_dictionaries[idx].1)
+        self.pattern_dictionaries.binary_search_by_key(&segment_number, |(num, _)| *num).ok().map(|idx| &self.pattern_dictionaries[idx].1)
     }
 
     /// Store a decoded symbol dictionary for later reference.
@@ -772,9 +675,7 @@ impl PageState {
     /// [`MAX_REFERRED_SYMBOLS`] before anything is collected.
     fn referred_symbols(&self, segments: &[u32]) -> Result<Vec<&Bitmap>> {
         let dictionaries = || segments.iter().filter_map(|&num| self.get_symbol_dictionary(num));
-        let count = dictionaries()
-            .map(|dictionary| dictionary.exported_symbols.len() as u64)
-            .fold(0, u64::saturating_add);
+        let count = dictionaries().map(|dictionary| dictionary.exported_symbols.len() as u64).fold(0, u64::saturating_add);
         if count > MAX_REFERRED_SYMBOLS {
             bail!(OverflowError::SymbolCount);
         }
@@ -783,10 +684,7 @@ impl PageState {
 
     /// Look up a symbol dictionary by segment number.
     fn get_symbol_dictionary(&self, segment_number: u32) -> Option<&SymbolDictionary> {
-        self.symbol_dictionaries
-            .binary_search_by_key(&segment_number, |(num, _)| *num)
-            .ok()
-            .map(|idx| &self.symbol_dictionaries[idx].1)
+        self.symbol_dictionaries.binary_search_by_key(&segment_number, |(num, _)| *num).ok().map(|idx| &self.symbol_dictionaries[idx].1)
     }
 
     /// Store a decoded Huffman table for later reference.
@@ -798,30 +696,18 @@ impl PageState {
 
     /// Look up a Huffman table by segment number.
     fn get_huffman_table(&self, segment_number: u32) -> Option<&HuffmanTable> {
-        self.huffman_tables
-            .binary_search_by_key(&segment_number, |(num, _)| *num)
-            .ok()
-            .map(|idx| &self.huffman_tables[idx].1)
+        self.huffman_tables.binary_search_by_key(&segment_number, |(num, _)| *num).ok().map(|idx| &self.huffman_tables[idx].1)
     }
 }
 
 /// Parse page information and initialize the page bitmap.
-fn init_page(
-    reader: &mut Reader<'_>,
-    height_from_stripes: Option<u32>,
-    page: &mut PageState,
-    bitmap: &mut Bitmap,
-) -> Result<()> {
+fn init_page(reader: &mut Reader<'_>, height_from_stripes: Option<u32>, page: &mut PageState, bitmap: &mut Bitmap) -> Result<()> {
     let page_info = parse_page_information(reader)?;
 
     // "A page's bitmap height may be declared in its page information segment
     // to be unknown (by specifying a height of 0xFFFFFFFF). In this case, the
     // page must be striped." (7.4.8.2)
-    let height = if page_info.height == 0xFFFF_FFFF {
-        height_from_stripes.ok_or(FormatError::UnknownPageHeight)?
-    } else {
-        page_info.height
-    };
+    let height = if page_info.height == 0xFFFF_FFFF { height_from_stripes.ok_or(FormatError::UnknownPageHeight)? } else { page_info.height };
 
     // "Bit 2: Page default pixel value. This bit contains the initial value
     // for every pixel in the page, before any region segments are decoded
@@ -908,10 +794,7 @@ mod tests {
                 // An immediate refinement of the page, which reads the page at its own location (7.4.7.4).
                 vec![segment(1, 42, &[], &region_of_4(x, y, REPLACE, REFINEMENT))],
                 // An immediate refinement of an intermediate region at the same place (7.4.7.5).
-                vec![
-                    segment(1, 36, &[], &region_of_4(x, y, OR, GENERIC)),
-                    segment(2, 42, &[1], &region_of_4(x, y, OR, REFINEMENT)),
-                ],
+                vec![segment(1, 36, &[], &region_of_4(x, y, OR, GENERIC)), segment(2, 42, &[1], &region_of_4(x, y, OR, REFINEMENT))],
             ];
             forms.map(|form| {
                 let stream = [page_of_8(), form.concat()].concat();
@@ -1008,7 +891,9 @@ mod tests {
         // A page of bit(1, ..), and over it at 41, 4 the area refined from it.
         const PAGE: &str = "000000003000010000001300000070000000180000000000000000420000000000012600010000016f00000070000000180000000000000000040003fffdff02fefefefb5d354db053c2a984c01af66c619b02c245055be23a2a431b04c60325c88676f6ff1b0a68c873ad9011a27a89fc99abc7db2e8f529ecf198ff8c6a726ddcb746dc51f3812e365e74ee668fa02f59182cae39f0ef43b3201da1bcd43a21f449889e15ba0ba1a9344da1bdb9dcb4015279a39d944509febc622a235fa2c623acb443f0c10dabf7fba5e9d6fef2f1289dfd0a6a3801d036f21a62045074f5d3158ab0373ad2334102ef867dc3132dc8d02fe517771c419cdbad47d67d409ec89d0425d1f51a48af6ba3bee6e0701185bfa5f46b347b0ec39e744b665d1e8aac868838d3db25162d65534ff4771d9c0d657bd48d5814fa7cc184d0e961defab2d75a79a88345cdae5546a54221a22ddfe9c8a0514f32ac9de806fbc5fb4f5275c79d679f0258f77900daaa273cee50e50c958f323414670d7761418639342fdb2082eac5e7934f1a06169991452b1a042eaee7871ffac000000022a000100000091000000400000001000000029000000040400ffffffffd24567306e52f57232cefa9800db00fb60c21b30b0e53d9fac8a1f863a580a7cc49ab401934ac8be3a18e2dc0f01774b76c3e9196283cb5504742c763a867bc1aae8c48d74d194dacda03ce7e91904897ab61add273d9188fda65dc6fefb995d85f48142e43c1970bedb9c5f4be3cb00d458e9f4ee9714a61fffac";
         let page: Vec<Vec<u8>> = (0..24)
-            .map(|y| (0..112).map(|x| bit(1, x, y) ^ if (41..105).contains(&x) && (4..20).contains(&y) { flipped(10, x - 41, y - 4) } else { 0 }).collect())
+            .map(|y| {
+                (0..112).map(|x| bit(1, x, y) ^ if (41..105).contains(&x) && (4..20).contains(&y) { flipped(10, x - 41, y - 4) } else { 0 }).collect()
+            })
             .collect();
         // A symbol of bit(3, ..), and a text instance refined from it, 70 narrower with RDX 0.
         const TEXT: &str = "0000000030000100000013000000460000000c000000000000000042000000000001000001000000ed000003fffdff02fefefe00000001000000013f4efc0ce48e6b5c00246a648400fb605a44d542ed29da2b9b55c01f4e5af9842dd70c88f4913c7f552503ba52a5d7b5d9fd08ff5794b4dbfb3df7bafcf9c43d04154c1cefa181ca1aba5da826a4e4229858bd0950442df69c098ab3b61a32f71b136974b96bcb5306f3e75af1a4ef51b8f56a355acb8b69915cfa623f5a21933be8c056a348783a116ea914e886af2c64bf3b23e5610726c981092220f05411857529861fbf4c630a15fd00b081d2351279e06602f4408b25dc1d01c223027ecb8c87c4b1d76e3882a759c1adaf749f0e20735f8bd5a7306fffac000000020620010100000085000000460000000c0000000000000000040012ffffffff00000001a967c0b129999147062a4766ce10bc3dae7f1daf43dda1427d31203a1bc9fa021e0504e0a4b01739952970b54ad11ac08c0684d2f556a1843eb01dc75b963be6237b7f02fdfe17ccf7f061de310a936fd08c5ddea47609789e55f7cbca81ae38219c4abc5f9eff47ffac";
@@ -1088,9 +973,8 @@ mod tests {
         let flipped = |seed: u32, x: u32, y: u32| bit(seed, x, y) & bit(seed + 1, x, y) & bit(seed + 2, x, y);
         // A symbol of bit(2, ..), and a text instance refined from it, 4 wider with RDX 0.
         const TEXT: &str = "0000000030000100000013000000680000000c000000000000000042000000000001000001000000b1000003fffdff02fefefe00000001000000013f525ad7118f669a303f1b11efa5210e9765b834b1831c650f3a3d325dbd7317379ea4fb573b09a20c362f065d8f9301e74cbbc50c69910641c0e0eea7c2fd1e831ca1459a943be55ed8e074b426ad7ff1e8d8ff6f1aa44684de5da4b4c3483911604412e00e96a0db6ec7103feb2bc4301ae98d3f9c23078ae72dc46f76e9dfea209d39187f1194f7b9285cd6e7b2dc7abb5def43ff0abe2df554fc55ffac0000000206200101000000af000000680000000c0000000000000000040012ffffffff00000001a96b5febebec5a68693b51f5db25ddf176d4aae89904a71d1690f12888e10b038db723ac59941f76c2844b739ce524d9563f4005e1edbabf2e323e8e9ac1a3b9060587c3010e7d6bcf90c00dbf9000a2f17b1d9b598e01b9158dc16a63f4388a6f647b99dc7118aa09e08d59fba1bc24e3a0f1ebb0cae636b6bedbb65b01945228d3e5d2980a0ad6290c13d2f34f5c861415ffac";
-        let picture: Vec<Vec<u8>> = (0..12)
-            .map(|y| (0..104).map(|x| (if (2..102).contains(&x) { bit(2, x - 2, y) } else { 0 }) ^ flipped(20, x, y)).collect())
-            .collect();
+        let picture: Vec<Vec<u8>> =
+            (0..12).map(|y| (0..104).map(|x| (if (2..102).contains(&x) { bit(2, x - 2, y) } else { 0 }) ^ flipped(20, x, y)).collect()).collect();
         let stream: Vec<u8> = (0..TEXT.len() / 2).map(|i| u8::from_str_radix(&TEXT[i * 2..i * 2 + 2], 16).unwrap()).collect();
         let mut rows = Rows::default();
         Image::new_embedded(&stream, None).unwrap().decode(&mut rows).unwrap();

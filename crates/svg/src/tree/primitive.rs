@@ -4,8 +4,8 @@
 //!
 //! A path is a primitive when it is one closed contour whose points all lie on the outline of
 //! an axis-aligned (rounded) rectangle or ellipse and that encloses its area. The check works on
-//! the segments as given, so use it on a [`Coordinates::Local`](super::document::Coordinates)
-//! scene, where a rotated or skewed shape keeps its own axes.
+//! the segments as given (a [`Path`](super::document::Path)'s are after its absolute transform), so
+//! a rotated or skewed shape is not recognised.
 
 use super::document::Segment;
 

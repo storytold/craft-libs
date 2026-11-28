@@ -1,6 +1,6 @@
 //! Encoder tests against this crate's decoder: the decoded pictures must equal the encoder's
 //! reconstruction exactly (any difference would drift along a GOP of P pictures). The ffmpeg
-//! comparison is in `tests/mpeg2/encode.rs`.
+//! comparison is in `tests/it/mpeg2/encode.rs`.
 
 use super::*;
 use crate::mpeg2::{Decoder, probe};

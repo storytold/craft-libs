@@ -20,6 +20,7 @@ heic-rs = { version = "=0.1.4", default-features = false, features = ["std", "pa
 rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 proptest = { workspace = true }
 
 [features]

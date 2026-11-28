@@ -1,6 +1,6 @@
 //! Print-color test scenes for the Craft apps.
 //!
-//! [`scene`] reads the app-neutral scene files in `scenes/`. [`reference`] writes a scene to
+//! [`scene`] reads the app-neutral scene files in `scenes/`. [`mod@reference`] writes a scene to
 //! PDF through craft-pdf, so the shared writer is tested on its own. [`structure`] summarizes a
 //! PDF's print-relevant structure (transparency groups, overprint and soft-mask graphics states,
 //! color spaces, output intents) and checks it against a scene's `structure` block. Apps use
@@ -9,6 +9,7 @@
 //! On developer machines, [`report`] separates each scene's PDF into plates with Ghostscript
 //! ([`gs`], an external program; [`tiff`] reads the plates) and [`judge`]s the ink at the
 //! scene's sample points.
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod gs;
@@ -29,6 +30,7 @@ pub enum Error {
     #[error("unsupported: {0}")]
     Unsupported(String),
     #[error("write: {0}")]
+    #[allow(missing_docs)]
     Write(#[from] craft_pdf::write::WriteError),
     /// The PDF could not be parsed for the structure summary.
     #[error("read: {0}")]
@@ -40,3 +42,10 @@ pub enum Error {
     #[error("tiff: {0}")]
     Tiff(String),
 }
+
+#[cfg(test)]
+extern crate self as craft_plate_test;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

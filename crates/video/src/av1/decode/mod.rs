@@ -5,7 +5,7 @@
 
 #![allow(clippy::needless_range_loop, clippy::type_complexity)]
 
-mod bits;
+pub(crate) mod bits;
 mod cdef;
 mod cdf;
 mod decoder;

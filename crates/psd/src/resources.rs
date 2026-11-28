@@ -8,10 +8,14 @@ use crate::io::{Reader, WriteExt, write_pascal};
 pub mod ids {
     /// Resolution info (`ResolutionInfo` structure).
     pub const RESOLUTION_INFO: u16 = 1005;
+    /// Alpha channel names as unpadded Pascal strings.
+    pub const ALPHA_NAMES: u16 = 1006;
     /// Target layer index.
     pub const LAYER_STATE: u16 = 1024;
     /// Layer group ids (one u16 per layer).
     pub const LAYER_GROUP_INFO: u16 = 1026;
+    /// Grid and guides (legacy v1).
+    pub const GUIDES: u16 = 1032;
     /// Legacy (Photoshop 4) thumbnail, BGR.
     pub const THUMBNAIL_PS4: u16 = 1033;
     /// Thumbnail (JFIF).
@@ -20,6 +24,8 @@ pub mod ids {
     pub const GLOBAL_ANGLE: u16 = 1037;
     /// ICC profile.
     pub const ICC_PROFILE: u16 = 1039;
+    /// Unicode alpha channel names.
+    pub const UNICODE_ALPHA_NAMES: u16 = 1045;
     /// Global altitude.
     pub const GLOBAL_ALTITUDE: u16 = 1049;
     /// Version info (has real merged data flag).
@@ -32,6 +38,14 @@ pub mod ids {
     pub const TIMELINE_INFO: u16 = 1075;
     /// Selected layer ids (`u16` count followed by `u32` ids).
     pub const LAYER_SELECTION_IDS: u16 = 1069;
+    /// Clipping path name and flatness.
+    pub const CLIPPING_PATH: u16 = 2999;
+}
+
+/// Encode a name for a legacy Pascal field: printable ASCII up to 255 bytes, with other
+/// characters replaced by `?`.
+pub fn encode_legacy_name(s: &str) -> Vec<u8> {
+    crate::io::encode_legacy_name(s)
 }
 
 /// One image resource block.
@@ -85,7 +99,9 @@ impl<'a> ImageResourceView<'a> {
         r.skip(name_pad)?;
         let len = r.u32()?;
         let data = r.bytes_u64(u64::from(len))?;
-        if len % 2 == 1 {
+        // A writer that drops the pad byte after the section's last resource is common; that
+        // byte would be past the section, so don't fail the whole file over it.
+        if len % 2 == 1 && !r.is_empty() {
             r.skip(1)?;
         }
         Ok(ImageResourceView { signature, id, name, data })
@@ -501,6 +517,19 @@ mod tests {
     #[test]
     fn empty_section() {
         assert_eq!(roundtrip(&[]), vec![0, 0, 0, 0]);
+    }
+
+    /// The last resource of the section has odd data and no pad byte (some writers drop it):
+    /// the resource still reads instead of the whole file failing.
+    #[test]
+    fn odd_last_resource_without_pad() {
+        let mut out = Vec::new();
+        write_section(&mut out, &[ImageResource::new(1000, vec![1, 2, 3])]).unwrap();
+        out.pop();
+        let len = u32::from_be_bytes([out[0], out[1], out[2], out[3]]) - 1;
+        out[..4].copy_from_slice(&len.to_be_bytes());
+        let back = read_section(&mut Reader::new(&out)).unwrap();
+        assert_eq!(back, [ImageResource::new(1000, vec![1, 2, 3])]);
     }
 
     #[test]

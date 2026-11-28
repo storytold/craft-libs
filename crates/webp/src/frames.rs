@@ -76,7 +76,7 @@ pub struct Animation {
 pub enum FrameError {
     /// Not a WebP file, or the first frame does not decode.
     Malformed(String),
-    /// The canvas is over [`FrameLimits::max_canvas_bytes`].
+    /// A configured frame, retained-byte, or canvas budget cannot fit the first frame.
     LimitExceeded(String),
 }
 
@@ -94,6 +94,9 @@ impl std::error::Error for FrameError {}
 /// Decodes the frames of a WebP file: every frame of an animation, composited, or the picture of
 /// a still as one frame.
 pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, FrameError> {
+    if limits.max_frames == 0 {
+        return Err(FrameError::LimitExceeded("the frame limit is zero".into()));
+    }
     let info = crate::scan(bytes, 0).ok_or_else(|| FrameError::Malformed("not a WebP file".into()))?;
     let canvas = u64::from(info.width) * u64::from(info.height) * 4;
     if canvas > limits.max_canvas_bytes {
@@ -110,6 +113,9 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     }
     if (width, height) != (info.width, info.height) {
         return Err(FrameError::Malformed("conflicting canvas dimensions".into()));
+    }
+    if canvas > limits.max_bytes {
+        return Err(FrameError::LimitExceeded(format!("the first frame needs {canvas} retained bytes but the limit is {}", limits.max_bytes)));
     }
     if !decoder.has_animation() {
         let mut rgba = vec![0u8; usize::try_from(canvas).map_err(|_| FrameError::LimitExceeded("canvas".into()))?];
@@ -228,11 +234,32 @@ mod tests {
     fn a_still_is_one_frame() {
         let mut file = Vec::new();
         WebPEncoder::new_lossless(&mut file).write_image(&[1, 2, 3, 255].repeat(6), 3, 2, ExtendedColorType::Rgba8).unwrap();
-        let a = read_frames(&file, &FrameLimits::default()).unwrap();
+        let limits = FrameLimits { max_frames: 1, max_bytes: 3 * 2 * 4, ..FrameLimits::default() };
+        let a = read_frames(&file, &limits).unwrap();
         assert_eq!((a.frames.len(), a.frames[0].delay_ms, &a.frames[0].rgba[..4]), (1, 0, &[1, 2, 3, 255][..]));
         let mut rgb = Vec::new();
         WebPEncoder::new_lossless(&mut rgb).write_image(&[9, 8, 7].repeat(6), 3, 2, ExtendedColorType::Rgb8).unwrap();
         assert_eq!(&read_frames(&rgb, &FrameLimits::default()).unwrap().frames[0].rgba[..8], &[9, 8, 7, 255, 9, 8, 7, 255]);
+    }
+
+    #[test]
+    fn initial_frame_budgets_apply_to_still_and_animated_webp() {
+        let mut still = Vec::new();
+        WebPEncoder::new_lossless(&mut still).write_image(&[10, 0, 0].repeat(6), 3, 2, ExtendedColorType::Rgb8).unwrap();
+        let animation = anim(&[(10, 50), (200, 100)]);
+        let first_frame_bytes = 3 * 2 * 4;
+        let refusing_limits =
+            [FrameLimits { max_frames: 0, ..FrameLimits::default() }, FrameLimits { max_bytes: first_frame_bytes - 1, ..FrameLimits::default() }];
+        let refused =
+            [&still, &animation].map(|bytes| refusing_limits.map(|limits| matches!(read_frames(bytes, &limits), Err(FrameError::LimitExceeded(_)))));
+        assert_eq!(refused, [[true, true], [true, true]], "both budgets must report limit errors for still and animated WebP");
+
+        let limits = FrameLimits { max_bytes: first_frame_bytes, ..FrameLimits::default() };
+        for (bytes, expected_delay, stop) in [(&still, 0, Stop::End), (&animation, 50, Stop::ByteLimit)] {
+            let decoded = read_frames(bytes, &limits).unwrap();
+            assert_eq!(reds(&decoded), [(10, expected_delay)]);
+            assert_eq!(decoded.stop, stop);
+        }
     }
 
     #[test]

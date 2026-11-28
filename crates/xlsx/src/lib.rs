@@ -51,6 +51,7 @@
 
 mod document;
 mod drawing;
+mod external;
 #[macro_use]
 mod features;
 pub mod ns;
@@ -74,6 +75,7 @@ pub use craft_sheet::{
 };
 pub use document::{Document, DrawingPart, KeptPart, PivotCachePart, PivotTablePart, TablePart, Worksheet, XlsxKind};
 pub use drawing::{Anchor, Drawing, Item, Marker, ObjectKind, Placement};
+pub use external::{ExternalBook, ExternalLink, ExternalName, ExternalSheetData};
 pub use features::{
     Break, CfRule, Cfvo, ColorScale, Comment, Comments, ConditionalFormatting, DataBar, DataValidation, DataValidations, Features, HeaderFooter,
     Hyperlink, IconSet, NoteShape, PageMargins, PageSetup, Pane, Print, PrintOptions, Selection, SheetFormat, SheetView, Table, TableColumn,

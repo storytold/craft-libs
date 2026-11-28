@@ -1,0 +1,38 @@
+[package]
+name = "craft-cloud-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Share dialog, cloud Open and Save pages, account menu and presence bar for Craft apps, on egui"
+
+[lints]
+workspace = true
+
+[dependencies]
+egui = { workspace = true }
+# The vendor-neutral vocabulary the share and e-sign dialogs speak. No IO and
+# no vendor, so this stays buildable for the web.
+craft-cloud = { workspace = true, optional = true }
+# The e-sign contract the request-signatures dialog states its work through.
+craft-esign = { workspace = true, optional = true }
+# The control channel's report of the cloud state. One serialiser here
+# rather than one per application. No IO and no vendor.
+serde_json = { workspace = true, optional = true }
+
+[features]
+default = []
+# The share dialog and the backend contract it states its work through.
+share = ["dep:craft-cloud"]
+# Open and Save against cloud storage. Needs the share dialog, which a
+# document's overflow menu and the Share split button both open.
+cloud = ["share", "dep:serde_json"]
+# Request-signatures dialog.
+esign = ["dep:craft-cloud", "dep:craft-esign"]
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+egui_kittest = { version = "0.37", features = ["wgpu"] }

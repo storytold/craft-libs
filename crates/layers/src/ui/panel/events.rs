@@ -1,0 +1,436 @@
+//! `LayersEvent` and the types it carries (`LayerSelect`, `LayerToggle`, `LayerDrop`, `LayerMove`,
+//! `SubRowMove`, `RowTransfer`, `MaskMove`).
+//!
+//! The panel reports what the user did in the order it happened; the app applies each event with
+//! its own commands and undo, in the pass it is reported.
+
+use craft_behavior::{EditEvent, SelectionChange};
+use craft_keymap::Mods;
+use craft_theme::LabelColor;
+use craft_ui::contract::{DropPayload, OpenChange};
+
+use super::footer::{LayersFooterAction, LayersFooterButton};
+use crate::ui::filter::LayerFilter;
+use crate::ui::rows::LayerPropertyEdit;
+use crate::ui::tree::{LayerPart, LayerRowKey, SubRowGroup};
+
+/// What the Layers panel reports.
+///
+/// ```ignore
+/// for event in out.events {
+///     match event {
+///         LayersEvent::Select(s) => app.select(s.change, s.part),
+///         LayersEvent::Toggle(t) => app.toggle(t),          // the events of one sweep are Updates of one gesture closed by a Commit; a plain press is a Set
+///         LayersEvent::Properties(p) => app.set_properties(p),
+///         LayersEvent::Drop(EditEvent::Set { after, .. }) => app.drop_rows(after),
+///         _ => {}
+///     }
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum LayersEvent<K> {
+    /// A click on a row (Cmd/Ctrl toggles, Shift extends), a selection key, or a click on the empty
+    /// space below the rows (`Clear`). A right-click outside the selection selects the row first.
+    /// The app sets its selection by the change and its target from `part`.
+    Select(LayerSelect<K>),
+    /// An eye or lock cell: a click sets its row; a drag down the column sets every
+    /// row crossed to the first row's new state, under one gesture and so one undo step.
+    Toggle(LayerToggle<K>),
+    /// Alt-click on an eye: show only this layer, or restore when it already is (Photoshop).
+    ShowOnly(LayerRowKey<K>),
+    /// Escape during an Alt eye sweep: undo the `ShowOnly` of that sweep, which turned the other layers' eyes off.
+    /// The key is the layer the sweep began on.
+    UndoShowOnly(LayerRowKey<K>),
+    /// A pick in the eye cell's colour menu or the row menu's Label Color submenu (None and the label colours): for
+    /// every selected layer when the row is in a multi-selection, else for the row.
+    #[non_exhaustive]
+    LabelColor {
+        /// The layers to colour.
+        rows: Vec<K>,
+        /// The colour; `None` for none.
+        color: Option<LabelColor>,
+    },
+    /// A group asked to open or close: its disclosure (Alt for every group), the arrow keys, a
+    /// screen reader, or a reveal with its groups opened ([`LayersPanel::reveal`](super::LayersPanel::reveal)). A
+    /// view change: no undo step.
+    Open(OpenChange<K>),
+    /// A layer's effects and Smart Filter rows asked to open or close: the `fx` disclosure, or the
+    /// effects commands on the lead; `all` (Alt) for every layer.
+    #[non_exhaustive]
+    FxOpen {
+        /// The layer.
+        layer: K,
+        /// Open or close.
+        open: bool,
+        /// Every layer takes the state.
+        all: bool,
+    },
+    /// A rename committed: never empty after trimming, never the unchanged name.
+    #[non_exhaustive]
+    Rename {
+        /// The layer.
+        layer: K,
+        /// The new name, trimmed.
+        text: String,
+    },
+    /// A double click or Enter where it isn't a rename: the app opens Layer Style, a fill's or
+    /// adjustment's options, a smart object's contents, edits the type, or converts the
+    /// Background.
+    #[non_exhaustive]
+    Activate {
+        /// The row: a layer, or an effects or Smart Filter row (Layer Style on that effect, the
+        /// filter's options).
+        row: LayerRowKey<K>,
+        /// What was activated.
+        on: ActivateOn,
+    },
+    /// A thumbnail click that isn't a select: Cmd/Ctrl-click loads it as a selection (Shift adds,
+    /// Alt subtracts, Shift+Alt intersects; `SelectionOperation::from_modifiers`), Shift-click on
+    /// a mask toggles it, Alt-click on a mask views it, Alt-click on the layer thumbnail fits the
+    /// layer on screen.
+    #[non_exhaustive]
+    ThumbClick {
+        /// The layer.
+        layer: K,
+        /// The thumbnail.
+        part: LayerPart,
+        /// The modifiers held.
+        mods: Mods,
+    },
+    /// The chain before a mask thumbnail: link or unlink the mask.
+    #[non_exhaustive]
+    MaskLink {
+        /// The layer.
+        layer: K,
+        /// The mask.
+        part: LayerPart,
+        /// The state asked for.
+        linked: bool,
+    },
+    /// An edit in the blend, opacity, lock and fill rows: the app applies it to every selected
+    /// layer.
+    Properties(LayerPropertyEdit),
+    /// The filter bar's edit, for a filter binding that does not write through.
+    Filter(Box<EditEvent<LayerFilter>>),
+    /// A drop of rows or a mask thumbnail (a drag, a stacking key in the list, or a stacking command): one `Set`, one
+    /// undo step.
+    Drop(EditEvent<LayerDrop<K>>),
+    /// A press on a footer button.
+    Footer(LayersFooterAction),
+    /// Rows dropped on a footer button: Delete deletes layers, clears effects, removes filters,
+    /// deletes a mask (the app asks first); New Layer duplicates layers; New Group groups them.
+    #[non_exhaustive]
+    FooterDrop {
+        /// The button.
+        button: LayersFooterButton,
+        /// What was dropped: layer rows, effects or filter rows, or one [`LayerRowKey::Mask`].
+        rows: Vec<LayerRowKey<K>>,
+    },
+    /// Alt-click on the line between two sibling layers (Photoshop): clip the upper layer to the one below, or release
+    /// it when it is clipped already.
+    #[non_exhaustive]
+    ClipLine {
+        /// The layer above the line.
+        upper: K,
+        /// The upper layer is clipped: the click releases it.
+        release: bool,
+    },
+    /// A pick in the host's row menu ([`LayersPanel::row_menu`](super::LayersPanel::row_menu)).
+    #[non_exhaustive]
+    Menu {
+        /// Where the menu was opened.
+        target: MenuTarget<K>,
+        /// The host's command.
+        command: String,
+    },
+    /// A claimed press on a cell of the eye or lock column ([`LayersPanel::row_look`](super::LayersPanel::row_look)),
+    /// with no `Toggle`: the app applies its own rule on the modifiers (Cmd on an eye is Outline, Cmd+Alt Outline
+    /// Others, Alt on a lock Lock Others).
+    #[non_exhaustive]
+    CellClick {
+        /// The row.
+        row: LayerRowKey<K>,
+        /// The column.
+        column: LayerColumn,
+        /// The modifiers held.
+        mods: Mods,
+    },
+    /// Delete or Backspace in the rows of a [`deletable`](super::LayersPanel::deletable) panel: the selected rows when
+    /// the lead is selected, else the lead.
+    Delete(Vec<LayerRowKey<K>>),
+    /// A payload of the host's type, dragged from outside the list, released `position` of the layer `target`
+    /// ([`LayersPanel::takes_drop`](super::LayersPanel::takes_drop)); `copy` when the operation is Copy. A
+    /// `LayersDrag` still reports `Drop`.
+    #[non_exhaustive]
+    HostDrop {
+        /// The payload dragged.
+        payload: DropPayload,
+        /// The layer the payload was released on.
+        target: K,
+        /// Where in relation to `target`.
+        position: LayerPosition,
+        /// Whether the drop operation is Copy.
+        copy: bool,
+    },
+}
+
+// `#[non_exhaustive]` variants have no struct literal outside the crate: these constructors are what the
+// app's event tests build events with.
+impl<K> LayersEvent<K> {
+    /// A thumbnail click that isn't a select, with the modifiers held.
+    pub fn thumb_click(layer: K, part: LayerPart, mods: Mods) -> Self {
+        Self::ThumbClick { layer, part, mods }
+    }
+
+    /// A click on the chain before a mask thumbnail: link (`true`) or unlink the mask.
+    pub fn mask_link(layer: K, part: LayerPart, linked: bool) -> Self {
+        Self::MaskLink { layer, part, linked }
+    }
+
+    /// A double click or Enter on `row` that isn't a rename.
+    pub fn activate(row: LayerRowKey<K>, on: ActivateOn) -> Self {
+        Self::Activate { row, on }
+    }
+
+    /// A committed rename of `layer` to `text`, which the panel gives trimmed, not empty and not the unchanged name.
+    pub fn rename(layer: K, text: impl Into<String>) -> Self {
+        Self::Rename { layer, text: text.into() }
+    }
+
+    /// A layer's effects and Smart Filter rows asked to open or close.
+    pub fn fx_open(layer: K, open: bool, all: bool) -> Self {
+        Self::FxOpen { layer, open, all }
+    }
+
+    /// `rows` dropped on footer `button`.
+    pub fn footer_drop(button: LayersFooterButton, rows: Vec<LayerRowKey<K>>) -> Self {
+        Self::FooterDrop { button, rows }
+    }
+
+    /// A pick of the host's `command` in the row menu opened at `target`.
+    pub fn menu(target: MenuTarget<K>, command: impl Into<String>) -> Self {
+        Self::Menu { target, command: command.into() }
+    }
+
+    /// A host payload released `position` of the layer `target`; `copy` when the operation is Copy.
+    pub fn host_drop(payload: DropPayload, target: K, position: LayerPosition, copy: bool) -> Self {
+        Self::HostDrop { payload, target, position, copy }
+    }
+
+    /// A claimed press on `column` of `row`, with the modifiers held.
+    pub fn cell_click(row: LayerRowKey<K>, column: LayerColumn, mods: Mods) -> Self {
+        Self::CellClick { row, column, mods }
+    }
+}
+
+/// A selection change, in layers.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LayerSelect<Id> {
+    /// The change: `Set` the layers (the last becomes the lead), `Toggle` one, or `Clear`. A click
+    /// on an effects or Smart Filter row picks its layer.
+    pub change: SelectionChange<Id>,
+    /// The thumbnail the click landed on, which becomes the target; `None` elsewhere on the row
+    /// and for keys (the target stays).
+    pub part: Option<LayerPart>,
+    /// The effects or Smart Filter row a click, a right-click or a selection key picked, which the app may select on
+    /// its own ([`LayerSelection::sub_row`](crate::ui::tree::LayerSelection::sub_row)); `None` on a layer row.
+    pub row: Option<LayerRowKey<Id>>,
+    /// The modifiers of the press that made the change; `Mods::NONE` from keys.
+    pub mods: Mods,
+}
+
+impl<Id> LayerSelect<Id> {
+    /// A selection change with an optional thumbnail target, made on a layer row.
+    pub fn new(change: SelectionChange<Id>, part: Option<LayerPart>) -> Self {
+        Self { change, part, row: None, mods: Mods::NONE }
+    }
+
+    /// The change made on `row`; a layer row leaves [`row`](Self::row) `None`.
+    pub fn on_row(mut self, row: &LayerRowKey<Id>) -> Self
+    where
+        Id: Clone,
+    {
+        self.row = (!row.is_layer()).then(|| row.clone());
+        self
+    }
+}
+
+/// An edit of an eye or lock cell.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LayerToggle<Id> {
+    /// The rows the edit sets, in the order the pointer crossed them; the first is the row the gesture started on
+    /// in its first event.
+    pub rows: Vec<LayerRowKey<Id>>,
+    /// Which column.
+    pub column: LayerColumn,
+    /// The new state of every row. The events of one sweep are `Update`s of one gesture, which arrive as the pointer
+    /// crosses more rows, closed by a `Commit` on release; a plain press is a `Set`. Escape during the sweep reports
+    /// the rows it crossed as a `Cancel` of that gesture that carries the state they had before.
+    pub edit: EditEvent<bool>,
+}
+
+impl<Id> LayerToggle<Id> {
+    /// An edit of `column` on `rows`.
+    pub fn new(rows: Vec<LayerRowKey<Id>>, column: LayerColumn, edit: EditEvent<bool>) -> Self {
+        Self { rows, column, edit }
+    }
+}
+
+/// A toggle column of the rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LayerColumn {
+    /// The eye.
+    Visibility,
+    /// The lock column ([`LayersPanel::lock_column`](super::LayersPanel::lock_column)), or the
+    /// lock indicator's press (which only unlocks).
+    Lock,
+}
+
+/// What an activation landed on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ActivateOn {
+    /// A thumbnail.
+    Thumbnail(LayerPart),
+    /// The rest of the row, or Enter.
+    Row,
+    /// A Smart Filter's Blending Options button ([`SubRow::options`](crate::ui::tree::SubRow::options)).
+    Options,
+}
+
+/// Where a dropped layer lands relative to its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LayerPosition {
+    /// Above the target.
+    Before,
+    /// Below the target.
+    After,
+    /// Inside the target group.
+    Into,
+}
+
+/// What a drop of rows means.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LayerDrop<Id> {
+    /// Layers moved or copied.
+    Layers(LayerMove<Id>),
+    /// A Smart Filter moved within its stack.
+    SubRows(SubRowMove<Id>),
+    /// Effects or Smart Filters moved to another layer.
+    Transfer(RowTransfer<Id>),
+    /// A mask thumbnail dropped on another layer's row: the mask moves there.
+    Mask(MaskMove<Id>),
+}
+
+/// Layers moved or copied next to a target layer.
+///
+/// A place has one encoding: `Into` a group at its first slot, else `Before` the next sibling, else `After` the last
+/// sibling. A place beside a layer's effects or Smart Filter rows is `After` that layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LayerMove<Id> {
+    /// The layers, in display order.
+    pub layers: Vec<Id>,
+    /// The layer they land by.
+    pub target: Id,
+    /// Before, after or inside the target.
+    pub position: LayerPosition,
+    /// Alt: copy instead of move.
+    pub copy: bool,
+}
+
+impl<Id> LayerMove<Id> {
+    /// `layers` land `position` of `target`.
+    pub fn new(layers: Vec<Id>, target: Id, position: LayerPosition, copy: bool) -> Self {
+        Self { layers, target, position, copy }
+    }
+}
+
+/// A Smart Filter moved within one layer's stack.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SubRowMove<Id> {
+    /// The layer the stack belongs to.
+    pub layer: Id,
+    /// The stack.
+    pub group: SubRowGroup,
+    /// The index it came from.
+    pub from: usize,
+    /// The index it lands at once it is taken out.
+    pub to: usize,
+    /// Alt: copy instead of move.
+    pub copy: bool,
+}
+
+impl<Id> SubRowMove<Id> {
+    /// The sub-row at `from` of `layer`'s `group` lands at `to`.
+    pub fn new(layer: Id, group: SubRowGroup, from: usize, to: usize, copy: bool) -> Self {
+        Self { layer, group, from, to, copy }
+    }
+}
+
+/// Effects or Smart Filters dropped on another layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RowTransfer<Id> {
+    /// The rows.
+    pub rows: Vec<LayerRowKey<Id>>,
+    /// The layer they go to.
+    pub to: Id,
+    /// Alt: copy instead of move.
+    pub copy: bool,
+}
+
+impl<Id> RowTransfer<Id> {
+    /// `rows` land on layer `to`.
+    pub fn new(rows: Vec<LayerRowKey<Id>>, to: Id, copy: bool) -> Self {
+        Self { rows, to, copy }
+    }
+}
+
+/// A mask moved or copied onto another layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MaskMove<Id> {
+    /// The layer the mask comes from.
+    pub layer: Id,
+    /// The mask: [`LayerPart::LayerMask`] or [`LayerPart::VectorMask`].
+    pub part: LayerPart,
+    /// The layer it goes to.
+    pub to: Id,
+    /// Alt: copy instead of move.
+    pub copy: bool,
+}
+
+impl<Id> MaskMove<Id> {
+    /// The mask `part` of `layer` lands on `to`.
+    pub fn new(layer: Id, part: LayerPart, to: Id, copy: bool) -> Self {
+        Self { layer, part, to, copy }
+    }
+}
+
+/// Where the host's row menu was opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MenuTarget<Id> {
+    /// The row; `None` for the empty space below the rows, or the whole list when no row is shown (the host's
+    /// thumbnail size and clipping menu).
+    pub row: Option<LayerRowKey<Id>>,
+    /// The thumbnail the press landed on, if known.
+    pub part: Option<LayerPart>,
+    /// The row is one of several selected rows: the command applies to all of them.
+    pub on_selection: bool,
+}
+
+impl<Id> MenuTarget<Id> {
+    /// A menu opened on `row` (`None`: the empty space), on no thumbnail and no multi-selection.
+    pub fn new(row: Option<LayerRowKey<Id>>) -> Self {
+        Self { row, part: None, on_selection: false }
+    }
+}

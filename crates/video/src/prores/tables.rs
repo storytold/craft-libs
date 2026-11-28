@@ -96,38 +96,3 @@ pub(crate) const BASIS: [[f32; 8]; 8] = [
     [0.191_341_72, -0.461_939_77, 0.461_939_77, -0.191_341_72, -0.191_341_72, 0.461_939_77, -0.461_939_77, 0.191_341_72],
     [0.097_545_16, -0.277_785_12, 0.415_734_8, -0.49039264, 0.49039264, -0.415_734_8, 0.277_785_12, -0.097_545_16],
 ];
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scans_are_permutations() {
-        for scan in [&SCAN_PROGRESSIVE, &SCAN_INTERLACED] {
-            let mut seen = [false; 64];
-            for &i in scan.iter() {
-                assert!(!seen[i as usize]);
-                seen[i as usize] = true;
-            }
-        }
-    }
-
-    #[test]
-    fn basis_matches_cosines() {
-        for u in 0..8 {
-            for x in 0..8 {
-                let c = if u == 0 { (0.125f64).sqrt() } else { 0.5 };
-                let v = c * (((2 * x + 1) * u) as f64 * std::f64::consts::PI / 16.0).cos();
-                assert!((v - BASIS[u][x] as f64).abs() < 1e-7);
-            }
-        }
-    }
-
-    #[test]
-    fn qscale_mapping() {
-        assert_eq!(qscale(1), 1);
-        assert_eq!(qscale(128), 128);
-        assert_eq!(qscale(129), 132);
-        assert_eq!(qscale(224), 512);
-    }
-}

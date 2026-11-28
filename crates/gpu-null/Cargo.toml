@@ -1,0 +1,13 @@
+[package]
+name = "craft-gpu-null"
+description = "In-memory GpuContext for CI and headless tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-gpu = { workspace = true }

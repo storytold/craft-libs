@@ -8,6 +8,8 @@
 //! reader's limit is refused before `zip` parses anything. Anything else that is wrong is left for
 //! `zip` to report.
 
+use std::io::{Read, Seek, SeekFrom};
+
 use crate::Error;
 
 const EOCD: &[u8; 4] = b"PK\x05\x06";
@@ -74,6 +76,86 @@ pub fn check_entry_count(bytes: &[u8], max_entries: u64) -> Result<(), Error> {
     Ok(())
 }
 
+/// Like [`check_entry_count`], but reads only the trailing end records and any referenced ZIP64
+/// end record from a seekable stream without buffering the archive in memory.
+pub fn check_entry_count_seekable<R: Read + Seek>(reader: &mut R, max_entries: u64) -> Result<(), Error> {
+    let io_err = |e: std::io::Error| Error::NotZip(e.to_string());
+    let len = reader.seek(SeekFrom::End(0)).map_err(io_err)?;
+    let tail_len = len.min(22 + u64::from(u16::MAX));
+    let tail_start = len - tail_len;
+    let tail_len_usize = usize::try_from(tail_len).map_err(|_| Error::NotZip("tail too large".into()))?;
+    reader.seek(SeekFrom::Start(tail_start)).map_err(io_err)?;
+    let mut tail = vec![0u8; tail_len_usize];
+    reader.read_exact(&mut tail).map_err(io_err)?;
+
+    let u16_at = |b: &[u8], at: usize| b.get(at..at.checked_add(2)?).map(|s| u16::from_le_bytes([s[0], s[1]]));
+    let u32_at = |b: &[u8], at: usize| b.get(at..at.checked_add(4)?).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]));
+    let u64_at = |b: &[u8], at: usize| b.get(at..at.checked_add(8)?).and_then(|s| <[u8; 8]>::try_from(s).ok()).map(u64::from_le_bytes);
+    let refuse =
+        |n: u64| -> Result<(), Error> { if n > max_entries { Err(Error::TooManyEntries { declared: n, limit: max_entries }) } else { Ok(()) } };
+
+    let mut end = tail.len();
+    let mut seen = 0;
+    while let Some(at) = tail.get(..end).and_then(|b| b.windows(4).rposition(|w| w == EOCD)) {
+        end = at;
+        seen += 1;
+        if seen > MAX_END_RECORDS {
+            return Err(Error::TooManyEndRecords(MAX_END_RECORDS));
+        }
+        let Some(comment) = u16_at(&tail, at + 20) else { continue };
+        if at + 22 + usize::from(comment) > tail.len() {
+            continue;
+        }
+        let (Some(on_disk), Some(total), Some(cd_offset)) = (u16_at(&tail, at + 8), u16_at(&tail, at + 10), u32_at(&tail, at + 16)) else {
+            continue;
+        };
+        let zip64 = total == u16::MAX || u32_at(&tail, at + 12) == Some(u32::MAX) || cd_offset == u32::MAX;
+        if zip64
+            && let Some(locator) = at.checked_sub(20)
+            && tail.get(locator..locator + 4) == Some(EOCD64_LOCATOR.as_slice())
+        {
+            let (Some(eocd64), Some(disks)) = (u64_at(&tail, locator + 8), u32_at(&tail, locator + 16)) else { continue };
+            let locator_pos = tail_start + locator as u64;
+            if eocd64 >= locator_pos || disks > 1 {
+                continue;
+            }
+            let span = (locator_pos - eocd64).min(65_536);
+            let mut buf;
+            let slice = if let Some(in_tail) = eocd64.checked_sub(tail_start).and_then(|o| usize::try_from(o).ok()) {
+                tail.get(in_tail..locator).unwrap_or_default()
+            } else {
+                let span_usize = usize::try_from(span).unwrap_or(65_536);
+                reader.seek(SeekFrom::Start(eocd64)).map_err(io_err)?;
+                buf = vec![0u8; span_usize];
+                reader.read_exact(&mut buf).map_err(io_err)?;
+                &buf
+            };
+            for (i, _) in slice.windows(4).enumerate().filter(|(_, w)| *w == EOCD64) {
+                refuse(u64_at(slice, i + 24).unwrap_or(0).max(u64_at(slice, i + 32).unwrap_or(0)))?;
+            }
+            continue;
+        }
+        if total == 0 {
+            return Ok(());
+        }
+        let cd = u64::from(cd_offset);
+        let at_pos = tail_start + at as u64;
+        if cd < at_pos {
+            let has_cd = if let Some(in_tail) = cd.checked_sub(tail_start).and_then(|o| usize::try_from(o).ok()) {
+                tail.get(in_tail..at).is_some_and(|b| b.windows(4).any(|w| w == CENTRAL_HEADER))
+            } else {
+                let mut sig = [0u8; 4];
+                reader.seek(SeekFrom::Start(cd)).map_err(io_err)?;
+                reader.read_exact(&mut sig).is_ok() && &sig == CENTRAL_HEADER
+            };
+            if has_cd {
+                return refuse(u64::from(on_disk.max(total)));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A package of one empty stored file, `a`, whose central directory lists it `entries` times (at
 /// most as many as fit in 64 MiB) under a ZIP64 end record that declares them all: `zip`
 /// parses and keeps every one of them before its caller can count them. Regression input for the
@@ -125,7 +207,8 @@ pub fn zip64_entry_count_sample(entries: u64) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CENTRAL_HEADER, EOCD, check_entry_count as check, zip64_entry_count_sample};
+    use super::{CENTRAL_HEADER, EOCD, check_entry_count as check, check_entry_count_seekable, zip64_entry_count_sample};
+
     use crate::Error;
 
     /// A plain package's tail: one central header at 0, then an end record declaring `entries`.
@@ -199,5 +282,17 @@ mod tests {
         let record = [0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let f: Vec<u8> = (0..20).flat_map(|_| EOCD.iter().copied().chain(record)).collect();
         assert_eq!(check(&f, 20_000), Err(Error::TooManyEndRecords(16)));
+    }
+
+    #[test]
+    fn seekable_entry_count_matches_in_memory_guard() {
+        use std::io::Cursor;
+
+        let sample = zip64_entry_count_sample(20_001);
+        assert_eq!(check_entry_count_seekable(&mut Cursor::new(&sample), 20_000), Err(Error::TooManyEntries { declared: 20_001, limit: 20_000 }));
+        assert!(check_entry_count_seekable(&mut Cursor::new(zip64_entry_count_sample(5)), 20_000).is_ok());
+
+        let padded = plain(30_000, &vec![b'c'; 65_000]);
+        assert_eq!(check_entry_count_seekable(&mut Cursor::new(&padded), 20_000), Err(Error::TooManyEntries { declared: 30_000, limit: 20_000 }));
     }
 }
