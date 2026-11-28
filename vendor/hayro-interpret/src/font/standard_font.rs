@@ -3,8 +3,8 @@ use crate::font::blob::{CffFontBlob, OpenTypeFontBlob};
 use crate::font::generated::{glyph_names, metrics, standard, symbol, zapf_dings};
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
-    Encoding, FontData, FontQuery, glyph_name_to_unicode, normalized_glyph_name, stretch_glyph,
-    strip_subset_prefix, unicode_from_name,
+    Encoding, FallbackFontQuery, FontData, FontQuery, glyph_name_to_unicode,
+    normalized_glyph_name, stretch_glyph, strip_subset_prefix, unicode_from_name,
 };
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Name;
@@ -407,6 +407,25 @@ impl StandardKind {
         fallback: bool,
         resolver: &FontResolverFn,
     ) -> Option<Self> {
+        Self::new_with_query(dict, base_font, fallback, None, resolver)
+    }
+
+    /// Craft patch (named fallback): a simple font the PDF doesn't embed, whose name is none of
+    /// the standard 14's, is asked of the resolver by `query` (`FontQuery::Fallback`, with its
+    /// PostScript name and no character collection) before its stand-in `base_font` is. A
+    /// resolver that knows the fonts installed on the machine can answer with the font the
+    /// document names. The default resolver answers with `pick_standard_font`'s data, which
+    /// the callers pass as `base_font`, so nothing changes for it; an answer that is no font
+    /// program is passed over for the stand-in. A font whose name is a standard font's is not
+    /// asked for by name, also when it comes here because the resolver had no data for that
+    /// standard font. CID fonts already ask this way (`cid.rs`).
+    pub(crate) fn new_with_query(
+        dict: &Dict<'_>,
+        base_font: StandardFont,
+        fallback: bool,
+        query: Option<&FallbackFontQuery>,
+        resolver: &FontResolverFn,
+    ) -> Option<Self> {
         let descriptor = dict.get::<Dict<'_>>(FONT_DESC).unwrap_or_default();
         let (widths, missing_width) = read_widths(dict, &descriptor)?;
 
@@ -417,8 +436,17 @@ impl StandardKind {
             encoding = Encoding::BuiltIn;
         }
 
-        let (blob, index) = resolver(&FontQuery::Standard(base_font))?;
-        let base_font_blob = StandardFontBlob::from_data(blob, index)?;
+        let named = query
+            .filter(|_| select_standard_font(dict, &descriptor).is_none())
+            .and_then(|query| resolver(&FontQuery::Fallback(query.clone())))
+            .and_then(|(blob, index)| StandardFontBlob::from_data(blob, index));
+        let base_font_blob = match named {
+            Some(blob) => blob,
+            None => {
+                let (blob, index) = resolver(&FontQuery::Standard(base_font))?;
+                StandardFontBlob::from_data(blob, index)?
+            }
+        };
 
         Some(Self {
             base_font,

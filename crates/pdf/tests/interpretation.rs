@@ -8,6 +8,11 @@
 #[path = "interpretation/vertical_forms.rs"]
 mod vertical_forms;
 
+// A simple font the PDF names but doesn't embed is asked of the font resolver by name.
+#[cfg(feature = "interpret")]
+#[path = "interpretation/named_fallback.rs"]
+mod named_fallback;
+
 #[cfg(feature = "interpret")]
 mod device {
     use craft_pdf::interpret::{
