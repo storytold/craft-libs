@@ -168,7 +168,8 @@ impl Mesh {
         self.submeshes.iter().filter(move |s| s.material == m).flat_map(|s| (s.start / 3) as usize..((s.start + s.count) / 3) as usize)
     }
 
-    /// Check that attribute arrays agree and every index is in range.
+    /// Check that attribute arrays agree, every index is in range, and every submesh is a
+    /// triangle-aligned range that shares no triangle with a submesh of another material.
     pub fn validate(&self) -> Result<()> {
         let n = self.positions.len();
         if self.normals.len() != n || self.uvs.len() != n || self.tangents.len() != n {
@@ -202,6 +203,26 @@ impl Mesh {
                 || s.material >= self.materials.len().max(1)
             {
                 return Err(GeomError::Invalid(format!("submesh {} is out of range", s.name)));
+            }
+        }
+        // Each triangle has one material. Submeshes of one material may list the same triangle.
+        let mut ranges: Vec<&SubMesh> = self.submeshes.iter().filter(|s| s.count > 0).collect();
+        ranges.sort_unstable_by_key(|s| s.start);
+        // The two largest range ends of distinct materials among the ranges seen so far.
+        let (mut first, mut second) = ((0u32, usize::MAX), (0u32, usize::MAX));
+        for s in ranges {
+            let other = if first.1 != s.material { first.0 } else { second.0 };
+            if other > s.start {
+                return Err(GeomError::Invalid(format!("submesh {} shares triangles with a submesh of another material", s.name)));
+            }
+            let end = s.start + s.count;
+            if s.material == first.1 {
+                first.0 = first.0.max(end);
+            } else if end > first.0 {
+                second = first;
+                first = (end, s.material);
+            } else if end > second.0 {
+                second = (end, s.material);
             }
         }
         Ok(())
@@ -336,9 +357,9 @@ impl Mesh {
         self.map_material_uvs_with(m, |_, uv| f(uv));
     }
 
-    /// [`Mesh::map_material_uvs`] where `f` also gets the UV centroid of the first of the
-    /// material's triangles using the vertex: piecewise maps (UV tiles of different sizes) then
-    /// place a vertex on a tile border with its own triangle's tile.
+    /// [`Mesh::map_material_uvs`] where `f` also gets the UV centroid of the triangle each corner
+    /// belongs to: piecewise maps (UV tiles of different sizes) then place a corner on a tile
+    /// border with its own triangle's tile. A vertex whose corners map to different UVs is split.
     pub fn map_material_uvs_with(&mut self, m: usize, f: impl Fn(Vec2, Vec2) -> Vec2) {
         let material_triangles: Vec<usize> = self.triangles_of(m).collect();
         let mut in_material = vec![false; self.triangle_count()];
@@ -370,19 +391,37 @@ impl Mesh {
             }
         }
 
-        // (vertex, centroid of its first triangle), each vertex once
-        let mut vertices = Vec::with_capacity(material_triangles.len() * 3);
+        // The mapped UV of every corner, from the UVs before any is replaced.
+        let mut corners = Vec::with_capacity(material_triangles.len() * 3);
         for t in &material_triangles {
             let Some(tri) = self.tri(*t) else { continue };
             let centroid = tri.iter().map(|v| self.uvs.get(*v).copied().unwrap_or_default()).sum::<Vec2>() / 3.0;
-            vertices.extend(tri.map(|v| (v, centroid)));
+            for (k, v) in (t * 3..t * 3 + 3).zip(tri) {
+                corners.push((k, v, f(centroid, self.uvs.get(v).copied().unwrap_or_default())));
+            }
         }
 
-        vertices.sort_by_key(|(v, _)| *v);
-        vertices.dedup_by_key(|(v, _)| *v);
-        for (v, centroid) in vertices {
-            if let Some(uv) = self.uvs.get_mut(v) {
-                *uv = f(centroid, *uv);
+        // A vertex whose corners map to different UVs (a tile border under a piecewise map) gets
+        // one copy per distinct result.
+        let mut results: std::collections::HashMap<usize, Vec<(Vec2, u32)>> = std::collections::HashMap::new();
+        let mut new_uvs = Vec::with_capacity(corners.len());
+        for (k, v, uv) in corners {
+            let list = results.entry(v).or_default();
+            let target = if let Some(&(_, i)) = list.iter().find(|(r, _)| r.to_array().map(f32::to_bits) == uv.to_array().map(f32::to_bits)) {
+                i
+            } else {
+                let i = if list.is_empty() { v as u32 } else { self.duplicate_vertex(v) };
+                list.push((uv, i));
+                new_uvs.push((i, uv));
+                i
+            };
+            if let Some(i) = self.indices.get_mut(k) {
+                *i = target;
+            }
+        }
+        for (i, uv) in new_uvs {
+            if let Some(x) = self.uvs.get_mut(i as usize) {
+                *x = uv;
             }
         }
 
@@ -472,7 +511,11 @@ impl Mesh {
         // Each child keeps the hidden bits of the halves of the parent's edges it has; the edges
         // inside the parent are real.
         let mut diagonals = Vec::with_capacity(if self.diagonals.is_empty() { 0 } else { self.diagonals.len().saturating_mul(4) });
+        // First child index of each parent triangle (and the end): ranges are rebuilt from the
+        // children actually emitted, since a parent with an index out of range emits none.
+        let mut child_start = Vec::with_capacity(self.triangle_count() + 1);
         for (k, t) in self.indices.as_chunks::<3>().0.iter().enumerate() {
+            child_start.push(m.indices.len() as u32);
             if t.iter().any(|&i| i as usize >= self.positions.len()) {
                 continue;
             }
@@ -485,9 +528,12 @@ impl Mesh {
             }
         }
         m.diagonals = diagonals;
+        child_start.push(m.indices.len() as u32);
+        let child = |index: u32| child_start.get((index / 3) as usize).or(child_start.last()).copied().unwrap_or(0);
         for s in &mut m.submeshes {
-            s.start *= 4;
-            s.count *= 4;
+            let (start, end) = (child(s.start), child(s.start.saturating_add(s.count)));
+            s.start = start;
+            s.count = end.saturating_sub(start);
         }
         m
     }
@@ -794,5 +840,50 @@ mod tests {
         bad.submeshes[0].start = 1;
         bad.submeshes[0].count = 3;
         assert!(bad.validate().is_err(), "a range off the triangle grid");
+    }
+
+    #[test]
+    fn validate_rejects_submeshes_that_share_triangles() {
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 6 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        assert!(m.validate().is_err());
+        m.submeshes[0].count = 3;
+        m.validate().unwrap();
+        // One material may list a triangle twice; a long range of it still hides no overlap.
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 6 }, SubMesh { name: "a2".into(), material: 0, start: 0, count: 3 }];
+        m.validate().unwrap();
+        m.submeshes.push(SubMesh { name: "b".into(), material: 1, start: 3, count: 3 });
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn subdivision_ranges_follow_the_children_emitted() {
+        // The first triangle has an index out of range and emits no children.
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        m.indices[0] = 99;
+        let s = m.subdivided();
+        assert_eq!(s.triangle_count(), 4);
+        assert_eq!((s.submeshes[0].start, s.submeshes[0].count), (0, 0));
+        assert_eq!((s.submeshes[1].start, s.submeshes[1].count), (0, 12));
+    }
+
+    #[test]
+    fn material_uvs_split_vertices_on_a_tile_border() {
+        // Two triangles share the edge at u = 1; the first lies in tile 0, the second in tile 1.
+        let positions = vec![Vec3::new(0.5, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 0.0), Vec3::new(1.5, 0.0, 0.0)];
+        let uvs = vec![Vec2::new(0.5, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(1.5, 0.0)];
+        let mut m = Mesh::from_parts(positions, None, uvs, vec![0, 1, 2, 1, 3, 2], "m").unwrap();
+        // Tile 0 packs into 0..0.5 and tile 1 into 0.6..1.1.
+        m.map_material_uvs_with(0, |c, uv| if c.x < 1.0 { uv * 0.5 } else { (uv - Vec2::X) * 0.5 + Vec2::new(0.6, 0.0) });
+        m.validate().unwrap();
+        let u = |t: usize| m.tri(t).unwrap().map(|v| m.uvs[v].x);
+        assert_eq!(u(0), [0.25, 0.5, 0.5]);
+        assert_eq!(u(1), [0.6, 0.85, 0.6]);
     }
 }
