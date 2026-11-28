@@ -46,6 +46,11 @@ fn harness(mesh: WarpMesh) -> Harness {
 }
 
 fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
+    harness_with(mesh, rotation, flip, None)
+}
+
+/// A harness with the split tool `tool` armed.
+fn harness_with(mesh: WarpMesh, rotation: f64, flip: bool, tool: Option<WarpSplit>) -> Harness {
     let id = Rc::new(Cell::new(Id::NULL));
     let mesh = Rc::new(RefCell::new(mesh));
     let view = Rc::new(Cell::new(None));
@@ -61,7 +66,11 @@ fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
         view.set(Some(shown_view));
         let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
             let mut held = mesh.borrow_mut();
-            WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).show_at(ui, body.rect)
+            let grid = WarpGrid::new("Warp", Bind::bound(&mut *held), RECT);
+            match tool {
+                Some(tool) => grid.split(tool).show_at(ui, body.rect),
+                None => grid.show_at(ui, body.rect),
+            }
         });
         if let Some(output) = canvas.inner {
             id.set(output.mesh.response.id);
@@ -130,20 +139,21 @@ impl Harness {
 
 #[trial]
 fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
-    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target;
+    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.53125;
     for (offset, taken) in [(reach - 0.5, true), (reach + 0.5, false)] {
         let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true);
-        // Out of the mesh along the bottom right anchor's diagonal, as the view draws it.
-        let anchor = h.screen(Point::new(RECT.x1, RECT.y1));
+        // Out of the mesh along the bottom right anchor's diagonal, as the view draws it. The reach is measured from
+        // where the pointer acts, half a document pixel up and left of it, so from half a pixel down and right of the
+        // anchor.
+        let anchor = h.screen(Point::new(RECT.x1 + 0.5, RECT.y1 + 0.5));
         let out = (anchor - h.screen(RECT.center())).normalized();
         let at = anchor + out * offset;
         let pull = 20.0_f32;
         h.drag(at, at + out * pull);
         match h.edit.get() {
-            Some(WarpEdit::Point { index, by, .. }) => {
+            Some(WarpEdit::Point { index, .. }) => {
                 assert!(taken, "{offset} pt");
                 assert_eq!(index, 15);
-                assert!((by.hypot() - f64::from(pull)).abs() < 1e-3, "{by:?}");
             }
             other => assert!(!taken && other.is_none(), "{offset} pt: {other:?}"),
         }
@@ -155,6 +165,23 @@ fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
     h.drag(at, at + shift(0.0, -10.0));
     assert!(matches!(h.edit.get(), Some(WarpEdit::Point { index: 1, .. })), "{:?}", h.edit.get());
     assert_eq!(h.picked.get(), Some(1));
+}
+
+#[trial]
+fn a_dragged_point_jumps_to_half_a_pixel_up_and_left_of_the_pointer() {
+    for (rotation, flip) in [(0.0, false), (30.0, true)] {
+        let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), rotation, flip);
+        let view = h.view.get().expect("drawn");
+        // 9 right of and 3 below the bottom right anchor, outside the mesh.
+        let from = view.to_screen(Point::new(RECT.x1 + 9.0, RECT.y1 + 3.0));
+        let to = view.to_screen(Point::new(RECT.x1 + 29.0, RECT.y1 + 13.0));
+        h.drag(from, to);
+        assert!(matches!(h.edit.get(), Some(WarpEdit::Point { index: 15, .. })), "{:?}", h.edit.get());
+        let landed = h.mesh().points[15];
+        let want = Point::new(RECT.x1 + 28.5, RECT.y1 + 12.5);
+        assert!(landed.distance(want) < 1e-3, "{rotation} deg: {landed:?}, want {want:?}");
+        assert_eq!(h.count(Seen::Commit), 1);
+    }
 }
 
 #[trial]
@@ -213,6 +240,46 @@ fn alt_or_ctrl_with_no_tool_is_a_quick_split_chosen_by_the_pointer() {
     let from = h.at_fraction(0.5, 0.5);
     h.drag(from, from + shift(10.0, 0.0));
     assert!(matches!(h.edit.get(), Some(WarpEdit::Surface { .. })), "{:?}", h.edit.get());
+}
+
+#[trial]
+fn a_split_cuts_half_a_pixel_up_and_left_of_the_pointer() {
+    let mut h = harness(WarpMesh::identity(RECT, 2, 2));
+    let at = h.screen(Point::new(RECT.x0 + 40.0, RECT.y0 + 30.0));
+    h.click(at, Modifiers::ALT);
+    assert!(matches!(h.edit.get(), Some(WarpEdit::Split { split: WarpSplit::Cross, .. })), "{:?}", h.edit.get());
+    let mesh = h.mesh();
+    // Within 0.02 of a pixel: the pointer is in f32 screen points.
+    let (u, v) = (39.5 / RECT.width(), 29.5 / RECT.height());
+    assert!(mesh.us.iter().any(|k| (k - u).abs() < 1e-4), "{:?}, want {u}", mesh.us);
+    assert!(mesh.vs.iter().any(|k| (k - v).abs() < 1e-4), "{:?}, want {v}", mesh.vs);
+}
+
+#[trial]
+fn a_split_less_than_a_pixel_beside_a_line_is_a_new_line_and_one_on_it_is_none() {
+    // The 2 x 2 mesh's middle column is at x 190, its patches 90 wide: 0.6 is under 1 % of one.
+    let line = RECT.x0 + 0.5 * RECT.width();
+    for (beside, inserted) in [(0.6, true), (0.0, false)] {
+        let mut h = harness_with(WarpMesh::identity(RECT, 2, 2), 0.0, false, Some(WarpSplit::Vertical));
+        // The split cuts half a pixel left of the pointer.
+        let at = h.screen(Point::new(line + beside + 0.5, RECT.y0 + 30.0));
+        h.click(at, Modifiers::NONE);
+        assert_eq!(h.size().0, if inserted { 3 } else { 2 }, "{beside} beside: {:?}", h.mesh().us);
+    }
+}
+
+/// The same on a wide mesh: 0.6 px beside the middle line of patches 2000 px wide is a new line too (as a share of
+/// the patch it is 0.03 %, which a tolerance by share took for the line itself).
+#[trial]
+fn a_split_beside_a_line_of_a_wide_mesh_is_a_new_line() {
+    let centre = RECT.center();
+    let wide = DocRect::new(centre.x - 2000.0, centre.y - 1500.0, centre.x + 2000.0, centre.y + 1500.0);
+    for (beside, inserted) in [(0.6, true), (0.0, false)] {
+        let mut h = harness_with(WarpMesh::identity(wide, 2, 2), 0.0, false, Some(WarpSplit::Vertical));
+        let at = h.screen(Point::new(centre.x + beside + 0.5, centre.y - 30.0));
+        h.click(at, Modifiers::NONE);
+        assert_eq!(h.size().0, if inserted { 3 } else { 2 }, "{beside} beside: {:?}", h.mesh().us);
+    }
 }
 
 fn warped(mesh: &mut WarpMesh) {
@@ -383,4 +450,285 @@ fn cylinder_handles_drag_their_values_and_keep_them_sound() {
     h.fixture.key(egui::Key::ArrowRight, Modifiers::SHIFT);
     near(h.values(), [100.0, 200.0, 291.0, 80.0, 0.5, 0.5, 0.85], "Shift and an arrow");
     assert_eq!(h.count(Seen::Set), 2);
+}
+
+/// A canvas tool that takes every key the host offers it, so a test sees which reach the tool.
+#[derive(Default)]
+struct KeyTaker {
+    seen: Vec<craft_ui::canvas::ToolKey>,
+}
+
+impl craft_ui::canvas::CanvasTool for KeyTaker {
+    fn press(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) -> craft_ui::canvas::ToolAction {
+        craft_ui::canvas::ToolAction::Ignored
+    }
+
+    fn drag(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn release(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: craft_behavior::CancelReason, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn key(&mut self, key: &craft_ui::canvas::ToolKey, _: &mut craft_ui::canvas::ToolContext<'_>) -> bool {
+        self.seen.push(key.clone());
+        true
+    }
+
+    fn paint(&self, _: &craft_ui::primitives::Draw<'_>, _: &craft_ui::canvas::ToolContext<'_>) {}
+
+    fn command_form(&self) -> craft_ui::canvas::ToolPath {
+        craft_ui::canvas::ToolPath::Command("the tool's form")
+    }
+}
+
+#[trial]
+fn enter_after_a_point_drag_reaches_the_canvas_tool() {
+    // A transform applies its warp on Enter from its canvas tool: the point a drag left focused takes no Enter of its
+    // own (no split tool is armed), so the canvas's tool still gets it, as it gets the Escape.
+    let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+    let view = Rc::new(Cell::new(None));
+    let (shown_mesh, shown_view) = (Rc::clone(&mesh), Rc::clone(&view));
+    let mut canvas = craft_ui::testing::ToolFixture::with_view(
+        "Document",
+        KeyTaker::default(),
+        |rect| CanvasView::new(rect, Point::new(190.0, 140.0), 1.0),
+        move |ui, body| {
+            if let Some(space) = craft_ui::canvas::canvas_space(&body.env) {
+                shown_view.set(Some(space.view));
+            }
+            WarpGrid::new("Warp", Bind::bound(&mut *shown_mesh.borrow_mut()), RECT).show_at(ui, body.rect);
+        },
+    );
+    canvas.fixture().settle();
+    let corner = view.get().expect("drawn").to_screen(Point::new(RECT.x1, RECT.y1));
+    drag_frames(canvas.fixture(), corner, corner + Vec2::new(-20.0, -15.0));
+    assert_ne!(*mesh.borrow(), WarpMesh::identity(RECT, 1, 1), "the drag moved the corner point");
+    assert!(canvas.fixture().focused_stop().is_some(), "the dragged point has focus");
+    canvas.fixture().key(egui::Key::Enter, Modifiers::NONE).settle();
+    let seen = &canvas.tool().seen;
+    assert!(matches!(seen[..], [craft_ui::canvas::ToolKey::Submit]), "Enter reaches the tool: {seen:?}");
+}
+
+/// At rest, with the pointer away, the grid draws a dot on each handle of its border (where each edge's curve is pulled
+/// from) and a smaller dot on each corner, as the reference application does, and nothing on the interior points. The
+/// grid drew handles only near the pointer, so its edges' handles could not be seen until hovered.
+#[trial]
+fn the_borders_handles_are_drawn_at_rest() {
+    let mut h = harness(WarpMesh::identity(RECT, 1, 1));
+    let mut found = Vec::new();
+    circles_with_radius(&h.fixture.frame_shapes(), &mut found);
+    let mesh = h.mesh.borrow().clone();
+    let at = |index: usize| h.screen(mesh.points[index]);
+    let radius = |index: usize| found.iter().filter(|(c, _)| c.distance(at(index)) < 0.01).map(|(_, r)| *r).fold(0.0f32, f32::max);
+    for index in [1usize, 2, 4, 7, 8, 11, 13, 14] {
+        assert!(radius(index) > 0.0, "border handle {index} has a dot: {found:?}");
+    }
+    for corner in [0usize, 3, 12, 15] {
+        assert!(radius(corner) > 0.0 && radius(corner) < radius(1), "corner {corner} has a smaller dot: {} vs {}", radius(corner), radius(1));
+    }
+    for index in [5usize, 6, 9, 10] {
+        assert!(radius(index) == 0.0, "interior point {index} has no dot: {found:?}");
+    }
+}
+
+fn circles_with_radius(shapes: &[egui::Shape], out: &mut Vec<(Pos2, f32)>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => circles_with_radius(inner, out),
+            egui::Shape::Circle(circle) => out.push((circle.center, circle.radius)),
+            _ => {}
+        }
+    }
+}
+
+/// The straight line from an anchor to each of its border handles is drawn at rest too: the handle ends' dots alone
+/// left a pulled edge's curve unexplained, where the reference application shows the arm from the corner to the point
+/// the curve is pulled from (along a straight edge it lies on the edge).
+#[trial]
+fn the_borders_arms_are_drawn_at_rest() {
+    let mut mesh = WarpMesh::identity(RECT, 1, 1);
+    mesh.points[1].y -= 30.0;
+    let mut h = harness(mesh);
+    let shapes = h.fixture.frame_shapes();
+    let mesh = h.mesh.borrow().clone();
+    let at = |index: usize| h.screen(mesh.points[index]);
+    fn segments_of(shapes: &[egui::Shape], out: &mut Vec<(Pos2, Pos2)>) {
+        for shape in shapes {
+            match shape {
+                egui::Shape::Vec(inner) => segments_of(inner, out),
+                egui::Shape::LineSegment { points, .. } => out.push((points[0], points[1])),
+                egui::Shape::Path(path) if path.points.len() == 2 => out.push((path.points[0], path.points[1])),
+                _ => {}
+            }
+        }
+    }
+    let mut segments: Vec<(Pos2, Pos2)> = Vec::new();
+    segments_of(&shapes, &mut segments);
+    let arm = |a: usize, b: usize| {
+        segments.iter().any(|(p, q)| (p.distance(at(a)) < 0.01 && q.distance(at(b)) < 0.01) || (p.distance(at(b)) < 0.01 && q.distance(at(a)) < 0.01))
+    };
+    for (anchor, handle) in [(0usize, 1usize), (0, 4), (3, 2), (3, 7), (12, 8), (12, 13), (15, 11), (15, 14)] {
+        assert!(arm(anchor, handle), "arm from anchor {anchor} to its border handle {handle}: {segments:?}");
+    }
+}
+
+/// A view the host scrolls under a surface pull (a drag past the canvas edge) moves the pointer on in the document, and
+/// the pull follows the document point under it: the press's document point is kept from the press.
+#[trial]
+fn a_surface_pull_follows_the_document_point_under_the_pointer_when_the_view_scrolls() {
+    let scroll = Rc::new(Cell::new(0.0f64));
+    let view = Rc::new(Cell::new(None::<CanvasView>));
+    let edit = Rc::new(Cell::new(None::<WarpEdit>));
+    let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+    let shown = (Rc::clone(&scroll), Rc::clone(&view), Rc::clone(&edit), Rc::clone(&mesh));
+    let mut fixture = Fixture::new(move |ui| {
+        let (scroll, view, edit, mesh) = &shown;
+        let room = ui.available_rect_before_wrap();
+        let centre = Point::new(f64::from(room.width()) / 2.0 + scroll.get(), f64::from(room.height()) / 2.0);
+        let shown_view = CanvasView::new(room, centre, 1.0);
+        view.set(Some(shown_view));
+        let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+            let mut held = mesh.borrow_mut();
+            WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).show_at(ui, body.rect)
+        });
+        if let Some(output) = canvas.inner
+            && output.edit.is_some()
+        {
+            edit.set(output.edit);
+        }
+    });
+    fixture.settle();
+    let at = view.get().expect("drawn").to_screen(RECT.center());
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::press(at)]);
+    fixture.frame(vec![pointer::moved(at + egui::vec2(20.0, 0.0))]);
+    // The view scrolls 30 document units to the right under the pointer, then the pointer moves on by one.
+    scroll.set(30.0);
+    fixture.frame(Vec::new());
+    fixture.frame(vec![pointer::moved(at + egui::vec2(21.0, 0.0))]);
+    match edit.get() {
+        Some(WarpEdit::Surface { by, .. }) => assert!((by.x - 51.0).abs() < 1e-6 && by.y.abs() < 1e-6, "{by:?}"),
+        other => panic!("a surface pull: {other:?}"),
+    }
+    fixture.frame(vec![pointer::release(at + egui::vec2(21.0, 0.0))]);
+}
+
+/// A host's reach scale shrinks (or grows) a point's reach at its position: at half scale a press three quarters of
+/// the reach from an anchor misses it, one at four tenths takes it.
+#[trial]
+fn the_reach_scale_shrinks_a_points_reach() {
+    let reach = f64::from(craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.53125);
+    for (share, taken) in [(0.75, false), (0.4, true)] {
+        let view = Rc::new(Cell::new(None::<CanvasView>));
+        let edit = Rc::new(Cell::new(None::<WarpEdit>));
+        let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+        let shown = (Rc::clone(&view), Rc::clone(&edit), Rc::clone(&mesh));
+        let mut fixture = Fixture::new(move |ui| {
+            let (view, edit, mesh) = &shown;
+            let room = ui.available_rect_before_wrap();
+            let shown_view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+            view.set(Some(shown_view));
+            let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+                let mut held = mesh.borrow_mut();
+                WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).reach_scale(|_| 0.5).show_at(ui, body.rect)
+            });
+            if let Some(output) = canvas.inner
+                && output.edit.is_some()
+            {
+                edit.set(output.edit);
+            }
+        });
+        fixture.settle();
+        // Out of the mesh along the bottom right anchor's diagonal, measured from where the pointer acts.
+        let v = view.get().expect("drawn");
+        let anchor = v.to_screen(Point::new(RECT.x1 + 0.5, RECT.y1 + 0.5));
+        let out = (anchor - v.to_screen(RECT.center())).normalized();
+        let at = anchor + out * (reach * 0.5 * share * 2.0) as f32;
+        drag_frames(&mut fixture, at, at + out * 20.0);
+        match edit.get() {
+            Some(WarpEdit::Point { index, .. }) => assert!(taken && index == 15, "{share}: point {index}"),
+            other => assert!(!taken && !matches!(other, Some(WarpEdit::Point { .. })), "{share}: {other:?}"),
+        }
+    }
+}
+
+/// Under a host's map from the unplaced contents, a point's reach is a circle in the contents as the view would show
+/// them unplaced: where the map halves x, a press 5.5 px right of an anchor (11 in the contents) takes it and one
+/// 6.5 px right (13) misses, while straight down, where nothing is squeezed, 11.5 px takes it and 12.5 misses.
+#[trial]
+fn a_reach_map_makes_a_points_reach_a_circle_in_the_contents() {
+    for (dir, px, taken) in [((1.0f32, 0.0f32), 5.5f32, true), ((1.0, 0.0), 6.5, false), ((0.0, 1.0), 11.5, true), ((0.0, 1.0), 12.5, false)] {
+        let view = Rc::new(Cell::new(None::<CanvasView>));
+        let edit = Rc::new(Cell::new(None::<WarpEdit>));
+        let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+        let shown = (Rc::clone(&view), Rc::clone(&edit), Rc::clone(&mesh));
+        let mut fixture = Fixture::new(move |ui| {
+            let (view, edit, mesh) = &shown;
+            let room = ui.available_rect_before_wrap();
+            let shown_view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+            view.set(Some(shown_view));
+            let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+                let mut held = mesh.borrow_mut();
+                WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).reach_map(|_| [0.5, 0.0, 0.0, 1.0]).show_at(ui, body.rect)
+            });
+            if let Some(output) = canvas.inner
+                && output.edit.is_some()
+            {
+                edit.set(output.edit);
+            }
+        });
+        fixture.settle();
+        // From the bottom right anchor, measured from where the pointer acts, outward (off the mesh).
+        let v = view.get().expect("drawn");
+        let anchor = v.to_screen(Point::new(RECT.x1 + 0.5, RECT.y1 + 0.5));
+        let at = anchor + egui::vec2(dir.0, dir.1) * px;
+        drag_frames(&mut fixture, at, at + egui::vec2(dir.0, dir.1) * 20.0);
+        match edit.get() {
+            Some(WarpEdit::Point { index, .. }) => assert!(taken && index == 15, "{dir:?} {px}: point {index}"),
+            other => assert!(!taken && !matches!(other, Some(WarpEdit::Point { .. })), "{dir:?} {px}: {other:?}"),
+        }
+    }
+}
+
+/// A crossed grid draws the two diagonals between the mesh's corners, as a placed object's transform box draws its own;
+/// a plain grid draws none.
+#[trial]
+fn a_crossed_grid_draws_the_diagonals_between_its_corners() {
+    fn segments_of(shapes: &[egui::Shape], out: &mut Vec<(Pos2, Pos2)>) {
+        for shape in shapes {
+            match shape {
+                egui::Shape::Vec(inner) => segments_of(inner, out),
+                egui::Shape::LineSegment { points, .. } => out.push((points[0], points[1])),
+                egui::Shape::Path(path) if path.points.len() == 2 => out.push((path.points[0], path.points[1])),
+                _ => {}
+            }
+        }
+    }
+    let diagonals = |crossed: bool| {
+        let view = Rc::new(Cell::new(None));
+        let shown = Rc::clone(&view);
+        let mut fixture = Fixture::new(move |ui| {
+            let room = ui.available_rect_before_wrap();
+            let centre = Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0);
+            let shown_view = CanvasView::new(room, centre, 1.0);
+            shown.set(Some(shown_view));
+            let _ = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+                let mut mesh = WarpMesh::identity(RECT, 1, 1);
+                let grid = WarpGrid::new("Warp", Bind::bound(&mut mesh), RECT);
+                let grid = if crossed { grid.crossed() } else { grid };
+                grid.show_at(ui, body.rect)
+            });
+        });
+        fixture.settle();
+        let view: CanvasView = view.get().expect("drawn");
+        let mut segments = Vec::new();
+        segments_of(&fixture.frame_shapes(), &mut segments);
+        let corner = |x: f64, y: f64| view.to_screen(Point::new(x, y));
+        let has = |a: Pos2, b: Pos2| {
+            segments.iter().any(|(p, q)| (p.distance(a) < 0.01 && q.distance(b) < 0.01) || (p.distance(b) < 0.01 && q.distance(a) < 0.01))
+        };
+        has(corner(RECT.x0, RECT.y0), corner(RECT.x1, RECT.y1)) && has(corner(RECT.x1, RECT.y0), corner(RECT.x0, RECT.y1))
+    };
+    assert!(diagonals(true), "a crossed grid draws both diagonals");
+    assert!(!diagonals(false), "a plain grid draws none");
 }

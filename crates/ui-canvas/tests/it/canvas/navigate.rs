@@ -1549,3 +1549,42 @@ fn the_wheel_scrolls_during_a_tool_drag_and_the_drag_follows_the_new_view() {
     assert!((last - before.to_doc(next)).hypot() > 1.0, "not through the view before the wheel");
     fixture.release_at(next);
 }
+
+/// The canvas shows an upright view with the document's origin on a whole device pixel at every zoom, as the reference
+/// application keeps it (measured 2026-11-25: 158,188 at 100 % → 258,263 · 308,301 · 358,338 · 383,357 at 66.7, 50,
+/// 33.3 and 25 %); the view the app keeps is not moved.
+#[trial]
+fn the_shown_view_keeps_the_origin_on_whole_pixels_at_every_zoom() {
+    let size = Size::new(600.0, 450.0);
+    // A canvas whose centre lies off the pixel grid, the origin on whole pixels at 100 % (the harness's geometry).
+    let rect = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(959.14, 861.0));
+    let mut view = CanvasView::new(rect, Point::new(300.57, 225.5), 1.0);
+    let origin = |view: CanvasView| craft_ui::canvas::pixel_aligned(view, 1.0).to_screen(Point::ZERO);
+    assert_eq!(origin(view), Pos2::new(179.0, 205.0));
+    for (want, z) in [((279.0, 280.0), 2.0 / 3.0), ((329.0, 318.0), 0.5), ((379.0, 355.0), 1.0 / 3.0), ((404.0, 374.0), 0.25)] {
+        let kept = view;
+        assert!(zoom::step(&mut view, -1, size, 1.0, &ZoomScheme::PHOTOSHOP));
+        assert!((view.zoom - z).abs() < 1e-9, "{}", view.zoom);
+        let o = origin(view);
+        assert!((o.x - want.0).abs() < 1e-3 && (o.y - want.1).abs() < 1e-3, "at {z}: {o:?}; the reference's offsets give {want:?}");
+        assert_eq!(view.center, kept.center, "the kept view's centre stays");
+    }
+    // An origin half way between two pixels goes up and left, as the reference's does: the document centred in a view
+    // of an odd size at 100 %, and its 201 × 151 pixels at a third in two other views.
+    let centred = |x: f32, y: f32, w: f32, h: f32, zoom: f64, stretch: [f64; 2]| {
+        CanvasView::new(egui::Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)), Point::new(300.0, 225.0), zoom).stretch(stretch)
+    };
+    let third = [201.0 / 200.0, 151.0 / 150.0];
+    assert_eq!(origin(centred(42.0, 92.0, 833.0, 643.0, 1.0, [1.0, 1.0])), Pos2::new(158.0, 188.0));
+    assert_eq!(origin(centred(11.0, 58.0, 1242.0, 677.0, 1.0 / 3.0, third)), Pos2::new(531.0, 321.0));
+    assert_eq!(origin(centred(59.0, 109.0, 816.0, 626.0, 1.0 / 3.0, third)), Pos2::new(366.0, 346.0));
+    // Two device pixels per point: whole device pixels, half points.
+    let shown = craft_ui::canvas::pixel_aligned(CanvasView::new(rect, Point::new(300.57, 225.5), 1.0 / 6.0), 2.0).to_screen(Point::ZERO);
+    for v in [shown.x, shown.y] {
+        assert!((v * 2.0 - (v * 2.0).round()).abs() < 1e-3, "{shown:?}");
+    }
+    // A turned view is shown as it is.
+    let mut turned = CanvasView::new(rect, Point::new(300.57, 225.5), 1.0 / 3.0);
+    turned.rotation = 15.0;
+    assert_eq!(craft_ui::canvas::pixel_aligned(turned, 1.0), turned);
+}

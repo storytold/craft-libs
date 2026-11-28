@@ -18,12 +18,20 @@ use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::{ComponentStyle, HandleLook, StyleColor, StyleCx};
-use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+use egui::{Pos2, Rect, Response, Vec2};
 
 use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 
 /// How far from the pointer the mesh's handles show, in hit targets (`size.hit.target`; 56 at an 8 target).
 const REVEAL_IN_TARGETS: f32 = 7.0;
+
+/// How far from an anchor or a handle end a press takes it, in hit targets (12 at an 8 target), measured from where
+/// the pointer acts ([`CanvasView::pointer_offset`](craft_behavior::CanvasView::pointer_offset)), in the unplaced mesh
+/// as the view would show it ([`WarpGrid::reach_map`] under a placement). The reach probes on the reference application
+/// (2026-11-23..25): straight above a handle end at rest 10.5 px reaches it and 12.5 does not at 100 %, 11.95 reaches
+/// and 13.95 does not at 33.3 %; under a perspective at 33.3 %, along three directions in 1 px steps, the presses
+/// within 11.02 of the handle in the unplaced contents reached it and those from 12.25 on did not.
+const REACH_IN_TARGETS: f32 = 1.5;
 
 /// An anchor or a handle end: `POINT.at(index)` with the index into [`WarpMesh::points`].
 pub const POINT: PartKey = PartKey::new("point");
@@ -40,6 +48,26 @@ craft_ui::words! {
         handle_left: template "warp.handleLeft" = "Row {row}, column {column}, left handle";
         handle_right: template "warp.handleRight" = "Row {row}, column {column}, right handle";
         handle_down: template "warp.handleDown" = "Row {row}, column {column}, down handle";
+    }
+}
+
+/// The host's scale of a point's reach at a document point: [`WarpGrid::reach_scale`].
+pub struct WarpReachScale<'a>(Box<dyn Fn(Point) -> f64 + 'a>);
+
+impl<'a> WarpReachScale<'a> {
+    /// The scale `scale`.
+    pub fn new(scale: impl Fn(Point) -> f64 + 'a) -> Self {
+        WarpReachScale(Box::new(scale))
+    }
+}
+
+/// The host's map from the warp's unplaced contents to the document at a document point: [`WarpGrid::reach_map`].
+pub struct WarpReachMap<'a>(Box<dyn Fn(Point) -> [f64; 4] + 'a>);
+
+impl<'a> WarpReachMap<'a> {
+    /// The map `map`.
+    pub fn new(map: impl Fn(Point) -> [f64; 4] + 'a) -> Self {
+        WarpReachMap(Box::new(map))
     }
 }
 
@@ -66,8 +94,8 @@ impl<'a> WarpRule<'a> {
 }
 
 /// The look of the warp grid: lines in `overlay.line`, arms in `overlay.handle_stroke`, the split
-/// preview in `overlay.stroke` over `overlay.halo`, anchors as handle squares and handle ends as
-/// small handle circles.
+/// preview in `overlay.stroke` over `overlay.halo`, anchors as small dots and handle ends as
+/// handle circles.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct WarpGridStyle {
@@ -102,11 +130,20 @@ struct Press {
     began: bool,
     /// A quick split: no tool was set at the press.
     quick: bool,
+    /// The document point under the press, as the view showed it then: a view the host scrolls under the drag (past
+    /// the canvas edge) moves the pointer on in the document, and the drag follows.
+    from: Point,
 }
 
 impl Default for Press {
     fn default() -> Self {
-        Press { mesh: WarpMesh { us: Vec::new(), vs: Vec::new(), points: Vec::new() }, target: Target::Split, began: false, quick: false }
+        Press {
+            mesh: WarpMesh { us: Vec::new(), vs: Vec::new(), points: Vec::new() },
+            target: Target::Split,
+            began: false,
+            quick: false,
+            from: Point::ORIGIN,
+        }
     }
 }
 
@@ -133,10 +170,11 @@ struct Report {
 /// - Look: patch boundaries `overlay.line` at `stroke.thin`; a one-patch mesh also its rule-of-thirds
 ///   lines. Anchors always show; a handle and its arm only near the pointer, while its anchor or one of
 ///   its handles is dragged, or while one of its anchor's parts is picked and the grid has the keyboard.
-/// - Pointer: the nearest anchor or handle within the hit reach drags that point; elsewhere on the
+/// - Pointer: the nearest anchor or handle within the hit reach (12.25 at an 8 target, from where the pointer acts) drags that
+///   point, which jumps to the pointer, where the view reads it ([`CanvasView::pointer_offset`](craft_behavior::CanvasView::pointer_offset)); elsewhere on the
 ///   surface the press pulls it. One drag is one gesture; Esc cancels it.
 /// - Split: with a [`split`](Self::split) tool set, a hover over the surface previews the new lines and a
-///   click inserts them. With no tool, Alt or Ctrl at the press is a quick split chosen by the pointer.
+///   click inserts them, through the point the view reads the pointer at. With no tool, Alt or Ctrl at the press is a quick split chosen by the pointer.
 /// - Keyboard: one Tab stop. Page Down and Page Up pick the next and previous point (anchors row by row,
 ///   each followed by its handles), Home and End the first and last; the arrows move the picked point.
 ///   With a split tool set, Enter splits the picked anchor's patch in the middle.
@@ -156,6 +194,10 @@ pub struct WarpGrid<'a> {
     /// rule-of-thirds lines real first.
     #[prop(flag)]
     preset: bool,
+    /// The frame is crossed corner to corner, as a placed object's transform box is: the two diagonals between the
+    /// mesh's corners, as the reference application keeps them in Warp mode.
+    #[prop(flag)]
+    crossed: bool,
     /// The split tool, when one is armed.
     #[prop]
     split: Option<WarpSplit>,
@@ -163,6 +205,20 @@ pub struct WarpGrid<'a> {
     /// [`WarpMesh::surface_at`].
     #[prop(func = "Fn(Point) -> Option<(f64, f64)>")]
     surface: Option<WarpSurface<'a>>,
+    /// How far a point's reach goes at the point's document position, as a share of the hit reach; 1 by default. A host
+    /// whose mesh lies under a projective placement gives the placement's local scale there: the reference application
+    /// measures a point's reach in the warp's own contents as the view would show them unplaced (2026-11-25: under a
+    /// Perspective that shrank the right side to about 0.65, a press 10 px from a handle there missed it, 7.6 at a third
+    /// reached it; at rest 12 reached and 14 did not).
+    #[prop(func = "Fn(Point) -> f64")]
+    reach_scale: Option<WarpReachScale<'a>>,
+    /// The linear map from the warp's unplaced contents to the document at a document point, row by row (`[a, b, c,
+    /// d]`: a contents step (x, y) is the document step (a·x + b·y, c·x + d·y)). A point's reach is then a circle in the
+    /// contents as the view would show them unplaced, an ellipse on screen (measured 2026-11-25 under a perspective
+    /// at 33.3 %: the reach runs further along the axis the placement squeezes). Takes the place of
+    /// [`reach_scale`](Self::reach_scale).
+    #[prop(func = "Fn(Point) -> [f64; 4]")]
+    reach_map: Option<WarpReachMap<'a>>,
     /// The mesh an edit makes of the mesh at the press; by default [`WarpMesh::edited`].
     #[prop(func = "Fn(&WarpMesh, &WarpEdit) -> WarpMesh")]
     rule: Option<WarpRule<'a>>,
@@ -179,8 +235,11 @@ impl<'a> WarpGrid<'a> {
             bounds,
             lines_only: false,
             preset: false,
+            crossed: false,
             split: None,
             surface: None,
+            reach_scale: None,
+            reach_map: None,
             rule: None,
             report: Report::default(),
         }
@@ -224,7 +283,9 @@ impl<'a> WarpGrid<'a> {
                     slot.picked = Some(index);
                     slot.dragging = Some(index);
                 }
-                *cx.press_slot::<Press>() = target.map(|target| Press { mesh: mesh.clone(), target, began: false, quick: self.split.is_none() });
+                let from = view.to_doc(start.origin);
+                *cx.press_slot::<Press>() =
+                    target.map(|target| Press { mesh: mesh.clone(), target, began: false, quick: self.split.is_none(), from });
             }
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                 let Some(mut held) = cx.press_slot::<Press>().clone() else { return };
@@ -235,9 +296,13 @@ impl<'a> WarpGrid<'a> {
                     *cx.press_slot::<Press>() = None;
                     return;
                 }
-                let by = view.to_doc(pos) - view.to_doc(start.origin);
+                let by = view.to_doc(pos) - held.from;
                 let edit = match held.target {
-                    Target::Point(index) => WarpEdit::Point { index, by },
+                    // The point jumps to the pointer rather than keeping its distance from the press.
+                    Target::Point(index) => match held.mesh.points.get(index) {
+                        Some(&from) => WarpEdit::Point { index, by: view.to_doc(pos) + view.pointer_offset() - from },
+                        None => WarpEdit::Point { index, by },
+                    },
                     Target::Surface(s, t) => WarpEdit::Surface { s, t, by },
                     Target::Split => return,
                 };
@@ -254,7 +319,7 @@ impl<'a> WarpGrid<'a> {
                 let Some(held) = cx.press_slot::<Press>().take() else { return };
                 match held.target {
                     Target::Split => {
-                        if let Some(at) = mesh.split_at(self.preset, self.bounds, self.split, held.quick, view.to_doc(pos)) {
+                        if let Some(at) = mesh.split_at(self.preset, self.bounds, self.split, held.quick, view.to_doc(pos) + view.pointer_offset()) {
                             let edit = at.edit();
                             cx.set(self.apply(mesh, &edit));
                             self.report.edit = Some(edit);
@@ -312,7 +377,8 @@ impl<'a> WarpGrid<'a> {
         }
         let quick = hover.is_some_and(|(_, held)| held);
         let preview = hover.map(|(at, _)| at).filter(|_| self.split.is_some() || quick).and_then(|at| {
-            let found = mesh.split_at(self.preset, self.bounds, self.split, self.split.is_none(), space.view.to_doc(at))?;
+            let found =
+                mesh.split_at(self.preset, self.bounds, self.split, self.split.is_none(), space.view.to_doc(at) + space.view.pointer_offset())?;
             let cursor = match found.motion {
                 None => CursorIcon::Crosshair,
                 Some(across) => resize_cursor(&space.view, across),
@@ -399,7 +465,7 @@ impl Component for WarpGrid<'_> {
             halo: cx.color(overlay.halo),
             anchor: cx.handle(),
             end,
-            reach: cx.tokens.size.hit.target,
+            reach: cx.tokens.size.hit.target * REACH_IN_TARGETS,
             reveal: cx.tokens.size.hit.target * REVEAL_IN_TARGETS,
         }
     }
@@ -421,12 +487,19 @@ impl Component for WarpGrid<'_> {
         let armed = self.split.is_some();
         let sense = if armed { Sense::CLICK | Sense::TAKE_FOCUS } else { Sense::DRAG | Sense::TAKE_FOCUS };
         for index in Self::points(mesh) {
-            let at = space.view.to_screen(mesh.points[index]);
-            let part = cx
-                .part(POINT.at(index as u64), HitShape::circle(at, cx.style.reach))
-                .sense(sense)
-                .priority(HitPriority::new(HitLevel::Handle, 0))
-                .focusable();
+            // The reach is measured from where the pointer acts (half a pixel up and left of it), so the circle
+            // sits half a pixel down and right of the point.
+            let at = space.view.to_screen(mesh.points[index] - space.view.pointer_offset());
+            let reach = cx.style.reach;
+            let shape = match self.reach_map.as_ref().and_then(|map| reach_ellipse(&space.view, at, reach, (map.0)(mesh.points[index]))) {
+                Some(ellipse) => HitShape::Polygon(ellipse),
+                None => {
+                    let scale = self.reach_scale.as_ref().map_or(1.0, |scale| (scale.0)(mesh.points[index]));
+                    let scale = if scale.is_finite() && scale > 0.0 { scale.clamp(0.05, 4.0) as f32 } else { 1.0 };
+                    HitShape::circle(at, reach * scale)
+                }
+            };
+            let part = cx.part(POINT.at(index as u64), shape).sense(sense).priority(HitPriority::new(HitLevel::Handle, 0)).focusable();
             if !armed {
                 part.cursor(CursorIcon::Crosshair);
             }
@@ -476,6 +549,16 @@ impl Component for WarpGrid<'_> {
         for path in mesh.boundaries() {
             stroke(&path, StrokeWidth::Thin, style.line);
         }
+        if self.crossed {
+            let (w, h) = (mesh.width().max(1), mesh.height().max(1));
+            let corner = |i: usize, j: usize| mesh.points.get(j * w + i).map(|point| view.to_screen(*point));
+            let diagonals = [(corner(0, 0), corner(w - 1, h - 1)), (corner(w - 1, 0), corner(0, h - 1))];
+            for (from, to) in diagonals.into_iter().filter_map(|(from, to)| Some((from?, to?))) {
+                let diagonal = PaintShape::Path(vec![from, to]);
+                draw.stroke(&diagonal, StrokeWidth::Thick, style.halo);
+                draw.stroke(&diagonal, StrokeWidth::Medium, style.line);
+            }
+        }
         if self.lines_only {
             return;
         }
@@ -483,10 +566,18 @@ impl Component for WarpGrid<'_> {
         let screen = |index: usize| view.to_screen(mesh.points[index]);
         let near = |p: Pos2| slot.hover.is_some_and(|hover| hover.distance(p) <= cx.style.reveal);
         let kept = [slot.dragging, slot.picked.filter(|_| cx.focus_visible())].map(|index| index.and_then(|index| mesh.anchor_of(index)));
+        // The border's handles and their arms are drawn at rest too, as the reference application draws them: a dot
+        // where each edge's curve is pulled from, and the straight arm from its corner, which lies along a straight
+        // edge and stands out once a pull bends the edge. The interior ones show only once revealed.
+        let (w, h) = (mesh.width(), mesh.height());
+        let on_border = |index: usize| {
+            let (i, j) = (index % w.max(1), index / w.max(1));
+            i == 0 || j == 0 || i + 1 == w || j + 1 == h
+        };
         let mut ends = Vec::new();
         for anchor in mesh.anchors() {
             for (index, _) in mesh.handles(anchor) {
-                if near(screen(index)) || near(screen(anchor)) || kept.contains(&Some(anchor)) {
+                if on_border(index) || near(screen(index)) || near(screen(anchor)) || kept.contains(&Some(anchor)) {
                     draw.stroke(&PaintShape::Path(vec![screen(anchor), screen(index)]), StrokeWidth::Hairline, style.arm);
                     ends.push(index);
                 }
@@ -496,10 +587,12 @@ impl Component for WarpGrid<'_> {
         let look = |index: usize, fill: &craft_ui::style::Stateful<craft_ui::style::StyleColor>| {
             if cx.part_if_declared(POINT.at(index as u64)).is_some() { cx.resolve_part(POINT.at(index as u64), fill) } else { cx.resolve(fill) }
         };
+        // Anchors are small dots, about half a handle end's size, as the reference application draws its warp grid
+        // (measured at 100 and 200 %: a corner mark of 3-4 px, a border handle's of about 7).
         for anchor in mesh.anchors() {
-            let square = PaintShape::Rect(Rect::from_center_size(screen(anchor), Vec2::splat(style.anchor.side)), CornerRadius::ZERO);
-            draw.fill(&square, look(anchor, &style.anchor.fill));
-            draw.stroke(&square, StrokeWidth::Thin, style.anchor.stroke);
+            let dot = PaintShape::Circle(screen(anchor), style.end.side * 0.3);
+            draw.fill(&dot, look(anchor, &style.anchor.fill));
+            draw.stroke(&dot, StrokeWidth::Thin, style.anchor.stroke);
         }
         for index in ends {
             let circle = PaintShape::Circle(screen(index), style.end.side / 2.0);
@@ -549,4 +642,31 @@ impl Component for WarpGrid<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> WarpGridOutput {
         WarpGridOutput { mesh: cx.edit_response(), edit: self.report.edit, picked: self.report.picked }
     }
+}
+
+/// The screen outline of a point's reach `reach` around `at` under the contents-to-document map `map` (`[a, b, c, d]`,
+/// [`WarpGrid::reach_map`]): the circle of that radius in the contents as `view` would show them unplaced, carried
+/// through the map, each radius kept within 0.05 to 4 times `reach`. `None` for a map that is no number or flat (the
+/// caller falls back to a circle).
+fn reach_ellipse(view: &craft_behavior::CanvasView, at: egui::Pos2, reach: f32, map: [f64; 4]) -> Option<Vec<egui::Pos2>> {
+    let [a, b, c, d] = map;
+    let det = a * d - b * c;
+    if !(map.iter().all(|v| v.is_finite()) && det.abs() > 1e-12) {
+        return None;
+    }
+    const SIDES: usize = 32;
+    let outline: Vec<egui::Pos2> = (0..SIDES)
+        .map(|k| {
+            let turn = std::f32::consts::TAU * k as f32 / SIDES as f32;
+            let unplaced = view.unmap_vec(egui::vec2(turn.cos(), turn.sin()) * reach);
+            let placed = craft_behavior::kurbo::Vec2::new(a * unplaced.x + b * unplaced.y, c * unplaced.x + d * unplaced.y);
+            // Each radius kept within 0.05 to 4 times the reach, as a scaled circle's is: near a placement's horizon
+            // (or under a crossed one) the map runs away and would take presses anywhere on the canvas.
+            let off = view.map_vec(placed);
+            let len = off.length();
+            let held = len.clamp(reach * 0.05, reach * 4.0);
+            at + if len > 0.0 && len.is_finite() { off * (held / len) } else { egui::vec2(turn.cos(), turn.sin()) * reach }
+        })
+        .collect();
+    outline.iter().all(|p| p.x.is_finite() && p.y.is_finite()).then_some(outline)
 }

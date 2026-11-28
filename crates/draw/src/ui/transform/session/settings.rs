@@ -47,8 +47,8 @@ impl TransformPreset {
     }
 }
 
-/// How the transform resamples the moving pixels: PhotoCraft's three choices (LC11). The app maps
-/// them to its engine; [`id`](Self::id) gives PhotoCraft's ids.
+/// How the transform resamples the moving pixels: the six methods of the Interpolation menu (LC11), in
+/// its order. The app maps them to its engine; [`id`](Self::id) gives PhotoCraft's ids.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -60,19 +60,36 @@ pub enum Interpolation {
     Bilinear,
     /// Nearest-neighbour resampling: no smoothing.
     NearestNeighbor,
+    /// Bicubic Smoother: the bicubic made for enlarging.
+    BicubicSmoother,
+    /// Bicubic Sharper: the bicubic made for reducing.
+    BicubicSharper,
+    /// Bicubic Automatic: Smoother or Sharper, by whether the transform enlarges or reduces.
+    BicubicAutomatic,
 }
 
 impl Interpolation {
     /// Every choice, in the select's order.
-    pub const ALL: [Interpolation; 3] = [Interpolation::Bicubic, Interpolation::Bilinear, Interpolation::NearestNeighbor];
+    pub const ALL: [Interpolation; 6] = [
+        Interpolation::NearestNeighbor,
+        Interpolation::Bilinear,
+        Interpolation::Bicubic,
+        Interpolation::BicubicSmoother,
+        Interpolation::BicubicSharper,
+        Interpolation::BicubicAutomatic,
+    ];
 
-    /// PhotoCraft's id: "bicubic", "bilinear", "nearest".
+    /// PhotoCraft's id: "nearest", "bilinear", "bicubic", "bicubicSmoother", "bicubicSharper",
+    /// "bicubicAutomatic".
     pub fn id(self) -> &'static str {
         // pc: crates/ui-egui/src/tools/transform_tool/options_bar.rs:241 (the select's options).
         match self {
             Interpolation::Bicubic => "bicubic",
             Interpolation::Bilinear => "bilinear",
             Interpolation::NearestNeighbor => "nearest",
+            Interpolation::BicubicSmoother => "bicubicSmoother",
+            Interpolation::BicubicSharper => "bicubicSharper",
+            Interpolation::BicubicAutomatic => "bicubicAutomatic",
         }
     }
 

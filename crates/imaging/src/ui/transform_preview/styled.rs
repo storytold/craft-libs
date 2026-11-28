@@ -207,7 +207,23 @@ pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: 
         let (x, y) = (x.clamp(0, iw as i64 - 1) as usize, y.clamp(0, ih as i64 - 1) as usize);
         image.pixels.get(y * iw + x).map_or([0.0; 4], |c| c.to_array().map(f32::from))
     };
-    let fade = |t: f64, n: f64| (t + 0.5).min(n - t + 0.5).clamp(0.0, 1.0) as f32;
+    // The area of the work pixel at `(px, py)` inside one of the box's boundaries: the line `a x + b y + c = 0` over
+    // the work pixels (positive inside, on the box's side of the horizon), at its true distance from the pixel's
+    // centre, so the outline is antialiased over one work pixel at any scale and under a perspective, as the commit
+    // draws it. A boundary with no direction (a collapsed map) covers all or nothing.
+    let inside_line = |[a, b, c]: [f64; 3], px: f64, py: f64| -> f64 {
+        let (len, at) = (a.hypot(b), (a * px + b * py + c) * side);
+        if !(len.is_finite() && len > 1e-12) {
+            return if at >= 0.0 { 1.0 } else { 0.0 };
+        }
+        edge_coverage(at / len, a / len, b / len)
+    };
+    // The area inside the box along one axis: what its near boundary (the unit coordinate's own row, zero on it) and
+    // its far one (the horizon's row less that row) both leave, so a box narrower than a pixel covers its width.
+    let cover = |near: [f64; 3], px: f64, py: f64| -> f32 {
+        let far = [m6 - near[0], m7 - near[1], m8 - near[2]];
+        (inside_line(near, px, py) + inside_line(far, px, py) - 1.0).max(0.0) as f32
+    };
     let straight = |p: [f32; 4]| -> [f32; 4] {
         let c = Color32::from_rgba_premultiplied(p[0].round() as u8, p[1].round() as u8, p[2].round() as u8, p[3].round() as u8);
         let [r, g, b, _] = c.to_srgba_unmultiplied();
@@ -232,7 +248,7 @@ pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: 
                 }
                 continue;
             }
-            let cover = fade(tx, tw) * fade(ty, th);
+            let cover = cover([m0, m1, m2], px, py) * cover([m3, m4, m5], px, py);
             if cover <= 0.0 {
                 continue;
             }
@@ -397,4 +413,28 @@ impl StyledPreview {
         state.builds += 1;
         Some((texture.id, rect))
     }
+}
+
+/// How much of a pixel lies inside a straight edge: the exact area of the unit pixel square on the inner side, for the
+/// edge at signed distance `d` from the pixel's centre (in pixels, positive inside) with unit normal `(nx, ny)`. Linear
+/// across the middle, quadratic where the edge cuts a corner; `0.5 + d` for an edge along the pixel grid.
+pub fn edge_coverage(d: f64, nx: f64, ny: f64) -> f64 {
+    let (a, b) = if nx.abs() >= ny.abs() { (nx.abs(), ny.abs()) } else { (ny.abs(), nx.abs()) };
+    let half = (a + b) / 2.0;
+    if d.is_nan() {
+        return 0.0;
+    }
+    if d >= half {
+        return 1.0;
+    }
+    if d <= -half {
+        return 0.0;
+    }
+    if d.abs() <= (a - b) / 2.0 || b < 1e-12 {
+        return (0.5 + d / a).clamp(0.0, 1.0);
+    }
+    // The part past the edge is a right triangle cut off a corner.
+    let t = half - d.abs();
+    let corner = (t * t / (2.0 * a * b)).clamp(0.0, 0.5);
+    if d > 0.0 { 1.0 - corner } else { corner }
 }

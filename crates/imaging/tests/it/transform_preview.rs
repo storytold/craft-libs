@@ -633,3 +633,49 @@ fn a_new_preview_under_the_same_name_shows_its_own_pixels() {
     let (id, _) = second.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
     assert_eq!(uploaded(id), Some(Color32::BLACK), "the new pixels go up");
 }
+
+#[trial]
+fn a_styled_preview_keeps_an_edge_on_the_pixel_grid_crisp_at_any_scale() {
+    // A 4 × 4 opaque frame shown over the work pixels 10..18 (twice its size): the edge at x = 10 lies on the pixel
+    // grid, so the pixel just inside is covered whole and the one just outside not at all, as the commit draws it.
+    // Measured in texels, the old fade covered three quarters of the inside pixel and a quarter of the outside one.
+    let image = ColorImage::new([4, 4], vec![Color32::WHITE; 16]);
+    let to_unit = craft_behavior::geometry::Homography::from_rows([[1.0 / 8.0, 0.0, -10.0 / 8.0], [0.0, 1.0 / 8.0, -10.0 / 8.0], [0.0, 0.0, 1.0]]);
+    let rect = PixelRect::new(8, 8, 20, 20);
+    let out = craft_imaging::ui::transform_preview::resample(&image, [1.0, 1.0], &to_unit, Point::new(14.0, 14.0), rect, false);
+    let alpha = |x: i32, y: i32| out.texels[((y - 8) * 12 + (x - 8)) as usize][3];
+    assert!((alpha(10, 14) - 1.0).abs() < 1e-6, "inside the edge: {}", alpha(10, 14));
+    assert!(alpha(9, 14).abs() < 1e-6, "outside the edge: {}", alpha(9, 14));
+    // A pixel the edge halves keeps half: the frame's right edge at x = 17.5 when the box is 7.5 wide.
+    let to_unit = craft_behavior::geometry::Homography::from_rows([[1.0 / 7.5, 0.0, -10.0 / 7.5], [0.0, 1.0 / 8.0, -10.0 / 8.0], [0.0, 0.0, 1.0]]);
+    let out = craft_imaging::ui::transform_preview::resample(&image, [1.0, 1.0], &to_unit, Point::new(14.0, 14.0), rect, false);
+    let half = out.texels[((14 - 8) * 12 + (17 - 8)) as usize][3];
+    assert!((half - 0.5).abs() < 1e-6, "half the pixel inside: {half}");
+}
+
+/// A box narrower than a work pixel covers its own width of it: both of its sides cut the pixel, and the nearer one
+/// alone would leave four tenths of it.
+#[trial]
+fn a_styled_preview_covers_a_box_narrower_than_a_pixel_by_its_width() {
+    // A 4 × 4 opaque frame over x = 0.6..0.7 and y = -4..4: the pixel at (0, 0) holds a tenth of a pixel of it.
+    let image = ColorImage::new([4, 4], vec![Color32::WHITE; 16]);
+    let to_unit = craft_behavior::geometry::Homography::from_rows([[10.0, 0.0, -6.0], [0.0, 0.125, 0.5], [0.0, 0.0, 1.0]]);
+    let rect = PixelRect::new(-1, 0, 2, 1);
+    let out = craft_imaging::ui::transform_preview::resample(&image, [1.0, 1.0], &to_unit, Point::new(0.65, 0.5), rect, false);
+    let alpha: Vec<f32> = out.texels.iter().map(|t| t[3]).collect();
+    assert!((alpha[1] - 0.1).abs() < 1e-6, "a tenth of the pixel: {alpha:?}");
+    assert!(alpha[0].abs() < 1e-6 && alpha[2].abs() < 1e-6, "none beside it: {alpha:?}");
+}
+
+/// Under a perspective a pixel's cover is measured to the box's side itself: the side at x = 0.2 leaves eight tenths of
+/// the pixel at (0, 0), whose centre is 0.3 px inside it. Read off the unit coordinate's slope at the pixel's centre,
+/// the distance came to 0.375 px and the cover to 0.875.
+#[trial]
+fn a_styled_preview_measures_cover_to_the_side_under_a_perspective() {
+    let image = ColorImage::new([4, 4], vec![Color32::WHITE; 16]);
+    let to_unit = craft_behavior::geometry::Homography::from_rows([[1.5, 0.0, -0.3], [0.5, 0.1, 0.45], [1.0, 0.0, 1.0]]);
+    let rect = PixelRect::new(0, 0, 1, 1);
+    let out = craft_imaging::ui::transform_preview::resample(&image, [1.0, 1.0], &to_unit, Point::new(0.5, 0.5), rect, false);
+    let alpha = out.texels[0][3];
+    assert!((alpha - 0.8).abs() < 1e-6, "eight tenths of the pixel: {alpha}");
+}
