@@ -9,9 +9,11 @@
 //! - [`math_linear`]: the linear format (UnicodeMath, the plain text Word shows for an equation),
 //!   read and written ([`math::parse_linear`], [`math::to_linear`]).
 //! - [`math_latex`]: LaTeX math, read and written ([`math_latex::parse_latex`],
-//!   [`math_latex::to_latex`]), with the named symbols of [`math_symbols`].
+//!   [`math_latex::to_latex`]), with the named symbols of [`math_symbols`];
+//!   [`math_latex::parse_latex_checked`] also names input the tree can't carry.
 //! - [`omml`]: Office Math Markup, read ([`omml::read_omath`], [`omml::read_str`]) and written
-//!   ([`omml::write_equation`], [`omml::write_str`]).
+//!   ([`omml::write_equation`], [`omml::write_str`], and with DrawingML run properties
+//!   [`omml::write_omath_drawingml`]).
 //! - [`mathml`]: presentation MathML, written ([`mathml::to_mathml`]) and read
 //!   ([`mathml::parse`], [`mathml::read`], [`mathml::to_tree`]).
 //! - [`latex_text`]: LaTeX math and the linear format converted as text, keeping the source's

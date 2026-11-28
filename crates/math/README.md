@@ -6,9 +6,9 @@ Equations as one tree, and the syntaxes it is read from and written to:
 | --- | --- | --- | --- |
 | `math` | the tree: `MNode`, `MRun`, `Math` (an equation with its kept source OMML), modelled on the Office Math object model (ECMA-376 Part 1 §22.1) | | |
 | `math_linear` | UnicodeMath, the linear format Word shows (`x=(-b±√(b^2-4ac))/2a`) | `math::parse_linear` | `math::to_linear` |
-| `math_latex` | LaTeX math, including MathLive's spellings | `parse_latex` | `to_latex` |
+| `math_latex` | LaTeX math, including MathLive's spellings | `parse_latex`, `parse_latex_checked` | `to_latex` |
 | `latex_text` | LaTeX math as text, keeping the source's spacing (for LaTeX documents) | `latex_to_linear` | `linear_to_latex` |
-| `omml` | Office Math Markup (`m:oMath`, DOCX/PPTX/XLSX) | `read_omath`, `read_str` | `write_equation`, `write_str` |
+| `omml` | Office Math Markup (`m:oMath`, DOCX/PPTX/XLSX) | `read_omath`, `read_str` | `write_equation`, `write_str`, `write_omath_drawingml` |
 | `mathml` | presentation MathML (HTML, ODF formulas, the clipboard) | `parse`, `read`, `to_tree` | `to_mathml`, `linear_to_mathml` |
 
 Beside them: `math_symbols` (LaTeX names of symbols), `math_tree` (the arguments of a node, a walk
@@ -53,4 +53,6 @@ The tree, the linear format, LaTeX, the symbol names, the tree walk, the symbol 
 are WordCraft's (`crates/doc`), as moved into craft-wordmodel; OMML is WordCraft's DOCX reader
 and writer (`crates/docx/src/read/math.rs`, `write/math.rs`) and MathML its formats crate's
 (`crates/formats/src/mathml.rs`), moved onto craft-xml. The MathLive command spellings and the
-round-trip corpus in `tests/corpus/` come from equaSHion (storytold/craft-libs#29).
+round-trip corpus in `tests/corpus/` come from equaSHion (storytold/craft-libs#29). The LaTeX
+colour names are the base colours listed in the xcolor package's manual; the colour, `\pmb`
+and checked-reader rules come from GridCraft's LaTeX-to-OMML writer (storytold/gridcraft#3299).

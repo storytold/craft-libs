@@ -3,13 +3,16 @@
 //! Input covers the commands people type in equations: `\frac`, `\sqrt[n]{}`, scripts, big
 //! operators with limits, `\left…\middle…\right`, matrix and `cases`/`aligned` environments,
 //! accents, `\overbrace`/`\underbrace`, `\text`/`\mathrm`/`\mathbf`/`\mathbb`…, function names,
-//! spacing and every named symbol in [`crate::math_symbols`]. Unknown commands stay as text.
+//! spacing, colour (`\color`, `\textcolor`) and every named symbol in [`crate::math_symbols`].
+//! Unknown commands stay as text; [`parse_latex_checked`] reports them and the other input the
+//! tree can't carry.
 
 use crate::math::{
     Arg, ColJc, FracKind, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
 };
 use crate::math_linear::{FUNCTION_NAMES, map_args};
 use crate::math_symbols::{name_of, symbol};
+use crate::rgb::Rgb;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Tok {
@@ -97,7 +100,23 @@ fn tokenize(s: &str) -> Vec<Tok> {
 
 /// Parse LaTeX math into nodes. Never fails.
 pub fn parse_latex(s: &str) -> Arg {
-    let mut p = Lp { t: tokenize(s), i: 0, depth: 0 };
+    parse(s).0
+}
+
+/// Parse LaTeX math into nodes, or name the first input the tree can't carry: an unknown
+/// command, a text size command (`\large`), a script style (`\scriptstyle`), a link (`\href`)
+/// or a colour that is unknown or translucent. The name is a sentence subject ("The link
+/// \href"), for the caller's message. [`parse_latex`] reads the same input and keeps going.
+pub fn parse_latex_checked(s: &str) -> Result<Arg, String> {
+    match parse(s) {
+        (nodes, None) => Ok(nodes),
+        (_, Some(lost)) => Err(lost),
+    }
+}
+
+/// The nodes, and the first input they don't carry.
+fn parse(s: &str) -> (Arg, Option<String>) {
+    let mut p = Lp { t: tokenize(s), i: 0, depth: 0, lost: None };
     let mut out = Vec::new();
     while p.i < p.t.len() {
         out.extend(p.seq(false));
@@ -112,9 +131,9 @@ pub fn parse_latex(s: &str) -> Arg {
     }
     let out = merge_runs(out);
     if out.iter().any(|n| matches!(n, MNode::Run(r) if !r.nor && r.text.contains('#'))) {
-        return vec![MNode::EqArr { rows: vec![out] }];
+        return (vec![MNode::EqArr { rows: vec![out] }], p.lost);
     }
-    out
+    (out, p.lost)
 }
 
 fn run(t: &str) -> MNode {
@@ -125,9 +144,15 @@ struct Lp {
     t: Vec<Tok>,
     i: usize,
     depth: usize,
+    /// The first input the nodes don't carry ([`parse_latex_checked`]).
+    lost: Option<String>,
 }
 
 impl Lp {
+    fn lose(&mut self, what: String) {
+        self.lost.get_or_insert(what);
+    }
+
     fn peek(&self) -> Option<&Tok> {
         self.t.get(self.i)
     }
@@ -156,6 +181,17 @@ impl Lp {
                         let base = out.pop();
                         out.push(script(base, tok == Tok::Sup, s));
                     }
+                }
+                // `\color` colours the rest of its group, inside runs coloured already keeping theirs.
+                Tok::Cmd(ref c) if c == "color" => {
+                    self.i += 1;
+                    let color = self.color_arg();
+                    let rest = self.seq(in_group);
+                    out.extend(match color {
+                        Some(color) => paint(rest, color),
+                        None => rest,
+                    });
+                    break;
                 }
                 Tok::Cmd(ref c) if c == "limits" || c == "nolimits" || c == "displaystyle" || c == "textstyle" => {
                     self.i += 1;
@@ -215,8 +251,38 @@ impl Lp {
             }
             toks.push(t);
         }
-        let mut p = Lp { t: toks, i: 0, depth: self.depth };
-        Some(p.seq(false))
+        let mut p = Lp { t: toks, i: 0, depth: self.depth, lost: None };
+        let a = p.seq(false);
+        if let Some(lost) = p.lost {
+            self.lose(lost);
+        }
+        Some(a)
+    }
+
+    /// The colour of `\color` or `\textcolor`: `[model]{spec}`. `None`, and the colour lost,
+    /// when it is unknown or translucent.
+    fn color_arg(&mut self) -> Option<Rgb> {
+        let mut model = None;
+        if self.peek() == Some(&Tok::Ch('[')) {
+            self.i += 1;
+            let mut m = String::new();
+            while let Some(Tok::Ch(c)) = self.peek().cloned() {
+                self.i += 1;
+                if c == ']' {
+                    break;
+                }
+                m.push(c);
+            }
+            model = Some(m);
+        }
+        let spec = self.raw_arg();
+        match latex_color(model.as_deref(), spec.trim()) {
+            Ok(c) => Some(c),
+            Err(lost) => {
+                self.lose(lost);
+                None
+            }
+        }
     }
 
     /// The text of a `{…}` argument, verbatim.
@@ -436,7 +502,8 @@ impl Lp {
                 let a = self.arg();
                 styled(a, Some(MSty::Plain), MScr::Roman, false)
             }
-            "mathbf" | "bf" => {
+            // `\pmb`, "poor man's bold", is bold.
+            "mathbf" | "bf" | "pmb" => {
                 let a = self.arg();
                 styled(a, Some(MSty::Bold), MScr::Roman, false)
             }
@@ -468,6 +535,14 @@ impl Lp {
             "mathtt" => {
                 let a = self.arg();
                 styled(a, None, MScr::Monospace, false)
+            }
+            "textcolor" => {
+                let color = self.color_arg();
+                let a = self.arg();
+                match color {
+                    Some(color) => paint(a, color),
+                    None => a,
+                }
             }
             "overline" => one(MNode::Bar { top: true, e: self.arg() }),
             "underline" => one(MNode::Bar { top: false, e: self.arg() }),
@@ -574,7 +649,10 @@ impl Lp {
                     e: Vec::new(),
                 }],
                 Some(ch) => vec![run(&ch.to_string())],
-                None => vec![run(&format!("\\{name}"))],
+                None => {
+                    self.lose(unknown_command(name));
+                    vec![run(&format!("\\{name}"))]
+                }
             },
         }
     }
@@ -754,6 +832,82 @@ fn nary_operands(a: Arg, depth: usize) -> Arg {
         }
     }
     out
+}
+
+/// What an unknown command loses, for [`parse_latex_checked`]: sizes, script styles and links
+/// have no place in the tree, the rest is unknown.
+fn unknown_command(name: &str) -> String {
+    let kind = match name {
+        "tiny" | "scriptsize" | "footnotesize" | "small" | "normalsize" | "large" | "Large" | "LARGE" | "huge" | "Huge" => "text size command",
+        "scriptstyle" | "scriptscriptstyle" => "script style command",
+        "href" | "url" => "link",
+        _ => "command",
+    };
+    format!("The {kind} \\{name}")
+}
+
+/// Colour every run inside that has no colour of its own, so an inner colour wins.
+fn paint(a: Arg, color: Rgb) -> Arg {
+    a.into_iter()
+        .map(|n| match n {
+            MNode::Run(mut r) => {
+                r.color.get_or_insert(color);
+                MNode::Run(r)
+            }
+            other => map_args(other, &|a| paint(a, color)),
+        })
+        .collect()
+}
+
+/// The base colours of the xcolor package (its manual, "Predefined colors"), by name.
+const COLOR_NAMES: &[(&str, Rgb)] = &[
+    ("black", Rgb(0, 0, 0)),
+    ("blue", Rgb(0, 0, 255)),
+    ("brown", Rgb(191, 128, 64)),
+    ("cyan", Rgb(0, 255, 255)),
+    ("darkgray", Rgb(64, 64, 64)),
+    ("gray", Rgb(128, 128, 128)),
+    ("green", Rgb(0, 255, 0)),
+    ("lightgray", Rgb(191, 191, 191)),
+    ("lime", Rgb(191, 255, 0)),
+    ("magenta", Rgb(255, 0, 255)),
+    ("olive", Rgb(128, 128, 0)),
+    ("orange", Rgb(255, 128, 0)),
+    ("pink", Rgb(255, 191, 191)),
+    ("purple", Rgb(191, 0, 64)),
+    ("red", Rgb(255, 0, 0)),
+    ("teal", Rgb(0, 128, 128)),
+    ("violet", Rgb(128, 0, 128)),
+    ("white", Rgb(255, 255, 255)),
+    ("yellow", Rgb(255, 255, 0)),
+];
+
+/// A colour spec: a base colour name, `#rgb` or `#rrggbb` (as KaTeX and MathLive take it), or
+/// `RRGGBB` in the `HTML` model. A run is opaque, so `transparent` and hex with alpha are lost,
+/// as are other names and models.
+fn latex_color(model: Option<&str>, spec: &str) -> Result<Rgb, String> {
+    let hex = match model {
+        Some("HTML") => Some(spec),
+        Some(_) => None,
+        None => spec.strip_prefix('#'),
+    };
+    if let Some(hex) = hex.filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit())) {
+        match hex.len() {
+            3 if model.is_none() => {
+                return Rgb::parse(&hex.chars().flat_map(|c| [c, c]).collect::<String>()).ok_or_else(|| format!("The colour {spec}"));
+            }
+            6 => return Rgb::parse(hex).ok_or_else(|| format!("The colour {spec}")),
+            4 | 8 if model.is_none() => return Err(format!("The translucent colour {spec}")),
+            _ => {}
+        }
+    }
+    if model.is_none() && spec == "transparent" {
+        return Err(format!("The translucent colour {spec}"));
+    }
+    match COLOR_NAMES.iter().find(|(name, _)| *name == spec) {
+        Some((_, c)) if model.is_none() => Ok(*c),
+        _ => Err(format!("The colour {spec}")),
+    }
 }
 
 /// Set a style on every run inside.
@@ -1298,6 +1452,49 @@ mod tests {
         }
         // The writer keeps its own names.
         assert_eq!(to_latex(&parse_latex(r"\infinity")), to_latex(&parse_latex(r"\infty")));
+    }
+
+    /// `\color` colours the rest of its group and `\textcolor` its argument, through structures;
+    /// an inner colour wins and black is a colour like another. `\pmb` is bold.
+    #[test]
+    fn colours_scope_and_pmb_is_bold() {
+        let colours = |src: &str| {
+            let mut out = Vec::new();
+            crate::math_tree::each_run_mut(&mut parse_latex(src), &mut |r| out.push((r.text.clone(), r.color)));
+            out
+        };
+        let (red, blue) = (Some(Rgb(255, 0, 0)), Some(Rgb(0, 0, 255)));
+        let nested = colours(r"\color{red}a{\color{blue}b}c");
+        assert_eq!(nested, [("a".into(), red), ("b".into(), blue), ("c".into(), red)]);
+        let scoped = colours(r"x\textcolor{#00f}{y}z{\color{black}w}v");
+        assert_eq!(scoped, [("x".into(), None), ("y".into(), blue), ("z".into(), None), ("w".into(), Some(Rgb::BLACK)), ("v".into(), None)]);
+        let structures = colours(r"\color[HTML]{FF0000}\frac{a}{b}^2");
+        assert!(structures.len() == 3 && structures.iter().all(|(_, c)| *c == red), "{structures:?}");
+
+        assert!(matches!(parse_latex(r"\pmb{x}").as_slice(), [MNode::Run(r)] if r.sty == Some(MSty::Bold)));
+    }
+
+    /// The checked reader names what the tree can't carry; the plain one still reads it.
+    #[test]
+    fn checked_reader_reports_what_is_lost() {
+        for (src, lost) in [
+            (r"\large x", "text size command"),
+            (r"\frac{\tiny a}{b}", "text size command"),
+            (r"\scriptstyle x", "script style command"),
+            (r"\href{https://example.org}{x}", "link"),
+            (r"\foo x", "command \\foo"),
+            (r"\color{nocolour}x", "colour nocolour"),
+            (r"\color{transparent}x", "translucent colour"),
+            (r"\textcolor{#ff000080}{x}", "translucent colour"),
+            (r"\sqrt[\huge 3]{x}", "text size command"),
+        ] {
+            let err = parse_latex_checked(src).expect_err(src);
+            assert!(err.contains(lost), "{src}: {err}");
+            assert!(!parse_latex(src).is_empty(), "{src}");
+        }
+        for src in [r"\color{red}x", r"\displaystyle \frac{a}{b}", r"\hbox{ab}", r"\pmb{x}", r"\alpha+\sin x"] {
+            assert!(parse_latex_checked(src).is_ok(), "{src}");
+        }
     }
 
     /// An operator name with a script still applies to its argument when the LaTeX is read back.
