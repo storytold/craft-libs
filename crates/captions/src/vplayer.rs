@@ -11,7 +11,7 @@
 //! Writing puts a clearing line where a caption ends before the next one starts, drops tags,
 //! rounds to a hundredth of a second and writes `|` in text as `｜`.
 
-use crate::text::{escape_markup, last_cue_end, ms_to_tick, number, plain_lines, sequential};
+use crate::text::{escape_markup, last_cue_end, ms_to_tick, number, plain_lines, round_ticks, sequential};
 use crate::time::{TICKS_PER_SECOND, Tick};
 use crate::{Cue, Document, Error, Result};
 
@@ -75,7 +75,7 @@ pub fn parse(text: &str) -> Result<Document> {
 }
 
 fn cs(t: Tick) -> i64 {
-    ((i128::from(t.0.max(0)) + i128::from(TICKS_PER_CS) / 2) / i128::from(TICKS_PER_CS)) as i64
+    round_ticks(t, TICKS_PER_CS)
 }
 
 fn clock(cs: i64) -> String {

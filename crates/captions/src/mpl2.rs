@@ -9,8 +9,8 @@
 //! drops other tags, rounds times to a tenth of a second, writes `|` in text as `｜`, and writes
 //! a leading `/` in non-italic text as `／`.
 
-use crate::text::{escape_markup, ms_to_tick, number, plain_text, tick_to_ms, whole_line_style, wrap_style};
-use crate::{Cue, Document, Error, Result};
+use crate::text::{escape_markup, ms_to_tick, number, plain_text, round_ticks, whole_line_style, wrap_style};
+use crate::{Cue, Document, Error, Result, TICKS_PER_SECOND, Tick};
 
 /// `[a][b]text` as its parts.
 pub(crate) fn split_cue(line: &str) -> Option<(i64, i64, &str)> {
@@ -62,7 +62,7 @@ pub fn parse(text: &str) -> Result<Document> {
 
 pub fn write(doc: &Document) -> String {
     let mut out = String::new();
-    let ds = |t| (tick_to_ms(t) + 50) / 100;
+    let ds = |t: Tick| round_ticks(t, TICKS_PER_SECOND / 10);
     for c in &doc.cues {
         let start = ds(c.start);
         let end = ds(c.end).max(start + 1);
@@ -98,6 +98,18 @@ mod tests {
     #[test]
     fn rejects_other_text() {
         assert!(parse("1\n00:00:01,000 --> 00:00:02,000\nx\n").is_err());
+    }
+
+    #[test]
+    fn writing_rounds_once_at_decisecond_midpoints() {
+        let decisecond = TICKS_PER_SECOND / 10;
+        let midpoint = TICKS_PER_SECOND + decisecond / 2;
+        for (offset, expected) in [(-1, 10), (0, 11), (1, 11)] {
+            let start = Tick(midpoint + offset);
+            let end = Tick(start.0 + TICKS_PER_SECOND);
+            let doc = Document { cues: vec![Cue { start, end, text: "cue".into(), ..Default::default() }], ..Default::default() };
+            assert_eq!(write(&doc), format!("[{expected}][{}]cue\n", expected + 10));
+        }
     }
 
     #[test]
