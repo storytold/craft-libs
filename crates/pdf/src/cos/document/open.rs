@@ -35,6 +35,7 @@ impl Document {
             security: None,
             encrypt_num: None,
             encrypt_members: Arc::default(),
+            embedded_files: Arc::default(),
             unfound: Arc::default(),
             encryption_changed: false,
             full_save: false,
@@ -125,6 +126,7 @@ impl Document {
             security: None,
             encrypt_num: None,
             encrypt_members: Arc::default(),
+            embedded_files: Arc::default(),
             unfound: Arc::default(),
             encryption_changed: false,
             full_save: false,
@@ -261,6 +263,12 @@ impl Document {
         self.security = Some(handler);
         self.encrypt_num = num;
         self.encrypt_members = Arc::new(members);
+        // Read with the handler, which an object stream may need, and with no set yet: what the
+        // read decrypts on the way is decided by `/Type` and then thrown away with the caches.
+        self.embedded_files = Arc::default();
+        if self.security.as_deref().is_some_and(|h| !h.dict().ef_f.is_empty() && h.dict().ef_f != h.dict().stm_f) {
+            self.embedded_files = Arc::new(self.embedded_file_streams());
+        }
         // Objects read while locating the catalog were read before decryption was possible.
         self.cache = Arc::default();
         self.objstms = Arc::default();
@@ -281,7 +289,7 @@ impl Document {
     /// encrypt a second time.
     fn unlock_embedded_files(&mut self, password: &str) -> Result<(), CosError> {
         let Some(current) = self.security.as_deref() else { return Ok(()) };
-        if self.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if self.reads_as_stored(s))) {
+        if self.overlay_entries().any(|(num, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if self.reads_as_stored_at(num, s))) {
             return Err(CosError::Security("an embedded file was edited before the password was given: save or undo that edit first".into()));
         }
         let handler = crate::crypt::SecurityHandler::open(current.dict().clone(), &self.first_id(), Some(password)).map_err(|e| match e {
@@ -304,8 +312,87 @@ impl Document {
     /// Whether `s`, a stream of this document, holds encrypted data that reads as stored because the
     /// document opened without the password its embedded files need (see
     /// [`Document::embedded_files_locked`]). Such data isn't the file it encrypts.
+    ///
+    /// Told from the stream's dictionary alone, which says it is an embedded file only through
+    /// `/Type /EmbeddedFile`, an optional entry (ISO 32000-2 Table 44). For a stream that is an
+    /// object of this document, [`Document::reads_as_stored_at`] also knows the embedded files
+    /// that leave it out.
     pub fn reads_as_stored(&self, s: &crate::cos::Stream) -> bool {
-        self.security.as_deref().is_some_and(|h| crate::cos::security::stream_reads_as_stored(self, h, s))
+        self.security.as_deref().is_some_and(|h| crate::cos::security::stream_reads_as_stored(self, h, None, s))
+    }
+
+    /// [`Document::reads_as_stored`] for `s`, object `num` of this document: a stream a file
+    /// specification's `/EF` refers to is an embedded file, whether or not it says `/Type
+    /// /EmbeddedFile` (ISO 32000-2 §7.11.4), and `/EFF` applies to it (§7.6.5).
+    pub fn reads_as_stored_at(&self, num: u32, s: &crate::cos::Stream) -> bool {
+        self.security.as_deref().is_some_and(|h| crate::cos::security::stream_reads_as_stored(self, h, Some(num), s))
+    }
+
+    /// Whether object `num` of the file is one a file specification's `/EF` refers to, which
+    /// matters only when `/EFF` and `/StmF` differ (see [`Document::embedded_file_streams`]). An
+    /// object added by an edit is told by its `/Type`.
+    pub(crate) fn is_embedded_file_stream(&self, num: u32) -> bool {
+        self.embedded_files.contains(&num)
+    }
+
+    /// The objects of the file a file specification's `/EF` refers to (ISO 32000-2 §7.11.4): its
+    /// embedded file streams, which `/EFF` encrypts whatever their `/Type` says (§7.6.5; `/Type` is
+    /// optional, Table 44). A file specification can be anywhere (a name tree, an annotation, an
+    /// `/AF` array, an action), so every object of the file is read, once and without the editing
+    /// caches, and what is nested in it is walked without recursion: cycles and nesting cost no
+    /// more than the objects' size. A reference that doesn't resolve to an object of the file (a
+    /// number it doesn't have, or a generation the object doesn't take, which is null, ISO 32000-2
+    /// §7.3.10) is left out, so the set is no larger than the file's object count; so is the
+    /// number the writer gives the object streams it builds.
+    fn embedded_file_streams(&self) -> HashSet<u32> {
+        let numbers = self.entries.object_numbers(&self.data);
+        let is_object = |r: ObjRef| r.num != u32::MAX && self.reference_matches(r);
+        let mut reader = self.object_reader();
+        let mut found = HashSet::new();
+        // The `/EF` dictionaries given by reference already scanned: file specifications can share
+        // one, and each is scanned once however many name it.
+        let mut scanned = HashSet::new();
+        let mut add = |ef: &Dict| {
+            for (_, v) in ef.iter() {
+                if let Object::Ref(r) = v
+                    && is_object(*r)
+                {
+                    found.insert(r.num);
+                }
+            }
+        };
+        for &num in &numbers {
+            let object = reader.get(ObjRef::new(num, reader.document.generation(num)));
+            // An `/EF` dictionary given by reference, read after the walk.
+            let mut by_ref = Vec::new();
+            let mut pending = vec![&*object];
+            while let Some(o) = pending.pop() {
+                let d = match o {
+                    Object::Array(a) => {
+                        pending.extend(a);
+                        continue;
+                    }
+                    Object::Dict(d) => d,
+                    Object::Stream(s) => &s.dict,
+                    _ => continue,
+                };
+                match d.get(b"EF") {
+                    Some(Object::Dict(ef)) => add(ef),
+                    Some(Object::Ref(r)) => by_ref.push(*r),
+                    _ => {}
+                }
+                pending.extend(d.iter().map(|(_, v)| v));
+            }
+            for r in by_ref {
+                if !scanned.insert(r) {
+                    continue;
+                }
+                if let Object::Dict(ef) = &*reader.get(r) {
+                    add(ef);
+                }
+            }
+        }
+        found
     }
 
     /// The first file identifier, part of the encryption key (empty when there is none).
@@ -508,7 +595,7 @@ impl Document {
     pub(super) fn decrypted(&self, id: ObjRef, o: Object) -> Object {
         match &self.security {
             Some(h) if Some(id.num) != self.encrypt_num && !self.encrypt_members.contains(&id.num) => {
-                crate::cos::security::transform(self, h, &o, id.num, id.generation, crate::cos::security::Pass::Decrypt)
+                crate::cos::security::transform(self, h, &o, id.num, id.num, id.generation, crate::cos::security::Pass::Decrypt)
             }
             _ => o,
         }

@@ -4,8 +4,8 @@
 //! Not encrypted, per the spec: the `/Encrypt` dictionary itself, cross-reference streams, the
 //! trailer `/ID`, objects inside object streams (the object stream is encrypted as a whole),
 //! the `/Contents` of signature dictionaries, and metadata streams when `/EncryptMetadata` is
-//! false. Streams naming a crypt filter (`/Crypt` in `/Filter`) use that filter; embedded files
-//! use `/EFF`.
+//! false. Streams naming a crypt filter (`/Crypt` in `/Filter`) use that filter; embedded files,
+//! with `/Type /EmbeddedFile` or referred to from a file specification's `/EF`, use `/EFF`.
 
 use std::cell::Cell;
 
@@ -178,20 +178,31 @@ pub(crate) fn efopen_only(doc: &Document, d: &Dict) -> bool {
 
 /// Whether `s` holds encrypted data that reads as stored: still encrypted. Either the handler has
 /// no file key and would decrypt it, or the stream names a crypt filter whose method the handler
-/// can't decrypt (ISO 32000-2 Table 25).
-pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &Stream) -> bool {
+/// can't decrypt (ISO 32000-2 Table 25). `source` is the stream's object number in `doc`, when it
+/// is one (see [`stream_kind`]).
+pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, source: Option<u32>, s: &Stream) -> bool {
     if h.has_key() && !h.dict().crypt_filters.iter().any(|(_, m)| *m == Method::Unsupported) {
         return false;
     }
     let _scope = FollowScope::enter();
     let named = named_crypt_filter(doc, &s.dict);
     let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
-    let kind = match (&named, ty.as_deref().and_then(Object::as_name)) {
+    let kind = stream_kind(doc, named.as_deref(), ty.as_deref().and_then(Object::as_name), source);
+    if h.has_key() { h.cannot_decrypt(kind) } else { h.decrypts(kind) }
+}
+
+/// Which crypt filter a stream's data uses: the one it names (`named`), else `/EFF` for an
+/// embedded file, else `/StmF`. An embedded file stream says `/Type /EmbeddedFile`, or leaves it
+/// out (it is optional, ISO 32000-2 Table 44): what makes it one is a file specification's `/EF`
+/// referring to it (§7.11.4), which [`Document::is_embedded_file_stream`] knows for `source`, its
+/// object number in `doc`.
+fn stream_kind<'n>(doc: &Document, named: Option<&'n [u8]>, ty: Option<&[u8]>, source: Option<u32>) -> StreamKind<'n> {
+    match (named, ty) {
         (Some(n), _) => StreamKind::Named(n),
         (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
+        _ if source.is_some_and(|n| doc.is_embedded_file_stream(n)) => StreamKind::EmbeddedFile,
         _ => StreamKind::Normal,
-    };
-    if h.has_key() { h.cannot_decrypt(kind) } else { h.decrypts(kind) }
+    }
 }
 
 /// Whether `f`, an entry of a `/Filter` chain or its only filter, is `/Crypt`.
@@ -324,8 +335,10 @@ pub(crate) enum Pass {
 /// dictionary's `/Contents` (see [`is_signature_dict`]).
 ///
 /// `o` is as `doc` holds it: what a stream's dictionary gives by reference is read from `doc`, so
-/// its references have to be the document's, not a save's renumbered ones.
-pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass) -> Object {
+/// its references have to be the document's, not a save's renumbered ones. `source` is its number
+/// in `doc`, which tells an embedded file stream (see [`stream_kind`]); `num` is the one it is
+/// encrypted or decrypted with, a save's renumbered one when writing.
+pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, source: u32, num: u32, generation: u16, pass: Pass) -> Object {
     let _scope = FollowScope::enter();
     let decrypt = pass == Pass::Decrypt;
     let strings = |s: &PdfString| {
@@ -337,7 +350,7 @@ pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u3
     // which overflowed the stack on a 10 KB file. A stream can't be nested, and a dictionary that
     // is reads as it says directly.
     match o {
-        Object::Stream(s) => stream(doc, s, &strings, h, num, generation, pass),
+        Object::Stream(s) => stream(doc, s, &strings, h, (source, num), generation, pass),
         Object::Dict(d) if is_signature_dict(Some(doc), d) => signature_dict(d, &strings),
         o => walk(o, &strings),
     }
@@ -370,7 +383,7 @@ fn stream(
     s: &Stream,
     strings: &dyn Fn(&PdfString) -> PdfString,
     h: &SecurityHandler,
-    num: u32,
+    (source, num): (u32, u32),
     generation: u16,
     pass: Pass,
 ) -> Object {
@@ -392,11 +405,7 @@ fn stream(
         named = None;
     }
     let dict = walked(dropped.as_ref().unwrap_or(&s.dict));
-    let kind = match (&named, ty) {
-        (Some(n), _) => StreamKind::Named(n),
-        (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
-        _ => StreamKind::Normal,
-    };
+    let kind = stream_kind(doc, named.as_deref(), ty, Some(source));
     let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
     Object::Stream(Stream { dict, raw: raw.into() })
 }

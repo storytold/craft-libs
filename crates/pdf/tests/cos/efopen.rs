@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use craft_pdf::cos::{Algorithm, CosError, Document, NewEncryption, ObjRef, Object, SaveOptions, write_full, write_incremental};
+use craft_pdf::cos::{Algorithm, CosError, Dict, Document, NewEncryption, ObjRef, Object, SaveOptions, write_full, write_incremental};
 use craft_pdf::crypt::StreamKind;
 
 const PAGE: &str = "BT /F1 12 Tf 20 100 Td (Visible page) Tj ET";
@@ -26,10 +26,27 @@ fn fixture(algorithm: Algorithm, auth_event: &str) -> Vec<u8> {
 /// [`fixture`], the attachment naming `/StdCF` in a `/Crypt` filter of its own when `named`, with
 /// no `/EFF` (ISO 32000-2 §7.4.10).
 fn fixture_with(algorithm: Algorithm, auth_event: &str, named: bool) -> Vec<u8> {
-    let id0 = [7u8; 16];
+    build(algorithm, auth_event, named, true)
+}
+
+/// [`fixture`] with `/AuthEvent /EFOpen`, its attachment without `/Type /EmbeddedFile` unless
+/// `typed`: the entry is optional (ISO 32000-2 Table 44).
+fn fixture_typed(algorithm: Algorithm, typed: bool) -> Vec<u8> {
+    build(algorithm, "EFOpen", false, typed)
+}
+
+const ID0: [u8; 16] = [7; 16];
+
+/// The handler the fixtures encrypt with.
+fn handler(algorithm: Algorithm) -> craft_pdf::crypt::SecurityHandler {
     let params =
         NewEncryption { algorithm, user_password: PASSWORD, owner_password: "owner pw", permissions: -4, encrypt_metadata: true, seed: [3; 32] };
-    let handler = craft_pdf::crypt::create(&params, &id0).unwrap();
+    craft_pdf::crypt::create(&params, &ID0).unwrap()
+}
+
+fn build(algorithm: Algorithm, auth_event: &str, named: bool, typed: bool) -> Vec<u8> {
+    let id0 = ID0;
+    let handler = handler(algorithm);
     let d = handler.dict();
     let kind = if named { StreamKind::Named(b"StdCF") } else { StreamKind::EmbeddedFile };
     let cipher = handler.encrypt_stream(EMBEDDED.num, 0, ATTACHED, kind);
@@ -51,7 +68,8 @@ fn fixture_with(algorithm: Algorithm, auth_event: &str, named: bool) -> Vec<u8> 
         format!("<< /Length {} >>\nstream\n{PAGE}\nendstream", PAGE.len()).into_bytes(),
         b"<< /Type /Filespec /F (note.txt) /UF (note.txt) /EF << /F 6 0 R >> >>".to_vec(),
     ];
-    let mut stream = format!("<< /Type /EmbeddedFile{crypt} /Length {} >>\nstream\n", cipher.len()).into_bytes();
+    let ty = if typed { "/Type /EmbeddedFile" } else { "" };
+    let mut stream = format!("<< {ty}{crypt} /Length {} >>\nstream\n", cipher.len()).into_bytes();
     stream.extend_from_slice(&cipher);
     stream.extend_from_slice(b"\nendstream");
     objs.push(stream);
@@ -221,4 +239,121 @@ fn the_password_given_later_unlocks_the_embedded_files() {
     let edited = stream(&doc, EMBEDDED);
     doc.set(EMBEDDED, Object::Stream(edited));
     assert!(matches!(doc.unlock(PASSWORD), Err(CosError::Security(_))));
+}
+
+/// The attachment the names tree lists, as `doc` holds it, and its object number.
+fn listed_attachment(doc: &Document) -> (u32, craft_pdf::cos::Stream) {
+    let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap();
+    let names = doc.resolve(catalog.get(b"Names").unwrap()).as_dict().cloned().unwrap();
+    let files = doc.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();
+    let list = doc.resolve(files.get(b"Names").unwrap()).as_array().cloned().unwrap();
+    let spec = doc.resolve(&list[1]).as_dict().cloned().unwrap();
+    let ef = doc.resolve(spec.get(b"EF").unwrap()).as_dict().cloned().unwrap();
+    let Some(Object::Ref(r)) = ef.get(b"F") else { panic!("the file specification's /EF /F isn't a reference") };
+    (r.num, stream(doc, *r))
+}
+
+/// An embedded file stream without `/Type` (optional, ISO 32000-2 Table 44) is one because a file
+/// specification's `/EF` refers to it (§7.11.4), and `/EFF` applies to it as to one with the entry:
+/// without the password its data reads as stored, and an edit of it, which only the key could
+/// encrypt, isn't saved. The page's content, in the clear, still reads as it is.
+#[test]
+fn an_embedded_file_without_a_type_reads_as_stored_without_the_password() {
+    for typed in [true, false] {
+        let mut doc = Document::open(Arc::new(fixture_typed(Algorithm::Aes256, typed))).unwrap();
+        assert!(doc.embedded_files_locked(), "typed: {typed}");
+        let embedded = stream(&doc, EMBEDDED);
+        assert_eq!(embedded.dict.get(b"Type").is_some(), typed);
+        assert!(doc.reads_as_stored_at(EMBEDDED.num, &embedded), "typed: {typed}");
+        assert_ne!(embedded.decoded().unwrap(), ATTACHED);
+        let content = stream(&doc, CONTENT);
+        assert!(!doc.reads_as_stored_at(CONTENT.num, &content), "typed: {typed}");
+        assert_eq!(content.decoded().unwrap(), PAGE.as_bytes());
+        let mut replaced = embedded;
+        replaced.raw = b"new words".to_vec().into();
+        doc.set(EMBEDDED, Object::Stream(replaced));
+        assert!(matches!(write_incremental(&doc, &SaveOptions::default()), Err(CosError::Security(_))), "typed: {typed}");
+    }
+}
+
+/// With the password, an embedded file stream without `/Type` decrypts with `/EFF` on reading, and
+/// a full save, which renumbers it, encrypts it again under its new number: AES-128 keys depend on
+/// the number, so data written as it was read would decrypt to noise.
+#[test]
+fn an_embedded_file_without_a_type_is_encrypted_again_under_its_new_number() {
+    for typed in [true, false] {
+        let bytes = fixture_typed(Algorithm::Aes128, typed);
+        assert_eq!(attachment_with_password(bytes.clone()), ATTACHED, "typed: {typed}");
+        let mut doc = Document::open_with_password(Arc::new(bytes), Some(PASSWORD)).unwrap();
+        // An object the catalog refers to, which the save numbers before the attachment.
+        let mut outlines = Dict::new();
+        outlines.set(b"Type".to_vec(), Object::name("Outlines"));
+        outlines.set(b"Count".to_vec(), Object::Int(0));
+        let outlines = doc.add(Object::Dict(outlines));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Outlines".to_vec(), Object::Ref(outlines))).unwrap();
+        let full = write_full(&doc, &SaveOptions::default()).unwrap();
+        // Without the password the save's attachment is held as it is stored.
+        let stored = Document::open(Arc::new(full.clone())).unwrap();
+        let (num, written) = listed_attachment(&stored);
+        assert_ne!(num, EMBEDDED.num, "the full save renumbers the attachment");
+        assert!(stored.reads_as_stored_at(num, &written), "typed: {typed}");
+        assert_eq!(handler(Algorithm::Aes128).decrypt_stream(num, 0, &written.raw, StreamKind::EmbeddedFile), ATTACHED, "typed: {typed}");
+        // And the password reads it.
+        let reopened = Document::open_with_password(Arc::new(full), Some(PASSWORD)).unwrap();
+        assert_eq!(listed_attachment(&reopened).1.decoded().unwrap(), ATTACHED, "typed: {typed}");
+    }
+}
+
+/// The page's content stream, through the page tree.
+fn page_content(doc: &Document) -> (u32, craft_pdf::cos::Stream) {
+    let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap();
+    let pages = doc.resolve(catalog.get(b"Pages").unwrap()).as_dict().cloned().unwrap();
+    let kids = doc.resolve(pages.get(b"Kids").unwrap()).as_array().cloned().unwrap();
+    let page = doc.resolve(&kids[0]).as_dict().cloned().unwrap();
+    let Some(Object::Ref(r)) = page.get(b"Contents") else { panic!("the page's /Contents isn't a reference") };
+    (r.num, stream(doc, *r))
+}
+
+/// A file specification can be anywhere, so every object of the file is looked in. Ones that are
+/// their own `/EF`, or each other's, or sit deep in arrays naming objects the file doesn't have
+/// or generations its objects don't have, open and save, and change how nothing else is read.
+#[test]
+fn hostile_embedded_file_dictionaries_change_nothing_else() {
+    let mut doc = Document::open(Arc::new(fixture_typed(Algorithm::Aes256, false))).unwrap();
+    let own = doc.add(Object::Null);
+    let mut d = Dict::new();
+    d.set(b"EF".to_vec(), Object::Ref(own));
+    doc.set(own, Object::Dict(d));
+    let (a, b) = (doc.add(Object::Null), doc.add(Object::Null));
+    for (x, y) in [(a, b), (b, a)] {
+        let mut d = Dict::new();
+        d.set(b"EF".to_vec(), Object::Ref(y));
+        d.set(b"Next".to_vec(), Object::Ref(y));
+        doc.set(x, Object::Dict(d));
+    }
+    let mut ef = Dict::new();
+    ef.set(b"F".to_vec(), Object::Ref(ObjRef { num: 999_999, generation: 0 }));
+    ef.set(b"UF".to_vec(), Object::Ref(ObjRef { num: u32::MAX, generation: 0 }));
+    // The page's content under a generation it doesn't have: a reference to null (§7.3.10).
+    ef.set(b"DOS".to_vec(), Object::Ref(ObjRef { num: CONTENT.num, generation: 1 }));
+    let mut spec = Dict::new();
+    spec.set(b"EF".to_vec(), Object::Dict(ef));
+    let mut nested = Object::Dict(spec);
+    for _ in 0..100 {
+        nested = Object::Array(vec![nested]);
+    }
+    let deep = doc.add(nested);
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"AF".to_vec(), Object::Array([own, a, deep].into_iter().map(Object::Ref).collect()))).unwrap();
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    for bytes in [saved.clone(), write_full(&Document::open(Arc::new(saved)).unwrap(), &SaveOptions::default()).unwrap()] {
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert!(doc.embedded_files_locked());
+        let (num, attachment) = listed_attachment(&doc);
+        assert!(doc.reads_as_stored_at(num, &attachment));
+        let (num, content) = page_content(&doc);
+        assert!(!doc.reads_as_stored_at(num, &content));
+        assert_eq!(content.decoded().unwrap(), PAGE.as_bytes());
+    }
 }
