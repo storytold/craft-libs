@@ -265,9 +265,14 @@ pub fn pred16x16(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, 
 
 /// Chroma intra prediction for a 4:2:0 macroblock (8x8 block at chroma (x, y)), 8.3.4.
 /// Modes: 0 DC, 1 horizontal, 2 vertical, 3 plane.
-pub fn pred_chroma(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, a: Avail) {
+///
+/// `a.left` covers the left samples of rows 0..3 and `left_lower` those of rows 4..7: in an MBAFF
+/// frame with constrained_intra_pred the two halves can come from different macroblocks (6.4.12),
+/// and DC prediction decides per 4x4 block (8.3.4.1 to 8.3.4.3).
+pub fn pred_chroma(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, a: Avail, left_lower: bool) {
     const W: usize = 8;
     const H: usize = 8;
+    let left_ok = [a.left, left_lower];
     let mut top = [0i32; W];
     let mut left = [0i32; H];
     if a.top {
@@ -275,8 +280,8 @@ pub fn pred_chroma(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8
             top[i] = plane[(y - 1) * stride + x + i] as i32;
         }
     }
-    if a.left {
-        for i in 0..H {
+    for i in 0..H {
+        if left_ok[i / 4] {
             left[i] = plane[(y + i) * stride + x - 1] as i32;
         }
     }
@@ -287,8 +292,9 @@ pub fn pred_chroma(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8
                 for bx in 0..W / 4 {
                     let st: i32 = top[bx * 4..bx * 4 + 4].iter().sum();
                     let sl: i32 = left[by * 4..by * 4 + 4].iter().sum();
+                    let a_left = left_ok[by];
                     let dc = if (bx == 0 && by == 0) || (bx > 0 && by > 0) {
-                        match (a.top, a.left) {
+                        match (a.top, a_left) {
                             (true, true) => (st + sl + 4) >> 3,
                             (false, true) => (sl + 2) >> 2,
                             (true, false) => (st + 2) >> 2,
@@ -297,12 +303,12 @@ pub fn pred_chroma(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8
                     } else if bx > 0 {
                         if a.top {
                             (st + 2) >> 2
-                        } else if a.left {
+                        } else if a_left {
                             (sl + 2) >> 2
                         } else {
                             128
                         }
-                    } else if a.left {
+                    } else if a_left {
                         (sl + 2) >> 2
                     } else if a.top {
                         (st + 2) >> 2
@@ -660,10 +666,34 @@ mod tests {
             p[3 * s + 4 + i] = if i < 4 { 40 } else { 80 };
             p[(4 + i) * s + 3] = if i < 4 { 8 } else { 16 };
         }
-        pred_chroma(&mut p, s, 4, 4, 0, ALL);
+        pred_chroma(&mut p, s, 4, 4, 0, ALL, true);
         assert_eq!(p[4 * s + 4], (160 + 32 + 4) >> 3); // top-left block: both
         assert_eq!(p[4 * s + 8], 80); // top-right block: top only
         assert_eq!(p[8 * s + 4], 16); // bottom-left: left only
         assert_eq!(p[8 * s + 8], ((320 + 64 + 4) >> 3) as u8); // bottom-right: both
+    }
+
+    /// Only the upper half of the left column available (an MBAFF field macroblock next to a
+    /// frame pair whose bottom macroblock is inter, with constrained_intra_pred): the lower
+    /// blocks fall back to the top samples, the upper left block still uses both.
+    #[test]
+    fn chroma_dc_with_half_the_left_column() {
+        let s = 16;
+        let mut p = vec![0u8; s * 16];
+        for i in 0..8 {
+            p[3 * s + 4 + i] = if i < 4 { 40 } else { 80 };
+            p[(4 + i) * s + 3] = if i < 4 { 8 } else { 16 };
+        }
+        pred_chroma(&mut p, s, 4, 4, 0, ALL, false);
+        assert_eq!(p[4 * s + 4], (160 + 32 + 4) >> 3); // top-left block: both
+        assert_eq!(p[4 * s + 8], 80); // top-right block: top
+        assert_eq!(p[8 * s + 4], 40); // bottom-left: no left samples, so top
+        assert_eq!(p[8 * s + 8], 80); // bottom-right: top only
+        // and the other way round: the lower half available, the upper not
+        let mut p2 = p.clone();
+        pred_chroma(&mut p2, s, 4, 4, 0, Avail { left: false, ..ALL }, true);
+        assert_eq!(p2[4 * s + 4], 40); // top-left: top only
+        assert_eq!(p2[8 * s + 4], 16); // bottom-left: left
+        assert_eq!(p2[8 * s + 8], ((320 + 64 + 4) >> 3) as u8); // bottom-right: both
     }
 }
