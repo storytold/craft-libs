@@ -464,3 +464,11 @@ The Y4M range-backed source in crates/media-source/src/y4m.rs adapts FilmCraft's
 original implementation (3f137a7ed420cac79b32145f5243b7f98b31f71c), licensed
 MIT OR Apache-2.0. Source notice retained:
 Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+
+The CPU renderer in crates/raster3d (rasterizer, shading, shadow maps, resolve and encoding) and
+the copy of it in crates/raster3d/tests/it/reference/ are moved from:
+- EffectCraft, crates/render/src/three_d/adv.rs, adv/raster.rs, adv/shade.rs and adv/scene.rs,
+  revision 2f16feb12f4d5ef601b35b2858f9c9a87077f61e, licensed under the MIT License or the Apache
+  License, Version 2.0, at your option.
+  https://github.com/storytold/effectcraft
+  Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.

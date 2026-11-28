@@ -1,0 +1,23 @@
+[package]
+name = "craft-raster3d"
+description = "CPU rasterizer for prepared 3D scenes: clipping, depth-buffered triangles, metallic-roughness shading, shadow maps, box resolve and sRGB encoding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+parallel = ["dep:rayon"]
+
+[lints]
+workspace = true
+
+[dependencies]
+rayon = { workspace = true, optional = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# The differential tests run a verbatim copy of the app's previous code, which uses rayon.
+rayon = { workspace = true }
