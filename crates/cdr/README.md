@@ -107,7 +107,10 @@ corners, not stretched ones. Hidden layers, groups and shapes, guide and grid la
 and master layers are left out; opacity, blend modes, fill rules and locked states are not
 written, desktop layers are written as drawing layers, and a spot color with no name opens as a
 process color; every use of a named spot color takes the look of its use at the strongest tint
-among the uses whose look is known.
+among the uses whose look is known. Each color entry holds the color twice: as the property list
+`read_cmx` reads, and as the model and value fields that other readers, such as libcdr, read. In
+those fields a spot color is written as its look at its tint, and the registration color as 100
+percent cyan, magenta, yellow and black.
 
 `write_cmx` returns an error, and writes nothing, for a coordinate, page side or outline width
 past the 32-bit range, a negative or NaN outline width, a page side that rounds to 0, more than

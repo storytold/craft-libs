@@ -143,6 +143,10 @@ pub fn read_cmx(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
 /// written with round corners of its radii times the square root of the scales' product, not with
 /// stretched corners, and is not reported.
 ///
+/// Each color entry holds the color twice: as the property list [`read_cmx`] reads, and as the
+/// model and value fields that other readers read. In those fields a spot color is written as its
+/// look at its tint, and the registration color as 100 percent cyan, magenta, yellow and black.
+///
 /// The file holds an index, so that a reader that finds the tables and pages through it, rather
 /// than by their chunk ids, opens it: the header gives where the master index starts, the index
 /// list (`LIST indx`) gives where each table, page, page reference list and layer starts, and the
