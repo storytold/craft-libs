@@ -496,7 +496,8 @@ pub struct Chart {
     /// the first typed-metadata reader, 2 adds stacked marker visibility and secondary-only
     /// axis ownership, 3 retains series IDs, 4 selects reciprocal duplicate-axis partners,
     /// 5 retains plot-group membership and selected axes' metadata, and 6 resolves group-owned
-    /// duplicate value-axis elements for all consumers.
+    /// duplicate value-axis elements, and 7 preserves resolved element identity through
+    /// ownership, scatter direction and source-linked formats.
     /// Missing fields are version 0. Preserve when editing.
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub raw_metadata_version: u16,
@@ -825,7 +826,8 @@ impl Chart {
         let mut remaining = 10_000_000;
         let mut slots_by_group = std::collections::HashMap::new();
         let mut stack_groups: Vec<Vec<(&Series, usize)>> = Vec::new();
-        let mut percent = false;
+        // A percentage axis has normalized defaults even when every cache slot is missing.
+        let percent = ser.iter().any(|s| kinds.kind(s).percent());
         for s in ser {
             if remaining == 0 {
                 break;
@@ -837,10 +839,10 @@ impl Chart {
             }
             let kind = kinds.kind(s);
             if kind.percent() {
-                for value in s.values.iter().take(slots) {
-                    percent |= value.is_some_and(|v| v.is_finite());
-                }
-            } else if kind.stacked() {
+                // The normalized range follows the effective kind; slots still consume the budget.
+                continue;
+            }
+            if kind.stacked() {
                 let next = stack_groups.len();
                 let group = *slots_by_group.entry((kind, s.source_group)).or_insert_with(|| {
                     stack_groups.push(Vec::new());
