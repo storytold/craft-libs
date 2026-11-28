@@ -167,6 +167,8 @@ pub(crate) struct Record {
     known: Option<Rect>,
     /// The place the window's own pass last saw.
     seen: Option<Rect>,
+    /// The place it saw before `seen`, and the window's pass number when `seen` took over from it.
+    seen_before: Option<(Rect, u64)>,
     /// The smallest inner size its caller asks for, as the window's builder carries it.
     min_size: Option<Vec2>,
     /// For a popup window ([`show_popup`]): the window its layer was opened from, while the layer shows.

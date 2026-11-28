@@ -726,7 +726,9 @@ impl<'a> TransformBox<'a> {
         let Some(kind) = self.rules.drag_kind(part, mods) else { return CursorIcon::Default.into() };
         let (screen, view, style) = (look.screen, &look.space.view, look.style);
         let (corner, away) = nearest_corner(screen, pointer);
-        let turn = || Cursor::from(PaintedCursor::turn(quad::bisector(screen, corner)));
+        // Photoshop's rotate pointer faces the point the box turns about, from wherever the pointer is (a rotate drag
+        // turns it with the outline instead: `follow`).
+        let turn = || Cursor::from(PaintedCursor::turn(toward_pivot(screen, pointer).unwrap_or_else(|| quad::bisector(screen, corner))));
         let along = |from: usize| vec2_of(screen.quad[(from + 1) % 4] - screen.quad[from % 4]);
         match (kind, part) {
             // The knob is a handle the pointer takes hold of and swings, not a stretch of the outside.
@@ -742,7 +744,8 @@ impl<'a> TransformBox<'a> {
                 if dragging || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Border { .. }) || away <= style.rotate_reach {
                     turn()
                 } else {
-                    CursorIcon::Alias.into()
+                    // Photoshop's Free Transform: the curved rotate pointer anywhere outside.
+                    turn()
                 }
             }
             (BoxDrag::Rotate, _) if dragging || away <= style.rotate_reach => turn(),
@@ -944,7 +947,21 @@ impl<'a> TransformBox<'a> {
         let rows = self.readout_rows(cx, space, grip.part, &next, &grip.start);
         readout(&*cx, pos, &rows);
         let acting = drag_mods(mods, suspend_key(snap));
-        let cursor = self.cursor(&CursorLook { space, screen: &on_screen(&space.view, &next), style }, grip.part, pos, acting, true);
+        let mut cursor = self.cursor(&CursorLook { space, screen: &on_screen(&space.view, &next), style }, grip.part, pos, acting, true);
+        // A rotate drag from the outside (not on a handle or the knob, which keep their own pointers): the pointer keeps the direction it had at the press, turned by exactly the angle the outline
+        // has turned since (Shift's steps included), so it turns with the box and never jumps.
+        if grip.part == BoxPart::Outside
+            && !matches!(self.rotate_zone, RotateZone::Handle | RotateZone::Knob)
+            && self.rules.drag_kind(grip.part, acting) == Some(BoxDrag::Rotate)
+        {
+            let (start, now) = (on_screen(&space.view, &grip.start), on_screen(&space.view, &next));
+            let press = space.view.affine() * grip.from;
+            let at_press = Vec2::new((start.pivot.x - press.x) as f32, (start.pivot.y - press.y) as f32);
+            if at_press.length() > 1.0 {
+                let turned = (now.angle() - start.angle()).to_radians() as f32;
+                cursor = PaintedCursor::turn(Vec2::angled(at_press.angle() + turned)).into();
+            }
+        }
         cx.cursor(cursor, CursorPriority::Drag);
     }
 
@@ -1574,6 +1591,18 @@ fn box_point_pull(state: &BoxState, p: Point, reach: f64) -> Point {
 fn nearest_corner(screen: &BoxState, p: Pos2) -> (usize, f32) {
     let p = Point::new(f64::from(p.x), f64::from(p.y));
     (0..4).map(|i| (i, screen.quad[i].distance(p) as f32)).min_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((0, f32::INFINITY))
+}
+
+/// The unit screen direction from `p` toward the box's pivot, in whole degrees (so the window's cursor image is not
+/// redrawn for a sub-degree move); `None` on the pivot.
+fn toward_pivot(screen: &BoxState, p: Pos2) -> Option<Vec2> {
+    let d = Vec2::new(screen.pivot.x as f32 - p.x, screen.pivot.y as f32 - p.y);
+    if d.length() < 1.0 {
+        return None;
+    }
+    let step = std::f32::consts::TAU / 360.0;
+    let angle = (d.y.atan2(d.x) / step).round() * step;
+    Some(Vec2::angled(angle))
 }
 
 /// The distance from `p` to the nearest side of the box whose corners are `quad`, all on the screen.

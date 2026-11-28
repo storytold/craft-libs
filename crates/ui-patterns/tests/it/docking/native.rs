@@ -306,6 +306,9 @@ struct NativeDock {
     auto_collapse: bool,
     /// The panel the next frame asks the dock to raise (`DockArea::raise`).
     raise: Option<u32>,
+    /// The host gives the area its workspace and applies the pass's actions after it, as an app that keeps the
+    /// workspace in its own state does: the area reads each change a pass late.
+    given: bool,
 }
 
 impl NativeDock {
@@ -338,6 +341,7 @@ impl NativeDock {
             palette_shapes: Vec::new(),
             auto_collapse: false,
             raise: None,
+            given: false,
         };
         for _ in 0..3 {
             dock.frame(vec![]);
@@ -358,13 +362,24 @@ impl NativeDock {
         let panels: &mut dyn DockPanels<u32> = if self.stepped { &mut stepped } else { &mut palettes };
         let specs = &self.specs;
         let raise = self.raise.take();
+        let given = self.given.then(|| Arc::clone(workspace));
         let out = self.windows.frame(root, child, |ui| {
-            let mut area = DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default());
+            let bind = match &given {
+                Some(given) => Bind::given(Arc::clone(given)),
+                None => Bind::bound(&mut *workspace),
+            };
+            let mut area = DockArea::new("Native dock", bind, specs, &mut *panels, DockConfig::default());
             if let Some(panel) = raise {
                 area = area.raise(panel);
             }
             actions.extend(area.show(ui).actions);
+            if given.is_some() && !ui.ctx().will_discard() && ui.ctx().viewport_id() == ViewportId::ROOT {
+                ui.ctx().request_discard("a second pass of the frame, as the app's sizing passes run");
+            }
         });
+        if self.given {
+            Arc::make_mut(&mut self.workspace).apply_all(actions.clone(), false, |_| Permissions::ALL).expect("the area's actions apply");
+        }
         if self.palette.is_none() {
             self.palette = out.builders.iter().map(|(viewport, _)| *viewport).find(|viewport| *viewport != ViewportId::ROOT);
         }
@@ -616,12 +631,10 @@ fn palette_steps(dock: &NativeDock) -> Option<u16> {
 /// puts it: its commands, with `at` the window's rect.
 fn placed_frame(dock: &mut NativeDock, child: Vec<Event>, at: &mut Rect) -> Vec<ViewportCommand> {
     let (_, commands) = dock.frame(child);
-    for command in &commands {
-        match command {
-            ViewportCommand::OuterPosition(to) => *at = Rect::from_min_size(*to, at.size()),
-            ViewportCommand::InnerSize(size) => *at = Rect::from_min_size(at.min, *size),
-            _ => {}
-        }
+    // The kit's fake window has taken every command of the frame, those of its passes before the palette's viewport
+    // was known included.
+    if let Some(placed) = dock.palette.and_then(|palette| dock.windows.facts(palette).outer_rect) {
+        *at = placed;
     }
     dock.windows.child_info(info(true, *at));
     commands
@@ -1857,4 +1870,35 @@ fn a_native_palettes_title_row_menu_stays_where_it_opened() {
     let menu = open_menu(&mut dock, &mut at, ROW_AT - Vec2::new(40.0, 0.0));
     let moved = window_rect(&dock, menu);
     assert!(moved.min.x < opened.min.x - 1.0, "it hangs at the second click: {moved:?}, first {opened:?}");
+}
+
+/// Where the OS resizes a palette's window (Windows, from the edge its hit test answers): a drag of the left edge
+/// moves the window and widens it each pass. An app that keeps the workspace itself applies the dock's changes after
+/// the frame, so a second pass of the same frame still asks for the window's place before the OS moved it. That
+/// repeated request is no new place: the app never sends the window back where the OS took it from, which would swing
+/// the left edge between the two places while the drag runs.
+#[trial]
+fn an_os_resize_of_a_palettes_left_edge_is_not_sent_back() {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    dock.given = true;
+    for _ in 0..3 {
+        dock.frame(vec![]);
+    }
+    let mut at = FLOAT_AT;
+    let mut sent = Vec::new();
+    for _ in 0..8 {
+        at = Rect::from_min_max(at.min - Vec2::new(12.0, 0.0), at.max);
+        dock.windows.child_info(info(true, at));
+        sent.extend(outer_positions(&dock.frame(vec![]).1));
+    }
+    for _ in 0..3 {
+        sent.extend(outer_positions(&dock.frame(vec![]).1));
+    }
+    assert!(sent.is_empty(), "the window is sent nowhere while the OS resizes it: {sent:?}");
+    let floating = dock.workspace.layout().floating[0].rect;
+    let expected = at.translate(-MAIN_AT.min.to_vec2());
+    assert!(
+        (floating.min - expected.min).length() < 1.0 && (floating.max - expected.max).length() < 1.0,
+        "the dock records the window's new place, in the main window's coordinates: {floating:?} / {expected:?}"
+    );
 }

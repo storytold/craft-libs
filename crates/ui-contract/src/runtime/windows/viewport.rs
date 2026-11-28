@@ -6,7 +6,7 @@ use super::placement::{record_placement, saved_placement};
 use super::shell::{app_id, base_shell, os_of, refresh};
 use super::spec::{WindowLevel, WindowSpec, frame_of_spec};
 use super::{Record, refuse_close_under_modal, shared};
-use crate::runtime::egui::viewports;
+use crate::runtime::egui::{pass, viewports};
 use crate::runtime::frame::PerViewport;
 use craft_behavior::placement::{Defaults, place};
 use craft_host::target::{Os, WindowChrome, WindowKind};
@@ -261,6 +261,7 @@ fn note_seen(ctx: &Context, viewport: ViewportId, facts: &viewports::Facts) {
     let Some(place) = place_of(facts) else { return };
     PerViewport::<Record>::with(ctx, viewport, |record| {
         if record.seen != Some(place) {
+            record.seen_before = record.seen.map(|before| (before, pass::pass_nr(ctx, viewport)));
             record.seen = Some(place);
             record.known = Some(place);
         }
@@ -270,19 +271,31 @@ fn note_seen(ctx: &Context, viewport: ViewportId, facts: &viewports::Facts) {
 /// Sends the window to the caller's position `pos` and inner size `size` where they differ from its known place by
 /// more than rounding. Nothing goes out while a move gesture moves the window (it sends the window's place itself),
 /// nor while the window is minimized, maximized or full screen, when a caller keeps its normal place.
+///
+/// Nor is the window sent back to the place it left in the last passes: while the OS moves or resizes it (Windows,
+/// from the left or top edge), a caller that records the window's place a pass late (it applies the pass's changes
+/// after the frame, and a second pass of the frame still reads the old ones) asks for that place, and sent, the window
+/// would swing between the two places each pass. Once the window has stood still for a few passes, the caller's
+/// place goes out whatever it is.
 fn keep_placed(ctx: &Context, viewport: ViewportId, pos: Option<Pos2>, size: Option<Vec2>) {
-    let (known, held) = PerViewport::<Record>::with(ctx, viewport, |record| {
+    let (known, held, left) = PerViewport::<Record>::with(ctx, viewport, |record| {
         let state = record.facts.is_some_and(|facts| facts.minimized || facts.maximized || facts.fullscreen);
-        (record.known, state || record.moved_pointer.is_some())
+        (record.known, state || record.moved_pointer.is_some(), record.seen_before)
     });
     let Some(known) = known.filter(|_| !held) else { return };
-    if let Some(pos) = pos.filter(|pos| differs(ctx, viewport, *pos - known.min)) {
+    let left = left.filter(|(_, at)| pass::pass_nr(ctx, viewport) <= at.saturating_add(LATE_PASSES)).map(|(left, _)| left);
+    let stale_pos = |pos: &Pos2| left.is_some_and(|left| !differs(ctx, viewport, *pos - left.min));
+    let stale_size = |size: &Vec2| left.is_some_and(|left| !differs(ctx, viewport, *size - left.size()));
+    if let Some(pos) = pos.filter(|pos| differs(ctx, viewport, *pos - known.min) && !stale_pos(pos)) {
         act(ctx, viewport, WindowAction::SetOuterPosition(pos));
     }
-    if let Some(size) = size.filter(|size| differs(ctx, viewport, *size - known.size())) {
+    if let Some(size) = size.filter(|size| differs(ctx, viewport, *size - known.size()) && !stale_size(size)) {
         act(ctx, viewport, WindowAction::SetInnerSize(size));
     }
 }
+
+/// How many of the window's passes after the OS moved or resized it a caller may still ask for the place it left.
+const LATE_PASSES: u64 = 3;
 
 /// `facts` with the window at its known place, where it has one: the place its caller records.
 pub(super) fn at_known(ctx: &Context, viewport: ViewportId, facts: viewports::Facts) -> viewports::Facts {
