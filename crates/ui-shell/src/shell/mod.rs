@@ -53,7 +53,7 @@ mod caption_icons;
 
 pub use caption_button::{CaptionButton, CaptionEnd, CaptionPlan, CaptionSlot};
 pub use caption_icons::{CaptionIcon, CaptionIcons, CaptionMask, RenderIconFn};
-pub use craft_window::policy::{CaptionFamily, Captions, Frame, MacInset};
+pub use craft_window::policy::{CaptionFamily, Captions, Frame, LayoutSides, MacInset};
 
 // A document's window: a container in its own OS viewport.
 pub(crate) mod document_window;

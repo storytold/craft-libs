@@ -3,7 +3,7 @@
 
 use super::caption_icons::{CaptionIcon, CaptionIcons};
 use super::words::ShellWords;
-use super::{Caption, CaptionFamily, Captions, SlotSize};
+use super::{Caption, CaptionFamily, Captions, LayoutSides, SlotSize};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, MemoProps, PaintUi, PartsCx, Role, Styled as _, WordSetCx as _};
 use crate::primitives::{Glyph, IconSpec, PaintShape, TextureCache};
 use crate::runtime::access::Name;
@@ -113,11 +113,12 @@ pub struct CaptionPlan {
 }
 
 impl CaptionPlan {
-    /// The buttons of `captions` at the (left, right) ends, left to right. A right-to-left UI mirrors the Windows
-    /// captions; the Linux desktops' layouts are the user's and stay as set.
+    /// The buttons of `captions` at the (left, right) ends, left to right. A right-to-left UI mirrors a layout whose
+    /// sides follow the reading direction (Windows'), whatever its look; a physical layout (a Linux desktop's) stays as
+    /// set.
     pub fn new(captions: &Captions, rtl: bool) -> Self {
         let (mut left, mut right) = (captions.layout.left.clone(), captions.layout.right.clone());
-        if rtl && captions.family == CaptionFamily::Windows {
+        if rtl && captions.sides == LayoutSides::Reading {
             std::mem::swap(&mut left, &mut right);
             left.reverse();
             right.reverse();

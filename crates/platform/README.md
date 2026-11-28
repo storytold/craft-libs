@@ -10,7 +10,7 @@ pull in heavier dependencies.
 | always (not wasm) | `dialogs`: reserve waiting workers before eager UI-thread native picker creation; serial requests, failure delivery and completion wakeups. The backend factory belongs to the app. |
 | always | `From<appearance::Reading> for craft_theme::SystemAppearance`, so a host hands the OS answer to `Base::resolve`. |
 | `pointer` | Move the system pointer (`pointer::warp`), installed by the app as craft-ui's `Scrub::install_warp` service for a scrub's screen-edge wrap; macOS only, `false` elsewhere. |
-| `appearance` | Linux/BSD XDG desktop preference observation (colour scheme, contrast, reduced motion, GNOME's text scale, button layout); reduced motion on Windows and macOS; browser contrast and motion media queries; owned cancellable subscriptions, bounded reads/helper capture, legacy compatibility and reconnect. |
+| `appearance` | Linux/BSD XDG desktop preference observation (colour scheme, contrast, reduced motion, GNOME's text scale, the window-button layout of every desktop); reduced motion on Windows and macOS; browser contrast and motion media queries; owned cancellable subscriptions, bounded reads/helper capture, legacy compatibility and reconnect. On Linux and the BSDs it also uses x11rb (the X settings manager and the window manager's name), roxmltree (window managers' XML files) and libc (`O_NONBLOCK`, to open a settings file without waiting). |
 | `browser` | Wasm download link/object URL ownership, cleanup on setup failure or abandonment, and cleanup timer registration before clicking; the file picker and save. |
 | always | `clock::Clock`: monotonic seconds (`web-time`, so also in the browser) for animation, autosave and deadlines, with a manual mode tests set and advance; `monotonic_ms`, `unix_ms`. |
 | always | `pacing`: `FrameCap` (desktop frame-rate cap without vsync), `WindowVisibility` (shown or hidden), `WorkBudget`/`WorkSlice` (background work per call, paused or sliced while hidden). No egui. |
@@ -70,12 +70,49 @@ application policy. `set_active(false)` suppresses wake notifications while cont
 Four existing custom-palette service hooks retain their current signatures and receive change-only
 notifications even in manual mode; they do not change the chosen palette.
 
-`Watcher::button_layout()` is GNOME's `org.gnome.desktop.wm.preferences` `button-layout`, read and
-followed on the same portal connection (ReadOne, then legacy Read; `gsettings` once when the portal
-has no answer). It is the string as the desktop reports it, `None` until one arrives, and a change
-runs the same wake callback. Malformed values keep the last one. `wait_first` does not wait for it.
-`craft_window::policy::LayoutWatch` turns it into the caption layout; craft-window takes the string,
-so it needs no D-Bus dependency.
+### Window-button layout
+
+`Watcher::caption_layout()` is the window-button layout of the running desktop, as a
+`craft_host::caption_layout::LayoutReading`: the value in its source's own grammar, which source gave it, and
+where it was read. Each source keeps its own answer and the best one present decides, in a fixed order, so a slow
+better source replaces a quick worse one and never the other way round:
+
+1. the settings portal's standard `org.freedesktop.appearance` `button-placement` (`(asas)`, leading and trailing);
+2. the window manager's own setting: GNOME's, Cinnamon's or MATE's `button-layout` exported by the portal, then read
+   with `gsettings get` and followed with one owned `gsettings monitor`; xfwm4's Xfconf property over D-Bus;
+3. the window manager's configuration file, looked at once a second while the app is active: KWin's `kwinrc` with
+   the system's files and their `[$i]` locks, xfwm4's channel file, Openbox's or labwc's `rc.xml` (Budgie's in
+   `budgie-desktop/labwc`);
+4. GTK's `Gtk/DecorationLayout` from the X settings manager (XSETTINGS 0.5, on an X11 session, with the manager's
+   selection followed; not on MATE, whose manager does not follow Marco's setting), then GNOME's key through the
+   portal where the desktop's own session keeps it in step with its window manager (Plasma's GTK bridge, Xfce 4.20's
+   settings daemon, Budgie's labwc bridge). On LXQt, Cinnamon and MATE, and for KWin or xfwm4 outside their own
+   sessions, GNOME's key holds GNOME's default and is not read;
+5. GTK's `gtk-decoration-layout` in `gtk-3.0/settings.ini`.
+
+Which window manager's setting counts follows `craft_host::caption_layout::LayoutDesktop`: the session's names,
+the X11 window manager's EWMH name on an X11 session, LXQt's chosen window manager and labwc's `LABWC_PID`. It is
+found once, for every source: the portal is asked for that window manager's keys only. Nothing of this runs before
+the first `caption_layout()` call: no X11 connection, file poll, helper or portal read of the layout keys, so an
+app that never asks pays for none of them. Only an X11 session's X server is asked, on a short-lived thread with a
+500 ms deadline: a connection on a Wayland session could start Xwayland. Every source shares the watcher's one
+worker, so none waits in a blocking call: every file the worker reads (the window managers', GTK's and the
+reduced-motion fallback's) is opened without waiting and read only when it is a regular file of at most 1 MiB
+(256 KiB for the motion fallback's), so a FIFO, device or socket in its place is no answer. In a Flatpak `gsettings`
+is not asked (it reads the sandbox's own settings), system configuration folders are the runtime's and not read,
+and a window manager's built-in default is not taken for a file out of the sandbox's reach; Xfconf needs
+`--talk-name=org.xfce.Xfconf` and a file its own `--filesystem` grant. GNOME's key is in step only where the
+desktop's bridge runs, which the session's names can't tell; without the file and the bridge a sandbox may get
+GNOME's default. A window manager started with another configuration file (Openbox's `--config-file`, labwc's
+`-C`, labwc's `--merge-config`) is not followed, except Budgie's known folder. A lost portal keeps the last answer; a new
+portal that has no such key gives way to the next source. `None` when no source answers; the caller keeps the
+desktop's default. A change runs the wake callback; `wait_first` does not wait for it. `set_active(true)` looks at
+the files at once.
+
+`Watcher::button_layout()` stays for older callers: GNOME's `org.gnome.desktop.wm.preferences` `button-layout`
+string as the portal (or `gsettings` once when the portal has no answer) reports it.
+`craft_window::policy::LayoutWatch` turns a reading into the caption layout, so craft-window needs no D-Bus or X11
+dependency.
 
 ### Contrast and reduced motion
 
@@ -85,8 +122,8 @@ combines the portal key, KDE's animation setting and GNOME's `org.gnome.desktop.
 `enable-animations`: any source that turns animation off wins. The portal's three keys (colour
 scheme, contrast, reduced motion) are read beside each other, so `wait_first` returns with them,
 and a change runs the same wake callback. `None` means no answer yet or no such key; where the
-portal has none, the desktop's settings files are read (`appearance/files.rs`); the `gsettings`
-fallback doesn't read them.
+portal has none, the desktop's settings files are read (`appearance/files.rs`), each opened without
+waiting and only when it is a regular file; the `gsettings` fallback doesn't read them.
 On macOS and Windows a worker polls the system's reduced-motion setting once a second
 (`NSWorkspace`, `UISettings`) and runs the wake callback when it changes. On the web, `browser_contrast()` and `browser_reduced_motion()` evaluate the
 `prefers-contrast: more` and `prefers-reduced-motion: reduce` media queries on each call, with

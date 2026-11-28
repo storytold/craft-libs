@@ -29,6 +29,8 @@ serde_json = { workspace = true }
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 wayland-client = "0.31"
 x11rb = { version = "0.13", default-features = false, features = ["xkb"] }
+# `O_NONBLOCK`, so the desktop's files are opened without waiting; the version the lock file already has.
+libc = "0.2"
 
 # `mac::set_movable` (`NSWindow.movable`), `mac::measure` (button frames, OS version), `system::SystemWindows`
 # (`NSEvent` pointer, buttons and modifiers, `NSScreen` for the primary screen),

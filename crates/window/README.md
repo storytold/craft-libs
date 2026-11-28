@@ -23,7 +23,7 @@ title bar" (`TitleBarPref::System`) gives the frame to the OS, window manager or
 | Windows | `Integrated(Windows)`: minimize, maximize, close at the right | `Native` |
 | GNOME, Wayland or XWayland | `Integrated(Adwaita)`, in the order of `button-layout` | `Native` |
 | KDE, Wayland or X11 | `Integrated(Breeze)`, in the order of KWin's `ButtonsOnLeft` and `ButtonsOnRight` | `Native` |
-| COSMIC, Xfce, Cinnamon, MATE, other floating desktops | `Integrated(Generic)` in the order of `gtk-decoration-layout`; Adwaita or Breeze when the GTK theme is one of those | `Native` |
+| COSMIC, Xfce, Cinnamon, MATE, LXQt, Budgie, Pantheon, other floating desktops | `Integrated(Generic)` in the order of the window manager's own setting (see Live layout changes); Adwaita or Breeze when the GTK theme is one of those | `Native` |
 | Tiling compositors and window managers (Sway, Hyprland, i3, niri, river, from `XDG_CURRENT_DESKTOP`) | `Native` | `Native` |
 | Wayland without server-side decorations, not GNOME | `Integrated(Generic)` | `Native` |
 | Web | `Native`; no frame code runs | `Native` |
@@ -41,7 +41,7 @@ reads the platform once and calls it.
 same for the caption buttons' style and layout. With the default prefix `CRAFT`: `CRAFT_TITLEBAR=app`
 forces the app's bar (also on tiling compositors), `=system` or `=desktop` forces the native frame.
 Apps pass their own prefix (`Prefix::new("PDFCRAFT")` reads `PDFCRAFT_TITLEBAR`).
-When `<PREFIX>_TITLEBAR` is unset, `CRAFT_TITLEBAR` applies, so one variable covers every app. `Decision::overridden` reports `Some(true)` or `Some(false)` when the variable decided.
+When `<PREFIX>_TITLEBAR` is unset, `CRAFT_TITLEBAR` applies, so one variable covers every app. `Decision::overridden` reports `Some(true)` or `Some(false)` when the variable decided. The caption variables fall back to `CRAFT_CAPTION_STYLE` and `CRAFT_CAPTION_LAYOUT` the same way; `Decision::caption_layout_fixed` reports a chosen layout, which then stays whatever the desktop's layout does; a tool window's decision sets it too, so its frame keeps no buttons.
 
 ## Use
 
@@ -64,32 +64,48 @@ This crate decides *whether* and *where*; craft-ui's title bar draws the buttons
 
 ### Live layout changes
 
-`policy::LayoutWatch` keeps the caption layout current without a restart:
+`policy::LayoutWatch` keeps the caption layout current without a restart. The layout comes from the app's one
+`craft_platform::appearance::Watcher` (it also supplies the theme), whose `caption_layout()` follows the best
+answering source of the running desktop; the watch turns that reading (`craft_host::caption_layout::LayoutReading`)
+into the buttons at each end:
 
 ```rust,ignore
 use craft_window::policy::{Frame, LayoutWatch};
 
 let mut layouts = LayoutWatch::new(&decision);
-// Each frame, with the app's one craft_platform::appearance::Watcher (it also supplies the theme):
-let mut changed = layouts.set_gnome(watcher.button_layout().as_deref());
-if window_gained_focus {
-    changed |= layouts.on_focus();
-}
+// Each frame, with the direction the app's UI reads in:
+let changed = layouts.follow(watcher.caption_layout().as_ref(), ui_reads_right_to_left);
 if changed && let Frame::Integrated(captions) = &mut decision.frame {
     captions.layout = layouts.layout().clone();
 }
 ```
 
-| Desktop | Live source |
+| Desktop | The setting followed, after the settings portal's standard `button-placement` |
 | --- | --- |
-| GNOME | `button-layout` from the settings portal, through `craft_platform::appearance` |
-| KDE | `kwinrc`, re-read by `on_focus` |
-| Other Linux and BSD desktops | GTK's `settings.ini`, re-read by `on_focus` |
+| GNOME, Ubuntu, Pantheon, Budgie on Mutter | `org.gnome.desktop.wm.preferences` `button-layout`: the settings portal, else `gsettings` |
+| Cinnamon | `org.cinnamon.desktop.wm.preferences` `button-layout`, the same way |
+| MATE | `org.mate.Marco.general` `button-layout`, the same way |
+| KDE Plasma, and KWin elsewhere | `kwinrc` `ButtonsOnLeft`, `ButtonsOnRight`, with the system's files, their locks and deletions; in Plasma's session, where the file can't be read (a Flatpak), GNOME's key as Plasma's GTK bridge writes it |
+| Xfce, and xfwm4 elsewhere | Xfconf's `xfwm4` `/general/button_layout`, else its channel file, GTK's X setting, and in Xfce's session GNOME's key as Xfce 4.20 writes it |
+| LXQt | its window manager's: Openbox's `rc.xml` `<titleLayout>`, KWin's or xfwm4's |
+| labwc, Budgie on labwc | `labwc/rc.xml` (Budgie's in `budgie-desktop/labwc`) `<titlebar><layout>` |
+| Any other X11 window manager | GTK's `Gtk/DecorationLayout` from the X settings manager, then `gtk-3.0/settings.ini` |
 | Windows, macOS, web | Fixed |
 
-A value with no usable button gives the desktop's default. The app passes the string from
-craft-platform, so this crate has no D-Bus dependency and the theme and layout share one
-connection.
+`craft_host::caption_layout` has the full list, the order in which the sources rank, and each window manager's
+default. Until the watcher has a reading, the layout `decide_for` read at startup stands in: on GNOME `gsettings`,
+on KDE the user's `kwinrc`, elsewhere GTK's `settings.ini`, then the desktop's default (Pantheon's `close:maximize`,
+say). A desktop layout that names no button gives none, as the desktop asked; a later change brings them back. A
+layout the decision chose itself stays: one `<PREFIX>_CAPTION_LAYOUT` set, or a tool window's
+(`Decision::caption_layout_fixed`). The portal's standard placement names leading and trailing ends, so a
+right-to-left UI shows it mirrored, once, when the reading is taken; every other desktop's setting names physical
+ends and is never mirrored. `Captions::sides` says which a layout's ends are, by the system and not the buttons'
+look: `LayoutSides::Physical` on Linux and the BSDs, `LayoutSides::Reading` on Windows, whose caption buttons change
+ends in a right-to-left UI. The Windows look on Linux (`CRAFT_CAPTION_STYLE=windows`) keeps the desktop's ends.
+
+For an app with no watcher, `LayoutWatch::set_gnome` takes GNOME's `button-layout` string alone, and
+`LayoutWatch::on_focus` re-reads `kwinrc` (KDE) or GTK's `settings.ini` when the window regains focus. Beyond those
+reads and the startup read above, this crate follows no desktop source itself: the watcher does, on its one worker.
 
 ## Older API
 

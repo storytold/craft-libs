@@ -177,13 +177,13 @@ fn a_body_on_a_line_it_shares_sits_on_the_lines_centre() {
     use craft_ui::contract::{Bind, Show as _};
     use craft_ui::display::Text;
     use craft_ui::sections::GroupBox;
-    use craft_ui::shell::{Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
+    use craft_ui::shell::{Caption, CaptionFamily, Captions, Frame, LayoutSides, Title, TitleBar};
     use craft_ui::testing::Fixture;
     use craft_ui::text::NumberField;
     let centre = |fixture: &Fixture, label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown")).rect.center().y;
     let mut bar = Fixture::new(|ui| {
         let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
         let _ = TitleBar::new().frame(frame).show_titled(
             ui,
             Title::new("Landscape.psd"),

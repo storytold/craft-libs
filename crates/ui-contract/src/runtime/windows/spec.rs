@@ -3,7 +3,7 @@
 use super::shared;
 use super::shell::{base_shell, os_of};
 use craft_host::target::{Os, WindowChrome, WindowKind};
-use craft_window::policy::{CaptionFamily, Captions, Frame, MacInset, tool_frame};
+use craft_window::policy::{CaptionFamily, Captions, Frame, LayoutSides, MacInset, tool_frame};
 use egui::{Context, ViewportId};
 
 /// Where a window stands in the stack of windows.
@@ -237,10 +237,11 @@ pub(super) fn chrome_of(frame: &Frame) -> WindowChrome {
 pub(super) fn frame_of(chrome: WindowChrome, captions: Option<Captions>) -> Frame {
     match chrome {
         WindowChrome::Inset => Frame::Inset(MacInset::default()),
-        WindowChrome::Integrated => Frame::Integrated(
-            captions
-                .unwrap_or_else(|| Captions { family: CaptionFamily::Generic, layout: craft_window::Layout { left: Vec::new(), right: Vec::new() } }),
-        ),
+        WindowChrome::Integrated => Frame::Integrated(captions.unwrap_or_else(|| Captions {
+            family: CaptionFamily::Generic,
+            layout: craft_window::Layout { left: Vec::new(), right: Vec::new() },
+            sides: LayoutSides::Physical,
+        })),
         _ => Frame::Native,
     }
 }

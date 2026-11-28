@@ -36,7 +36,7 @@ impl Ends {
     /// The ends of a bar in `frame`. A window in full screen (`shown` false) has none. The macOS lights and the
     /// Windows captions stay where the platform puts them: the lights on the physical left (the right under a
     /// right-to-left titlebar, [`MacInset::lights_right`](crate::shell::MacInset)), the Windows captions
-    /// mirrored, the Linux layouts as the user set them (see [`CaptionPlan::new`]).
+    /// mirrored, the Linux layouts as the user set them, whatever their look (see [`CaptionPlan::new`]).
     pub(super) fn of(frame: &Frame, shown: bool, rtl: bool) -> Ends {
         if !shown {
             return Ends::bare();

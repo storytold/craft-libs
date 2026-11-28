@@ -74,6 +74,7 @@ mod win32;
 
 pub mod restore;
 
+use craft_host::caption_layout::RawLayout;
 pub use list::{Closed, WindowId, WindowList};
 pub use lock_state::caps_lock;
 pub use menu::{Document, MenuEntry, WindowMenu};
@@ -242,25 +243,53 @@ impl Layout {
         let value = value.trim().trim_matches(|c| c == '\'' || c == '"');
         let (left, right) = value.split_once(':').unwrap_or((value, ""));
         let mut seen: Vec<Button> = Vec::new();
-        let mut side = |list: &str| {
-            let mut out = Vec::new();
-            for name in list.split(',') {
-                let button = match name.trim() {
-                    "minimize" => Button::Minimize,
-                    "maximize" => Button::Maximize,
-                    "close" => Button::Close,
-                    _ => continue,
-                };
-                if !seen.contains(&button) {
-                    seen.push(button);
-                    out.push(button);
+        let left = buttons(left.split(','), &mut seen, gtk_button);
+        let right = buttons(right.split(','), &mut seen, gtk_button);
+        Self { left, right }
+    }
+
+    /// The buttons a desktop's layout names, in any of the grammars of [`RawLayout`]. Names and letters with no button
+    /// here (a menu, an icon, shade, sticky, a spacer) are skipped, and a button named twice appears once, at its first
+    /// place, the left (or leading) end first. A layout that names no button gives none: the desktop asked for none.
+    ///
+    /// The portal's standard placement names leading and trailing ends: with `rtl` (the app's UI reads right to left)
+    /// the leading end is the right one, and each end reads from the leading edge, so the whole layout is mirrored.
+    /// Every other grammar names the physical left and right ends and is never mirrored. The other grammars split their
+    /// ends at a separator (`:`, xfwm4's `|`, Openbox's title `L`); a value without one has every button at the left end.
+    pub fn from_reading(raw: &RawLayout, rtl: bool) -> Self {
+        let mut seen = Vec::new();
+        match raw {
+            RawLayout::Placement { leading, trailing } => {
+                let leading = buttons(leading.iter().map(String::as_str), &mut seen, gtk_button);
+                let trailing = buttons(trailing.iter().map(String::as_str), &mut seen, gtk_button);
+                if rtl {
+                    Self { left: trailing.into_iter().rev().collect(), right: leading.into_iter().rev().collect() }
+                } else {
+                    Self { left: leading, right: trailing }
                 }
             }
-            out
-        };
-        let left = side(left);
-        let right = side(right);
-        Self { left, right }
+            RawLayout::Names(text) => Self::parse(text),
+            RawLayout::Labwc(text) => {
+                let (left, right) = text.split_once(':').unwrap_or((text, ""));
+                let left = buttons(left.split(','), &mut seen, labwc_button);
+                Self { left, right: buttons(right.split(','), &mut seen, labwc_button) }
+            }
+            RawLayout::Kwin { left, right } => {
+                let left = unique(left.as_deref().unwrap_or("MS").chars().filter_map(kwin_button), &mut seen);
+                Self { left, right: unique(right.as_deref().unwrap_or("HIAX").chars().filter_map(kwin_button), &mut seen) }
+            }
+            RawLayout::Xfwm(text) => Self::letters(text, '|', xfwm_button),
+            RawLayout::Openbox(text) => Self::letters(text, 'L', openbox_button),
+            _ => Self::default(),
+        }
+    }
+
+    /// One letter a button, `split` between the ends.
+    fn letters(text: &str, split: char, button: fn(char) -> Option<Button>) -> Self {
+        let mut seen = Vec::new();
+        let (left, right) = text.trim().split_once(split).unwrap_or((text.trim(), ""));
+        let left = unique(left.chars().filter_map(button), &mut seen);
+        Self { left, right: unique(right.chars().filter_map(button), &mut seen) }
     }
 
     /// The layout with the two sides swapped, for right-to-left UIs.
@@ -272,6 +301,73 @@ impl Layout {
     /// with none (a desktop that named only buttons this crate skips) falls back to the default.
     pub(crate) fn is_usable(&self) -> bool {
         !self.left.is_empty() || !self.right.is_empty()
+    }
+}
+
+/// The buttons `names` name, by `button`, each the first time only (`seen` holds those of the ends already read).
+fn buttons<'a>(names: impl Iterator<Item = &'a str>, seen: &mut Vec<Button>, button: fn(&str) -> Option<Button>) -> Vec<Button> {
+    unique(names.filter_map(|name| button(name.trim())), seen)
+}
+
+/// `buttons` without the ones in `seen`, each once; `seen` takes them.
+fn unique(buttons: impl Iterator<Item = Button>, seen: &mut Vec<Button>) -> Vec<Button> {
+    let mut out = Vec::new();
+    for button in buttons {
+        if !seen.contains(&button) {
+            seen.push(button);
+            out.push(button);
+        }
+    }
+    out
+}
+
+/// GNOME's, GTK's and the portal's names.
+fn gtk_button(name: &str) -> Option<Button> {
+    match name {
+        "minimize" => Some(Button::Minimize),
+        "maximize" => Some(Button::Maximize),
+        "close" => Some(Button::Close),
+        _ => None,
+    }
+}
+
+/// labwc's names.
+fn labwc_button(name: &str) -> Option<Button> {
+    match name {
+        "iconify" => Some(Button::Minimize),
+        "max" => Some(Button::Maximize),
+        "close" => Some(Button::Close),
+        _ => None,
+    }
+}
+
+/// KWin's letters.
+fn kwin_button(letter: char) -> Option<Button> {
+    match letter {
+        'I' => Some(Button::Minimize),
+        'A' => Some(Button::Maximize),
+        'X' => Some(Button::Close),
+        _ => None,
+    }
+}
+
+/// xfwm4's letters: `H` hides (minimizes) the window.
+fn xfwm_button(letter: char) -> Option<Button> {
+    match letter {
+        'H' => Some(Button::Minimize),
+        'M' => Some(Button::Maximize),
+        'C' => Some(Button::Close),
+        _ => None,
+    }
+}
+
+/// Openbox's letters: `I` iconifies (minimizes) the window.
+fn openbox_button(letter: char) -> Option<Button> {
+    match letter {
+        'I' => Some(Button::Minimize),
+        'M' => Some(Button::Maximize),
+        'C' => Some(Button::Close),
+        _ => None,
     }
 }
 

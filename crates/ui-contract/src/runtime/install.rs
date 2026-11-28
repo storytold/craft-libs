@@ -29,7 +29,8 @@ pub struct InstallSpec {
     /// The app's style replacements, frozen at install.
     pub looks: StyleReplacements,
     /// The frame decided for the root window; `runtime::windows` takes its chrome and captions and keeps the
-    /// caption layout current on focus gain.
+    /// caption layout current with the desktop's, as `system`'s watcher reads it (KWin's and GTK's files on focus gain
+    /// for a reader with no watcher).
     pub frame: Option<Decision>,
     /// Where the root's `System` choices read the OS's appearance. `new` gives a reader with no desktop watcher,
     /// which answers only the colour scheme egui's integration reports; a host passes one it started.

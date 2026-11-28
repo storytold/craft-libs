@@ -22,7 +22,7 @@ use craft_ui::patterns::form_dialogs::{
 };
 use craft_ui::runtime::commands::{self, CommandRef, Commands as _, EditCommands};
 use craft_ui::runtime::env::{Env, Label, WindowKey};
-use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ScreenMode, ShellDialogsCx as _, Title, TitleBar};
+use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, LayoutSides, ScreenMode, ShellDialogsCx as _, Title, TitleBar};
 use craft_window::Layout;
 use egui::{Rect, Ui};
 use std::sync::Arc;
@@ -223,7 +223,7 @@ fn select(ui: &Ui, state: &mut MockState, tool: Tool) {
 fn title_bar(ui: &mut Ui, state: &MockState) {
     let document = &state.document;
     let title = if document.dirty { Title::unsaved(document.title.clone()) } else { Title::new(document.title.clone()) };
-    let frame = Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: Layout::default() });
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: Layout::default(), sides: LayoutSides::Physical });
     TitleBar::new().frame(frame).show_titled(
         ui,
         title,

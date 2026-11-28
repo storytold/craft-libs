@@ -5,6 +5,7 @@ use crate::{
     Layout,
     policy::{CaptionFamily, Decision, Frame, Os},
 };
+use craft_host::caption_layout::{DesktopHints, LayoutDesktop, LayoutReading};
 
 use crate::desktop::DesktopKind;
 
@@ -23,27 +24,6 @@ pub(crate) fn ini_value(text: &str, section: &str, key: &str) -> Option<String> 
         }
     }
     None
-}
-
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
-/// KWin's button order (`[org.kde.kdecoration2]` `ButtonsOnLeft` / `ButtonsOnRight`, one letter a
-/// button: `I` minimize, `A` maximize, `X` close) as a GTK layout string. Missing keys keep KWin's
-/// defaults: the window menu on the left, minimize, maximize and close on the right.
-pub(crate) fn kwin_layout(kwinrc: &str) -> String {
-    let side = |key: &str, default: &str| {
-        let letters = ini_value(kwinrc, "org.kde.kdecoration2", key).unwrap_or_else(|| default.to_string());
-        letters
-            .chars()
-            .filter_map(|c| match c {
-                'I' => Some("minimize"),
-                'A' => Some("maximize"),
-                'X' => Some("close"),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    format!("{}:{}", side("ButtonsOnLeft", "MS"), side("ButtonsOnRight", "HIAX"))
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
@@ -80,55 +60,64 @@ pub(crate) fn default_layout(kind: DesktopKind) -> Layout {
     if kind == DesktopKind::Gnome { Layout::parse("appmenu:close") } else { Layout::default() }
 }
 
-/// A parsed layout, or the default when the text names no usable button.
-fn parse_or_default(text: Option<&str>, kind: DesktopKind) -> Layout {
-    text.map(Layout::parse).filter(Layout::is_usable).unwrap_or_else(|| default_layout(kind))
+/// What `desktop`'s window manager shows when nothing sets a layout (elementary's `close:maximize` on Pantheon, say),
+/// else `kind`'s default.
+pub(crate) fn desktop_default(desktop: LayoutDesktop, kind: DesktopKind) -> Layout {
+    desktop.default_layout().map_or_else(|| default_layout(kind), |raw| Layout::from_reading(&raw, false))
 }
 
-/// The layout `kind` uses, read from the desktop's files (`kwinrc` on KDE, GTK's `settings.ini`
-/// elsewhere). GNOME's comes from `gsettings`, then GTK's `settings.ini`, then Close only.
+/// A source's answer, which is the layout even when it names no button (the desktop asked for none), else the
+/// desktop's default.
+fn answer_or_default(text: Option<&str>, desktop: LayoutDesktop, kind: DesktopKind) -> Layout {
+    text.map_or_else(|| desktop_default(desktop, kind), Layout::parse)
+}
+
+/// The desktop the session's variables name, as far as the layout goes; the running window manager is not asked.
+pub(crate) fn layout_desktop(var: &dyn Fn(&str) -> Option<String>) -> LayoutDesktop {
+    LayoutDesktop::detect(var, DesktopHints::default())
+}
+
+/// The layout `kind` uses, read from what is quick to read at startup: on GNOME `gsettings` (500 ms at most), then
+/// GTK's `settings.ini`; on KDE the user's `kwinrc`; elsewhere GTK's `settings.ini`; then `desktop`'s default. It only
+/// stands in until `craft_platform::appearance` has read the desktop's own setting ([`LayoutWatch::follow`]).
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
-pub(crate) fn read_layout(kind: DesktopKind, var: &dyn Fn(&str) -> Option<String>) -> Layout {
+pub(crate) fn read_layout(kind: DesktopKind, desktop: LayoutDesktop, var: &dyn Fn(&str) -> Option<String>) -> Layout {
+    let gtk = || {
+        let ini = read_config(var, "gtk-3.0/settings.ini").unwrap_or_default();
+        answer_or_default(gtk_settings(&ini).0.as_deref(), desktop, kind)
+    };
     match kind {
-        DesktopKind::Gnome => {
-            let from_gsettings = crate::platform::gsettings_button_layout().map(|v| Layout::parse(&v)).filter(Layout::is_usable);
-            from_gsettings.unwrap_or_else(|| {
-                let ini = read_config(var, "gtk-3.0/settings.ini").unwrap_or_default();
-                parse_or_default(gtk_settings(&ini).0.as_deref(), kind)
-            })
-        }
+        DesktopKind::Gnome => crate::platform::gsettings_button_layout().map_or_else(gtk, |value| Layout::parse(&value)),
         DesktopKind::Kde => {
             let rc = read_config(var, "kwinrc").unwrap_or_default();
-            parse_or_default(Some(&kwin_layout(&rc)), kind)
+            Layout::from_reading(&craft_host::caption_layout::kwin_layout(&[&rc]), false)
         }
-        _ => {
-            let ini = read_config(var, "gtk-3.0/settings.ini").unwrap_or_default();
-            parse_or_default(gtk_settings(&ini).0.as_deref(), kind)
-        }
+        _ => gtk(),
     }
 }
 
 /// Follows the desktop's window-button layout while the app runs, so `Captions.layout` can change
 /// without a restart.
 ///
-/// - GNOME: the live value is `org.gnome.desktop.wm.preferences` `button-layout`, which
-///   `craft_platform::appearance::Watcher::button_layout` follows on the settings portal. Pass it
-///   to [`LayoutWatch::set_gnome`] when the watcher wakes; until it answers, the layout read at
-///   startup stays.
-/// - KDE: KWin's `kwinrc`; other desktops: GTK's `settings.ini`. Neither announces changes, so
-///   [`LayoutWatch::on_focus`] re-reads them when the window regains focus.
-/// - Windows, macOS and the web: the layout never changes.
+/// The layout comes from `craft_platform::appearance::Watcher::caption_layout`, the app's one observer of the
+/// desktop: the best of the settings portal's standard `button-placement`, the window manager's own setting (GNOME's,
+/// Cinnamon's or MATE's GSettings key, KWin's `kwinrc`, xfwm4's Xfconf channel, Openbox's or labwc's `rc.xml`), GTK's
+/// X setting and GTK's `settings.ini` (`craft_host::caption_layout`). Pass it to [`LayoutWatch::follow`] on each frame,
+/// with the direction the app's UI reads in: the standard placement names leading and trailing ends. Until the
+/// observer has a reading, the layout read at startup stands in.
 ///
-/// A value that names no usable button gives the desktop's default (Close only on GNOME, all
-/// three elsewhere).
+/// For an app with no observer, two older inputs stay: [`LayoutWatch::set_gnome`] takes GNOME's `button-layout` alone
+/// (only GNOME follows it), and [`LayoutWatch::on_focus`] re-reads KWin's `kwinrc` (KDE) or GTK's `settings.ini` (other
+/// desktops) when the window regains focus. Windows, macOS and the web: the layout never changes.
+///
+/// A desktop layout that names no button gives none: the desktop asked for none, and a later change brings the
+/// buttons back. A layout the decision chose itself stays: one `<PREFIX>_CAPTION_LAYOUT` set, and a tool window's,
+/// which has none ([`Decision::caption_layout_fixed`]).
 ///
 /// ```ignore
 /// let mut layouts = LayoutWatch::new(&decision);
 /// // Each frame, with the app's one `craft_platform::appearance::Watcher`:
-/// let mut changed = layouts.set_gnome(watcher.button_layout().as_deref());
-/// if window_gained_focus {
-///     changed |= layouts.on_focus();
-/// }
+/// let changed = layouts.follow(watcher.caption_layout().as_ref(), ui_reads_right_to_left);
 /// if changed && let Frame::Integrated(captions) = &mut decision.frame {
 ///     captions.layout = layouts.layout().clone();
 /// }
@@ -137,11 +126,18 @@ pub(crate) fn read_layout(kind: DesktopKind, var: &dyn Fn(&str) -> Option<String
 pub struct LayoutWatch {
     os: Os,
     kind: DesktopKind,
+    /// The desktop the session's variables name, for its default layout.
+    desktop: LayoutDesktop,
     /// The layout read at startup, or on the last focus re-read.
     read: Layout,
-    /// GNOME's `button-layout` as the platform watcher last reported it.
+    /// GNOME's `button-layout` as [`LayoutWatch::set_gnome`] last took it.
     gnome: Option<String>,
+    /// The observer's reading as [`LayoutWatch::follow`] last took it, and the UI's direction then.
+    reading: Option<LayoutReading>,
+    rtl: bool,
     current: Layout,
+    /// The decision chose the layout itself, so the desktop's never replaces it.
+    fixed: bool,
 }
 
 impl LayoutWatch {
@@ -151,15 +147,12 @@ impl LayoutWatch {
     pub fn new(decision: &Decision) -> Self {
         let os = Os::current();
         let kind = decision.desktop.kind;
-        let read = match &decision.frame {
-            Frame::Integrated(captions) => captions.layout.clone(),
-            Frame::Native | Frame::Inset(_) => crate::policy::desktop_layout(os, kind),
+        let desktop = if os == Os::Linux { layout_desktop(&|k: &str| std::env::var(k).ok()) } else { LayoutDesktop::Unknown };
+        let (read, fixed) = match &decision.frame {
+            Frame::Integrated(captions) => (captions.layout.clone(), decision.caption_layout_fixed),
+            Frame::Native | Frame::Inset(_) => (crate::policy::desktop_layout(os, kind), false),
         };
-        Self::with(os, kind, read)
-    }
-
-    fn with(os: Os, kind: DesktopKind, read: Layout) -> Self {
-        Self { os, kind, current: read.clone(), read, gnome: None }
+        Self { os, kind, desktop, current: read.clone(), read, gnome: None, reading: None, rtl: false, fixed }
     }
 
     /// The layout to draw the caption buttons in.
@@ -167,8 +160,21 @@ impl LayoutWatch {
         &self.current
     }
 
+    /// Take the desktop observer's reading (`craft_platform::appearance::Watcher::caption_layout`) and whether the
+    /// app's UI reads right to left. `None`, no reading yet or none to be had, keeps the startup layout. Returns whether
+    /// the layout changed.
+    pub fn follow(&mut self, reading: Option<&LayoutReading>, rtl: bool) -> bool {
+        if self.reading.as_ref() == reading && self.rtl == rtl {
+            return false;
+        }
+        self.reading = reading.cloned();
+        self.rtl = rtl;
+        self.update()
+    }
+
     /// Take GNOME's `button-layout` from `craft_platform::appearance::Watcher::button_layout`.
-    /// Only GNOME follows it; `None` keeps the startup layout. Returns whether the layout changed.
+    /// Only GNOME follows it, and a reading [`LayoutWatch::follow`] took wins over it; `None` keeps the startup layout.
+    /// Returns whether the layout changed.
     pub fn set_gnome(&mut self, value: Option<&str>) -> bool {
         if self.gnome.as_deref() == value {
             return false;
@@ -177,10 +183,9 @@ impl LayoutWatch {
         self.update()
     }
 
-    /// Re-read KWin's `kwinrc` (KDE) or GTK's `settings.ini` (other desktops). Call it when the
-    /// window regains focus, since neither file announces changes. GNOME's value comes through
-    /// [`LayoutWatch::set_gnome`] instead, so nothing is read there. Returns whether the layout
-    /// changed.
+    /// Re-read KWin's `kwinrc` (KDE) or GTK's `settings.ini` (other desktops), for an app with no desktop observer.
+    /// Call it when the window regains focus, since neither file announces changes. GNOME's value comes through
+    /// [`LayoutWatch::set_gnome`] instead, so nothing is read there. Returns whether the layout changed.
     pub fn on_focus(&mut self) -> bool {
         #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
         {
@@ -194,16 +199,18 @@ impl LayoutWatch {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
     fn refresh_with(&mut self, var: &dyn Fn(&str) -> Option<String>) -> bool {
-        if self.os != Os::Linux || self.kind == DesktopKind::Gnome {
+        if self.fixed || self.os != Os::Linux || self.kind == DesktopKind::Gnome {
             return false;
         }
-        self.read = read_layout(self.kind, var);
+        self.read = read_layout(self.kind, self.desktop, var);
         self.update()
     }
 
     fn update(&mut self) -> bool {
-        let next = match &self.gnome {
-            Some(value) if self.os == Os::Linux && self.kind == DesktopKind::Gnome => parse_or_default(Some(value), self.kind),
+        let follows = !self.fixed && self.os == Os::Linux;
+        let next = match (&self.reading, &self.gnome) {
+            (Some(reading), _) if follows => Layout::from_reading(&reading.raw, self.rtl),
+            (None, Some(value)) if follows && self.kind == DesktopKind::Gnome => answer_or_default(Some(value), self.desktop, self.kind),
             _ => self.read.clone(),
         };
         let changed = next != self.current;
@@ -236,16 +243,27 @@ pub(crate) fn read_icon_theme(kind: DesktopKind, var: &dyn Fn(&str) -> Option<St
     icon_theme(kind, &kdeglobals, &ini)
 }
 
-/// A small file under the user's config directory (`XDG_CONFIG_HOME`, else `~/.config`).
+/// A small file under the user's config directory (`XDG_CONFIG_HOME`, else `~/.config`). It is opened without waiting
+/// and read only when it is a regular file: a FIFO in its place, which a plain open waits on for a writer, is no file,
+/// and holds up no frame.
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 fn read_config(var: &dyn Fn(&str) -> Option<String>, relative: &str) -> Option<String> {
     use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt as _;
     let config = var("XDG_CONFIG_HOME")
         .filter(|d| std::path::Path::new(d).is_absolute())
         .map(std::path::PathBuf::from)
         .or_else(|| var("HOME").map(|h| std::path::Path::new(&h).join(".config")))?;
+    let file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY).open(config.join(relative)).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
     let mut bytes = Vec::new();
     // Config files are small; the cap keeps a stray huge file from stalling startup.
-    std::fs::File::open(config.join(relative)).ok()?.take(1 << 20).read_to_end(&mut bytes).ok()?;
+    file.take(1 << 20).read_to_end(&mut bytes).ok()?;
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
+
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod tests;

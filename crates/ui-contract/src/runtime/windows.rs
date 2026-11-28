@@ -12,7 +12,6 @@ use crate::runtime::overlay;
 use crate::runtime::pass_state;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority};
 use craft_host::target::{Backend, Caps, EdgeInsets, Os, ShellInfo, WindowChrome, WindowKind, WindowState};
-use craft_window::desktop::Desktop;
 use craft_window::native::NativeWindow;
 use craft_window::policy::{Captions, Decision, Frame, LayoutWatch};
 use craft_window::restore::Store;
@@ -88,8 +87,10 @@ pub(crate) struct Shared {
     /// The root window's frame and its caption layout watch, from `InstallSpec::frame`.
     root_frame: Option<Frame>,
     layouts: Option<LayoutWatch>,
-    /// The desktop the installed frame decision was made for (`Decision::desktop`); `None` without a decision.
-    desktop: Option<Desktop>,
+    /// The decision the app last gave for the root window (`InstallSpec::frame`, `WindowHost::set_root_frame`), with the
+    /// desktop it was made for; `None` without one. The watch moves the caption buttons of `root_frame`, never these, so
+    /// a decision equal to it is the decision in force.
+    decided: Option<Decision>,
     /// Whether the root window had focus in the last root pass.
     root_focused: bool,
     /// The app's state as the last root frame's windows reported it, which its palettes follow.
@@ -259,7 +260,7 @@ pub(crate) fn install(
         match frame.zip(layouts) {
             Some((decision, layouts)) => keep_root_frame(shared, decision, layouts),
             None => {
-                shared.desktop = None;
+                shared.decided = None;
                 shared.root_frame = None;
                 shared.layouts = None;
             }
@@ -275,8 +276,8 @@ fn keep_root_frame(shared: &mut Shared, decision: Decision, layouts: LayoutWatch
         let window = (*shell.window).clone().chrome(chrome_of(&decision.frame));
         shell.window(window)
     });
-    shared.desktop = Some(decision.desktop);
-    shared.root_frame = Some(decision.frame);
+    shared.root_frame = Some(decision.frame.clone());
+    shared.decided = Some(decision);
     shared.layouts = Some(layouts);
 }
 
@@ -604,7 +605,6 @@ pub(crate) fn end(ctx: &Context) {
     shared(ctx, |shared| shared.close_requests.clear());
     follow_activity(ctx);
     follow_overlays(ctx);
-    follow_layout(ctx, viewports::current(ctx).focused);
     // The root window's placement is the app's `main` entry.
     if shared(ctx, |shared| shared.store.is_some()) {
         record_placement(ctx, ViewportId::ROOT, craft_window::restore::MAIN, &viewports::current(ctx));
@@ -765,20 +765,34 @@ fn follow_overlays(ctx: &Context) {
     }
 }
 
-/// On the root window's focus gain, re-reads the desktop's caption layout and gives the root frame the change.
-fn follow_layout(ctx: &Context, focused: bool) {
+/// The root pass's part of the begin hook, once the pass's root `Env` is installed and before anything draws: the root
+/// frame's caption layout, for the direction `rtl` this pass reads in (`follow_layout`).
+pub(crate) fn begin_root(ctx: &Context, rtl: bool) {
+    follow_layout(ctx, viewports::current(ctx).focused, rtl);
+}
+
+/// Keeps the root frame's caption layout on the desktop's, at the start of every root pass: the layout the host's
+/// reader hears from the best of the desktop's sources (the settings portal, the window manager's own setting, GTK's),
+/// for the direction the root window's UI reads in. A reader that hears none keeps the two older inputs: GNOME's
+/// `button-layout` alone, and KWin's or GTK's files re-read when the root window gains focus. The pass that takes a
+/// change draws it, so a layout the reader has by the app's first frame is drawn in that frame.
+fn follow_layout(ctx: &Context, focused: bool, rtl: bool) {
+    let reading = crate::runtime::env::system::caption_layout(ctx);
+    let gnome = crate::runtime::env::system::button_layout(ctx);
     let gained = shared(ctx, |shared| {
-        let gained = focused && !std::mem::replace(&mut shared.root_focused, focused);
-        if !gained {
-            return false;
+        // Recorded on every pass, so a gain after a loss is one again.
+        let was = std::mem::replace(&mut shared.root_focused, focused);
+        let gained = focused && !was;
+        let Some(layouts) = &mut shared.layouts else { return gained };
+        let mut changed = layouts.set_gnome(gnome.as_deref());
+        changed |= layouts.follow(reading.as_ref(), rtl);
+        if gained {
+            changed |= layouts.on_focus();
         }
-        if let Some(layouts) = &mut shared.layouts
-            && layouts.on_focus()
-            && let Some(Frame::Integrated(captions)) = &mut shared.root_frame
-        {
+        if changed && let Some(Frame::Integrated(captions)) = &mut shared.root_frame {
             captions.layout = layouts.layout().clone();
         }
-        true
+        gained
     });
     if gained {
         crate::runtime::env::system::set_active(ctx, true);

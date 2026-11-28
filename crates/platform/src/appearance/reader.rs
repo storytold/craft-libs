@@ -2,8 +2,9 @@
 //! the settings portal's [`Watcher`] where one exists, the browser's media queries on the web,
 //! and the colour scheme the windowing integration reports.
 
-use super::{Contrast, Theme, Watcher};
+use super::{Contrast, LayoutReading, Theme, Watcher};
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 /// What the OS reports now. `None` is no answer; the host decides the fallback.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -49,6 +50,12 @@ struct Reported {
     contrast: AtomicU8,
     motion: AtomicU8,
     text_scale: AtomicU32,
+    /// GNOME's `button-layout` as reported in place of the watcher's; `None` until a report. Like the
+    /// watcher's layout, it leaves `generation`.
+    layout: Mutex<Option<String>>,
+    /// A desktop's window-button layout as reported in place of the watcher's; `None` until a report. It leaves
+    /// `generation` too.
+    caption: Mutex<Option<LayoutReading>>,
     /// Raised on each change of a reported value.
     generation: AtomicU64,
 }
@@ -70,9 +77,14 @@ impl Reported {
 
 impl SystemReader {
     /// Starts watching. `wake` runs on the watcher's worker when a preference changes and must
-    /// not block.
+    /// not block. The window-button layout's sources start at once too ([`Watcher::caption_layout`]), not at the
+    /// first frame's ask, so the desktop's layout can be known by the app's first frame.
     pub fn start(wake: impl Fn() + Send + Sync + 'static) -> Self {
-        Self { watcher: Watcher::start(wake), reported: Reported::default() }
+        let watcher = Watcher::start(wake);
+        if let Some(watcher) = &watcher {
+            let _ = watcher.caption_layout();
+        }
+        Self { watcher, reported: Reported::default() }
     }
 
     /// A reader without a desktop watcher: it answers what the host reports (and the browser's
@@ -123,6 +135,19 @@ impl SystemReader {
         self.reported.set_text_scale(scale.filter(|scale| scale.is_finite() && *scale > 0.0).map_or(0, f32::to_bits));
     }
 
+    /// Takes GNOME's `button-layout` in place of the settings portal's; `None` is no answer.
+    #[cfg(feature = "testing")]
+    pub fn report_button_layout(&self, layout: Option<&str>) {
+        *self.reported.layout.lock().unwrap_or_else(PoisonError::into_inner) = layout.map(str::to_owned);
+    }
+
+    /// Takes a desktop's window-button layout in place of the watcher's (see [`Watcher::caption_layout`]); `None` is no
+    /// answer.
+    #[cfg(feature = "testing")]
+    pub fn report_caption_layout(&self, reading: Option<LayoutReading>) {
+        *self.reported.caption.lock().unwrap_or_else(PoisonError::into_inner) = reading;
+    }
+
     /// Rises each time a preference [`SystemReader::read`] or [`SystemReader::text_scale`] answers
     /// from changes, as its source reports it: the watcher's theme, contrast, reduced motion or text
     /// scale, or a reported value. Read
@@ -132,10 +157,19 @@ impl SystemReader {
         self.watcher.as_ref().map_or(0, Watcher::generation) + self.reported.generation.load(Ordering::Acquire)
     }
 
-    /// GNOME's `button-layout` as the watcher last heard it; see [`Watcher::button_layout`].
-    /// `None` on the web and where no watcher runs.
+    /// GNOME's `button-layout` as the watcher last heard it (see [`Watcher::button_layout`]), else
+    /// a reported one. `None` on the web and where no watcher runs, until a report.
     pub fn button_layout(&self) -> Option<String> {
-        self.watcher.as_ref().and_then(Watcher::button_layout)
+        self.watcher.as_ref().and_then(Watcher::button_layout).or_else(|| self.reported.layout.lock().unwrap_or_else(PoisonError::into_inner).clone())
+    }
+
+    /// The desktop's window-button layout as the watcher last heard it (see [`Watcher::caption_layout`]), else a
+    /// reported one. `None` on the web and where no watcher runs, until a report.
+    pub fn caption_layout(&self) -> Option<LayoutReading> {
+        self.watcher
+            .as_ref()
+            .and_then(Watcher::caption_layout)
+            .or_else(|| self.reported.caption.lock().unwrap_or_else(PoisonError::into_inner).clone())
     }
 
     /// GNOME's `icon-theme` name as the watcher last heard it; see [`Watcher::icon_theme`].

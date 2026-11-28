@@ -4,8 +4,8 @@
 //! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
 //! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
 //! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the
-//! placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted window's
-//! Control-click and window-input policy.
+//! placement of a minimized window, the root frame decided again, the caption layout GNOME reports and the layouts it
+//! leaves alone, a held close, `act`, and a hosted window's Control-click and window-input policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -208,6 +208,112 @@ fn the_root_frame_changes_at_once_when_the_app_decides_again() {
     assert_eq!(host.frame(), integrated.frame, "a refused decision keeps the frame");
     assert_eq!(decide(native), (true, vec![ViewportCommand::Decorations(true)]), "the system's bar turns the OS frame back on");
     assert_eq!(host.frame(), Frame::Native);
+}
+
+/// GNOME in a Flatpak (storytold/pdfcraft#5575): `gsettings` reads the sandbox's own `button-layout` there, which shows
+/// Close only, while the settings portal answers with the user's. The main window's caption buttons take the layout
+/// the host's reader hears from the portal, and follow it when the user changes it while the app runs, also for an app
+/// that gives its unchanged decision again every frame (PdfCraft does). Only a build that can run on GNOME follows it.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[trial]
+fn the_caption_buttons_follow_the_button_layout_gnome_reports() {
+    use craft_ui::testing::windows::report_os_button_layout;
+    use craft_window::Layout;
+    let desktop = Desktop { kind: DesktopKind::Gnome, ssd: Some(false), gtk_theme: None, icon_theme: None };
+    let decision =
+        craft_window::policy::decide(Os::Linux, Runtime::Native, Backend::Wayland, &desktop, WindowKind::Main, TitleBarPref::Integrated, None);
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).frame(decision.clone()));
+    // The caption layout the title bar draws in the second frame after the reader heard `layout`: each frame the app
+    // gives its decision again before its UI, and the bar reads the frame then.
+    let shown_after = |layout: &str| {
+        report_os_button_layout(&windows.ctx, Some(layout));
+        let drawn = RefCell::new(None);
+        for _ in 0..2 {
+            windows.frame(vec![], vec![], |ui| {
+                let host = WindowHost::of(ui.ctx());
+                host.set_root_frame(decision.clone());
+                *drawn.borrow_mut() = Some(host.frame());
+            });
+        }
+        match drawn.into_inner() {
+            Some(Frame::Integrated(captions)) => captions.layout,
+            frame => panic!("the main window keeps the app's bar, not {frame:?}"),
+        }
+    };
+    for layout in ["appmenu:minimize,maximize,close", "close,minimize,maximize:"] {
+        assert_eq!(shown_after(layout), Layout::parse(layout), "the caption buttons follow {layout:?}");
+    }
+}
+
+/// A caption layout the app was started with (`<PREFIX>_CAPTION_LAYOUT`, else `CRAFT_CAPTION_LAYOUT`) stays when GNOME's
+/// portal reports another, also for an app that gives its decision again every frame. The variables are read from the
+/// environment, which a test can't change in its own process, so each runs in a fresh process of this binary.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[trial]
+fn an_explicit_caption_layout_stays_when_gnome_reports_another() {
+    use craft_ui::testing::windows::report_os_button_layout;
+    use craft_window::Layout;
+    const CHILD: &str = "CRAFT_UI_CAPTION_LAYOUT_CHILD";
+    const NAME: &str = "runtime::windows::an_explicit_caption_layout_stays_when_gnome_reports_another";
+    if std::env::var_os(CHILD).is_none() {
+        for var in ["CAPTIONTRIAL_CAPTION_LAYOUT", "CRAFT_CAPTION_LAYOUT"] {
+            let mut child = std::process::Command::new(std::env::current_exe().expect("the test executable"));
+            child.args(["--exact", NAME, "--nocapture"]).env(CHILD, "1");
+            for name in
+                ["CAPTIONTRIAL", "CRAFT"].iter().flat_map(|prefix| ["TITLEBAR", "CAPTION_STYLE", "CAPTION_LAYOUT"].map(|v| format!("{prefix}_{v}")))
+            {
+                child.env_remove(name);
+            }
+            let config = std::env::temp_dir().join("craft-ui-caption-layout-trial-no-config");
+            let output = child
+                .env(var, "close:")
+                .env("XDG_CURRENT_DESKTOP", "GNOME")
+                .env("XDG_CONFIG_HOME", config)
+                .output()
+                .expect("run the trial in a fresh process");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("chosen layout kept"),
+                "{var}:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    }
+    let decision = craft_window::policy::decide_for(craft_window::Prefix::new("CAPTIONTRIAL"), Backend::X11, TitleBarPref::Integrated);
+    let chosen = Layout::parse("close:");
+    assert!(matches!(&decision.frame, Frame::Integrated(captions) if captions.layout == chosen), "the variable chose the layout: {decision:?}");
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).frame(decision.clone()));
+    report_os_button_layout(&windows.ctx, Some("appmenu:minimize,maximize,close"));
+    let drawn = RefCell::new(None);
+    for _ in 0..3 {
+        windows.frame(vec![], vec![], |ui| {
+            let host = WindowHost::of(ui.ctx());
+            host.set_root_frame(decision.clone());
+            *drawn.borrow_mut() = Some(host.frame());
+        });
+    }
+    assert_eq!(drawn.into_inner(), Some(decision.frame), "the chosen layout stays");
+    println!("chosen layout kept");
+}
+
+/// A tool window that is the app's root window keeps its frame without caption buttons, whatever layout GNOME's
+/// portal reports.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[trial]
+fn a_tool_root_window_shows_no_caption_buttons_whatever_gnome_reports() {
+    use craft_ui::testing::windows::report_os_button_layout;
+    let desktop = Desktop { kind: DesktopKind::Gnome, ssd: Some(false), gtk_theme: None, icon_theme: None };
+    let decision =
+        craft_window::policy::decide(Os::Linux, Runtime::Native, Backend::Wayland, &desktop, WindowKind::Tool, TitleBarPref::Integrated, None);
+    assert!(matches!(&decision.frame, Frame::Integrated(captions) if captions.is_empty()), "a tool window's frame has no caption buttons");
+    let shell = ShellInfo::default().window(WindowInfo::new(WindowKind::Tool));
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(FakeSystem::new())).frame(decision.clone()));
+    report_os_button_layout(&windows.ctx, Some("appmenu:minimize,maximize,close"));
+    for _ in 0..3 {
+        windows.frame(vec![], vec![], |_| {});
+    }
+    assert_eq!(WindowHost::of(&windows.ctx).frame(), decision.frame, "the tool root keeps no caption buttons");
 }
 
 /// L-37: the app holds the main window's close to ask about unsaved changes, and the question must reach the user: the
@@ -1627,8 +1733,9 @@ fn a_title_with_nul_reaches_the_window_without_it() {
 fn a_double_click_on_an_app_drawn_frame_follows_the_setting() {
     use craft_host::target::DoubleClick;
     use craft_ui::runtime::windows::{WindowAction, double_click_action};
-    use craft_window::policy::{CaptionFamily, Captions};
-    let integrated = Frame::Integrated(Captions { family: CaptionFamily::Adwaita, layout: craft_window::Layout::default() });
+    use craft_window::policy::{CaptionFamily, Captions, LayoutSides};
+    let integrated =
+        Frame::Integrated(Captions { family: CaptionFamily::Adwaita, layout: craft_window::Layout::default(), sides: LayoutSides::Physical });
     let inset = Frame::Inset(MacInset::default());
     for frame in [&integrated, &inset] {
         assert_eq!(double_click_action(frame, DoubleClick::Zoom, false), Some(WindowAction::SetMaximized(true)), "{frame:?}");
