@@ -411,6 +411,14 @@ fn dutch_suggestions(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     } else {
         crate::affix_suggest::suggest_in(d, &full, max, &Tuning::DEFAULT)
     };
+    if let Some(apostrophe) = apostrophe {
+        let mut seen = std::collections::HashSet::new();
+        for suggestion in &mut found {
+            let body = suggestion.strip_prefix(['\'', '’']).unwrap_or(suggestion);
+            *suggestion = format!("{apostrophe}{body}");
+        }
+        found.retain(|suggestion| suggestion != word && seen.insert(suggestion.clone()));
+    }
     if apostrophe == Some('\'') && found.len() < max {
         // The range includes the user's straight quote. Keep it when the word inside
         // the quotation, rather than the elision, needs correcting.
@@ -418,13 +426,6 @@ fn dutch_suggestions(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
             let quoted = format!("'{bare}");
             if !found.contains(&quoted) {
                 found.push(quoted);
-            }
-        }
-    }
-    if apostrophe == Some('’') {
-        for suggestion in &mut found {
-            if let Some(rest) = suggestion.strip_prefix('\'') {
-                *suggestion = format!("’{rest}");
             }
         }
     }
@@ -457,7 +458,8 @@ mod tests {
         assert!(!check_word(&nl, "s-Hertogenbosch", "s-Hertogenbosch", "nl"));
         assert!(dutch_suggestions(&nl, "’s-Hertogenbosh", 5).contains(&"’s-Hertogenbosch".into()));
         assert!(dutch_suggestions(&nl, "s-Hertogenbosch", 5).contains(&"'s-Hertogenbosch".into()));
-        let nl = AffixDict::from_hunspell("SET UTF-8\nFORBIDDENWORD Z\n", "3\nt-shirt\n't-shirt/Z\nprofiel\n", &[]).unwrap();
+        let nl =
+            AffixDict::from_hunspell("SET UTF-8\nFORBIDDENWORD Z\nREP 1\nREP 't-shrit t-shirt\n", "3\nt-shirt\n't-shirt/Z\nprofiel\n", &[]).unwrap();
         assert!(check_word(&nl, "t-shirt", "t-shirt", "nl"));
         assert!(!check_word(&nl, "’t-shirt", "t-shirt", "nl"));
         assert!(check_word(&nl, "T-profiel", "T-profiel", "nl"));
@@ -465,7 +467,9 @@ mod tests {
         assert!(check_word(&nl, "'t-shirt", "t-shirt", "nl"));
 
         assert!(dutch_suggestions(&nl, "t-shrit", 5).contains(&"t-shirt".into()));
-        assert!(dutch_suggestions(&nl, "'t-shrit", 5).contains(&"'t-shirt".into()));
+        let quoted = dutch_suggestions(&nl, "'t-shrit", 5);
+        assert!(quoted.contains(&"'t-shirt".into()));
+        assert!(quoted.iter().all(|word| word.starts_with('\'')));
     }
 
     /// Review follow-up (craft-libs#485): a panic inside a check (caught by the app) doesn't leave
