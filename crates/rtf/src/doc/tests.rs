@@ -2435,3 +2435,19 @@ fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page()
     assert_eq!(flow.meta.title, "A—аà");
     assert_eq!(texts(&flow), ["Normal:Body"]);
 }
+
+/// Hidden body text keeps as hidden (the run's character props carry it, a save writes
+/// `w:vanish`) instead of vanishing from the import; a hidden field result still drops with
+/// the field (#7116).
+#[test]
+fn hidden_text_is_kept_as_hidden() {
+    let d = import(br"{\rtf1\ansi Visible {\v Hidden} {\b Bold}\par}").unwrap();
+    let p = d.body[0].as_para().unwrap();
+    assert!(p.text.contains("Hidden"), "the hidden run's text is in the paragraph: {:?}", p.text);
+    assert!(p.runs.iter().any(|r| r.props.hidden == Some(true)), "the hidden run's props carry hidden, none do: {:#?}", p.runs);
+    // A field result hidden by `\v` still drops with the field: nothing of it shows.
+    let fh = import(br"{\rtf1\ansi\pard {\field{\*\fldinst{ PAGE }}{\fldrslt{\v hidden result}}}\par}").unwrap();
+    let fp = fh.body[0].as_para().unwrap();
+    assert_eq!(fp.text, "", "a hidden field result leaves no text: {:?}", fp.text);
+    assert!(fh.body[0].as_para().unwrap().runs.is_empty(), "and no field object");
+}
