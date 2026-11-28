@@ -841,17 +841,18 @@ fn nudge_of(press: &Press) -> Option<Nudge> {
 fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
     let Some(node) = nodes.get(&request.node()).copied() else { return };
     let owner = Some(node.owner);
+    let part_without_stop = node.part.is_some() && focus::stop_rec(ctx, (node.owner, node.part)).is_none();
     // A request that only scrolls (a screen reader's Scroll Into View) shows the node and leaves focus where it is.
-    if node.focusable && !request.scrolls() {
+    if node.focusable && !request.scrolls() && !part_without_stop {
         let target = node.part.map_or(focus::FocusTarget::Id(node.owner), |part| focus::FocusTarget::Part(node.owner, part));
         focus::request_now(ctx, target);
     }
     match request.kind() {
-        ActionKind::Focus if node.focusable => {}
+        ActionKind::Focus if node.focusable && !part_without_stop => {}
         ActionKind::Expand | ActionKind::Collapse if node.expanded.is_some() => {
             if node.expanded == Some(matches!(request.kind(), ActionKind::Collapse)) {
-                // A sub-node with no stop of its own (a chevron) names its part: the component decides what it opens.
-                if node.part.is_some() && !node.focusable {
+                // A sub-node with no stop of its own (a chevron, a collection member) names its part: the component decides what it opens.
+                if part_without_stop {
                     push(routed, owner, Intent::Access(request.request(node.part)), false);
                     return;
                 }
@@ -866,14 +867,12 @@ fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, rou
                 }
             }
         }
-        ActionKind::Click if node.part.is_some() && !node.focusable => push(routed, owner, Intent::Access(request.request(node.part)), false),
+        ActionKind::Click if part_without_stop => push(routed, owner, Intent::Access(request.request(node.part)), false),
         ActionKind::Click => match focus::stop_rec(ctx, (node.owner, node.part)).filter(|rec| rec.stop.group.is_some()) {
             Some(rec) => route_activate(ctx, &rec, routed, activated),
             None => push(routed, owner, Intent::Activate, false),
         },
-        ActionKind::Increment | ActionKind::Decrement if node.part.is_some() && !node.focusable => {
-            push(routed, owner, Intent::Access(request.request(node.part)), false)
-        }
+        ActionKind::Increment | ActionKind::Decrement if part_without_stop => push(routed, owner, Intent::Access(request.request(node.part)), false),
         ActionKind::Increment => push(routed, owner, Intent::Move(NavMove::Forward, MoveMods::PLAIN), false),
         ActionKind::Decrement => push(routed, owner, Intent::Move(NavMove::Back, MoveMods::PLAIN), false),
         ActionKind::ShowContextMenu => push(routed, owner, Intent::ContextMenu, false),

@@ -93,7 +93,7 @@ impl<'a, K> RowMarks<'a, K> {
 pub struct SwatchTableOutput {
     /// The cells.
     pub response: Response,
-    /// The entry a click, Space or a screen reader's click selected this pass: the lead of the selection it made.
+    /// The entry a primary click, Space or a screen reader's click chose this pass, including re-picking the selected entry.
     pub selected: Option<usize>,
     /// The selected entries after the pass, in selection order.
     pub chosen: Vec<usize>,
@@ -363,7 +363,8 @@ impl ItemLayout for SwatchLayout {
 /// told apart by index, so duplicates select one cell. With [`span`](Self::span) and a count per row, the cells share
 /// the table's width edge to edge; [`marks`](Self::marks) gives each cell its marks.
 ///
-/// - A click or Space selects the cell; a double click or Enter reports `open` and the Enter is the table's, so a
+/// - A primary click or Space chooses the cell (reporting `selected` even when it was already selected), while a
+///   secondary click leaves the selection; a double click or Enter reports `open` and the Enter is the table's, so a
 ///   dialog around it does not also answer OK.
 /// - The table is one Tab stop; the arrows move through the cells as a grid.
 /// - The cell under the pointer is previewed ([`SwatchTableOutput::preview`]); the selection stays.
@@ -465,7 +466,8 @@ impl<'a> SwatchTable<'a> {
                 .arrows_select(false)
                 .lead_on_open(LeadOnOpen::First)
                 .natural_height(true)
-                .deletable(true),
+                .deletable(true)
+                .primary_picks(true),
             swatches,
             selection: None,
             per_row: None,
@@ -586,6 +588,10 @@ impl Component for SwatchTable<'_> {
             _ => None,
         });
         let changed = response.events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. }));
+        let picked = response.events.iter().find_map(|event| match event {
+            CollectionEvent::Picked { key, .. } => Some(*key),
+            _ => None,
+        });
         let delete = response
             .events
             .iter()
@@ -599,7 +605,7 @@ impl Component for SwatchTable<'_> {
         let preview = cx.memory::<Previewed>().follow(hovered);
         SwatchTableOutput {
             response: response.response,
-            selected: selection.lead.filter(|_| changed),
+            selected: selection.lead.filter(|_| changed).or(picked),
             chosen: selection.items,
             open,
             delete,
