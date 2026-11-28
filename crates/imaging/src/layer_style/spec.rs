@@ -95,6 +95,11 @@ pub struct EffectSpec {
     pub fields: Vec<EffectField>,
     /// The values a new instance starts from.
     pub defaults: StyleParams,
+    /// The most instances the dialog adds to a layer: at this count every `+` of the kind is
+    /// greyed and [`LayerStyleDraft::try_add_instance`](super::LayerStyleDraft::try_add_instance)
+    /// adds none. `None` sets no limit. A style that already holds more keeps them all; only adding
+    /// stops.
+    pub max_instances: Option<usize>,
 }
 
 impl EffectSpec {
@@ -154,6 +159,9 @@ impl EffectSpec {
     /// - Satin: blend; color; opacity; angle; distance Distance 0..250 px; size 0..250 px;
     ///   contour; invert Invert. Defaults: Multiply, #000000, 50, 19, 11, 14, Linear, antiAlias
     ///   true, invert true.
+    ///
+    /// Drop Shadow has `max_instances` 10, as Photoshop's dialog adds no eleventh; the other
+    /// kinds have none.
     ///
     /// The defaults name blend modes by Photoshop's English names (`"Multiply"`, `"Screen"`,
     /// `"Normal"`), as PhotoCraft's engine stores them; a host whose `BlendChoice` keys differ
@@ -431,7 +439,9 @@ impl EffectSpec {
             ),
         };
         let defaults = StyleParams(defaults.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
-        EffectSpec { kind, label: Cow::Borrowed(label), fields, defaults }
+        // Photoshop's dialog adds at most ten Drop Shadows (photocraft#14891).
+        let max_instances = (kind == EffectKind::DropShadow).then_some(10);
+        EffectSpec { kind, label: Cow::Borrowed(label), fields, defaults, max_instances }
     }
 
     /// The field with `key`.

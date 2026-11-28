@@ -266,3 +266,72 @@ fn a_gradient_offset_drag_starts_from_the_shown_offset_and_rebases_on_another_in
 
 // A `StyleValue::Other` key no field shows survives `set_param`, `toggle` and
 // `StyleParams::over` unchanged.
+
+fn drop_shadows(draft: &LayerStyleDraft) -> usize {
+    draft.style.instances(EffectKind::DropShadow).count()
+}
+
+/// A draft with `n` Drop Shadows, numbered `fx1`..
+fn shadows(n: u32) -> LayerStyleDraft {
+    LayerStyleDraft::new(style_with(&(1..=n).map(|id| (id, EffectKind::DropShadow)).collect::<Vec<_>>()))
+}
+
+// photocraft#14891: eleven adds from one Drop Shadow stop at the spec's limit; an add at the limit returns `None` and
+// leaves the selection alone, and Layer › Layer Style › Drop Shadow (`open_on`) adds none either.
+#[trial]
+fn adding_stops_at_the_specs_limit() {
+    let spec = EffectSpec::photoshop(EffectKind::DropShadow);
+    let max = spec.max_instances.expect("Drop Shadow has a limit");
+    let mut draft = shadows(1);
+    for _ in 0..=max {
+        draft.try_add_instance(&spec);
+    }
+    assert_eq!(drop_shadows(&draft), max);
+    assert!(!draft.can_add(&spec));
+    let page = draft.page;
+    assert_eq!(draft.try_add_instance(&spec), None);
+    assert_eq!(draft.page, page, "a refused add keeps the page");
+    draft.open_on(EffectKind::DropShadow);
+    assert_eq!(drop_shadows(&draft), max);
+}
+
+// Removing one at the limit lets one more in, and only one.
+#[trial]
+fn removing_one_at_the_limit_lets_one_more_in() {
+    let spec = EffectSpec::photoshop(EffectKind::DropShadow);
+    let max = spec.max_instances.expect("Drop Shadow has a limit");
+    let mut draft = shadows(max as u32);
+    draft.remove_instance(EffectId(1));
+    assert!(draft.can_add(&spec));
+    assert!(draft.try_add_instance(&spec).is_some());
+    assert_eq!(draft.try_add_instance(&spec), None);
+    assert_eq!(drop_shadows(&draft), max);
+}
+
+// A style over the limit (from a file) keeps every instance; only adding stops.
+#[trial]
+fn a_style_over_the_limit_keeps_every_instance() {
+    let spec = EffectSpec::photoshop(EffectKind::DropShadow);
+    let max = spec.max_instances.expect("Drop Shadow has a limit");
+    let mut draft = shadows(max as u32 + 2);
+    assert_eq!(draft.try_add_instance(&spec), None);
+    draft.open_on(EffectKind::DropShadow);
+    assert_eq!(drop_shadows(&draft), max + 2);
+}
+
+// The limit is the spec's: the other kinds that allow several take more than ten, and a spec without a limit adds a
+// Drop Shadow past ten.
+#[trial]
+fn kinds_without_a_limit_keep_adding() {
+    let mut draft = shadows(10);
+    for kind in [EffectKind::Stroke, EffectKind::InnerShadow, EffectKind::ColorOverlay, EffectKind::GradientOverlay] {
+        let spec = EffectSpec::photoshop(kind);
+        for _ in 0..12 {
+            assert!(draft.try_add_instance(&spec).is_some(), "{kind:?} is not limited");
+        }
+        assert_eq!(draft.style.instances(kind).count(), 12);
+    }
+    let unlimited = EffectSpec { max_instances: None, ..EffectSpec::photoshop(EffectKind::DropShadow) };
+    assert!(draft.try_add_instance(&unlimited).is_some());
+    assert_eq!(drop_shadows(&draft), 11);
+}

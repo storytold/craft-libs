@@ -99,7 +99,8 @@ impl LayerStyleDraft {
     }
 
     /// Opens on `kind`'s page (Layer › Layer Style › Drop Shadow…): its first instance, turned on,
-    /// or a new instance when the layer has none.
+    /// or a new instance when the layer has none. It never adds one beside an instance, so a kind
+    /// at its [`max_instances`](EffectSpec::max_instances) gets no more from here.
     // pc: crates/ui-egui/src/dialogs/layer_style.rs:549-567 (`select` names a kind).
     pub fn open_on(&mut self, kind: EffectKind) {
         let first = self.style.instances(kind).next();
@@ -121,11 +122,27 @@ impl LayerStyleDraft {
         }
     }
 
+    /// Whether the dialog may add another instance of `spec`'s kind: the style holds fewer than
+    /// the spec's [`max_instances`](EffectSpec::max_instances), or the spec sets no limit. The list
+    /// greys the kind's `+` while this is false.
+    pub fn can_add(&self, spec: &EffectSpec) -> bool {
+        spec.max_instances.is_none_or(|max| self.style.instances(spec.kind).count() < max)
+    }
+
+    /// The dialog's add (`+`, the `+` key, a click on an absent effect's row): an
+    /// [`add_instance`](Self::add_instance) of `spec`'s kind with its defaults while
+    /// [`can_add`](Self::can_add) holds. At the limit it adds nothing, leaves the page alone and
+    /// returns `None`; a style that already holds more keeps them all.
+    pub fn try_add_instance(&mut self, spec: &EffectSpec) -> Option<EffectId> {
+        self.can_add(spec).then(|| self.add_instance(spec.kind, &spec.defaults))
+    }
+
     /// Adds an instance of `kind`, turned on, with `defaults` (the kind's spec defaults) and,
     /// when its `useGlobalLight` is on, `angle` set to the shared light angle. The id is one past
     /// the highest `fxN` in the style (the lowest free number if that overflows). It goes right
     /// after the last instance of its kind (at the end when there is none), so the render order
-    /// keeps the layer's effect order, and its page is selected.
+    /// keeps the layer's effect order, and its page is selected. It sets no limit: the dialog adds
+    /// through [`try_add_instance`](Self::try_add_instance).
     // pc: crates/ui-egui/src/dialogs/layer_style.rs:449-460 `next_id`, :463-473 `add_instance`,
     // :82-88 `fresh_params`.
     pub fn add_instance(&mut self, kind: EffectKind, defaults: &StyleParams) -> EffectId {

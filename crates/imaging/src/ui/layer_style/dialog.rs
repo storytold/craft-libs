@@ -365,7 +365,16 @@ impl Work {
             self.next.style = style.clone();
         }
         let before = self.next.style.clone();
-        let defaults = |kind| specs.iter().find(|spec| spec.kind == kind).map(|spec| spec.defaults.clone()).unwrap_or_default();
+        // The dialog's add: the spec's defaults, refused at its `max_instances`; a kind without a spec adds with no
+        // defaults and no limit.
+        let add = |draft: &mut LayerStyleDraft, kind: EffectKind| match specs.iter().find(|spec| spec.kind == kind) {
+            Some(spec) => {
+                draft.try_add_instance(spec);
+            }
+            None => {
+                draft.add_instance(kind, &StyleParams::default());
+            }
+        };
         for action in actions {
             match action {
                 ListAction::Select(page) => self.next.page = page,
@@ -378,15 +387,13 @@ impl Work {
                     let present = self.next.style.instances(kind).next();
                     match (present, on) {
                         (None, true) => {
-                            self.next.add_instance(kind, &defaults(kind));
+                            add(&mut self.next, kind);
                         }
                         (Some(id), false) => self.next.remove_instance(id),
                         _ => {}
                     }
                 }
-                ListAction::Add(kind) => {
-                    self.next.add_instance(kind, &defaults(kind));
-                }
+                ListAction::Add(kind) => add(&mut self.next, kind),
                 ListAction::Remove(id) => self.next.remove_instance(id),
             }
         }

@@ -13,7 +13,7 @@ use craft_imaging::layer_style::{
 use craft_imaging::ui::layer_style::LayerStyleDialog;
 use craft_ui::contract::Role;
 use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
-use craft_ui::testing::access::{NodeKey, name};
+use craft_ui::testing::access::{NodeKey, is_interactive, name};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Key, Modifiers, Vec2};
@@ -31,7 +31,7 @@ struct Host {
 }
 
 fn spec(kind: EffectKind) -> EffectSpec {
-    EffectSpec { kind, label: Cow::Borrowed(""), fields: Vec::new(), defaults: StyleParams::default() }
+    EffectSpec { kind, label: Cow::Borrowed(""), fields: Vec::new(), defaults: StyleParams::default(), max_instances: None }
 }
 
 fn instance(id: u32, kind: EffectKind, on: bool) -> EffectInstance {
@@ -92,7 +92,7 @@ fn size_spec(kind: EffectKind) -> EffectSpec {
     let field = EffectField { key: "size".into(), label: "Size".into(), kind: FieldKind::Slider { min: 0.0, max: 250.0, unit: FieldUnit::Pixels } };
     let mut defaults = StyleParams::default();
     defaults.set("size", StyleValue::Number(5.0));
-    EffectSpec { kind, label: Cow::Borrowed(""), fields: vec![field], defaults }
+    EffectSpec { kind, label: Cow::Borrowed(""), fields: vec![field], defaults, max_instances: None }
 }
 
 /// Typing in Size and then clicking another effect's row commits the typing: the page the click leaves is drawn in the
@@ -183,4 +183,42 @@ fn page_shows_defaults_under_the_values_and_writes_only_edits() {
     let written = edit.value().and_then(|style| style.effect(EffectId(1))).map(|e| e.params.clone()).unwrap_or_default();
     assert!(written.number("distance") > defaults.number("distance"), "the arrow key steps the distance up from its default");
     assert_eq!(written.number("opacity"), None, "only the edited key is written");
+}
+
+/// The number of Drop Shadows in the host's draft.
+fn drop_shadows(host: &Rc<RefCell<Host>>) -> usize {
+    host.borrow().draft.style.instances(EffectKind::DropShadow).count()
+}
+
+/// photocraft#14891: eleven clicks on the first Drop Shadow's `+` stop at the spec's ten; at ten every Drop Shadow's
+/// `+` is greyed (no button left to press) and the `+` key adds none either. Removing one lets `+` add again.
+#[trial]
+fn the_plus_stops_at_ten_drop_shadows() {
+    let draft = LayerStyleDraft::new(LayerStyle { effects: vec![instance(1, EffectKind::DropShadow, true)], ..LayerStyle::default() });
+    let (mut fixture, host) = rig_of(host(draft, vec![EffectSpec::photoshop(EffectKind::DropShadow)]));
+    let plus = one(&fixture, Role::BUTTON, "Add another Drop Shadow");
+    for _ in 0..11 {
+        fixture.click_at(plus.center());
+        fixture.idle(2);
+    }
+    assert_eq!(drop_shadows(&host), 10, "eleven clicks on + give ten Drop Shadows");
+    let adders: Vec<_> =
+        fixture.by_role(Role::BUTTON).into_iter().filter(|b| name(fixture.tree(), b.node).is_some_and(|n| n.starts_with("Add another"))).collect();
+    assert!(adders.iter().all(|b| !is_interactive(fixture.tree(), b.node)), "no + is pressable at ten");
+
+    let row = one(&fixture, Role::LIST_ITEM, "Drop Shadow 1");
+    fixture.click(&row);
+    fixture.idle(2);
+    fixture.type_key(Key::Plus, "+");
+    fixture.idle(2);
+    assert_eq!(drop_shadows(&host), 10, "the + key adds none at ten");
+
+    let minus = one(&fixture, Role::BUTTON, "Remove this Drop Shadow 1");
+    fixture.click(&minus);
+    fixture.idle(2);
+    assert_eq!(drop_shadows(&host), 9);
+    let plus = one(&fixture, Role::BUTTON, "Add another Drop Shadow 1");
+    fixture.click(&plus);
+    fixture.idle(2);
+    assert_eq!(drop_shadows(&host), 10, "at nine + adds one again");
 }

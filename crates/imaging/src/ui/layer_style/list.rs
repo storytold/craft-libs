@@ -35,7 +35,7 @@ pub(super) enum ListAction {
     Check(EffectId, bool),
     /// An absent effect is added when checked and removed again if its sweep is cancelled.
     CheckAbsent(EffectKind, bool),
-    /// A click on an absent effect's row, or `+`: [`LayerStyleDraft::add_instance`].
+    /// A click on an absent effect's row, or `+`: [`LayerStyleDraft::try_add_instance`].
     Add(EffectKind),
     /// `−`: [`LayerStyleDraft::remove_instance`].
     Remove(EffectId),
@@ -123,7 +123,8 @@ fn instance_name(draft: &LayerStyleDraft, words: &LayerStyleWords, units: &Units
 ///
 /// Each effect row has a check box in a toggle column, and its name is muted while the effect is off. A kind that
 /// allows several has a `+` trailing part and, while it has more than one instance, a `−` before it; both keep the
-/// selection, and `+` and `−` on the lead row do the same through [`LayerStyleCommand`]. The list is one Tab stop; ↑, ↓,
+/// selection, and `+` and `−` on the lead row do the same through [`LayerStyleCommand`]. At the kind's
+/// [`EffectSpec::max_instances`] its `+` is greyed and the `+` key adds nothing. The list is one Tab stop; ↑, ↓,
 /// Home and End move the lead and show the page of a page row, Enter shows the page of any row and Space flips the
 /// lead's check box. A kind with several instances numbers them ([`LayerStyleWords::instance_name`]), so no two rows,
 /// check boxes or buttons share a name.
@@ -143,6 +144,8 @@ pub(super) fn effect_list(
             rows.push(EffectRow::Absent(spec.kind));
         }
     }
+    // At its spec's `max_instances` a kind's `+` is greyed and the `+` key adds nothing.
+    let can_add = |kind: EffectKind| specs.iter().find(|spec| spec.kind == kind).is_none_or(|spec| draft.can_add(spec));
     let kind_of = |row: &EffectRow| match row {
         EffectRow::Instance(id) => draft.style.effect(*id).map(|instance| instance.kind),
         EffectRow::Absent(kind) => Some(*kind),
@@ -188,6 +191,9 @@ pub(super) fn effect_list(
                     }
                     let add = Label::from(words.add_instance.fill(&[("effect", name.as_str())]));
                     row = row.trailing_part(ADD, TrailingFace::Icon(IconSpec::svg(IconId::new("plus"))), add);
+                    if !can_add(instance.kind) {
+                        row = row.part_disabled(ADD);
+                    }
                 }
                 row
             }
@@ -237,7 +243,7 @@ pub(super) fn effect_list(
         }
         let kind = lead.as_ref().and_then(kind_of).filter(|kind| kind.allows_several());
         let action = match (command, &lead) {
-            (LayerStyleCommand::AddInstance, _) => kind.map(ListAction::Add),
+            (LayerStyleCommand::AddInstance, _) => kind.filter(|kind| can_add(*kind)).map(ListAction::Add),
             (LayerStyleCommand::RemoveInstance, Some(EffectRow::Instance(id))) => {
                 kind.filter(|kind| draft.style.instances(*kind).count() > 1).map(|_| ListAction::Remove(*id))
             }

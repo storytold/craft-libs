@@ -838,6 +838,20 @@ impl<'a> ListRow<'a> {
         self
     }
 
+    /// Greys the trailing part `part` added before: it takes no press, is no focus stop and keeps its name as its
+    /// tooltip (an `Add` that has reached its limit). A part the row lacks is left alone.
+    #[must_use]
+    pub fn part_disabled(mut self, part: TrailingPart) -> Self {
+        for held in &mut self.trailing {
+            if let TrailingItem::Part { part: have, enabled, .. } = &mut held.item
+                && *have == part
+            {
+                *enabled = false;
+            }
+        }
+        self
+    }
+
     /// The row's "More" button, a [revealed](Self::trailing_part_revealed) part named "More ({row})": a click on it
     /// asks for the row's menu, which the collection reports as `CollectionEvent::ContextMenu` hung from the button.
     #[must_use]
