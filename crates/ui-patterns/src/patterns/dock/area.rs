@@ -1274,6 +1274,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if scene.config.wheel_selects_tabs {
                 group = group.wheel_selects_tabs();
             }
+            if scene.config.whole_tab_titles {
+                group = group.whole_tab_titles();
+            }
             group
         };
         let rect = match at {

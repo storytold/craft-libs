@@ -941,6 +941,33 @@ fn a_very_long_document_name_is_cut_to_a_compact_tab() {
     assert!(short.left() >= tab.right(), "the next tab follows it");
 }
 
+/// The width of a document tab named `long` in a strip under `DocumentTabLook::Shrinking`, with or without
+/// `TabStrip::whole_titles`.
+fn long_document_tab_width(long: &'static str, whole: bool) -> f32 {
+    let mut fixture = Fixture::new(move |ui| {
+        ui.set_max_width(1200.0);
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Documents").shown(0);
+        let strip = if whole { strip.whole_titles() } else { strip };
+        let _ = strip.show_items(ui, &source, &mut |_, _| Tab::new(long));
+    });
+    fixture.root_value(DocumentTabLook::Shrinking);
+    fixture.idle(6);
+    fixture.by_label(long).expect("the long tab").rect.width()
+}
+
+/// `TabStrip::whole_titles` keeps a long document name whole under `DocumentTabLook::Shrinking`, where a strip without
+/// it cuts the tab near 22 characters wide.
+#[trial]
+fn whole_titles_keep_a_long_document_name_whole_under_the_shrinking_look() {
+    let long = "a-very-long-synthetic-document-file-name-for-truncation-test-1234567890.pdf";
+    let capped = long_document_tab_width(long, false);
+    let whole = long_document_tab_width(long, true);
+    assert!(capped < 320.0, "without whole titles the name is cut short, got {capped}");
+    assert!(whole > capped + 100.0, "with whole titles the tab takes the whole name: {whole} against {capped}");
+}
+
 const PANELS: [&str; 6] = ["Layers", "Channels", "Properties", "Adjustments", "History", "Navigator"];
 
 /// The widths of the panel tabs a strip shows in a room `room` wide, by title, with the second panel shown.

@@ -105,6 +105,9 @@ pub struct DockConfig {
     pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
+    /// The groups' panel tabs keep their whole titles: the tabs that do not fit go to the overflow menu instead of
+    /// shrinking to their first letters. Off: panel tabs shrink before they overflow.
+    pub whole_tab_titles: bool,
     /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), on a
     /// filled rounded pill ([`PanelTabLook::Pill`]), or a square filled block on a canvas strip
     /// ([`PanelTabLook::Block`]).
@@ -145,6 +148,7 @@ impl Default for DockConfig {
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
+            whole_tab_titles: false,
             tab_look: PanelTabLook::Plain,
             native_windows: true,
             group_order_items: false,
@@ -300,6 +304,13 @@ impl DockConfig {
     #[must_use]
     pub fn wheel_selects_tabs(mut self, on: bool) -> Self {
         self.wheel_selects_tabs = on;
+        self
+    }
+
+    /// See [`DockConfig::whole_tab_titles`].
+    #[must_use]
+    pub fn whole_tab_titles(mut self, on: bool) -> Self {
+        self.whole_tab_titles = on;
         self
     }
 

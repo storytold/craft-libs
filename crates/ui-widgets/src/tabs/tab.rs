@@ -217,6 +217,10 @@ pub struct Tab<'a> {
     /// [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking).
     #[prop(flag)]
     modified: bool,
+    /// The tab keeps its whole label under [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking) instead of
+    /// a name of `MAX_NAME_DIGITS` digits' width at most (a strip with `TabStrip::whole_titles` sets it).
+    #[prop(flag)]
+    whole_title: bool,
     /// The length in bytes of the label's name part (a document's name before its zoom and colour mode): a modified
     /// tab under the `*` look shows the mark right after the name, inside the label.
     #[prop]
@@ -251,6 +255,7 @@ impl<'a> Tab<'a> {
             detail: None,
             icon: None,
             modified: false,
+            whole_title: false,
             name_len: None,
             closable: None,
             progress: None,
@@ -518,7 +523,11 @@ impl Component for Tab<'_> {
         let label_width = width(&self.label_run(cx.style, label));
         // A document tab never takes more than a name of `MAX_NAME_DIGITS` digits' width, as production's tabs cut a long
         // name short so the other tabs and the Open control keep their room; the label is cut with an ellipsis.
-        let capped = if cx.style.shrinking { label_width.min(width(&self.label_run(cx.style, &"0".repeat(MAX_NAME_DIGITS)))) } else { label_width };
+        let capped = if cx.style.shrinking && !self.whole_title {
+            label_width.min(width(&self.label_run(cx.style, &"0".repeat(MAX_NAME_DIGITS))))
+        } else {
+            label_width
+        };
         let mut natural = parts + capped;
         if let Some(detail) = self.detail_text() {
             natural += sizes.gap + width(&TextRun::new(detail).role(cx.style.detail.role));
