@@ -3,9 +3,9 @@ name: Shared audio
 on:
   push:
     branches: [main]
-    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "scripts/fetch-opus-vectors.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
+    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "crates/testkit/**", "scripts/fetch-opus-vectors.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
   pull_request:
-    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "scripts/fetch-opus-vectors.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
+    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "crates/testkit/**", "scripts/fetch-opus-vectors.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
   workflow_dispatch:
 
 permissions:
