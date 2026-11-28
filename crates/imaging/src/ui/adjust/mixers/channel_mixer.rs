@@ -68,6 +68,17 @@ impl ChannelMixer {
         self
     }
 
+    /// The value with Monochrome turned `on` or off. On starts the Gray row at [`Self::MONOCHROME_START`]. Off hands
+    /// the Gray row to each of the three outputs, as the reference application does, so the image stays gray until an
+    /// output is edited (photocraft#14412).
+    fn with_monochrome(self, on: bool) -> Self {
+        match (on, self.gray) {
+            (true, _) => Self { gray: Some(Self::MONOCHROME_START), ..self },
+            (false, Some(gray)) => Self { red: gray, green: gray, blue: gray, gray: None },
+            (false, None) => self,
+        }
+    }
+
     /// The sum of the three sources.
     fn total(row: [f64; 4]) -> f64 {
         row[0] + row[1] + row[2]
@@ -178,7 +189,7 @@ impl<'a> ChannelMixerEditor<'a> {
             let constant = AdjustField::new("constant", words.constant.clone(), -200.0..=200.0, 0.0).unit_kind(UnitKind::Percent);
             run.slider_row(ui, cx, &constant, row[3], move |now: &ChannelMixer, x| set(now, 3, x));
             let monochrome = Checkbox::new(Bind::given(mono)).label(words.monochrome.clone()).show(ui);
-            run.push(cx, monochrome, |now, on| ChannelMixer { gray: on.then_some(ChannelMixer::MONOCHROME_START), ..*now });
+            run.push(cx, monochrome, |now, on| now.with_monochrome(*on));
             let memory = cx.memory::<MixerMemory>();
             memory.began = run.began();
             memory.output = picked.unwrap_or(out);
