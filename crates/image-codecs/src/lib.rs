@@ -599,7 +599,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::JpegLs => jpegls::encode(image, plan),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
-        Format::Jp2 => Err(CodecError::unsupported(format, "JPEG 2000 is import-only; save as PNG or TIFF instead")),
+        Format::Jp2 => jp2::encode(image, plan, opts),
         Format::Jxl => jxl::encode(image, plan),
         // The `image` crate leaves a BMP's resolution fields 0; Photoshop fills them in. They are
         // part of the header, not metadata, so they are written whatever `embed_metadata` says.

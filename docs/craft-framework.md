@@ -103,7 +103,7 @@ App engineers need the framework: sections 2 and 3. Component and theme authors 
 
 ### 2.1 Run the component gallery
 
-The gallery shows every registered story of every crate with a `ui` feature, under every theme. Themes switch at run time. It needs Rust 1.95 or later.
+The gallery shows every registered story of every crate with a `ui` feature, under every theme. Themes switch at run time. It needs Rust 1.96 or later.
 
 ```
 git switch craft-framework

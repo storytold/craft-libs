@@ -43,7 +43,8 @@ pub enum Format {
     Dicom,
     /// Amiga IFF/ILBM (`FORM ... ILBM`): planar bitplanes with a palette or 24-bit RGB.
     Iff,
-    /// JPEG 2000 (JP2 container or raw J2K codestream): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
+    /// JPEG 2000 (JP2 container or raw J2K codestream). Written losslessly, as a JP2 file or, with
+    /// [`crate::EncodeOptions::jp2_codestream`], a raw codestream.
     Jp2,
     /// Sun Raster (`.ras`): 1-, 8-, 24- and 32-bit, uncompressed or RLE.
     SunRaster,
@@ -114,7 +115,6 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
          writing needs an HEVC encoder, and the mature ones (x265, libheif) are C, so write stays \
          unsupported. Without the feature HEIF is detected but neither read nor written.",
     ),
-    (Format::Jp2, "JPEG 2000 decode uses hayro-jpeg2000 (pure Rust); writing JPEG 2000 is not provided."),
 ];
 
 use ChannelLayout as L;
@@ -350,7 +350,7 @@ pub fn caps(format: Format) -> FormatCaps {
             FormatCaps { read: cfg!(feature = "sgi"), write: cfg!(feature = "sgi"), depths: &[S::U8, S::U16], layouts: RGB_GRAY, alpha: true, ..base }
         }
         Format::JpegLs => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
-        Format::Jp2 => FormatCaps { read: true, write: false, layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA], icc: true, ..base },
+        Format::Jp2 => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba], icc: true, ..base },
     }
 }
 

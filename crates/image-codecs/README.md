@@ -61,6 +61,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | Sun Raster (`.ras`) | with feature `sunraster` (incl. RLE and colour maps) | with feature `sunraster` (uncompressed) | U8 | Gray, RGB, RGBA | yes | no | no | no | no | no | no | `sunraster` (off by default) |
 | SGI (`.sgi`, `.rgb`, `.bw`) | with feature `sgi` | with feature `sgi` (RLE) | U8, U16 | Gray, Gray+A, RGB, RGBA | yes | no | no | no | no | no | no | `sgi` (off by default) |
 | JPEG-LS (`.jls`) | yes (any NEAR; one scan per component) | yes (lossless) | U8, U16 | Gray, RGB | no | no | no | no | no | no | no | built in |
+| JPEG 2000 (`.jp2`, `.j2k`) | yes | yes (lossless) | U8, U16 (deeper samples decode to U16; to U8 when only 8 bits fit `max_alloc` or `j2k` cannot decode the layout) | Gray, GrayA, RGB, RGBA; CMYK, CMYK+A read only | yes (`cdef` opacity) | yes (`colr`; none in a raw codestream) | no | no | no | no | no | `hayro-jpeg2000` (read), `j2k` (write, and reading samples deeper than 8 bits) |
 | AVIF | with feature `avif-decode` (native only) | only with feature `avif` | U8, U16 (10/12-bit decodes to U16; PQ/HLG to linear F32) | RGB, RGBA | yes (auxiliary alpha) | read (`colr` prof/rICC) | read | read | no | no | yes | `craft-video` AV1 decoder; `image` + `ravif` to write |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
@@ -101,6 +102,14 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   document pipeline converts tagged images to sRGB and reports metadata loss.
   Reading remains in the separate #2868 PR. The `ASYMMETRIC_EXCEPTIONS`
   entry stays until import is merged.
+
+* **JPEG 2000 export.** Writes lossless (reversible 5/3 wavelet) 8 and 16-bit gray and RGB, with or
+  without alpha, through `j2k`. A JP2 file records the image's ICC profile when `embed_icc` is set
+  and one is attached, otherwise enumerated sRGB or grayscale, and marks alpha as opacity for the
+  whole image. `EncodeOptions::jp2_codestream` writes a raw codestream instead, which has no colour
+  information: `fidelity_warnings` reports a dropped profile. CMYK and Lab are converted to RGB
+  (`CmykConverted`, `LabConverted`) and float to 16 bits (`DepthReduced`). Choosing which profile a
+  map carries (linear or sRGB) is the caller's job.
 
 * **DDS** (through [`craft-dds`](../dds/README.md), whose `DdsCompression` and `DdsOptions` are
   re-exported). The top mip level of a 2D texture: uncompressed pixels described by channel masks

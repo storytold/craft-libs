@@ -1,7 +1,7 @@
 # craft-print
 
 Submit a print-ready PDF to the system spooler. Used by PdfCraft and DesignCraft;
-there are no dependencies on either app or on a UI framework. Requires Rust 1.95.
+there are no dependencies on either app or on a UI framework. Requires Rust 1.96.
 
 ```rust,no_run
 let job = craft_print::Job { title: "Report".into(), ..Default::default() };

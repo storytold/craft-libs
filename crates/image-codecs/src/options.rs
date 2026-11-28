@@ -283,6 +283,9 @@ pub struct EncodeOptions {
     pub dpx_bits: Option<DpxBits>,
     /// DDS compression and mip chain.
     pub dds: DdsOptions,
+    /// JPEG 2000: write a raw codestream (`.j2k`) instead of a JP2 file (`.jp2`). A codestream
+    /// has no colour box, so it carries no ICC profile and no colour space.
+    pub jp2_codestream: bool,
     /// Embed the ICC profile when the format supports it.
     pub embed_icc: bool,
     /// Embed EXIF/XMP/DPI/text when the format supports it.
@@ -308,6 +311,7 @@ impl Default for EncodeOptions {
             exr_chromaticities: None,
             dpx_bits: None,
             dds: DdsOptions::default(),
+            jp2_codestream: false,
             embed_icc: true,
             embed_metadata: true,
         }

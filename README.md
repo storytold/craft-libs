@@ -477,7 +477,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 ## Craft framework
 
 The shared UI layer of the Craft apps: the design system, the UI library on egui, the host convention and the
-feature families above. Assets, localization and commands stay in each app. Requires Rust 1.95 or later. Design and
+feature families above. Assets, localization and commands stay in each app. Requires Rust 1.96 or later. Design and
 architecture: [docs/craft-framework.md](docs/craft-framework.md).
 
 - [`craft`](crates/craft/README.md): the facade: one dependency, one pin and one import root for an app, with a

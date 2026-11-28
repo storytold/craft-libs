@@ -149,6 +149,9 @@ mod exr {
 mod hdr {
     cases!(Format::Hdr);
 }
+mod jp2 {
+    cases!(Format::Jp2);
+}
 
 // ---------------------------------------------------------------------------
 // Targeted round-trips beyond the matrix

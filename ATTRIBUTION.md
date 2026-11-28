@@ -207,3 +207,16 @@ adapting code from [PiJellyPin's MaterialCraft](https://github.com/PiJellyPin/Ma
 `NOTICE` for the original attribution. This extraction retains vangel76's subsequent evaluator and GPU work.
 The format reference and tests are from the same TextureCraft source. The tests' numerical rule tables document
 their provenance in their headers.
+
+## JPEG 2000 encoding
+
+`craft-image-codecs` writes JPEG 2000, and reads samples deeper than 8 bits, through these crates.io
+packages, used unmodified as dependencies (no code is vendored or copied). The writer in
+`crates/image-codecs/src/codecs/jp2.rs` (`encode`) is moved from
+[TextureCraft's texture export](https://github.com/storytold/texturecraft/pull/827) at
+`a53bba9af608bf2b74436a45868336494feefd83` (MIT OR Apache-2.0), where TextureCraft contributors wrote it.
+
+| Crate | Author | Source | License |
+|---|---|---|---|
+| `j2k`, `j2k-core`, `j2k-native`, `j2k-types`, `j2k-profile`, `j2k-codec-math` 0.11.3 | j2k contributors; `j2k-native` names The Hayro Authors in its licence | [frames-sg/j2k@c708d2f](https://github.com/frames-sg/j2k/tree/c708d2fda9f2672472b9e06aa2e66bf1f191dc3d) | MIT OR Apache-2.0 |
+| `fearless_simd` 1.3.0 (through `j2k-native`) | Raph Levien and the fearless_simd contributors | [linebender/fearless_simd@2ac6acd](https://github.com/linebender/fearless_simd/tree/2ac6acdd13efb7689a6e80049a4933516a57ec20) | Apache-2.0 OR MIT |

@@ -331,6 +331,15 @@ implementation, https://github.com/macosforge/alac at c38887c5c5e64a4b31108733bd
 wrapping integer arithmetic, the unrolled predictor and per-width matrix routines folded into one,
 and the average bit rate filled in. Those files are Apache-2.0 only.
 
+JPEG 2000 encoding dependencies: j2k, j2k-core, j2k-native, j2k-types, j2k-profile and
+j2k-codec-math 0.11.3 (https://github.com/frames-sg/j2k, MIT OR Apache-2.0; j2k-native:
+Copyright (c) The Hayro Authors), and fearless_simd 1.3.0
+(https://github.com/linebender/fearless_simd, Apache-2.0 OR MIT, Copyright (c) 2018 Raph Levien).
+They are used unmodified from crates.io; no code is vendored. craft-image-codecs' JPEG 2000 writer
+is moved from TextureCraft (https://github.com/storytold/texturecraft/pull/827, revision
+a53bba9af608bf2b74436a45868336494feefd83), Copyright (c) 2026 ArtCraft Team and the TextureCraft
+contributors, MIT OR Apache-2.0. See ATTRIBUTION.md.
+
 JPEG encoding dependency: jpeg-encoder 0.6.1
 
 Source: https://crates.io/crates/jpeg-encoder/0.6.1

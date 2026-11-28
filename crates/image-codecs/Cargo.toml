@@ -55,6 +55,9 @@ ravif = { version = "0.13", default-features = false, optional = true }
 rav1e = { version = "0.8", default-features = false, optional = true }
 avif-serialize = { version = "0.8", optional = true }
 hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"] }
+# Lossless JPEG 2000 encoding, and decoding samples deeper than 8 bits (hayro-jpeg2000 returns 8-bit).
+j2k = "=0.11.3"
+j2k-core = "=0.11.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # DDS encodes rows of blocks on several threads, as the other parallel codecs here do on native targets.

@@ -247,14 +247,14 @@ jobs:
           done < "$RUNNER_TEMP/caches"
 
   msrv:
-    name: Rust 1.95
+    name: Rust 1.96
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       # Its own dependency-cache entry: the calls in this file share one job id, so without a name
       # they would write the same key.
       cache-name: msrv
       os: '["ubuntu-latest"]'
-      toolchain: 1.95.0
+      toolchain: 1.96.0
       targets: ""
       tools: ""
       craft-fonts-ref: ""
