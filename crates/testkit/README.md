@@ -237,6 +237,20 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## corpus
+
+`craft_testkit::corpus` is behind the `corpus` feature and is native only. It parses a corpus manifest and checks a folder of files against it.
+
+A manifest has one row per file, with tab-separated columns: the SHA-256 as 64 hexadecimal digits in either case, the path relative to the corpus folder with `/` between its parts, and optional license and URL columns. Blank lines and lines whose first character other than a space or a tab is `#` are skipped. LF and CRLF line endings are both read.
+
+- `Manifest::parse(text)` returns a `ManifestError` naming the line for a row with fewer than 2 or more than 4 columns, a digest that is not 64 hexadecimal digits, a path that is empty, starts with `/`, has an empty, `.` or `..` part, or holds a `\`, a `:` or a control character (NUL included), and a path listed twice. An empty optional column is `None`. The parser does not check that a name is valid on a given file system: a name Windows reserves (`<`, `>`, `"`, `|`, `?`, `*`, a trailing `.` or space, a device name such as `NUL`) or two names that differ only in case are accepted, so a manifest must use names that every file system it is verified on supports.
+- `Manifest::read(path, &limits)` reads a manifest file, stopping one byte past the size limit. A path that is not a regular file, such as a folder or a named pipe, returns `ManifestError::NotAFile` without being opened.
+- `verify(dir, &manifest)` checks that each listed file resolves inside `dir` after symbolic links are followed, is a regular file within the size limit, and has the listed SHA-256. It returns a `VerifyError` naming the path. A manifest with no rows is an error.
+- On Unix, `Manifest::read` and `verify` open each file with `O_NONBLOCK` and check the opened file's type again, so a path replaced by a named pipe after the first check fails at once. After the open, `verify` also checks that the opened file is inside `dir`: on Linux, Android and Apple platforms by the path the kernel reports for the open file, and on other Unix systems, or on Linux and Android when `/proc/self/fd` cannot be read, by resolving the listed path again and comparing its device and inode with the opened file's. On Apple platforms an error from the path query fails verification with `VerifyError::Read` instead of falling back to the second lookup. That second lookup goes through the path again, so a folder changed during it is not detected. On Windows the location of the opened file is not checked again, so a part of the path changed into a link out of `dir` between the check and the open is not detected. In every case the opened file must still have the listed SHA-256.
+- `pinned(var, manifest)` is the gate a test calls. `var` names the folder variable, and `None` reads `CRAFT_CORPUS`. With the folder variable unset, it calls `skip::skip` with the reason `corpus not given: set <var> to its folder` and the required variable `<var>_REQUIRED` (by default `CRAFT_CORPUS_REQUIRED`), so the [skip](#skip) rule applies: unset or empty prints `SKIPPED: corpus not given: set <var> to its folder` to stderr and returns `None`, `1` fails the test, and any other value, `0` included, fails the test as a configuration error. With the folder variable set to an empty value, a manifest that does not parse or a folder that does not match, it fails the test. A `var` that is empty or holds `=` or a NUL character fails the test before the environment is read. Otherwise it returns the folder.
+
+`Limits` sets the size limits: by default a manifest of at most 1 MiB and 10,000 rows, and files of at most 8 GiB each, read 64 KiB at a time. No function downloads a file or changes the process environment.
+
 ## skip
 
 The `skip` module is not built for `wasm32`. A test that needs something a test environment may lack
@@ -354,6 +368,12 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
 
+### corpus
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| The manifest rows and the digest check of `pinned` | storytold/craft-libs | `crates/affinity/tests/support/corpus.rs:18-35` | `75a654f4` |
+
 ### skip
 
 | Code | Repository | Path | Commit |
@@ -413,6 +433,17 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### corpus
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| craft-libs `affinity` | `tests/support/corpus.rs`, which parses `corpus.tsv` (four tab-separated columns) and checks the folder `AFFINITY_CORPUS` names | Pending |
+| craft-libs `raw` | `tests/it/raf_corpus_manifest.rs`, which checks the rows of the tab-separated `docs/raf-corpus.sha256` but not the files | Pending |
+| LightCraft | `crates/raw/tests/it/corpus.rs` checks the RAF list | Pending |
+| PhotoCraft | `crates/io/tests/it/corpus.rs` and `xtask/*-corpus.sha256` (two-space lists, to be converted to tabs) | Pending |
+| CADCraft | `crates/io/src/roundtrip/tests.rs` scans `CADCRAFT_CORPUS_DIR` without a checksum list | Pending: needs a pinned list first |
+| VectorCraft | `crates/affinity/tests/support/corpus.rs` reads a two-space list, to be converted to tabs | Pending |
 
 ### skip
 

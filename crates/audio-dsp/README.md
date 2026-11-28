@@ -13,10 +13,13 @@ and contains no `unsafe` code.
   delays and reverbs (including convolution and surround), modulation, restoration (denoise,
   dehum, click remover, de-esser, de-reverb, speech enhancement), channel tools, distortion,
   dither, a signal generator, a loudness meter, a pitch shifter for a live voice with 10 ms of
-  latency, and a formant shifter for a live voice with 10.7 ms of latency at 48 kHz (its size
-  depends on the sample rate; `latency()` reports it in samples). The pitch shifter's Keep
-  Formants switch adds the formant shifter's latency, and `latency()` reports it while the switch
-  is on.
+  latency, a formant shifter for a live voice with 10.7 ms of latency, and noise suppression for
+  a live voice with 5.3 ms of latency that follows the noise floor without first learning it.
+  These latencies are at 48 kHz (the STFT sizes depend on the sample rate; `latency()` reports
+  them in samples). The pitch shifter's Keep Formants switch adds the formant shifter's latency,
+  and `latency()` reports it while the switch is on. A ring modulator for robotic and metallic
+  voices (ring, frequency modulation, and positive or negative comb resonators, with the
+  frequency moved by an LFO, the input's level or a sample-and-hold source) adds no latency.
 - `loudness`: an ITU-R BS.1770-4 / EBU R128 meter with momentary, short-term and integrated
   loudness, loudness range (EBU Tech 3342), sample peak and true peak.
 - `pan`: stereo pan laws, a surround panner over any layout of up to 16 speakers, and first-order
@@ -30,6 +33,14 @@ and contains no `unsafe` code.
   music track under them.
 - `biquad` and `design`: biquad filters with their magnitude response, and IIR filter design from
   Butterworth, Bessel, Chebyshev and elliptic prototypes.
+
+`noise_suppression` estimates the noise floor from minimum spectral power over 1.5 s. The first
+noise estimate after a reset starts from the median bin's power. Each bin's value is clamped
+between 30 dB below its own estimate and its own estimate. Windows that overlap a run of at
+least one hop of zeros (64 samples at 48 kHz) do not enter the noise estimate. The gain floor
+moves from 0 dB toward the attenuation set by `reduction` during the first search window
+of sound. Continuous voiced or tonal audio present from startup can enter the noise estimate
+and be attenuated afterward.
 
 ## Conventions
 
@@ -82,7 +93,8 @@ The crate combines two crates from the ArtCraft apps, with changes:
   offline resampler.
 - [storytold/soundcraft](https://github.com/storytold/soundcraft) `crates/dsp` at
   `915481be1b49d7e0502e07b059d0c0198c61911a`: the two crossfaded read taps of the voice pitch
-  shifter (`src/plugins/pitch.rs`) and its YIN pitch tracker (`src/pitch_detect.rs`).
+  shifter (`src/plugins/pitch.rs`) and its YIN pitch tracker (`src/pitch_detect.rs`), and the
+  ring modulator (`src/plugins/modulation.rs`).
 
 `NOTICE` keeps the copyright notices of both projects.
 

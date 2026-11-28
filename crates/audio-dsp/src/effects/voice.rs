@@ -69,9 +69,11 @@ fn formant_size(sample_rate: f32) -> usize {
 /// Fundamental period of the recent input, from YIN (de Cheveigné and Kawahara, 2002) run on a
 /// low-passed, decimated copy. Every buffer is sized at creation.
 ///
-/// It keeps two copies: the mean of the channels, and the first channel alone. A frame whose
-/// mean holds less than a quarter of the first channel's energy (channels of opposite polarity
-/// cancel in the mean) is analyzed on the first channel.
+/// It keeps two copies: the mean of the channels, and one channel alone. A frame whose mean holds
+/// less than a quarter of that channel's energy (channels of opposite polarity cancel in the
+/// mean) is analyzed on that channel. The channel is the first one until another channel holds
+/// over four times its energy through one hop; the tracker then moves to the loudest channel, and
+/// analyzes that channel's copy only once a whole frame of it has come in.
 #[derive(Clone, Debug)]
 struct Tracker {
     /// Input samples per analysis sample.
@@ -88,10 +90,16 @@ struct Tracker {
     max_tau: usize,
     /// Period in input samples, or `None` when the last frame was unvoiced.
     period: Option<f64>,
+    /// Channel the second copy holds.
+    channel: usize,
+    /// Energy of each channel's clipped input since the last analysis.
+    energy: Vec<f64>,
+    /// Analysis samples of `channel` in the second copy, up to the frame length.
+    filled: usize,
 }
 
 impl Tracker {
-    fn new(sample_rate: f32) -> Self {
+    fn new(sample_rate: f32, channels: usize) -> Self {
         let factor = (sample_rate / TRACK_RATE).round().max(1.0) as usize;
         let rate = sample_rate / factor as f32;
         let max_hz = MAX_HZ.min(rate / 4.0);
@@ -114,6 +122,10 @@ impl Tracker {
             min_tau,
             max_tau,
             period: None,
+            channel: 0,
+            energy: vec![0.0; channels.max(1)],
+            // The zeros the copy starts with are the first channel's silence.
+            filled: len,
         }
     }
 
@@ -123,12 +135,23 @@ impl Tracker {
         self.at = 0;
         self.since = 0;
         self.period = None;
+        self.channel = 0;
+        self.energy.fill(0.0);
+        self.filled = self.frame.len();
     }
 
-    /// Takes one input sample, as the mean of the channels and the first channel; runs an
-    /// analysis every `hop` analysis samples.
-    fn push(&mut self, mean: f32, first: f32) {
-        let clipped = [mean, first].map(|x| (x as f64).clamp(-TRACK_CLIP, TRACK_CLIP));
+    /// Adds one input sample of channel `c` to that channel's energy.
+    fn measure(&mut self, c: usize, x: f32) {
+        if let Some(e) = self.energy.get_mut(c) {
+            let x = (x as f64).clamp(-TRACK_CLIP, TRACK_CLIP);
+            *e += x * x;
+        }
+    }
+
+    /// Takes one input sample, as the mean of the channels and the sample of the channel in
+    /// `self.channel`; runs an analysis every `hop` analysis samples.
+    fn push(&mut self, mean: f32, single: f32) {
+        let clipped = [mean, single].map(|x| (x as f64).clamp(-TRACK_CLIP, TRACK_CLIP));
         for (feed, x) in self.feeds.iter_mut().zip(clipped) {
             feed.filter(&self.coeffs, x);
         }
@@ -142,16 +165,34 @@ impl Tracker {
             feed.ring[self.at] = feed.last as f32;
         }
         self.at = (self.at + 1) & mask;
+        self.filled = (self.filled + 1).min(self.frame.len());
         self.since += 1;
         if self.since >= self.hop {
             self.since = 0;
             self.analyze();
+            self.choose_channel();
         }
     }
 
+    /// Moves the second copy to the loudest channel when that channel held over four times the
+    /// energy of the one in use since the last analysis. The first of equally loud channels wins.
+    fn choose_channel(&mut self) {
+        let loudest = (0..self.energy.len()).fold(0, |b, c| if self.energy[c] > self.energy[b] { c } else { b });
+        if self.energy[self.channel] < 0.25 * self.energy[loudest] {
+            self.channel = loudest;
+            self.feeds[1].reset();
+            self.filled = 0;
+        }
+        self.energy.fill(0.0);
+    }
+
     fn analyze(&mut self) {
-        let [mean, first] = [0, 1].map(|f| self.feeds[f].ring.iter().map(|v| v * v).sum::<f32>());
-        let feed = if mean < 0.25 * first { &self.feeds[1] } else { &self.feeds[0] };
+        let [mean, single] = [0, 1].map(|f| self.feeds[f].ring.iter().map(|v| v * v).sum::<f32>());
+        if mean < 0.25 * single && self.filled < self.frame.len() {
+            // The channel's copy holds less than a frame since the move: keep the last period.
+            return;
+        }
+        let feed = if mean < 0.25 * single { &self.feeds[1] } else { &self.feeds[0] };
         let mask = self.frame.len() - 1;
         for (i, v) in self.frame.iter_mut().enumerate() {
             *v = feed.ring[(self.at + i) & mask];
@@ -308,7 +349,7 @@ impl VoicePitch {
             lines: vec![vec![0.0; len]; ch],
             mask: len - 1,
             pos: 0,
-            tracker: Tracker::new(sample_rate),
+            tracker: Tracker::new(sample_rate, ch),
             ratio: 1.0,
             phase: 0.5,
             spacing: latency as f64 - MARGIN,
@@ -409,7 +450,7 @@ impl AudioEffect for VoicePitch {
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let len = block_len(channels);
-        let ch = channels.len().min(self.lines.len());
+        let ch = self.lines.len();
         let dry_at = self.mask + 1 - self.latency;
         let follow_target = self.follow_target();
         // The formant stage moves the envelope by the inverse of the pitch ratio.
@@ -423,9 +464,10 @@ impl AudioEffect for VoicePitch {
                 let x = channels.get(c).map_or(0.0, |io| flush32(io[i]));
                 line[self.pos] = x;
                 sum += x;
+                self.tracker.measure(c, x);
             }
-            let first = self.lines[0][self.pos];
-            self.tracker.push(sum / ch as f32, first);
+            let single = self.lines[self.tracker.channel][self.pos];
+            self.tracker.push(sum / ch as f32, single);
             let t = self.advance();
             let mix = if self.follow_mix < follow_target {
                 (self.follow_mix + self.wet_step).min(follow_target)
@@ -515,11 +557,12 @@ impl Envelope {
             *v = history.ring[(history.pos + i) & mask] as f64 * w;
         }
         let len = self.frame.len();
-        for (lag, (r, w)) in self.r.iter_mut().zip(&self.lags).enumerate() {
-            *r = dot(&self.frame[..len - lag], &self.frame[lag..]) * w;
-        }
+        self.r[0] = dot(&self.frame, &self.frame) * self.lags[0];
         if !(self.r[0] > 0.0 && self.r[0].is_finite()) {
             return false;
+        }
+        for (lag, (r, w)) in self.r.iter_mut().zip(&self.lags).enumerate().skip(1) {
+            *r = dot(&self.frame[..len - lag], &self.frame[lag..]) * w;
         }
         self.r[0] *= 1.0 + WHITE;
         levinson(&self.r, &mut self.a, &mut self.prev);
@@ -795,6 +838,24 @@ mod tests {
             let rest = beside_tone_db(&y, f_in * 2f64.powf(semis as f64 / 12.0));
             assert!(rest < -40.0, "{f_in} Hz {semis:+} st: {rest:.1} dB beside the tone");
         }
+    }
+
+    /// With a silent first channel, a voice on the other two channels in opposite polarity is
+    /// still tracked from one of them and crossfades without beating.
+    #[test]
+    fn opposite_polarity_beside_a_silent_first_channel_is_still_tracked() {
+        let mut p = VoicePitch::new(SR, 3);
+        assert!(p.set_param("semitones", 7.0));
+        p.reset();
+        let n = SR as usize * 2;
+        let mut silent = vec![0.0f32; n];
+        let mut l = sine(220.0, 0.5, SR as f64, n, 0.0);
+        let mut r: Vec<f32> = l.iter().map(|v| -v).collect();
+        p.process(&mut [&mut silent, &mut l, &mut r]);
+        assert!(silent.iter().all(|v| *v == 0.0));
+        assert!(l.iter().zip(&r).all(|(a, b)| *a == -*b));
+        let rest = beside_tone_db(&l, 220.0 * 2f64.powf(7.0 / 12.0));
+        assert!(rest < -40.0, "{rest:.1} dB beside the tone");
     }
 
     /// A voice whose two channels have opposite polarity, which cancel in their mean, is still
@@ -1111,7 +1172,7 @@ mod tests {
     fn formant_stage_output_stays_finite() {
         let (sr, f0) = (SR as f64, 150.0);
         let mut x = vowel(f0, 600.0, 2000.0, sr, SR as usize * 2);
-        let (p1, _) = formants(&x, f0, 1.0, sr);
+        let (p1, p2) = formants(&x, f0, 1.0, sr);
         for (i, bad) in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX, -f32::MAX].into_iter().enumerate() {
             x[3000 + i * 1500] = bad;
             x[3001 + i * 1500] = bad;
@@ -1129,6 +1190,10 @@ mod tests {
         let y = run(&mut p, &x);
         assert!(y.iter().all(|v| v.is_finite()));
         assert!(rms(settled(&y)) > 0.01);
+        let shifted_f0 = f0 * 2f64.powf(-7.0 / 12.0);
+        let (q1, q2) = formants(&y, shifted_f0, 1.0, sr);
+        assert!((q1 / p1 - 1.0).abs() < 0.12, "Keep Formants: {p1} read {q1}");
+        assert!((q2 / p2 - 1.0).abs() < 0.05, "Keep Formants: {p2} read {q2}");
     }
 
     /// A block that leaves channels out feeds them silence, so when they come back without a
@@ -1181,18 +1246,42 @@ mod tests {
         }
     }
 
+    /// Leaving a silent third channel out of a block does not change the pitch the tracker finds,
+    /// so a shifted voice comes out the same on the channels that remain.
+    #[test]
+    fn a_silent_channel_left_out_keeps_the_tracked_pitch() {
+        let n = SR as usize;
+        let (low, high) = (sine(187.5, 0.2, SR as f64, n, 0.0), sine(375.0, 0.24, SR as f64, n, 0.0));
+        let left: Vec<f32> = low.iter().zip(&high).map(|(a, b)| a + b).collect();
+        let right: Vec<f32> = low.iter().zip(&high).map(|(a, b)| -a + b).collect();
+        let mut out = Vec::new();
+        for omit in [false, true] {
+            let mut p = VoicePitch::new(SR, 3);
+            assert!(p.set_param("semitones", 5.0));
+            p.reset();
+            let (mut l, mut r, mut s) = (left.clone(), right.clone(), vec![0.0f32; n]);
+            if omit {
+                p.process(&mut [&mut l, &mut r]);
+            } else {
+                p.process(&mut [&mut l, &mut r, &mut s]);
+            }
+            out.push((l, r));
+        }
+        assert!(out[0] == out[1], "leaving a silent channel out changed the tracked pitch");
+    }
+
     /// The tracker finds a voice's period down to 70 Hz and reports nothing for silence.
     #[test]
     fn the_tracker_reaches_70_hz() {
         for f in [72.0, 110.0, 440.0, 950.0] {
-            let mut t = Tracker::new(SR);
+            let mut t = Tracker::new(SR, 1);
             for v in sine(f, 0.3, SR as f64, SR as usize / 4, 0.0) {
                 t.push(v, v);
             }
             let period = t.period.unwrap_or(0.0);
             assert!((SR as f64 / period / f - 1.0).abs() < 0.005, "{f} Hz read as {} Hz", SR as f64 / period);
         }
-        let mut t = Tracker::new(SR);
+        let mut t = Tracker::new(SR, 1);
         (0..SR as usize / 4).for_each(|_| t.push(0.0, 0.0));
         assert!(t.period.is_none());
     }
