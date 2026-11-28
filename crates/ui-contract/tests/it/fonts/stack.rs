@@ -281,3 +281,15 @@ fn variable_faces_draw_at_regular_weight() {
     set.tweak.coords.push(*b"wght", 300.0);
     assert!(!set_weight(&mut set, 400));
 }
+
+/// The suite's default fonts draw the macOS key symbols of shortcut labels (⌘ S, ⌥ ⌘ V) in every interface family,
+/// with no system font: the Inter subset lacks some of them.
+#[trial]
+fn the_default_fonts_draw_the_macos_key_symbols() {
+    let stack = UiFonts::new(&I18nScripts).languages(&["en"]).ui_language("en").stack();
+    let keys = [craft_ui::fonts::Sample::new("en", "keys", "⌘⌥⌃⇧⌫⌦⏎↩⎋⇥⇪")];
+    for family in [FontRef::proportional(), FontRef::named(craft_ui::fonts::SEMIBOLD), FontRef::monospace()] {
+        let missing = craft_ui::fonts::missing_glyphs(&stack, &family, keys, false);
+        assert!(missing.is_empty(), "{family:?} lacks {missing:?}");
+    }
+}
