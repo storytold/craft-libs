@@ -534,7 +534,7 @@ pub(crate) fn spec_of(space: &El) -> Option<ChartSpec> {
         _ => LegendPos::Right,
     });
     let data_labels = ty.child("c:dLbls").and_then(|d| d.child("c:showVal")).and_then(|v| v.attr("val")) == Some("1");
-    let (cat_a, val_a) = crate::read::chart::chart_axes(plot, scatter);
+    let (cat_a, val_a) = crate::read::chart::chart_axes(plot, scatter, &[]);
     let axis = |a: crate::read::chart::Axis| ChartAxis {
         title: a.title,
         min: a.min,

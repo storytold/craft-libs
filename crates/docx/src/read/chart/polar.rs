@@ -1,5 +1,5 @@
 use super::canvas::{Rect, clip_text, fill, stroke, text, text_w, widest};
-use super::format::format_value;
+use super::format::{format_cell, format_value};
 use super::model::{DataLabel, Kind, LabelPos, Series};
 use super::plot::{Axes, has_values};
 use super::{Chart, FRAC_PI_2, GAP, GRID, GraphicItem, LINE, LINE_W, PathSeg, Rgb, ShapeKind, TAU, TEXT, TextAlign};
@@ -109,7 +109,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             let y = at(*t, 0).1 as f32;
             let s = format_value(*t, &c.val_fmt, vs.step);
             let w = text_w(&s, fs) + 4.0;
-            text(out, Rect { x: cx as f32 - GAP / 2.0 - w, y: y - lh / 2.0, w, h: lh }, &s, fs, TextAlign::Right, false);
+            text(out, Rect { x: cx as f32 - GAP / 2.0 - w, y: y - lh / 2.0, w, h: lh }, &s, fs, TextAlign::Right, c.val_bold(), c.val_colour());
         }
     }
     if labelled {
@@ -128,7 +128,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
                 let cw = (text_w(&txt, fs) + 4.0).max(1.0);
                 (Rect { x: x - cw / 2.0, y: if sy > 0.0 { y - lh } else { y }, w: cw, h: lh }, TextAlign::Center)
             };
-            text(out, rect, &txt, fs, align, false);
+            text(out, rect, &txt, fs, align, c.cat_bold(), c.cat_colour());
         }
     }
 }
@@ -142,15 +142,33 @@ pub(super) fn label_of(s: &Series, i: usize) -> Option<String> {
     let v = s.raw.get(i).copied().flatten()?;
     let fmt = s.label_fmt.as_ref().map_or(s.fmt.as_deref(), |f| f.as_deref().or(s.fmt.as_deref())).filter(|f| !f.eq_ignore_ascii_case("General"));
     Some(match fmt {
-        Some(f) => format_value(v, f, 1.0),
+        Some(f) => format_cell(v, f),
         None => general_value(v),
     })
 }
 
-/// A value in the `General` format: whole numbers without decimals, others with up to six.
+/// A value of `s` in the series' number format (a data table's cells).
+pub(super) fn value_text(s: &Series, v: f64) -> String {
+    match s.fmt.as_deref().filter(|f| !f.eq_ignore_ascii_case("General")) {
+        Some(f) => format_cell(v, f),
+        None => general_value(v),
+    }
+}
+
+/// A value in the `General` format: whole numbers without decimals, others with up to six; one
+/// too small for that in scientific notation with up to five significant digits, as Excel's
+/// General shows it (`0.0000004` is `4E-07`), rather than as 0.
 fn general_value(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 {
         return format!("{v:.0}");
+    }
+    if v.is_finite() && v != 0.0 && v.abs() < 1e-5 {
+        let s = format!("{:.4e}", v.abs());
+        let (mantissa, exp) = s.split_once('e').unwrap_or((s.as_str(), "0"));
+        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+        let exp: i32 = exp.parse().unwrap_or(0);
+        let minus = if v < 0.0 { "-" } else { "" };
+        return format!("{minus}{mantissa}E{}{:02}", if exp < 0 { "-" } else { "+" }, exp.unsigned_abs());
     }
     let s = format!("{v:.6}");
     let s = s.trim_end_matches('0').trim_end_matches('.');

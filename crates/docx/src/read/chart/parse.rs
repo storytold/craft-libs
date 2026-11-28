@@ -1,7 +1,11 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, Grouping, Kind, LabelPos, Pos, Series, Symbol};
+use super::model::{Axis, Crosses, DataTable, Grouping, Kind, LabelPos, Pos, Series, Symbol, TickPos};
+use super::plot::Scale;
 use super::plot::label;
-use super::{Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
+use super::{
+    AXIS, Chart, El, FONT, Fill, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, TITLE_SIZE, fill_colour, int, measure,
+    read_fill, slot,
+};
 
 impl Chart {
     pub(super) fn parse(space: &El, theme: &[Rgb]) -> Option<Chart> {
@@ -11,7 +15,30 @@ impl Chart {
         let kind = Kind::of(&ty.name)?;
         let scatter = kind == Kind::Scatter;
         let date1904 = space.child("c:date1904").is_some_and(|d| d.attr("val").is_none_or(truthy));
-        let mut series = read_series(ty, scatter, theme);
+        let horizontal = kind == Kind::Bar && ty.child("c:barDir").and_then(|d| d.attr("val")) == Some("bar");
+        // One cell budget for the whole chart, shared by every chart type of a combination.
+        let mut budget = MAX_CELLS;
+        let mut series = read_series(ty, scatter, theme, &mut budget);
+        // Bar spacing comes from the bar chart type, wherever it is in a combination.
+        let mut bar_ty = ty;
+        // The grouping of each other chart type of a combination (the first one's is `grouping`).
+        let mut groupings: Vec<(Kind, Grouping)> = Vec::new();
+        if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
+            for other in combined_types(plot, ty) {
+                if let Some(k) = Kind::of(&other.name).filter(|k| *k != kind && !groupings.iter().any(|(g, _)| g == k)) {
+                    groupings.push((k, grouping_of(other, k)));
+                }
+                // Past the series limit or the cell budget a chart type is not parsed: each would
+                // cost a pass over series that are dropped.
+                let room = MAX_SERIES.saturating_sub(series.len());
+                if room > 0 && budget > 0 {
+                    series.extend(read_series(other, false, theme, &mut budget).into_iter().take(room));
+                }
+                if bar_ty.name != "c:barChart" && other.name == "c:barChart" {
+                    bar_ty = other;
+                }
+            }
+        }
         if series.is_empty() {
             return None;
         }
@@ -30,44 +57,59 @@ impl Chart {
         if kind == Kind::Radar {
             series.truncate(MAX_RADAR_SERIES);
         }
-        let grouping = match ty.child("c:grouping").and_then(|g| g.attr("val")) {
-            Some("stacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Stacked,
-            Some("percentStacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Percent,
-            _ => Grouping::Clustered,
-        };
+        let grouping = grouping_of(ty, kind);
         let mut cats = cats;
         cats.resize(n, String::new());
         let radar_style = ty.child("c:radarStyle").and_then(|r| r.attr("val"));
-        let type_labels = show_values(ty.child("c:dLbls"));
-        let type_fmt = label_format(ty.child("c:dLbls"));
+        let data_table = if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
+            plot.child("c:dTable").map(|d| {
+                let flag = |n: &str| d.child(n).is_some_and(|e| e.attr("val").is_none_or(truthy));
+                DataTable {
+                    horz: flag("c:showHorzBorder"),
+                    vert: flag("c:showVertBorder"),
+                    outline: flag("c:showOutline"),
+                    keys: flag("c:showKeys"),
+                    text: element_text_colour(d, theme).unwrap_or_else(|| chart_text_colour(space, theme)),
+                    bold: element_bold(d).or_else(|| chart_bold(space)).unwrap_or(false),
+                    line: d.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)).unwrap_or(AXIS),
+                }
+            })
+        } else {
+            None
+        };
         for s in &mut series {
             s.values.resize(n, None);
             s.xs.resize(n, None);
-            s.labels = Some(s.labels.or(type_labels).unwrap_or(false));
-            // Absent (`None`) inherits the chart type's; explicitly source-linked (`Some(None)`) does not.
-            if s.label_fmt.is_none() {
-                s.label_fmt.clone_from(&type_fmt);
-            }
-            if s.labels == Some(true) {
+            // The file's values are kept for data labels and a data table (100% stacked charts
+            // turn `values` into shares).
+            if s.labels == Some(true) || data_table.is_some() {
                 s.raw = s.values.clone();
             }
         }
-        if grouping == Grouping::Percent {
-            to_percent(&mut series, n);
+        // Each 100% stacked chart type turns its own series into shares.
+        for (k, g) in std::iter::once((kind, grouping)).chain(groupings.iter().copied()) {
+            if g == Grouping::Percent {
+                to_percent(&mut series, n, k);
+            }
         }
-        let (cat, val) = chart_axes(plot, scatter);
+        let (cat, val) = chart_axes(plot, scatter, theme);
+        let text_colour = chart_text_colour(space, theme);
+        let title_el = chart.child("c:title");
+        let legend_el = chart.child("c:legend");
         let val_fmt = if grouping == Grouping::Percent {
             "0%".to_string()
         } else {
             val.fmt.clone().or_else(|| series.iter().find_map(|s| s.fmt.clone())).unwrap_or_else(|| "General".to_string())
         };
         let num = |n: &str| ty.child(n).and_then(|g| g.attr("val")).and_then(int);
+        let bar_num = |n: &str| bar_ty.child(n).and_then(|g| g.attr("val")).and_then(int);
         Some(Chart {
             kind,
-            horizontal: kind == Kind::Bar && ty.child("c:barDir").and_then(|d| d.attr("val")) == Some("bar"),
+            horizontal,
             grouping,
-            gap: num("c:gapWidth").unwrap_or(150).clamp(0, 500) as f32 / 100.0,
-            overlap: num("c:overlap").unwrap_or(0).clamp(-100, 100) as f32 / 100.0,
+            groupings,
+            gap: bar_num("c:gapWidth").unwrap_or(150).clamp(0, 500) as f32 / 100.0,
+            overlap: bar_num("c:overlap").unwrap_or(0).clamp(-100, 100) as f32 / 100.0,
             hole: num("c:holeSize").unwrap_or(50).clamp(10, 90) as f32 / 100.0,
             first_angle: num("c:firstSliceAng").unwrap_or(0).clamp(0, 360) as f64,
             radar_fill: radar_style == Some("filled"),
@@ -85,11 +127,68 @@ impl Chart {
             val_fmt,
             date1904,
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+            plot_fill: plot.child("c:spPr").and_then(|p| own_fill(p, theme)),
+            legend_box: legend_el.and_then(manual_layout),
+            data_table,
+            title_bold: title_el.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true),
+            title_size: title_el.and_then(element_size).unwrap_or(TITLE_SIZE),
+            legend_bold: legend_el.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(false),
+            text_bold: chart_bold(space).unwrap_or(false),
+            title_colour: title_el.and_then(|t| element_text_colour(t, theme)).unwrap_or(text_colour),
+            legend_colour: legend_el.and_then(|l| element_text_colour(l, theme)).unwrap_or(text_colour),
+            text_colour,
         })
+    }
+
+    /// Colour of the category (scatter: x) axis labels.
+    pub(super) fn cat_colour(&self) -> Rgb {
+        self.cat.text.unwrap_or(self.text_colour)
+    }
+
+    /// Colour of the value axis labels.
+    pub(super) fn val_colour(&self) -> Rgb {
+        self.val.text.unwrap_or(self.text_colour)
+    }
+
+    /// Whether the category and value axis labels are bold.
+    pub(super) fn cat_bold(&self) -> bool {
+        self.cat.bold.unwrap_or(self.text_bold)
+    }
+
+    pub(super) fn val_bold(&self) -> bool {
+        self.val.bold.unwrap_or(self.text_bold)
+    }
+
+    /// Where the category axis crosses the value axis, as a value within its scale `vs`.
+    pub(super) fn cat_cross(&self, vs: &Scale) -> f64 {
+        let (lo, hi) = (vs.lo.min(vs.hi), vs.lo.max(vs.hi));
+        match self.cat.crosses {
+            Crosses::AutoZero => 0.0f64.clamp(lo, hi),
+            Crosses::Min => lo,
+            Crosses::Max => hi,
+            Crosses::At(v) => v.clamp(lo, hi),
+        }
     }
 
     pub(super) fn stacked(&self) -> bool {
         self.grouping != Grouping::Clustered
+    }
+
+    /// Whether the series of chart type `kind` stack: each chart type of a combination stacks by
+    /// its own grouping (a line before stacked columns leaves the columns stacked).
+    pub(super) fn stacks(&self, kind: Kind) -> bool {
+        let grouping = if kind == self.kind { Some(self.grouping) } else { self.groupings.iter().find(|(k, _)| *k == kind).map(|(_, g)| *g) };
+        grouping.is_some_and(|g| g != Grouping::Clustered)
+    }
+
+    /// Whether any series is drawn as `kind`.
+    pub(super) fn has(&self, kind: Kind) -> bool {
+        self.series.iter().any(|s| s.kind == kind)
+    }
+
+    /// Whether the chart combines chart types (columns and a line…).
+    pub(super) fn combined(&self) -> bool {
+        self.series.iter().any(|s| s.kind != self.kind)
     }
 
     fn accent(&self, i: usize) -> Rgb {
@@ -128,31 +227,81 @@ impl Chart {
                 .map(|(i, c)| (if c.is_empty() { (i + 1).to_string() } else { c.clone() }, self.point_colour(0, i)))
                 .collect();
         }
-        self.series
-            .iter()
-            .enumerate()
-            .map(|(j, s)| (if s.name.is_empty() { format!("Series {}", j + 1) } else { s.name.clone() }, self.series_colour(j)))
-            .collect()
+        self.series.iter().enumerate().map(|(j, s)| (series_name(s, j), self.series_colour(j))).collect()
     }
 }
 
-/// The series of a chart type element, within the chart's cell budget.
-pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb]) -> Vec<Series> {
-    let mut budget = MAX_CELLS;
+/// A series' name, or Word's "Series n" for one without.
+pub(super) fn series_name(s: &Series, j: usize) -> String {
+    if s.name.is_empty() { format!("Series {}", j + 1) } else { s.name.clone() }
+}
+
+/// The series of a chart type element, within what is left of the chart's cell `budget`; parsing
+/// stops once it is spent. Each series takes the chart type's kind and, where it says nothing of
+/// its own, the chart type's data labels.
+pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb], budget: &mut usize) -> Vec<Series> {
+    let kind = Kind::of(&ty.name).unwrap_or(Kind::Bar);
+    // A line chart shows markers on its series when it says so (`c:marker` of the chart type):
+    // a series that names no symbol of its own gets its automatic marker.
+    let type_markers = kind == Kind::Line && ty.child("c:marker").is_some_and(|m| m.attr("val").is_none_or(truthy));
+    let type_labels = show_values(ty.child("c:dLbls"));
+    let type_fmt = label_format(ty.child("c:dLbls"));
     let mut series = Vec::new();
     for ser in ty.children("c:ser").take(MAX_SERIES) {
-        let s = Series::parse(ser, scatter, theme, budget.min(MAX_POINTS));
-        budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
+        if *budget == 0 {
+            break;
+        }
+        let mut s = Series::parse(ser, scatter, theme, (*budget).min(MAX_POINTS));
+        *budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
+        s.kind = kind;
+        if type_markers && s.markers.is_none() {
+            s.markers = Some(true);
+            s.symbol = Symbol::auto(s.idx.unwrap_or(series.len()));
+        }
+        s.labels = Some(s.labels.or(type_labels).unwrap_or(false));
+        // Absent (`None`) inherits the chart type's; explicitly source-linked (`Some(None)`) does not.
+        if s.label_fmt.is_none() {
+            s.label_fmt.clone_from(&type_fmt);
+        }
         series.push(s);
     }
     series
 }
 
-/// Values as their share of each category's total (100% stacked charts).
-fn to_percent(series: &mut [Series], n: usize) {
+/// The axis ids a chart type is plotted on.
+fn axis_ids(ty: &El) -> Vec<&str> {
+    ty.children("c:axId").take(4).filter_map(|a| a.attr("val")).collect()
+}
+
+/// The other chart types a combination chart draws with `ty`: the column, line and area types on
+/// the same axes. Types on other axes (a secondary axis) and horizontal bars are left out.
+fn combined_types<'a>(plot: &'a El, ty: &El) -> Vec<&'a El> {
+    let axes = axis_ids(ty);
+    plot.els()
+        .filter(|e| !std::ptr::eq(*e, ty))
+        .filter(|e| matches!(Kind::of(&e.name), Some(Kind::Bar | Kind::Line | Kind::Area)))
+        .filter(|e| e.child("c:barDir").and_then(|d| d.attr("val")) != Some("bar"))
+        .filter(|e| axis_ids(e) == axes)
+        .take(MAX_SERIES)
+        .collect()
+}
+
+/// Values as their share of each category's total (100% stacked charts). Only the series of the
+/// stacked chart type `kind` count: the other types of a combination keep their values.
+/// How the series of chart type `ty` (of kind `kind`) are grouped (`c:grouping`): only columns,
+/// lines and areas stack.
+fn grouping_of(ty: &El, kind: Kind) -> Grouping {
+    match ty.child("c:grouping").and_then(|g| g.attr("val")) {
+        Some("stacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Stacked,
+        Some("percentStacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Percent,
+        _ => Grouping::Clustered,
+    }
+}
+
+fn to_percent(series: &mut [Series], n: usize, kind: Kind) {
     for i in 0..n {
-        let total: f64 = series.iter().map(|s| s.values.get(i).copied().flatten().map_or(0.0, f64::abs)).sum();
-        for s in series.iter_mut() {
+        let total: f64 = series.iter().filter(|s| s.kind == kind).map(|s| s.values.get(i).copied().flatten().map_or(0.0, f64::abs)).sum();
+        for s in series.iter_mut().filter(|s| s.kind == kind) {
             if let Some(Some(v)) = s.values.get_mut(i) {
                 *v = if total > 0.0 { *v / total } else { 0.0 };
             }
@@ -160,8 +309,9 @@ fn to_percent(series: &mut [Series], n: usize) {
     }
 }
 
-/// The category axis (scatter: the horizontal value axis) and the value axis of a plot area.
-pub(crate) fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
+/// The category axis (scatter: the horizontal value axis) and the value axis of a plot area;
+/// `theme` resolves their text colours.
+pub(crate) fn chart_axes(plot: &El, scatter: bool, theme: &[Rgb]) -> (Axis, Axis) {
     let vals_ax: Vec<&El> = plot.children("c:valAx").collect();
     let horiz_pos = |a: &&El| matches!(a.child("c:axPos").and_then(|p| p.attr("val")), Some("b" | "t"));
     let (val_el, x_el) = if scatter {
@@ -172,7 +322,7 @@ pub(crate) fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
         (vals_ax.first().copied(), None)
     };
     let cat_el = plot.els().find(|e| matches!(e.name.as_str(), "c:catAx" | "c:dateAx"));
-    (axis(if scatter { x_el } else { cat_el }), axis(val_el))
+    (axis(if scatter { x_el } else { cat_el }, theme), axis(val_el, theme))
 }
 
 /// The chart's title. An empty `c:title` shows the series name (Word's automatic title of a
@@ -238,7 +388,12 @@ impl Series {
         // series show markers unless the file says not; line series only when it says so.
         let symbol = ser.child("c:marker").and_then(|m| m.child("c:symbol")).and_then(|s| s.attr("val")).map(str::to_string);
         let markers = symbol.as_deref().map(|s| s != "none").or_else(|| scatter.then_some(true));
-        let symbol = symbol.as_deref().map_or(Symbol::Circle, Symbol::parse);
+        // `auto` is the series' automatic marker, picked by its index.
+        let symbol = match symbol.as_deref() {
+            Some("auto") => Symbol::auto(idx.unwrap_or(0)),
+            Some(s) => Symbol::parse(s),
+            None => Symbol::Circle,
+        };
         let marker_size = ser
             .child("c:marker")
             .and_then(|m| m.child("c:size"))
@@ -284,6 +439,8 @@ impl Series {
             label_pos,
             marker_color,
             raw: Vec::new(),
+            kind: Kind::Bar,
+            shading: sp.and_then(|p| p.child("a:gradFill")).and_then(|g| read_fill(g, theme, None)).filter(|f| matches!(f, Fill::Gradient(_))),
         }
     }
 }
@@ -350,9 +507,19 @@ fn pts(cache: &El, cap: usize) -> Vec<Option<String>> {
     out
 }
 
-pub(super) fn axis(a: Option<&El>) -> Axis {
+pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
     let Some(a) = a else { return Axis { deleted: true, labels: true, line: true, ..Default::default() } };
     let scaling = a.child("c:scaling");
+    let du = a.child("c:dispUnits");
+    let units = du.and_then(|d| {
+        if let Some(b) = d.child("c:builtInUnit") {
+            return builtin_unit(b.attr("val").unwrap_or("thousands"));
+        }
+        // A custom unit is any positive number; one far outside what a chart could count in is
+        // taken as the nearest end of a sane range.
+        let v = d.child("c:custUnit")?.attr("val")?.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)?;
+        Some((v.clamp(1e-6, 1e18), ""))
+    });
     let num =
         |n: &str| scaling.and_then(|s| s.child(n)).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
     Axis {
@@ -376,7 +543,119 @@ pub(super) fn axis(a: Option<&El>) -> Axis {
             .and_then(|v| v.trim().parse::<i64>().ok())
             .map(|v| (v as f64 / 60_000.0).clamp(-360.0, 360.0) as f32),
         labels: a.child("c:tickLblPos").and_then(|p| p.attr("val")) != Some("none"),
+        text: element_text_colour(a, theme),
+        bold: element_bold(a),
+        // Where this axis crosses the perpendicular one, as a value on that axis's scale.
+        crosses: match a.child("c:crossesAt").and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite()) {
+            Some(v) => Crosses::At(v),
+            None => match a.child("c:crosses").and_then(|e| e.attr("val")) {
+                Some("min") => Crosses::Min,
+                Some("max") => Crosses::Max,
+                _ => Crosses::AutoZero,
+            },
+        },
+        tick_pos: match a.child("c:tickLblPos").and_then(|e| e.attr("val")) {
+            Some("low") => TickPos::Low,
+            Some("high") => TickPos::High,
+            _ => TickPos::NextTo,
+        },
+        line_colour: a.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+        line_w: a
+            .child("c:spPr")
+            .and_then(|p| p.child("a:ln"))
+            .and_then(|l| l.attr("w"))
+            .and_then(|v| measure(v, 12_700.0))
+            .map(|w| w.clamp(0.0, 20.0)),
+        unit: units.map(|(u, _)| u),
+        unit_label: units.and_then(|(_, name)| {
+            let l = du?.child("c:dispUnitsLbl")?;
+            Some((title_text(l).unwrap_or_else(|| name.to_string()), element_text_colour(l, theme), element_bold(l).unwrap_or(false)))
+        }),
     }
+}
+
+/// A chart element's hand-set place (`c:layout/c:manualLayout` in edge mode): x, y, width and
+/// height as shares of the chart (0 when the file gives none). Other modes (`factor`, a shift
+/// from the automatic place) are left to the automatic layout.
+fn manual_layout(e: &El) -> Option<[f32; 4]> {
+    let m = e.child("c:layout")?.child("c:manualLayout")?;
+    let edge = |n: &str| m.child(n).and_then(|e| e.attr("val")) == Some("edge");
+    if !edge("c:xMode") || !edge("c:yMode") {
+        return None;
+    }
+    let share = |n: &str| {
+        m.child(n).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0))
+    };
+    Some([share("c:x")?, share("c:y")?, share("c:w").unwrap_or(0.0), share("c:h").unwrap_or(0.0)])
+}
+
+/// A built-in display unit (`c:builtInUnit`): what it divides by, and its label.
+fn builtin_unit(name: &str) -> Option<(f64, &'static str)> {
+    Some(match name {
+        "hundreds" => (1e2, "Hundreds"),
+        "thousands" => (1e3, "Thousands"),
+        "tenThousands" => (1e4, "10000"),
+        "hundredThousands" => (1e5, "100000"),
+        "millions" => (1e6, "Millions"),
+        "tenMillions" => (1e7, "10000000"),
+        "hundredMillions" => (1e8, "100000000"),
+        "billions" => (1e9, "Billions"),
+        "trillions" => (1e12, "Trillions"),
+        _ => return None,
+    })
+}
+
+/// A chart element's text size, points, when its rich text's first run, its default run
+/// properties or its `c:txPr` state one (`sz`, hundredths of a point).
+pub(super) fn element_size(e: &El) -> Option<f32> {
+    let sz = |r: &El| r.attr("sz").and_then(int).map(|v| (v as f32 / 100.0).clamp(6.0, 72.0));
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(sz)
+        .or_else(|| rich.and_then(|r| r.find("a:defRPr")).and_then(sz))
+        .or_else(|| e.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(sz))
+}
+
+/// Whether a chart element's text is bold, when its rich text's first run, its default run
+/// properties or its `c:txPr` say (`b`).
+pub(super) fn element_bold(e: &El) -> Option<bool> {
+    let b = |r: &El| r.attr("b").map(truthy);
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(b)
+        .or_else(|| rich.and_then(|r| r.find("a:defRPr")).and_then(b))
+        .or_else(|| e.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(b))
+}
+
+/// The text colour a chart element (title, legend, axis) states for itself: its rich text's
+/// first run, else the default run properties of its rich text or `c:txPr`.
+pub(super) fn element_text_colour(e: &El, theme: &[Rgb]) -> Option<Rgb> {
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(|r| fill_colour(r, theme))
+        .or_else(|| rich.and_then(|r| run_defaults_colour(r, theme)))
+        .or_else(|| e.child("c:txPr").and_then(|t| run_defaults_colour(t, theme)))
+}
+
+/// The colour of a text body's default run properties (`a:defRPr`).
+fn run_defaults_colour(body: &El, theme: &[Rgb]) -> Option<Rgb> {
+    body.find("a:defRPr").and_then(|d| fill_colour(d, theme))
+}
+
+/// Whether the chart's own text properties (`c:txPr`) make its text bold.
+pub(super) fn chart_bold(space: &El) -> Option<bool> {
+    space.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(|d| d.attr("b")).map(truthy)
+}
+
+/// The fill a `c:spPr` states for its area: solid, pattern (its foreground) or gradient.
+pub(super) fn own_fill(sp: &El, theme: &[Rgb]) -> Option<Fill> {
+    let f = sp.els().find(|e| matches!(e.name.as_str(), "a:solidFill" | "a:gradFill" | "a:pattFill"))?;
+    read_fill(f, theme, None)
+}
+
+/// The chart's own text colour (its `c:txPr`), the grey Word's default style uses without one.
+pub(super) fn chart_text_colour(space: &El, theme: &[Rgb]) -> Rgb {
+    space.child("c:txPr").and_then(|t| run_defaults_colour(t, theme)).unwrap_or(TEXT)
 }
 
 fn title_text(t: &El) -> Option<String> {

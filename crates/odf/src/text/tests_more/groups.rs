@@ -168,6 +168,53 @@ fn a_diagram_is_saved_as_a_group_of_its_drawing() {
     assert!(members.iter().any(|m| m.4 == "Plan"), "its text: {members:?}");
 }
 
+/// A fill in a drawing (a chart area's gradient) is saved as a filled rectangle of the group, so
+/// the area isn't lost from the drawing.
+#[test]
+fn a_fill_in_a_drawing_is_saved_as_a_filled_rectangle() {
+    use craft_wordmodel::fill::Fill;
+    use craft_wordmodel::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use craft_wordmodel::props::Rgb;
+    // Empty rectangles the size of the drawing in the group it is saved as.
+    let areas = |with_fill: bool| {
+        let fill = GraphicItem::Fill { rect: [0.0, 0.0, 108.0, 36.0], fill: Fill::solid(Rgb(0xDD, 0xDD, 0xDD)) };
+        let text = GraphicItem::Text {
+            rect: [0.0, 0.0, 108.0, 36.0],
+            text: "Sales".into(),
+            size: 12.0,
+            color: Rgb::BLACK,
+            bold: false,
+            align: TextAlign::Center,
+            font: None,
+            angle: 0.0,
+        };
+        let items = if with_fill { vec![fill, text] } else { vec![text] };
+        let graphic = Graphic { kind: GraphicKind::Chart, items, w: 108.0, h: 36.0, ..Graphic::default() };
+        let mut d = Document::new();
+        let mut p = craft_wordmodel::Paragraph::new();
+        let obj = InlineObject::Graphic { w: 108.0, h: 36.0, alt: "Chart".into(), float: Default::default(), graphic: std::sync::Arc::new(graphic) };
+        p.insert_object(0, obj, &Default::default()).unwrap();
+        d.body = vec![craft_wordmodel::para_block(p)];
+        let back = import(&export(&d).unwrap()).unwrap();
+        let g = groups(&back);
+        let count = g.first().map_or(0, |g| g.3.iter().filter(|m| m.0 == ShapeKind::Rectangle && m.2 == (108.0, 36.0) && m.4.is_empty()).count());
+        // The fills of the group's shapes, as read back.
+        let fills: Vec<Option<Fill>> = back
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| if let InlineObject::Group { children, .. } = o { Some(children) } else { None })
+            .flatten()
+            .filter_map(|c| if let InlineObject::Shape { fill, .. } = &c.obj { Some(fill.clone()) } else { None })
+            .collect();
+        (count, fills)
+    };
+    let ((with, fills), (without, _)) = (areas(true), areas(false));
+    assert_eq!(with, without + 1, "the fill is one more rectangle");
+    assert!(fills.contains(&Some(Fill::solid(Rgb(0xDD, 0xDD, 0xDD)))), "the rectangle keeps the fill's colour: {fills:?}");
+}
+
 /// A group anchored to a page stays on that page, and a number on another anchor says nothing.
 #[test]
 fn a_group_anchored_to_a_page_stays_on_that_page() {

@@ -863,6 +863,12 @@ fn graphic_group(
                 };
                 Some(Member { link: None, x: rect[0] * sx, y, inline })
             }
+            GraphicItem::Fill { rect, fill } if finite(rect) => {
+                let look = BoxLook { fill: Some(fill.clone()), ..plain.clone() };
+                let inline =
+                    Inline::Shape { kind: ShapeKind::Rectangle, w: rect[2] * sx, h: rect[3] * sy, float: None, blocks: Vec::new(), look, path: None };
+                Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline })
+            }
             GraphicItem::Image { rect, media } if finite(rect) => {
                 let data = doc.media.get(media)?;
                 let img = Img {

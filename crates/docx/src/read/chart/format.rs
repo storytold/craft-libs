@@ -71,7 +71,18 @@ fn currency(inner: &str) -> Option<&str> {
 /// there is one, which shows it without a minus (`#,##0;(#,##0)`). `General` shows as many
 /// decimals as the step needs.
 pub(super) fn format_value(v: f64, code: &str, step: f64) -> String {
+    // A tick a rounding error away from zero is zero.
     let v = if v.abs() < step * 1e-9 { 0.0 } else { v };
+    format_in(v, code, step)
+}
+
+/// A value of the data itself (a data label, a data table cell) in format `code`: as it is, so a
+/// small value isn't taken for a tick's rounding error.
+pub(super) fn format_cell(v: f64, code: &str) -> String {
+    format_in(v, code, 1.0)
+}
+
+fn format_in(v: f64, code: &str, step: f64) -> String {
     let secs = sections(code);
     match secs.get(1) {
         Some(neg) if v < 0.0 => format_section(-v, neg, step),

@@ -1,4 +1,4 @@
-use super::Rgb;
+use super::{Fill, Rgb};
 
 /// A data label to draw once the chart is: the value at (`x`, `y`), centred there (`inside`, in
 /// white on the fill) or just beside it (above, or right of a horizontal bar's end).
@@ -94,9 +94,48 @@ pub(crate) struct Axis {
     /// The title's `a:bodyPr/@rot` in degrees clockwise (`-5400000` is 90° counter-clockwise),
     /// when the file gives one.
     pub(crate) title_rot: Option<f32>,
+    /// Colour of the tick labels, when the axis's `c:txPr` states one.
+    pub(crate) text: Option<Rgb>,
+    /// Bold tick labels, when its text properties say.
+    pub(crate) bold: Option<bool>,
+    /// The display unit the tick labels count in (`c:dispUnits`): 1000 for thousands; `None`
+    /// for the values themselves.
+    pub(crate) unit: Option<f64>,
+    /// The display unit's label, when the axis shows one: its text, colour and weight.
+    pub(crate) unit_label: Option<(String, Option<Rgb>, bool)>,
+    /// Where this axis crosses the other one (`c:crosses` / `c:crossesAt`).
+    pub(crate) crosses: Crosses,
+    /// Where its tick labels sit (`c:tickLblPos`).
+    pub(crate) tick_pos: TickPos,
+    /// The axis line's colour and width, when its `c:spPr` states them.
+    pub(crate) line_colour: Option<Rgb>,
+    pub(crate) line_w: Option<f32>,
     /// Tick labels, as `c:tickLblPos` says (`none` hides them; a file that says nothing shows
     /// them, as Word does).
     pub(crate) labels: bool,
+}
+
+/// Where an axis crosses the other axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Crosses {
+    /// At zero, or at the end of the range nearer zero when zero is outside it.
+    #[default]
+    AutoZero,
+    Min,
+    Max,
+    At(f64),
+}
+
+/// Where an axis's tick labels sit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TickPos {
+    /// Beside the axis, wherever it crosses.
+    #[default]
+    NextTo,
+    /// At the low end of the other axis (under a column chart's plot).
+    Low,
+    /// At the high end.
+    High,
 }
 
 /// The shape of a series' point markers (`ST_MarkerStyle`, ECMA-376 §21.2.3.28).
@@ -129,6 +168,31 @@ impl Symbol {
             _ => Symbol::Circle,
         }
     }
+
+    /// The automatic marker of the series with index `idx`: diamond, square, triangle, x, star,
+    /// circle and plus, in turn.
+    pub(super) fn auto(idx: usize) -> Symbol {
+        match idx % 7 {
+            0 => Symbol::Diamond,
+            1 => Symbol::Square,
+            2 => Symbol::Triangle,
+            3 => Symbol::X,
+            4 => Symbol::Star,
+            5 => Symbol::Circle,
+            _ => Symbol::Plus,
+        }
+    }
+}
+
+/// A chart's data table (`c:dTable`): the plotted values in a grid under the plot.
+pub(super) struct DataTable {
+    pub(super) horz: bool,
+    pub(super) vert: bool,
+    pub(super) outline: bool,
+    pub(super) keys: bool,
+    pub(super) text: Rgb,
+    pub(super) bold: bool,
+    pub(super) line: Rgb,
 }
 
 pub(super) struct Series {
@@ -172,4 +236,8 @@ pub(super) struct Series {
     /// The values as the file has them, for data labels (`values` become shares in a 100%
     /// stacked chart); empty when the series shows no labels.
     pub(super) raw: Vec<Option<f64>>,
+    /// The chart type the series is drawn as: a combination chart has more than one.
+    pub(super) kind: Kind,
+    /// A gradient fill (`a:gradFill`) its columns are painted with; `color` is its first colour.
+    pub(super) shading: Option<Fill>,
 }
