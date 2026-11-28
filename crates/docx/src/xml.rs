@@ -49,6 +49,8 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("cx6", "http://schemas.microsoft.com/office/drawing/2016/5/12/chartex"),
     ("cx7", "http://schemas.microsoft.com/office/drawing/2016/5/13/chartex"),
     ("cx8", "http://schemas.microsoft.com/office/drawing/2016/5/14/chartex"),
+    // A tracked change's UTC time (`w16du:dateUtc`).
+    ("w16du", "http://schemas.microsoft.com/office/word/2023/wordml/word16du"),
 ];
 
 /// The `a:ext` URI under which a drawing is marked decorative ([MS-ODRAWXML]), and the
@@ -201,14 +203,19 @@ impl El {
     /// Attribute by canonical name (`w:val`); falls back to an unqualified attribute with the
     /// same local name (some producers omit the prefix).
     pub fn attr(&self, name: &str) -> Option<&str> {
-        if let Some((_, v)) = self.attrs.iter().find(|(k, _)| k == name) {
+        if let Some(v) = self.attr_exact(name) {
             return Some(v);
         }
         let local = name.rsplit(':').next().unwrap_or(name);
         if local != name {
-            return self.attrs.iter().find(|(k, _)| k == local).map(|(_, v)| v.as_str());
+            return self.attr_exact(local);
         }
         None
+    }
+    /// Attribute by canonical name only, for one whose namespace carries meaning an unqualified
+    /// attribute can't claim.
+    pub fn attr_exact(&self, name: &str) -> Option<&str> {
+        self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
     /// Child elements.
     pub fn els(&self) -> impl Iterator<Item = &El> {
@@ -531,7 +538,7 @@ impl W {
 /// `xmlns:` declarations for the body-part namespaces, plus `mc:Ignorable`.
 pub fn body_ns() -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = NAMESPACES.iter().map(|(p, u)| (format!("xmlns:{p}"), (*u).to_string())).collect();
-    v.push(("mc:Ignorable".into(), "w14 w15 wp14".into()));
+    v.push(("mc:Ignorable".into(), "w14 w15 wp14 w16du".into()));
     v
 }
 

@@ -1,9 +1,10 @@
 //! The sensing core over probe roots: the press lifecycle, arenas, press targets, parts and the shape record.
 
 use craft_behavior::{CanvasTransform, HitLevel, PartKey, PointerButton, PressPhase, Sense};
+use craft_ui::contract::{MemoProps, MemoView};
 use craft_ui::testing::pointer::{self, drag};
 use craft_ui::testing::sensing::{ProbeMember, ProbePart, ProbeRoot, RootReport, SenseReport, egui_click_target, show};
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Frames, MemoRun, last_frame_memo_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -75,6 +76,42 @@ fn a_press_uses_its_event_modifiers_when_the_frame_has_released_them() {
         &mut show,
     );
     assert!(log.borrow().last().root.press.mods.shift, "the press reads Shift even after the frame has released it");
+}
+
+/// A view that shows whether a button is held, from the press state.
+#[derive(MemoProps)]
+struct Held {}
+
+fn held(_: &mut Held, ui: &mut Ui) {
+    let state = craft_ui::runtime::pointer::press_state(ui.ctx());
+    ui.label(if state.buttons.is_empty() { "Up" } else { "Down" });
+}
+
+/// Whether the press-state reader ran in any pass of the last frame.
+fn held_ran(frames: &Frames) -> bool {
+    last_frame_memo_runs(&frames.ctx).iter().any(|(name, _, run)| name.ends_with("Held") && *run == MemoRun::Ran)
+}
+
+/// A view that reads the press state runs on a press and on a release, wherever they land, and replays while the
+/// pointer only moves, with a button held or not.
+#[trial]
+fn a_press_state_reader_runs_on_a_press_or_release_and_replays_on_a_move() {
+    let mut show = |ui: &mut Ui| {
+        MemoView::new("held", Held {}, held).show(ui);
+    };
+    let away = Pos2::new(300.0, 300.0);
+    let mut frames = Frames::new();
+    frames.frame(vec![pointer::moved(away)], &mut show);
+    frames.idle(30, &mut show);
+    frames.frame(vec![pointer::moved(away + Vec2::new(20.0, 0.0))], &mut show);
+    assert!(!held_ran(&frames), "a pointer move replays the reader: {:?}", last_frame_memo_runs(&frames.ctx));
+    frames.frame(vec![pointer::press(away)], &mut show);
+    assert!(held_ran(&frames), "a press runs the reader");
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(away + Vec2::new(0.0, 20.0))], &mut show);
+    assert!(!held_ran(&frames), "a move with the button held replays the reader: {:?}", last_frame_memo_runs(&frames.ctx));
+    frames.frame(vec![pointer::release(away + Vec2::new(0.0, 20.0))], &mut show);
+    assert!(held_ran(&frames), "a release runs the reader");
 }
 
 /// A hover-revealed part must remain identifiable when a drag leaves its shape.
@@ -861,4 +898,129 @@ fn a_press_after_a_drag_starts_a_new_click_run() {
     }
     let counts = counts.borrow();
     assert!(counts.len() == 3 && counts[1] == 1 && counts[2] == 2, "the drag's press is out of the run, the clicks after it count: {counts:?}");
+}
+
+/// The pointer-move gate (photocraft#17148): a move over the same shapes and widgets of the last pass runs no pass; a move
+/// onto another root's shape, into a rect that follows the pointer, or into the window from outside runs one.
+#[trial]
+fn a_move_that_changes_nothing_under_the_pointer_needs_no_pass() {
+    use craft_ui::runtime::pointer::{follows_pointer, move_needs_pass};
+    use egui::ViewportId;
+    let left = rect(100.0, 100.0, 120.0, 40.0);
+    let right = rect(300.0, 100.0, 120.0, 40.0);
+    let follow = rect(100.0, 300.0, 200.0, 100.0);
+    let roots = vec![ProbeRoot::new("left", left, Sense::CLICK), ProbeRoot::new("right", right, Sense::CLICK)];
+    let (mut scene, _) = scene(roots);
+    let mut show = move |ui: &mut Ui| {
+        scene(ui);
+        follows_pointer(ui.ctx(), follow);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let needs = |from: Option<Pos2>, to: Pos2| move_needs_pass(&frames.ctx, ViewportId::ROOT, from, to);
+    let inside = left.center();
+    assert!(!needs(Some(inside), inside + Vec2::new(10.0, 3.0)), "a move within one root's shape changes nothing");
+    assert!(needs(Some(inside), right.center()), "a move onto another root runs a pass");
+    assert!(needs(Some(inside), Pos2::new(250.0, 120.0)), "a move off the root runs a pass");
+    assert!(!needs(Some(Pos2::new(250.0, 30.0)), Pos2::new(260.0, 40.0)), "a move over empty room changes nothing");
+    assert!(needs(Some(follow.center()), follow.center() + Vec2::new(5.0, 0.0)), "a move in a rect that follows the pointer runs a pass");
+    assert!(needs(None, inside), "the pointer coming in runs a pass");
+}
+
+/// The part of `Knob` over its start half.
+const KNOB: PartKey = PartKey::new("knob");
+
+/// A leaf whose knob part covers its start half, and which logs where the pointer hovers on the knob each pass
+/// (`Cx::hover_pos`).
+#[derive(craft_ui::contract::Component)]
+struct Knob<'a> {
+    #[common]
+    common: craft_ui::contract::Common,
+    seen: &'a RefCell<Vec<Option<Pos2>>>,
+}
+
+impl craft_ui::contract::Component for Knob<'_> {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::GROUP;
+    type Style = craft_ui_test_kit::contract::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: KnobStyleKey) -> Self::Style {
+        craft_ui_test_kit::contract::PlainStyle::min(Vec2::new(200.0, 40.0))
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut craft_ui::contract::PartsCx<'_, Self>) {
+        cx.part(KNOB, Rect::from_min_max(rect.min, rect.center_bottom()));
+    }
+
+    fn update(&mut self, cx: &mut craft_ui::contract::Cx<'_, Self>) {
+        use craft_ui::contract::Pointer as _;
+        self.seen.borrow_mut().push(cx.hover_pos(KNOB));
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// The knob at `KNOB_AT`, logging into `seen`.
+fn show_knob(seen: &RefCell<Vec<Option<Pos2>>>) -> impl FnMut(&mut Ui) + '_ {
+    use craft_ui::contract::Show as _;
+    move |ui: &mut Ui| {
+        Knob { common: craft_ui::contract::Common::new(), seen }.show_at(ui, KNOB_AT);
+    }
+}
+
+const KNOB_AT: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(300.0, 140.0) };
+
+/// `Cx::hover_pos` gives the hover point while the part is hovered, and nothing over the rest of the component.
+#[trial]
+fn hover_pos_reads_the_point_over_its_part_only() {
+    let seen = RefCell::new(Vec::new());
+    let mut show = show_knob(&seen);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let on_knob = Pos2::new(130.0, 120.0);
+    frames.frame(vec![pointer::moved(on_knob)], &mut show);
+    assert_eq!(seen.borrow().last(), Some(&Some(on_knob)), "the point over the knob, in the component's layer space");
+    frames.frame(vec![pointer::moved(Pos2::new(260.0, 120.0))], &mut show);
+    assert_eq!(seen.borrow().last(), Some(&None), "no point over the rest of the component");
+}
+
+/// A component that read the hover position on its part follows the pointer there: a move within the part needs a
+/// pass (`move_needs_pass`); over the rest of the component, which it read nothing on, a move needs none.
+#[trial]
+fn a_hover_position_read_follows_the_pointer() {
+    use craft_ui::runtime::pointer::move_needs_pass;
+    let seen = RefCell::new(Vec::new());
+    let mut show = show_knob(&seen);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let (on_knob, off_knob) = (Pos2::new(130.0, 120.0), Pos2::new(260.0, 120.0));
+    let step = Vec2::new(5.0, 0.0);
+    frames.frame(vec![pointer::moved(on_knob)], &mut show);
+    assert!(move_needs_pass(&frames.ctx, egui::ViewportId::ROOT, Some(on_knob), on_knob + step), "a move within the read part runs a pass");
+    frames.frame(vec![pointer::moved(off_knob)], &mut show);
+    assert!(
+        !move_needs_pass(&frames.ctx, egui::ViewportId::ROOT, Some(off_knob), off_knob + step),
+        "a move over the rest of the component, which read no position, runs none"
+    );
+}
+
+/// Two overlapping parts of one root that hit both points of a move, where the nearest centre picks another part at
+/// the end: the hover changes, so the move runs a pass.
+#[trial]
+fn a_move_that_changes_the_nearest_part_needs_a_pass() {
+    use craft_ui::runtime::pointer::move_needs_pass;
+    use egui::ViewportId;
+    const LEFT: PartKey = PartKey::new("left");
+    const RIGHT: PartKey = PartKey::new("right");
+    let root = ProbeRoot::new("parts", rect(0.0, 0.0, 140.0, 100.0), Sense::empty())
+        .part(ProbePart::new(LEFT, rect(0.0, 0.0, 100.0, 100.0), Sense::CLICK))
+        .part(ProbePart::new(RIGHT, rect(40.0, 0.0, 100.0, 100.0), Sense::CLICK));
+    let (mut show, _) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let needs = |from: Pos2, to: Pos2| move_needs_pass(&frames.ctx, ViewportId::ROOT, Some(from), to);
+    assert!(!needs(Pos2::new(60.0, 50.0), Pos2::new(65.0, 50.0)), "both points nearer the left part's centre");
+    assert!(needs(Pos2::new(60.0, 50.0), Pos2::new(80.0, 50.0)), "the right part's centre is nearer at the end");
 }

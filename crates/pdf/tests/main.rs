@@ -9,6 +9,7 @@ mod crypt;
 #[path = "filters/main.rs"]
 mod filters;
 mod font_tables;
+mod image_default_spaces;
 mod interpretation;
 mod knockout;
 mod knockout_backdrop;

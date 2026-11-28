@@ -16,8 +16,8 @@ use super::title_bar::PageBand;
 use super::words::ShellWords;
 use crate::contract::overlay::{PopupRegion, Resize};
 use crate::contract::{
-    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropZone, Mount, NoValue, Outcome, Overlay, PaneEdge, Props as _,
-    Remember as _, Role, ShellPane, ShowContainer as _, Sizing,
+    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropZone, MemoView, Mount, NoValue, Outcome, Overlay, PaneEdge,
+    Props as _, Remember as _, Role, ShellPane, ShowContainer as _, Sizing,
 };
 use crate::layout_components::Stack;
 use crate::notices::ToastStack;
@@ -34,7 +34,7 @@ use crate::runtime::windows::{WindowAction, WindowHost};
 use crate::shell::Slot;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::{EditEvent, Metrics, Mixed, Sense};
-use egui::{Context, Rect, Response, Ui, ViewportId, pos2};
+use egui::{Context, Rect, Response, Ui, UiBuilder, ViewportId, pos2};
 use std::sync::Arc;
 
 /// The closure that fills a region.
@@ -61,6 +61,134 @@ impl<'a, S> SlotBody<'a, S> {
     fn new(body: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
         SlotBody(Box::new(body))
     }
+}
+
+/// The host's version of what a slot or the page shows, read from the app state at the slot's turn in the pass; `None`
+/// runs the slot in every pass.
+type VersionFn<'a, S> = Box<dyn Fn(&S) -> Option<u64> + 'a>;
+
+/// Where and how one slot shows: everything its pane and its content take from the shell besides the app.
+#[derive(Clone, crate::contract::MemoProps)]
+struct SlotPlace {
+    key: SlotKey,
+    edge: PaneEdge,
+    /// The slot's extent along its edge, as it was laid out.
+    extent: f32,
+    /// The pane's rect, or for a slot sized by its content the room it can grow into.
+    room: Rect,
+    /// The slot is as large as its content ([`SlotSize::Content`]).
+    by_content: bool,
+    /// The title slot mirrors with the traffic lights at the right end.
+    mirrored: bool,
+    /// The floating options bar's top-left corner: the bar is a movable layer over the body, bounded by `room`.
+    floating: Option<egui::Pos2>,
+    label: Option<Label>,
+}
+
+/// A versioned slot as a memoized view: its pane and its content replay while the host's version holds and no input
+/// reaches the slot.
+#[derive(crate::contract::MemoProps)]
+struct SlotView<'v, 'a, S> {
+    version: u64,
+    place: SlotPlace,
+    #[memo_props(covered_by = "version", reason = "the host's version holds everything the slot shows of the app")]
+    add: &'v mut SlotFn<'a, S>,
+    #[memo_props(covered_by = "version", reason = "the host's version holds everything the slot shows of the app")]
+    app: &'v mut S,
+}
+
+fn slot_view<S>(view: &mut SlotView<'_, '_, S>, ui: &mut Ui) -> (Rect, bool) {
+    let drawn = show_slot(ui, &view.place, view.add, view.app);
+    // A pane takes no room in flow; the run covers it, so the pointer over the slot, and nowhere else, runs it. A
+    // floating bar's layer is its own.
+    if view.place.floating.is_none() {
+        ui.expand_to_include_rect(drawn.0);
+    }
+    drawn
+}
+
+/// Shows one slot at `place`: its chrome pane with `add` in it, or the floating options bar's layer. Returns the pane's
+/// or the layer's rect, and whether it came from a real run (a sizing pass's run is not what shows).
+fn show_slot<S>(ui: &mut Ui, place: &SlotPlace, add: &mut SlotFn<'_, S>, app: &mut S) -> (Rect, bool) {
+    let SlotPlace { key, edge, extent, room, by_content, mirrored, floating, label } = place.clone();
+    if let Some(corner) = floating {
+        let overlay = Overlay::floating().modeless().bounds(room).placed_at(corner).body_scroll(false);
+        let layer = FloatingBar::new(overlay, label).id_salt(("slot", key)).show(ui, |ui, bcx| add(ui, bcx, app));
+        return (layer.output.response.rect, !ui.is_sizing_pass());
+    }
+    // A slot sized by its content is as large as its content from its outer edge, in the room it can grow into; any
+    // other slot takes its extent and fills its rect.
+    let pane = ShellPane::new(key).edge(edge);
+    let pane = if by_content { pane.at_content_extent(room) } else { pane.extent(extent).at(room) };
+    // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward the body.
+    let mut region = ShellRegion::chrome(pane).id_salt(("slot", key));
+    // A slot sized by its content stacks it from the slot's outer edge: a top pane's own layout centres one line in its
+    // height, which would lay a strip and the row under it side by side.
+    if by_content {
+        region.props = region.props.layout(BodyLayout::stack());
+    }
+    if let Some(label) = label {
+        region = region.label(label);
+    }
+    if !by_content {
+        let shown = region.show(ui, |ui, bcx| in_lights_flow(ui, mirrored, |ui| add(ui, bcx, app)));
+        return (shown.output.response.rect, !ui.is_sizing_pass());
+    }
+    // A top or bottom slot's content fills its width and is as tall as it is; a rail's is as wide as it is. Only the
+    // slot's own real run counts: a run in a sizing pass (the scope's measuring run, which alone runs for a shell out of
+    // sight) is not what shows.
+    let along_x = matches!(edge, PaneEdge::Start | PaneEdge::End);
+    let shown = region.show(ui, |ui, bcx| {
+        let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
+        stack.show(ui, |ui, _| in_lights_flow(ui, mirrored, |ui| add(ui, bcx, app)));
+        !ui.is_sizing_pass()
+    });
+    (shown.output.response.rect, shown.inner == Some(true))
+}
+
+/// Shows a slot at `place`, held to its room: as a memoized view while the host's `version` is given, else run in
+/// this pass.
+fn shown_slot<S>(ui: &mut Ui, place: SlotPlace, version: Option<u64>, add: &mut SlotFn<'_, S>, app: &mut S) -> (Rect, bool) {
+    let room = place.room;
+    ui.scope_builder(UiBuilder::new().max_rect(room), |ui| match version {
+        Some(version) => {
+            let key = place.key;
+            MemoView::new(("slot", key), SlotView { version, place, add, app }, slot_view::<S>).show(ui).unwrap_or((room, false))
+        }
+        None => show_slot(ui, &place, add, app),
+    })
+    .inner
+}
+
+/// The full-window page as a memoized view: it replays while the host's version holds and no input reaches it.
+#[derive(crate::contract::MemoProps)]
+struct PageView<'v, 'a, S> {
+    version: u64,
+    /// The page's room: the window less nothing, or its body's for a shell as tall as its content.
+    room: Rect,
+    content_extent: bool,
+    #[memo_props(hash = "a command scope is a name")]
+    scope: CommandScope,
+    label: Label,
+    #[memo_props(covered_by = "version", reason = "the host's version holds everything the page shows of the app")]
+    add: &'v mut SlotFn<'a, S>,
+    #[memo_props(covered_by = "version", reason = "the host's version holds everything the page shows of the app")]
+    app: &'v mut S,
+}
+
+fn page_view<S>(view: &mut PageView<'_, '_, S>, ui: &mut Ui) -> egui::Id {
+    let id = show_page(ui, view.room, view.content_extent, view.scope, view.label.clone(), view.add, view.app);
+    ui.expand_to_include_rect(view.room);
+    id
+}
+
+/// Shows the page's region at `room` with `add` in it; returns the region's id, the root of the page's keys.
+fn show_page<S>(ui: &mut Ui, room: Rect, content_extent: bool, scope: CommandScope, label: Label, add: &mut SlotFn<'_, S>, app: &mut S) -> egui::Id {
+    let pane = ShellPane::new("page");
+    let pane = if content_extent { pane.at_content_extent(room) } else { pane.at(room) };
+    let mut region = ShellRegion::pane(pane).label(label);
+    region.props = region.props.command_scope(scope);
+    region.show(ui, |ui, bcx| add(ui, bcx, app)).output.response.id
 }
 
 /// The style of a shell region: the surface comes from the container.
@@ -201,6 +329,7 @@ struct Placed<'a, S> {
     options: bool,
     /// The slot's name in the shell's words, for a slot of the canvas preset.
     named: Option<fn(&ShellWords) -> Label>,
+    version: VersionFn<'a, S>,
     add: SlotFn<'a, S>,
 }
 
@@ -384,6 +513,13 @@ impl Outcome for AppShellOutput {
 /// - **App state.** `S` is the state the slots and the body edit; [`show`](Self::show) hands each of them `&mut S` in
 ///   turn, so a title bar, a rail and a body that edit one document share it without interior mutability. An app with
 ///   no shared state uses `S = ()`.
+/// - **Versions.** Every slot, and the page, comes with the host's version of what it shows: a function of `S` the
+///   shell calls at the slot's turn in the pass, so it sees what the slots before it changed. While the version is the
+///   same and no input reaches the slot, the slot's pane and content replay their last run instead of running: the
+///   version must cover all the app data the slot shows that can change while no input reaches it. The framework's own
+///   inputs (the slot's rect, the screen mode and reveal, the language, the theme, bound values and command states it
+///   reads) reach the replay test themselves. A version of `None` runs the slot in every pass. The body runs in every
+///   pass.
 /// - **Dialogs.** The window owns one dialog host, shared by every body in it (`ShellDialogsCx::dialogs`). The shell runs it
 ///   after the body in each pass, so dialogs show over the window.
 /// - **Embedded.** [`embedded`](Self::embedded) shows a shell inside a region of another window. Its screen modes
@@ -447,7 +583,7 @@ pub struct AppShell<'a, S> {
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>, &mut S)")]
     body: Option<SlotBody<'a, S>>,
     /// The full-window page and its command scope, set while it shows.
-    page: Option<(CommandScope, SlotBody<'a, S>)>,
+    page: Option<(CommandScope, VersionFn<'a, S>, SlotBody<'a, S>)>,
 }
 
 impl<'a, S> AppShell<'a, S> {
@@ -491,24 +627,35 @@ impl<'a, S> AppShell<'a, S> {
 
     /// The title bar slot, the first top slot, keyed `"title"`: visible, and revealing in body-only mode. The title bar
     /// types fill it.
-    pub fn title_bar(self, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.title(Slot::new(keys::TITLE).reveal(), add)
+    pub fn title_bar(self, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        self.title(Slot::new(keys::TITLE).reveal(), version, add)
     }
 
     /// The title slot with a slot of your own, for a title that follows the host's menu bar flag.
-    pub fn title(mut self, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.title = Some(Placed { slot, edge: PaneEdge::Top, title: true, options: false, named: None, add: Box::new(add) });
+    pub fn title(mut self, slot: Slot, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        self.title =
+            Some(Placed { slot, edge: PaneEdge::Top, title: true, options: false, named: None, version: Box::new(version), add: Box::new(add) });
         self
     }
 
     /// The title bar slot with the host's menu bar flag: `visible` shows it, and it reveals in body-only mode only when
     /// it is on.
-    pub fn title_bar_if(self, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.title(Slot::new(keys::TITLE).visible(visible).reveal_if(visible), add)
+    pub fn title_bar_if(
+        self,
+        visible: bool,
+        version: impl Fn(&S) -> Option<u64> + 'a,
+        add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a,
+    ) -> Self {
+        self.title(Slot::new(keys::TITLE).visible(visible).reveal_if(visible), version, add)
     }
 
     /// The options bar, a top slot keyed `"options"` that reveals in body-only mode.
-    pub fn options_bar(mut self, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+    pub fn options_bar(
+        mut self,
+        visible: bool,
+        version: impl Fn(&S) -> Option<u64> + 'a,
+        add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a,
+    ) -> Self {
         let slot = Slot::new(keys::OPTIONS).visible(visible).reveal();
         self.slots.push(Placed {
             slot,
@@ -516,13 +663,14 @@ impl<'a, S> AppShell<'a, S> {
             title: false,
             options: true,
             named: Some(|words| words.options.clone()),
+            version: Box::new(version),
             add: Box::new(add),
         });
         self
     }
 
     /// The status bar, a bottom slot keyed `"status"` that never reveals.
-    pub fn status(mut self, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+    pub fn status(mut self, visible: bool, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
         let slot = Slot::new(keys::STATUS).visible(visible);
         self.slots.push(Placed {
             slot,
@@ -530,43 +678,56 @@ impl<'a, S> AppShell<'a, S> {
             title: false,
             options: false,
             named: Some(|words| words.status.clone()),
+            version: Box::new(version),
             add: Box::new(add),
         });
         self
     }
 
     /// A top slot, below the ones added before it.
-    pub fn top(self, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.place(PaneEdge::Top, slot, add)
+    pub fn top(self, slot: Slot, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        self.place(PaneEdge::Top, slot, version, add)
     }
 
     /// A bottom slot, above the ones added before it.
-    pub fn bottom(self, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.place(PaneEdge::Bottom, slot, add)
+    pub fn bottom(self, slot: Slot, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        self.place(PaneEdge::Bottom, slot, version, add)
     }
 
     /// A slot at the reading start, inside the ones added before it.
-    pub fn start(self, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.place(PaneEdge::Start, slot, add)
+    pub fn start(self, slot: Slot, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        self.place(PaneEdge::Start, slot, version, add)
     }
 
     /// A page that, while `shown`, fills the window in place of the slots and the body (a backstage, a print page). A
     /// move band with the window's ends (the traffic lights' room or the caption buttons) lies over its top; the page
     /// reads the room they take with `ShellCx::page_band` and keeps its controls clear of the band. The page's region is
     /// the instance of `scope`; dialogs run over it, and with nothing focused the page takes keys beside the window's,
-    /// so `scope`'s commands get their default keys.
-    pub fn page(mut self, shown: bool, scope: CommandScope, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.page = shown.then(|| (scope, SlotBody::new(add)));
+    /// so `scope`'s commands get their default keys. `version` is read as a slot's is.
+    pub fn page(
+        mut self,
+        shown: bool,
+        scope: CommandScope,
+        version: impl Fn(&S) -> Option<u64> + 'a,
+        add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a,
+    ) -> Self {
+        self.page = shown.then(|| (scope, Box::new(version) as VersionFn<'a, S>, SlotBody::new(add)));
         self
     }
 
     /// A slot at the reading end, inside the ones added before it.
-    pub fn end(self, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.place(PaneEdge::End, slot, add)
+    pub fn end(self, slot: Slot, version: impl Fn(&S) -> Option<u64> + 'a, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        self.place(PaneEdge::End, slot, version, add)
     }
 
-    fn place(mut self, edge: PaneEdge, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.slots.push(Placed { slot, edge, title: false, options: false, named: None, add: Box::new(add) });
+    fn place(
+        mut self,
+        edge: PaneEdge,
+        slot: Slot,
+        version: impl Fn(&S) -> Option<u64> + 'a,
+        add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a,
+    ) -> Self {
+        self.slots.push(Placed { slot, edge, title: false, options: false, named: None, version: Box::new(version), add: Box::new(add) });
         self
     }
 
@@ -776,16 +937,23 @@ impl<'a, S> AppShell<'a, S> {
                 if unseen && !ui.is_sizing_pass() {
                     return;
                 }
-                if let Some((scope, SlotBody(page))) = page.as_mut() {
-                    let pane = ShellPane::new("page");
-                    let pane = if content_room.is_some() { pane.at_content_extent(regions.body) } else { pane.at(regions.body) };
-                    let mut region = ShellRegion::pane(pane).label(body_label.clone());
-                    region.props = region.props.command_scope(*scope);
-                    let shown = region.show(ui, |ui, bcx| page(ui, bcx, app));
+                if let Some((scope, version, SlotBody(page))) = page.as_mut() {
+                    let (room, content_extent, label) = (regions.body, content_room.is_some(), body_label.clone());
+                    let root = ui
+                        .scope_builder(UiBuilder::new().max_rect(room), |ui| match version(&*app) {
+                            Some(version) => {
+                                let view = PageView { version, room, content_extent, scope: *scope, label, add: page, app: &mut *app };
+                                MemoView::new("page", view, page_view::<S>).show(ui)
+                            }
+                            None => Some(show_page(ui, room, content_extent, *scope, label, page, app)),
+                        })
+                        .inner;
                     // With nothing focused the page takes keys beside the window's, as a modal's root does; the window's
                     // shell record stays.
                     // PLAN: assumed `commands::note_page_root(ctx: &Context, viewport: ViewportId, id: Id)` (chrome-w6)
-                    crate::runtime::commands::note_page_root(&ctx, viewport, shown.output.response.id);
+                    if let Some(root) = root {
+                        crate::runtime::commands::note_page_root(&ctx, viewport, root);
+                    }
                     PageBand::new().show_over_page(ui);
                     if let Some(dialogs) = WindowDialogs::existing(ui.ctx(), &window) {
                         dialogs.run(ui);
@@ -799,54 +967,36 @@ impl<'a, S> AppShell<'a, S> {
                         if !*shown || if floats { !covering } else { covers(&placed.slot, only) != covering } {
                             continue;
                         }
-                        let mirrored = placed.title && mirror_title;
                         let by_content = placed.sized_by_content();
                         let along_x = placed.along_x();
-                        let extent = placed.extent(&tokens, &measured_before);
-                        let Placed { slot, edge, named, add, .. } = placed;
-                        let label = slot.name().cloned().or_else(|| named.map(|name| name(&words)));
+                        let key = placed.slot.key();
+                        let place = SlotPlace {
+                            key,
+                            edge: placed.edge,
+                            extent: placed.extent(&tokens, &measured_before),
+                            room: if floats {
+                                regions.body
+                            } else if by_content {
+                                grow_room(key)
+                            } else {
+                                rect_of(key)
+                            },
+                            by_content,
+                            mirrored: placed.title && mirror_title,
+                            floating: floats.then(|| held.corner(regions.body, tokens.space.gap.section)),
+                            label: placed.slot.name().cloned().or_else(|| placed.named.map(|name| name(&words))),
+                        };
+                        // Read at the slot's turn, so it holds what the slots before it changed in this pass.
+                        let version = (placed.version)(&*app);
+                        let (rect, real) = shown_slot(ui, place, version, &mut placed.add, app);
                         if floats {
-                            let corner = held.corner(regions.body, tokens.space.gap.section);
-                            let overlay = Overlay::floating().modeless().bounds(regions.body).placed_at(corner).body_scroll(false);
-                            let layer = FloatingBar::new(overlay, label).id_salt(("slot", slot.key())).show(ui, |ui, bcx| add(ui, bcx, app));
-                            floated.extend(edge.reveal_edge().map(|edge| (edge, layer.output.response.rect)));
+                            floated.extend(placed.edge.reveal_edge().map(|edge| (edge, rect)));
                             continue;
                         }
-                        // A slot sized by its content is as large as its content from its outer edge, in the room it
-                        // can grow into; any other slot takes its extent and fills its rect.
-                        let pane = ShellPane::new(slot.key()).edge(*edge);
-                        let pane =
-                            if by_content { pane.at_content_extent(grow_room(slot.key())) } else { pane.extent(extent).at(rect_of(slot.key())) };
-                        // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward
-                        // the body.
-                        let mut region = ShellRegion::chrome(pane).id_salt(("slot", slot.key()));
-                        // A slot sized by its content stacks it from the slot's outer edge: a top pane's own layout
-                        // centres one line in its height, which would lay a strip and the row under it side by side.
-                        if by_content {
-                            region.props = region.props.layout(BodyLayout::stack());
-                        }
-                        if let Some(label) = label {
-                            region = region.label(label);
-                        }
-                        let key = slot.key();
-                        // The slot runs every pass; the app memoizes inside it.
-                        if !by_content {
-                            region.show(ui, |ui, bcx| in_lights_flow(ui, mirrored, |ui| add(ui, bcx, app)));
-                            continue;
-                        }
-                        // The slot's extent along its edge is the pane's: its content's, with what the pane keeps
-                        // around its body (its rule). A top or bottom slot's content fills its width and is as tall
-                        // as it is; a rail's is as wide as it is. Only the slot's own real run records it: a run in a
-                        // sizing pass (the scope's measuring run, which alone runs for a shell out of sight) is not
-                        // what shows.
-                        let shown = region.show(ui, |ui, bcx| {
-                            let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
-                            stack.show(ui, |ui, _| in_lights_flow(ui, mirrored, |ui| add(ui, bcx, app)));
-                            !ui.is_sizing_pass()
-                        });
-                        let pane = shown.output.response.rect;
-                        let took = if along_x { pane.width() } else { pane.height() };
-                        if shown.inner == Some(true) && took.is_finite() && took > 0.0 {
+                        // The slot's extent along its edge is the pane's: its content's, with what the pane keeps around
+                        // its body (its rule). Only the slot's own real run records it.
+                        let took = if along_x { rect.width() } else { rect.height() };
+                        if by_content && real && took.is_finite() && took > 0.0 {
                             measured_now.push((key, took));
                         }
                     }

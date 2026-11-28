@@ -1,9 +1,12 @@
 //! `JobQueue` and `ManualJobs`: order, replacement, one job per key, cancellation, wakes and
 //! inline runs. Every test drives lanes with `ManualJobs` (or `lanes: 0`), so nothing depends on
-//! thread timing.
+//! thread timing. The tests of `Cancel::wait` block a second thread and hand off over channels.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, TryRecvError};
+use std::thread;
+use std::time::Duration;
 
 use crate::queue::{Cancel, Finished, JobQueue, Priority, QueueOptions, QueueOrder};
 use crate::{ManualJobs, Wake};
@@ -81,6 +84,62 @@ fn queue_dropped_keys_are_cancelled() {
     assert!(drain(&queue).is_empty());
     assert_eq!(wakes.load(Ordering::Relaxed), 0);
     assert!(!queue.contains(&"waiting") && !queue.contains(&"running"));
+}
+
+// `wait_timeout` reads the flag, a clone shares it, and `wait` returns at once on a set flag.
+#[test]
+fn cancel_wait_timeout_reports_the_flag() {
+    let cancel = Cancel::new();
+    let shared = cancel.clone();
+    assert!(!cancel.wait_timeout(Duration::ZERO));
+    shared.cancel();
+    assert!(cancel.is_cancelled());
+    assert!(cancel.wait_timeout(Duration::ZERO));
+    cancel.wait();
+}
+
+// A thread blocked in `wait` returns once another thread cancels. The 60-second bound only fails
+// the test when the wake never comes.
+#[test]
+fn cancel_wait_returns_once_another_thread_cancels() {
+    let cancel = Cancel::new();
+    let (started, has_started) = mpsc::channel();
+    let (returned, has_returned) = mpsc::channel();
+    let waiter = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            let _ = started.send(());
+            cancel.wait();
+            let _ = returned.send(());
+        })
+    };
+    has_started.recv().expect("the waiter starts");
+    assert_eq!(has_returned.try_recv(), Err(TryRecvError::Empty), "wait returned before the cancel");
+    cancel.cancel();
+    has_returned.recv_timeout(Duration::from_secs(60)).expect("wait returns after the cancel");
+    waiter.join().expect("the waiter ends");
+}
+
+// A running job blocked in `wait` ends when the queue drops its key, and its result never arrives.
+#[test]
+fn a_job_waiting_on_its_cancel_ends_when_its_key_is_dropped() {
+    let (queue, jobs, wakes) = queue(1);
+    let (started, has_started) = mpsc::channel();
+    queue.submit("running", Priority::VISIBLE, move |cancel: &Cancel| {
+        let _ = started.send(());
+        cancel.wait();
+        "running"
+    });
+    let (ran, has_run) = mpsc::channel();
+    let lane = thread::spawn(move || {
+        let _ = ran.send(jobs.run_all());
+    });
+    has_started.recv().expect("the job starts");
+    assert_eq!(queue.reprioritize(|_, _| None), ["running"]);
+    assert_eq!(has_run.recv_timeout(Duration::from_secs(60)), Ok(1), "the job ends after the cancel");
+    lane.join().expect("the lane ends");
+    assert!(drain(&queue).is_empty());
+    assert_eq!(wakes.load(Ordering::Relaxed), 0);
 }
 
 // The wake is called once per finished job, never for a dropped or cancelled one.
