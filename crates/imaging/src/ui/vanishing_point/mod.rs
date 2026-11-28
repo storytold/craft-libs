@@ -54,8 +54,8 @@ use craft_ui::bars::StatusMessage;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::contract::{Bind, Job, Pending, Remember as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::dialog::{
-    FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
-    RasterOverlay, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
+    DialogResult, FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView,
+    FullWindowWorkspace, RasterOverlay, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
 };
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::Checker;
@@ -66,9 +66,12 @@ use craft_ui::runtime::windows::WindowSpec;
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 
-use command::{command_planes, command_strokes, point, read_paste_at, read_paste_width, read_planes, read_strokes};
+use command::{command_planes, command_strokes, point, read_pastes, read_planes, read_strokes};
 use commands::Pick;
 use editor::{PASTE_CELLS, is_unset};
+
+/// The footer's OK, by the index the dialog reports a pick with.
+const PICK_OK: usize = 0;
 
 pub use command::{VanishingCommandPaste, VanishingCommandPlane, VanishingCommandStroke, VanishingPointCommand};
 
@@ -176,8 +179,8 @@ impl VanishingPointOpen {
 pub enum VanishingPointEvent {
     /// The planes changed: a node or edge drag (Begin, Update, Commit), a plane made, torn off or deleted (`Set`).
     Planes(EditEvent<PlaneEdit>),
-    /// The pasted image moved on its plane, or its Width changed.
-    Paste(EditEvent<PasteImage>),
+    /// The pasted images changed: one pasted (⌘V), moved, scaled, turned, mirrored or deleted. The value is every paste.
+    Paste(EditEvent<Vec<PasteImage>>),
     /// A clone stroke: the app paints its preview from the points as they come.
     Stamp(EditEvent<StampStroke>),
     /// A bar setting changed.
@@ -212,8 +215,9 @@ struct NewPlaneState {
 /// The Vanishing Point workspace: the session, its history, the settings and the editor, as one value the app keeps
 /// while Vanishing Point is open. The view and the strip's memory live in the dialog's body.
 ///
-/// Keys ([`VanishingPointCommands`], on the dialog's scope): V, C, S, H, Z pick the tools; Delete and Backspace remove
-/// the selected plane while the canvas has the keyboard. ⌘Z and ⇧⌘Z step the history (a field being edited steps its own
+/// Keys ([`VanishingPointCommands`], on the dialog's scope): V, C, S, T, H, Z pick the tools; ⌘V pastes the clipboard
+/// image once more; Delete and Backspace remove the selected paste, else the selected plane, while the canvas has the
+/// keyboard. ⌘Z and ⇧⌘Z step the history (a field being edited steps its own
 /// text first); Enter is OK and
 /// Esc Cancel (with the canvas focused, Esc drops pending corners first, and during a drag cancels the drag only). A
 /// tool switch cancels the old tool's gesture (`CancelReason::Removed`), and so does an undo
@@ -292,10 +296,10 @@ impl VanishingPointWorkspace {
         &self.editor
     }
 
-    /// The engine command OK answers: the session's planes, paste and strokes with the bar's options. The paste is
+    /// The engine command OK answers: the session's planes, pastes and strokes with the bar's options. The pastes are
     /// left out when `has_paste` is false.
     pub fn command(&self, has_paste: bool) -> VanishingPointCommand {
-        VanishingPointCommand::new(&self.session, &self.settings, self.editor.selected(), has_paste)
+        VanishingPointCommand::new(&self.session, &self.settings, has_paste)
     }
 
     /// The options bar's current values.
@@ -322,8 +326,13 @@ impl VanishingPointWorkspace {
             let now = PlaneEdit::new(self.session.planes.clone(), self.session.torn.clone());
             events.push(VanishingPointEvent::Planes(EditEvent::set(Mixed::Same(was), now, label.clone(), None)));
         }
-        if before.paste != self.session.paste {
-            events.push(VanishingPointEvent::Paste(EditEvent::set(Mixed::Same(before.paste), self.session.paste, label.clone(), None)));
+        if before.pastes != self.session.pastes {
+            events.push(VanishingPointEvent::Paste(EditEvent::set(
+                Mixed::Same(before.pastes.clone()),
+                self.session.pastes.clone(),
+                label.clone(),
+                None,
+            )));
         }
         if before.strokes != self.session.strokes {
             // A stroke is the event's value: the last one, or the last one emptied when the write cleared them.
@@ -369,7 +378,7 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
     fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<VanishingPointEvent, VanishingPointCommand> {
         // pc: crates/ui-egui/src/dialogs/vp_ui.rs:1230 `options_bar`, :1045 `keys`, :1068 `escape`;
         // distort_ui.rs:352-368 (the mode on the main canvas, replaced by the frame).
-        let WorkspaceCx { source, revision: source_revision, open, .. } = cx;
+        let WorkspaceCx { source, revision: source_revision, open, hold_ok, ok_waits, .. } = cx;
         let scene = source.scene();
         let env = Env::of(ui);
         let words = env.words::<VanishingPointWords>();
@@ -384,12 +393,15 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
             .own_window(WindowSpec::dialog())
             .opened(open)
             .command_scope(VanishingPointCommands::SCOPE)
-            .buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
+            .buttons([
+                FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(hold_ok),
+                FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
+            ])
             .settle_buttons(|_, buttons| {
                 // Read after this pass's edits: OK is disabled while a plane is invalid.
                 let blocked = this.borrow().blocked(scene);
                 for button in buttons.iter_mut().filter(|button| button.role() == DialogRole::Accept) {
-                    button.set_enabled(!blocked);
+                    button.set_enabled(!blocked && !ok_waits);
                 }
             })
             .sides(|ui, _| {
@@ -415,9 +427,16 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                 while let Some((command, _)) = cx.take_command::<ViewCommands>() {
                     state.view.apply(command);
                 }
+                // ⌘V reaches egui as a paste event on the desktop shells (egui-winit and the native menu turn it into
+                // `Event::Paste`, not a key press); a focused text field keeps it.
+                let mut paste_now = !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
                 while let Some((command, fired)) = cx.take_command::<VanishingPointCommands>() {
                     if command == VanishingPointCommands::NewPlane {
                         work.new_plane.open = true;
+                        continue;
+                    }
+                    if command == VanishingPointCommands::Paste {
+                        paste_now |= fired.phase != FirePhase::Release;
                         continue;
                     }
                     // A tool key's release picks nothing.
@@ -434,18 +453,30 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                     }
                 }
 
-                let bar = VanishingPointBar::new(work.editor.tool(), &work.settings, work.session.paste, source.paste().is_some())
-                    .has_strokes(!work.session.strokes.is_empty())
-                    .show(ui);
+                let selected_paste = work.editor.selected_paste().filter(|i| *i < work.session.pastes.len());
+                let bar = VanishingPointBar::new(
+                    work.editor.tool(),
+                    &work.settings,
+                    selected_paste.and_then(|i| work.session.pastes.get(i)).copied(),
+                    source.paste().is_some(),
+                )
+                .has_strokes(!work.session.strokes.is_empty())
+                .show(ui);
                 if let Some(settings) = bar.edit.value() {
                     work.settings = *settings;
                 }
-                for event in bar.paste_width {
-                    let at = work.session.paste.at;
-                    if let Some(width) = event.value() {
-                        work.session.paste.width = *width;
+                if let Some(i) = selected_paste {
+                    for event in bar.paste {
+                        if let Some(paste) = event.value() {
+                            work.session.pastes[i] = *paste;
+                        }
+                        let list = work.session.pastes.clone();
+                        out.push(VanishingPointEvent::Paste(event.map(move |paste| {
+                            let mut list = list.clone();
+                            list[i] = paste;
+                            list
+                        })));
                     }
-                    out.push(VanishingPointEvent::Paste(event.map(|width| PasteImage::new(at, width))));
                 }
 
                 let strokes = !work.session.strokes.is_empty();
@@ -465,7 +496,11 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                 let VanishingPointWorkspace { editor, session, settings, hand, zoom, checkerboard, navigation, strip, .. } = &mut *work;
                 let (checkerboard, navigation, strip) = (*checkerboard, *navigation, *strip);
                 let pass = editor.pass(&ctx, session, settings, scene, source);
-                let paste = source.paste().filter(|_| !strokes || source.stamp_preview().is_none()).zip(pass.paste_placement());
+                if paste_now && let Err(refused) = pass.paste_new(&words) {
+                    out.push(VanishingPointEvent::Refused(*refused));
+                }
+                let paste = source.paste().filter(|_| !strokes || source.stamp_preview().is_none());
+                let placements = paste.map(|_| pass.paste_placements()).unwrap_or_default();
 
                 let shown = Row::new()
                     .fill()
@@ -481,8 +516,10 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                             .controls(|ui, rect| {
                                 pass.planes().show_at(ui, rect);
                             });
-                        if let Some((paste, (frame, placed))) = paste {
-                            canvas = canvas.overlay(RasterOverlay::new(paste).mapped(frame, PASTE_CELLS).placed(placed).tint(PASTE_TINT));
+                        if let Some(paste) = paste {
+                            for (frame, placement) in &placements {
+                                canvas = canvas.overlay(RasterOverlay::new(paste).mapped(*frame, PASTE_CELLS).placed_by(*placement).tint(PASTE_TINT));
+                            }
                         }
                         match strip {
                             VanishingPointStripTool::Hand => canvas.tool(&mut *hand).show(ui),
@@ -518,8 +555,16 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
             events.push(VanishingPointEvent::Settings(this.settings));
         }
         events.extend(this.editor.take_status().map(VanishingPointEvent::Refused));
-        let result = shown.output.result(|| this.command(source.paste().is_some()));
-        WorkspacePass::new(shown.output.response.clone(), events).result(result).canvas(shown_canvas.get())
+        // A held OK files the command for the app and keeps the window open; Esc and Cancel close it either way.
+        let (result, held) = if hold_ok {
+            (
+                shown.output.closed.map(|_| DialogResult::Cancel),
+                (shown.output.picked == Some(PICK_OK)).then(|| this.command(source.paste().is_some())),
+            )
+        } else {
+            (shown.output.result(|| this.command(source.paste().is_some())), None)
+        };
+        WorkspacePass::new(shown.output.response.clone(), events).held(held).result(result).canvas(shown_canvas.get())
     }
 
     fn json_fields(&self, _source: &Self::Source) -> Option<Value> {
@@ -530,8 +575,8 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
         map.insert("tool".to_owned(), serde_json::to_value(self.editor.tool()).ok()?);
         map.insert("select".to_owned(), selected);
         map.insert("planes".to_owned(), serde_json::to_value(command_planes(&self.session)).ok()?);
-        map.insert("pasteAt".to_owned(), Value::from(self.session.paste.at.to_vec()));
-        map.insert("pasteWidth".to_owned(), Value::from(self.session.paste.width));
+        map.insert("pastes".to_owned(), serde_json::to_value(&self.session.pastes).ok()?);
+        map.insert("selectPaste".to_owned(), self.editor.selected_paste().map_or(Value::Null, Value::from));
         map.insert("source".to_owned(), source);
         map.insert("clone".to_owned(), serde_json::to_value(command_strokes(&self.session)).ok()?);
         Some(fields)
@@ -541,7 +586,8 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
         let words = Env::of_root(ctx).words::<VanishingPointWords>();
         match field {
             "tool" => {
-                let tool = serde_json::from_value::<VanishingTool>(value.clone()).map_err(|_| rejects(field, &value, "edit|create|stamp"))?;
+                let tool =
+                    serde_json::from_value::<VanishingTool>(value.clone()).map_err(|_| rejects(field, &value, "edit|create|stamp|transform"))?;
                 self.tool(tool);
             }
             "select" => {
@@ -556,16 +602,24 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                 self.write_session(words.edit_planes_step.as_str(), |work| {
                     work.session.planes = if planes.is_empty() { planes } else { source.scene().resolve(&planes, &torn) };
                     work.session.torn = torn;
+                    work.session.pastes.retain(|paste| paste.plane < work.session.planes.len());
+                    work.editor.after_step(&work.session);
                     work.editor.select(work.session.planes.len().checked_sub(1), &work.session);
                 });
             }
-            "pasteAt" => {
-                let at = read_paste_at(&value).ok_or_else(|| rejects(field, &value, "[x, y]"))?;
-                self.write_session(words.paste_step.as_str(), |work| work.session.paste.at = at);
+            "pastes" => {
+                let pastes = read_pastes(&value, self.session.planes.len()).map_err(|detail| rejects(field, &value, &detail))?;
+                self.write_session(words.paste_step.as_str(), |work| {
+                    work.session.pastes = pastes;
+                    work.editor.select_paste(work.session.pastes.len().checked_sub(1), &work.session);
+                });
             }
-            "pasteWidth" => {
-                let width = read_paste_width(&value).ok_or_else(|| rejects(field, &value, "a number"))?;
-                self.write_session(words.paste_width_step.as_str(), |work| work.session.paste.width = width);
+            "selectPaste" => {
+                let index = match &value {
+                    Value::Null => None,
+                    other => Some(other.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| rejects(field, &value, "a paste index"))?),
+                };
+                self.editor.select_paste(index, &self.session);
             }
             "source" => {
                 let at = match &value {
@@ -613,15 +667,19 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
     }
 }
 
-/// The strip: Edit Plane (V), Create Plane (C), Stamp (S), a gap, Hand (H) and Zoom (Z); each slot runs the tool's
-/// command, which has its label, icon and letter.
+/// The strip groups Edit Plane (V) with Create Plane (C), then Stamp (S), then Transform (T), then Hand (H) with
+/// Zoom (Z). Each slot runs the tool's command, which has its label, icon and letter.
 fn slots() -> Vec<ToolSlot<Pick>> {
-    [Pick::EditPlane, Pick::CreatePlane, Pick::Stamp, Pick::Hand, Pick::Zoom]
+    [Pick::EditPlane, Pick::CreatePlane, Pick::Stamp, Pick::Transform, Pick::Hand, Pick::Zoom]
         .into_iter()
         .zip(0_u32..)
         .map(|(pick, id)| {
             let tools = vec![RailTool::new(pick, VanishingPointCommands::of(pick))];
-            if pick == Pick::Stamp { ToolSlot::ending_group(id, tools) } else { ToolSlot::new(id, tools) }
+            if matches!(pick, Pick::CreatePlane | Pick::Stamp | Pick::Transform) {
+                ToolSlot::ending_group(id, tools)
+            } else {
+                ToolSlot::new(id, tools)
+            }
         })
         .collect()
 }

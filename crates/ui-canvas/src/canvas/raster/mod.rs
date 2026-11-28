@@ -301,6 +301,9 @@ struct Mapping {
     cells: u32,
     /// Where the image lies in the frame's unit square.
     placed: Rect64,
+    /// The map from the image's unit square into the frame's unit square, when it is not the axis-aligned `placed`
+    /// (a turned or mirrored image: Vanishing Point's transformed paste).
+    placement: Option<Homography>,
 }
 
 impl Mapping {
@@ -311,8 +314,21 @@ impl Mapping {
         Some(self.doc_corners()?.map(|corner| view.to_screen(corner)))
     }
 
+    /// Where image point (`s`, `t`) of the unit square lies in the frame's unit square.
+    fn place(&self, s: f64, t: f64) -> Point64 {
+        match &self.placement {
+            Some(placement) => placement.apply(Point64::new(s, t)),
+            None => Point64::new(self.placed.x0 + s * self.placed.width(), self.placed.y0 + t * self.placed.height()),
+        }
+    }
+
     /// The picture's area in document space, clockwise from the top left; `None` as for [`corners`](Self::corners).
+    /// A [`placement`](Self::placement)'s area is the image's own quad, not clipped to the unit square.
     fn doc_corners(&self) -> Option<[Point64; 4]> {
+        if self.placement.is_some() {
+            let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(s, t)| self.frame.apply(self.place(s, t)));
+            return corners.iter().all(|c| c.x.is_finite() && c.y.is_finite()).then_some(corners);
+        }
         let area = self.placed.intersect(Rect64::new(0.0, 0.0, 1.0, 1.0));
         if area.width() <= 0.0 || area.height() <= 0.0 {
             return None;
@@ -370,7 +386,8 @@ impl<'a> RasterDisplay<'a> {
     #[must_use]
     pub fn mapped(mut self, frame: Homography, cells: u32) -> Self {
         let placed = self.mapping.map_or(Rect64::new(0.0, 0.0, 1.0, 1.0), |mapping| mapping.placed);
-        self.mapping = Some(Mapping { frame, cells: cells.max(1), placed });
+        let placement = self.mapping.and_then(|mapping| mapping.placement);
+        self.mapping = Some(Mapping { frame, cells: cells.max(1), placed, placement });
         self
     }
 
@@ -379,6 +396,18 @@ impl<'a> RasterDisplay<'a> {
     pub fn placed(mut self, placed: Rect64) -> Self {
         if let Some(mapping) = self.mapping.as_mut() {
             mapping.placed = placed;
+            mapping.placement = None;
+        }
+        self
+    }
+
+    /// Where the image lies in the mapped frame's unit square as a map from the image's unit square (an affine map
+    /// turns or mirrors it), instead of [`placed`](Self::placed). A cell whose centre the map takes outside the unit
+    /// square is left out, as for `placed`. A mapped display only.
+    #[must_use]
+    pub fn placed_by(mut self, placement: Homography) -> Self {
+        if let Some(mapping) = self.mapping.as_mut() {
+            mapping.placement = Some(placement);
         }
         self
     }
@@ -650,11 +679,7 @@ fn mapped_mesh(view: &CanvasView, texture: CachedTexture, factor: u32, size: Pix
     let n = mapping.cells;
     let (texels_x, texels_y) = (texture.size.width as f32 * factor as f32, texture.size.height as f32 * factor as f32);
     let (u, v) = (size.width as f32 / texels_x, size.height as f32 / texels_y);
-    let placed = mapping.placed;
-    let at = |s: f64, t: f64| {
-        let p = mapping.frame.apply(Point64::new(placed.x0 + s * placed.width(), placed.y0 + t * placed.height()));
-        view.to_screen(p)
-    };
+    let at = |s: f64, t: f64| view.to_screen(mapping.frame.apply(mapping.place(s, t)));
     let mut mesh = Mesh::with_texture(texture.id);
     for j in 0..=n {
         for i in 0..=n {
@@ -666,8 +691,7 @@ fn mapped_mesh(view: &CanvasView, texture: CachedTexture, factor: u32, size: Pix
     let row = n + 1;
     for j in 0..n {
         for i in 0..n {
-            let x = placed.x0 + (f64::from(i) + 0.5) / f64::from(n) * placed.width();
-            let y = placed.y0 + (f64::from(j) + 0.5) / f64::from(n) * placed.height();
+            let Point64 { x, y } = mapping.place((f64::from(i) + 0.5) / f64::from(n), (f64::from(j) + 0.5) / f64::from(n));
             if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
                 continue;
             }

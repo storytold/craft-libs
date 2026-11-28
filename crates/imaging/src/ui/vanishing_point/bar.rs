@@ -19,6 +19,9 @@ use super::{PasteImage, StampSettings, VanishingPointSettings, VanishingTool};
 /// The paste's Width, in percent of the plane's width (PhotoCraft's range).
 pub(super) const PASTE_WIDTH: RangeInclusive<f64> = 1.0..=1000.0;
 
+/// The paste's Angle, in degrees.
+pub(super) const PASTE_ANGLE: RangeInclusive<f64> = -180.0..=180.0;
+
 /// What [`VanishingPointBar::show`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -28,9 +31,9 @@ pub struct VanishingPointBarOutput {
     /// The settings the user changed this pass, in order, each with every setting as it is then: a number field's gesture (`Begin`,
     /// `Update`, `Commit`) or a checkbox's `Set`.
     pub edit: EditEvents<VanishingPointSettings>,
-    /// The paste's Width as a fraction of the plane's width, edited this pass: a session change, one undo step when
+    /// The selected paste as its Width, Angle or Flip fields left it this pass: a session change, one undo step when
     /// its gesture commits.
-    pub paste_width: EditEvents<f64>,
+    pub paste: EditEvents<PasteImage>,
 }
 
 impl Outcome for VanishingPointBarOutput {
@@ -42,25 +45,25 @@ impl Outcome for VanishingPointBarOutput {
 }
 
 /// The options bar, full width under the title: for Stamp Diameter (1..=2000 px), Hardness, Opacity (0..=100 %),
-/// Aligned; for every tool Grid Size (px); with an image on the clipboard Paste and Width (percent of the plane); New
-/// Layer. PhotoCraft's tool pills and its check and ban buttons go: the strip holds the tools and the side column's
-/// footer OK and Cancel.
+/// Aligned; for every tool Grid Size (px); with a paste selected (not under Stamp) its Width (percent of the plane),
+/// Angle (degrees), Flip Horizontal and Flip Vertical; New Layer. PhotoCraft's tool pills and its check and ban
+/// buttons go: the strip holds the tools and the side column's footer OK and Cancel.
 ///
-/// Width shows while Paste is on. New Layer shows with an image on the clipboard, with strokes
-/// ([`has_strokes`](Self::has_strokes)) or with the Stamp tool, as PhotoCraft's bar does.
+/// New Layer shows with an image on the clipboard, with strokes ([`has_strokes`](Self::has_strokes)) or with the Stamp
+/// tool, as PhotoCraft's bar does.
 #[derive(craft_ui::contract::Pattern)]
 pub struct VanishingPointBar<'a> {
     tool: VanishingTool,
     settings: &'a VanishingPointSettings,
-    paste: PasteImage,
+    paste: Option<PasteImage>,
     has_clip: bool,
     has_strokes: bool,
 }
 
 impl<'a> VanishingPointBar<'a> {
-    /// The bar for `tool` over `settings`; `paste` is the pasted image's placement and `has_clip` whether the
-    /// clipboard holds an image.
-    pub fn new(tool: VanishingTool, settings: &'a VanishingPointSettings, paste: PasteImage, has_clip: bool) -> Self {
+    /// The bar for `tool` over `settings`; `paste` is the selected paste, if any, and `has_clip` whether the clipboard
+    /// holds an image.
+    pub fn new(tool: VanishingTool, settings: &'a VanishingPointSettings, paste: Option<PasteImage>, has_clip: bool) -> Self {
         Self { tool, settings, paste, has_clip, has_strokes: false }
     }
 
@@ -78,9 +81,9 @@ impl<'a> VanishingPointBar<'a> {
         let words = env.words::<VanishingPointWords>();
         let Self { tool, settings, paste, has_clip, has_strokes } = self;
         let mut edit = EditEvents::<VanishingPointSettings>::new();
-        let mut paste_width = EditEvents::new();
+        let mut pasted = EditEvents::new();
         let shown = Bar::new(words.options.clone(), BarKind::Options).show(ui, |ui, _| {
-            (edit, paste_width) = (EditEvents::new(), EditEvents::new());
+            (edit, pasted) = (EditEvents::new(), EditEvents::new());
             let set = |change: fn(&mut VanishingPointSettings, f64)| {
                 move |value: f64| {
                     let mut next = *settings;
@@ -108,14 +111,19 @@ impl<'a> VanishingPointBar<'a> {
                 number(ui, "grid-size", &words.grid_size, settings.grid_size, VanishingPointSettings::GRID_SIZE, UnitKind::Pixels)
                     .map(set(|s, v| s.grid_size = v)),
             );
-            if has_clip {
+            if let Some(p) = paste.filter(|_| tool != VanishingTool::Stamp) {
                 Divider::vertical().show(ui);
-                let pasted = Checkbox::new(Bind::given(settings.paste)).label(words.paste.clone()).show(ui);
-                edit.extend(pasted.events.map(|on| VanishingPointSettings { paste: on, ..*settings }));
-                if settings.paste {
-                    let percent = paste.width * 100.0;
-                    paste_width = number(ui, "paste-width", &words.width, percent, PASTE_WIDTH, UnitKind::Percent).map(|v| v / 100.0);
-                }
+                pasted.extend(
+                    number(ui, "paste-width", &words.width, p.width * 100.0, PASTE_WIDTH, UnitKind::Percent)
+                        .map(move |v| PasteImage { width: v / 100.0, ..p }),
+                );
+                pasted.extend(
+                    number(ui, "paste-angle", &words.angle, p.angle, PASTE_ANGLE, UnitKind::Degrees).map(move |v| PasteImage { angle: v, ..p }),
+                );
+                let flip_h = Checkbox::new(Bind::given(p.flip_h)).label(words.flip_h.clone()).show(ui);
+                pasted.extend(flip_h.events.map(move |on| PasteImage { flip_h: on, ..p }));
+                let flip_v = Checkbox::new(Bind::given(p.flip_v)).label(words.flip_v.clone()).show(ui);
+                pasted.extend(flip_v.events.map(move |on| PasteImage { flip_v: on, ..p }));
             }
             if has_clip || has_strokes || tool == VanishingTool::Stamp {
                 Divider::vertical().show(ui);
@@ -123,7 +131,7 @@ impl<'a> VanishingPointBar<'a> {
                 edit.extend(layer.events.map(|on| VanishingPointSettings { new_layer: on, ..*settings }));
             }
         });
-        VanishingPointBarOutput { response: shown.response.clone(), edit, paste_width }
+        VanishingPointBarOutput { response: shown.response.clone(), edit, paste: pasted }
     }
 }
 

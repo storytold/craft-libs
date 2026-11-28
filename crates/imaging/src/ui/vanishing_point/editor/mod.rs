@@ -4,7 +4,7 @@
 
 pub(crate) mod control;
 mod tool;
-mod work;
+pub(crate) mod work;
 
 pub use control::{VanishingPlanes, VanishingPlanesOutput};
 pub use tool::VanishingPointTool;
@@ -15,7 +15,6 @@ use std::ops::RangeInclusive;
 use serde::{Deserialize, Serialize};
 
 use craft_behavior::geometry::quad::Homography;
-use craft_behavior::kurbo::Rect;
 use craft_behavior::{CancelReason, EditEvent, GestureId};
 use craft_ui::bars::StatusMessage;
 
@@ -41,7 +40,8 @@ impl StampLimits {
     }
 }
 
-/// The editor's tools: Edit Plane (V), Create Plane (C), Stamp (S). The workspace's strip adds Hand and Zoom.
+/// The editor's tools: Edit Plane (V), Create Plane (C), Stamp (S), Transform (T). The workspace's strip adds Hand and
+/// Zoom.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -55,6 +55,8 @@ pub enum VanishingTool {
     CreatePlane,
     /// Clone from a source onto the planes.
     Stamp,
+    /// Move, scale and rotate the pasted images on their planes.
+    Transform,
 }
 
 /// `value` limited to `range`.
@@ -153,21 +155,63 @@ impl StampStroke {
     }
 }
 
-/// The pasted image on the selected plane: its top-left in plane coordinates (0..=1) and its width as a fraction of
-/// the plane's width.
+/// One pasted image (⌘V pastes the clipboard as many times as wanted): the plane it lies on, the top-left of its
+/// unturned box in plane coordinates (0..=1 on the plane), its width as a fraction of the plane's width, and its turn
+/// (degrees, about its centre in the plane's metric) and mirroring.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 #[non_exhaustive]
 pub struct PasteImage {
-    /// The image's top-left in plane coordinates, 0..=1.
+    /// The plane's index.
+    pub plane: usize,
+    /// The unturned box's top-left in plane coordinates.
     pub at: [f64; 2],
     /// The image's width as a fraction of the plane's width.
     pub width: f64,
+    /// Degrees, clockwise on the plane.
+    pub angle: f64,
+    /// Mirrored left to right.
+    pub flip_h: bool,
+    /// Mirrored top to bottom.
+    pub flip_v: bool,
+    /// The strokes made before it was pasted: it lies over the first `after` strokes and under the later ones.
+    pub after: usize,
+}
+
+impl Default for PasteImage {
+    fn default() -> Self {
+        // pc: crates/ui-egui/src/dialogs/vp_ui.rs:814-829 (the paste at 0.25, 0.25, half the plane wide).
+        Self::new([0.25, 0.25], 0.5)
+    }
 }
 
 impl PasteImage {
-    /// An image at `at`, `width` of the plane wide.
+    /// An unturned image on plane 0 at `at`, `width` of the plane wide.
     pub const fn new(at: [f64; 2], width: f64) -> Self {
-        Self { at, width }
+        Self { plane: 0, at, width, angle: 0.0, flip_h: false, flip_v: false, after: 0 }
+    }
+
+    /// The same image on plane `plane`.
+    #[must_use]
+    pub const fn on(mut self, plane: usize) -> Self {
+        self.plane = plane;
+        self
+    }
+
+    /// The same image over the first `after` strokes and under the later ones.
+    #[must_use]
+    pub const fn after(mut self, after: usize) -> Self {
+        self.after = after;
+        self
+    }
+
+    /// The same image turned `angle` degrees and mirrored as `flip_h`, `flip_v`.
+    #[must_use]
+    pub const fn turned(mut self, angle: f64, flip_h: bool, flip_v: bool) -> Self {
+        self.angle = angle;
+        self.flip_h = flip_h;
+        self.flip_v = flip_v;
+        self
     }
 }
 
@@ -188,18 +232,18 @@ impl PlaneEdit {
     }
 }
 
-/// What OK applies and the history snapshots (PhotoCraft's `VpEdit`): the planes, how they were torn off, where the
-/// paste sits, the clone source and strokes. The tool, the pending corners, the selection and the bar's options are
+/// What OK applies and the history snapshots (PhotoCraft's `VpEdit`): the planes, how they were torn off, the pasted
+/// images, the clone source and strokes. The tool, the pending corners, the selection and the bar's options are
 /// outside it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct VanishingPointSession {
     /// Every plane.
     pub planes: Vec<VanishingPlane>,
     /// Per plane, how it was torn off an earlier plane; `None` for a plane drawn by hand.
     pub torn: Vec<Option<TornPlane>>,
-    /// Where the pasted image sits on the selected plane.
-    pub paste: PasteImage,
+    /// The pasted images, bottom to top.
+    pub pastes: Vec<PasteImage>,
     /// The clone source (Alt-click), document pixels.
     pub source: Option<[f64; 2]>,
     /// The clone strokes, in order.
@@ -208,31 +252,15 @@ pub struct VanishingPointSession {
     pub aligned_from: Option<([f64; 2], [f64; 2])>,
 }
 
-impl Default for VanishingPointSession {
-    fn default() -> Self {
-        // pc: crates/ui-egui/src/dialogs/vp_ui.rs:814-829 (the paste at 0.25, 0.25, half the plane wide).
-        Self {
-            planes: Vec::new(),
-            torn: Vec::new(),
-            paste: PasteImage::new([0.25, 0.25], 0.5),
-            source: None,
-            strokes: Vec::new(),
-            aligned_from: None,
-        }
-    }
-}
-
-/// The options bar's values that are not undone: the grid's cell size (100), whether to paste the clipboard (on when it
-/// holds an image; the app sets it), whether the result goes to a new layer (off), the stamp options. Reading them
-/// limits the grid size to [`GRID_SIZE`](Self::GRID_SIZE).
+/// The options bar's values that are not undone: the grid's cell size (100), whether the result goes to a new layer
+/// (off), the stamp options. Reading them limits the grid size to [`GRID_SIZE`](Self::GRID_SIZE). Pasting is ⌘V, as
+/// in Photoshop: no option pastes by itself.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", from = "SettingsFields")]
 #[non_exhaustive]
 pub struct VanishingPointSettings {
     /// Grid cell size in pixels at the plane's nearest edge.
     pub grid_size: f64,
-    /// Whether to paste the clipboard image.
-    pub paste: bool,
     /// Whether the result goes to a new layer.
     pub new_layer: bool,
     /// The Stamp tool's options.
@@ -244,21 +272,20 @@ pub struct VanishingPointSettings {
 #[serde(rename_all = "camelCase", default)]
 struct SettingsFields {
     grid_size: f64,
-    paste: bool,
     new_layer: bool,
     stamp: StampSettings,
 }
 
 impl Default for SettingsFields {
     fn default() -> Self {
-        let VanishingPointSettings { grid_size, paste, new_layer, stamp } = VanishingPointSettings::default();
-        Self { grid_size, paste, new_layer, stamp }
+        let VanishingPointSettings { grid_size, new_layer, stamp } = VanishingPointSettings::default();
+        Self { grid_size, new_layer, stamp }
     }
 }
 
 impl From<SettingsFields> for VanishingPointSettings {
     fn from(fields: SettingsFields) -> Self {
-        Self { grid_size: clamp_in(&Self::GRID_SIZE, fields.grid_size), paste: fields.paste, new_layer: fields.new_layer, stamp: fields.stamp }
+        Self { grid_size: clamp_in(&Self::GRID_SIZE, fields.grid_size), new_layer: fields.new_layer, stamp: fields.stamp }
     }
 }
 
@@ -270,7 +297,7 @@ impl VanishingPointSettings {
 impl Default for VanishingPointSettings {
     fn default() -> Self {
         // pc: crates/ui-egui/src/dialogs/vp_ui.rs:819-826.
-        Self { grid_size: 100.0, paste: false, new_layer: false, stamp: StampSettings::default() }
+        Self { grid_size: 100.0, new_layer: false, stamp: StampSettings::default() }
     }
 }
 
@@ -279,21 +306,30 @@ impl Default for VanishingPointSettings {
 pub(super) enum VanishingDrag {
     /// A corner node and the pointer's offset from it.
     Corner { plane: usize, corner: usize, offset: [f64; 2] },
+    /// A press inside a plane with Edit Plane: plane `plane` (the one a torn plane hangs off) moves with the pointer
+    /// from `start`, from its corners `from` at the press; the planes torn off it and the pastes on them follow.
+    Plane { plane: usize, start: [f64; 2], from: [[f64; 2]; 4] },
     /// An edge node: the edge slides along the plane's perspective at the press.
     Edge { plane: usize, edge: usize, at_press: Homography },
-    /// The pasted image and the pointer's offset from its top-left in plane coordinates.
-    Paste { offset: [f64; 2] },
+    /// Paste `index` moves: the image point (its unit square) under the pointer at the press stays under it, from
+    /// plane to plane.
+    Paste { index: usize, grab: [f64; 2] },
+    /// Transform on a corner of paste `index`: it scales about its centre, by the pointer's distance from the centre in
+    /// the plane's metric against `from` at the press, from width `width`.
+    Scale { index: usize, from: f64, width: f64 },
+    /// Transform outside paste `index`: it turns about its centre with the pointer, from `angle` at the press and the
+    /// pointer's direction `from` (radians, in the plane's metric).
+    Rotate { index: usize, from: f64, angle: f64 },
     /// The far edge node of a torn plane: depth, or with Alt its angle, once it left `start`.
     Torn { plane: usize, rotate: bool, start: [f64; 2], moved: bool },
     /// A clone stroke.
     Stamp,
 }
-
 /// The value a drag changes, as it was at the press.
 #[derive(Clone, Debug)]
 pub(super) enum DragStart {
     Planes(PlaneEdit),
-    Paste(PasteImage),
+    Pastes(Vec<PasteImage>),
     /// The session's aligned offset before the stroke (the stroke is the last one), and the stroke as it began.
     Stamp(Option<([f64; 2], [f64; 2])>, StampStroke),
 }
@@ -307,6 +343,8 @@ pub struct VanishingPointEditor {
     pub(super) tool: VanishingTool,
     pub(super) pending: Vec<[f64; 2]>,
     pub(super) selected: Option<usize>,
+    /// The selected paste: Transform and the options bar act on it, Delete removes it.
+    pub(super) selected_paste: Option<usize>,
     pub(super) drag: Option<(GestureId, VanishingDrag)>,
     /// What the drag changes, as it was at the press (Esc puts it back, Commit compares).
     pub(super) before: Option<DragStart>,
@@ -325,6 +363,7 @@ impl VanishingPointEditor {
             tool: VanishingTool::CreatePlane,
             pending: Vec::new(),
             selected: None,
+            selected_paste: None,
             drag: None,
             before: None,
             pointer: None,
@@ -364,6 +403,17 @@ impl VanishingPointEditor {
         self.selected
     }
 
+    /// The index of the selected paste, if any.
+    pub fn selected_paste(&self) -> Option<usize> {
+        self.selected_paste
+    }
+
+    /// Selects paste `index` of `session`; none when it is out of range.
+    pub fn select_paste(&mut self, index: Option<usize>, session: &VanishingPointSession) -> &mut Self {
+        self.selected_paste = index.filter(|i| *i < session.pastes.len());
+        self
+    }
+
     /// Selects plane `index` of `session`; none when it is out of range.
     pub fn select(&mut self, index: Option<usize>, session: &VanishingPointSession) -> &mut Self {
         self.selected = index.filter(|i| *i < session.planes.len());
@@ -378,15 +428,45 @@ impl VanishingPointEditor {
         had
     }
 
+    /// Delete or Backspace with a paste selected: removes it from `session`. Reported as a `Paste` `Set`; `false` with
+    /// none selected or while a drag runs.
+    pub fn delete_selected_paste(&mut self, session: &mut VanishingPointSession, step: &str) -> bool {
+        if self.drag.is_some() {
+            return false;
+        }
+        let Some(i) = self.selected_paste.take().filter(|i| *i < session.pastes.len()) else { return false };
+        let before = session.pastes.clone();
+        session.pastes.remove(i);
+        self.events.push(VanishingPointEvent::Paste(EditEvent::set(craft_behavior::Mixed::Same(before), session.pastes.clone(), step.into(), None)));
+        true
+    }
+
     /// Delete or Backspace: removes the selected plane from `session`; planes torn off it keep their place as drawn
-    /// planes, later parents' indices shift down. Returns the edit, which is also reported (a `Planes` `Set`).
-    /// Nothing while a drag runs: the gesture ends first.
+    /// planes, later parents' indices shift down, and the pastes on it go with it. Returns the edit, which is also
+    /// reported (a `Planes` `Set`, and a `Paste` `Set` when pastes went). Nothing while a drag runs: the gesture ends
+    /// first.
     pub fn delete_selected(&mut self, session: &mut VanishingPointSession, scene: &dyn VanishingScene, step: &str) -> Option<PlaneEdit> {
         // pc: crates/ui-egui/src/dialogs/vp_ui.rs:398 `delete_selected`.
         if self.drag.is_some() {
             return None;
         }
         let i = self.selected.take().filter(|i| *i < session.planes.len())?;
+        let pastes_before = session.pastes.clone();
+        session.pastes.retain(|p| p.plane != i);
+        for p in &mut session.pastes {
+            if p.plane > i {
+                p.plane -= 1;
+            }
+        }
+        if session.pastes != pastes_before {
+            self.selected_paste = None;
+            self.events.push(VanishingPointEvent::Paste(EditEvent::set(
+                craft_behavior::Mixed::Same(pastes_before),
+                session.pastes.clone(),
+                step.into(),
+                None,
+            )));
+        }
         let before = PlaneEdit::new(session.planes.clone(), session.torn.clone());
         session.torn.resize(session.planes.len(), None);
         session.planes.remove(i);
@@ -423,6 +503,7 @@ impl VanishingPointEditor {
         // pc: crates/ui-egui/src/dialogs/vp_ui.rs:383-396 `step`.
         self.pending.clear();
         self.selected = self.selected.filter(|i| *i < session.planes.len());
+        self.selected_paste = self.selected_paste.filter(|i| *i < session.pastes.len());
     }
 
     /// Ends the drag in progress without a commit, for `reason`: the session is put back as the press found it and
@@ -436,8 +517,8 @@ impl VanishingPointEditor {
                 session.aligned_from = aligned;
                 Some(VanishingPointEvent::Stamp(EditEvent::cancel(id, reason, Some(craft_behavior::Mixed::Same(first)))))
             }
-            (VanishingDrag::Paste { .. }, Some(DragStart::Paste(before))) => {
-                session.paste = before;
+            (VanishingDrag::Paste { .. } | VanishingDrag::Scale { .. } | VanishingDrag::Rotate { .. }, Some(DragStart::Pastes(before))) => {
+                session.pastes.clone_from(&before);
                 Some(VanishingPointEvent::Paste(EditEvent::cancel(id, reason, Some(craft_behavior::Mixed::Same(before)))))
             }
             (_, Some(DragStart::Planes(before))) => {
@@ -507,6 +588,7 @@ impl Shared for VanishingPointPass<'_> {
         let mut work = Work {
             ctx: self.ctx,
             gesture: None,
+            reach: 0.0,
             editor: &mut editor,
             session: &mut session,
             scene: self.scene,
@@ -529,12 +611,21 @@ impl VanishingPointPass<'_> {
         VanishingPlanes::new(self)
     }
 
-    /// Where the paste lies: the selected plane's frame (the unit square onto the plane, or onto the document) and
-    /// the paste's rectangle in plane coordinates. `None` without Paste on, an image, or a usable plane. The app
-    /// draws its clipboard image through it (`RasterOverlay::mapped`) unless the stamp preview shows.
-    pub fn paste_placement(&self) -> Option<(Homography, Rect)> {
-        let mut found = None;
-        self.with(&mut |work| found = work.paste_placement());
+    /// Where each paste lies, bottom to top: its plane's frame (the unit square onto the document) and the map from
+    /// the image's unit square into the plane's (`RasterOverlay::placed_by`). A paste without an image or a usable
+    /// plane is left out. The app draws its clipboard image through them unless the stamp preview shows.
+    pub fn paste_placements(&self) -> Vec<(Homography, Homography)> {
+        let mut found = Vec::new();
+        self.with(&mut |work| found = (0..work.session.pastes.len()).filter_map(|i| work.paste_placement(i)).collect());
         found
+    }
+
+    /// ⌘V: pastes the clipboard image once more, centred on the selected plane (else the first), selected, with
+    /// Transform picked. Reported as a `Paste` `Set` named `step`. `Err` is the refusal for the status bar: no image or
+    /// no usable plane.
+    pub fn paste_new(&self, words: &crate::ui::vanishing_point::VanishingPointWords) -> Result<(), Box<StatusMessage>> {
+        let mut out = Ok(());
+        self.with(&mut |work| out = work.paste_new(words));
+        out
     }
 }

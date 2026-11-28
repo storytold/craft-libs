@@ -27,6 +27,8 @@ pub(super) struct Snapshot {
     pub grid_size: f64,
     pub source: Option<[f64; 2]>,
     pub ring: Option<Vec<Point>>,
+    /// The selected paste's corners in document pixels.
+    pub paste: Option<[[f64; 2]; 4]>,
 }
 
 impl Snapshot {
@@ -52,6 +54,7 @@ impl Snapshot {
             grid_size: settings.grid_size,
             source: session.source,
             ring,
+            paste: editor.selected_paste.and_then(|i| work.paste_quad(i)),
         }
     }
 
@@ -68,7 +71,8 @@ impl Snapshot {
 ///    outline over the halo.
 /// 2. The selected plane's nodes: corners and edge middles as handle squares with the plane's colour outline.
 /// 3. Create Plane's pending corners as squares with the rubber band to the pointer.
-/// 4. Stamp: the source cross and the foreshortened ring of the diameter, each a line over the halo.
+/// 4. The selected paste's outline, with its corners as handles under Transform.
+/// 5. Stamp: the source cross and the foreshortened ring of the diameter, each a line over the halo.
 pub(super) fn paint(
     draw: &Draw<'_>,
     view: &CanvasView,
@@ -138,6 +142,22 @@ pub(super) fn paint(
         for c in points.iter().take(corners) {
             let square = PaintShape::Rect(Rect::from_center_size(*c, Vec2::splat(style.handle.side)), CornerRadius::ZERO);
             draw.fill(&square, style.valid);
+        }
+    }
+
+    if let Some(quad) = &snap.paste {
+        let mut ring: Vec<Pos2> = quad.iter().map(|c| screen(*c)).collect();
+        ring.push(ring[0]);
+        draw.stroke(&PaintShape::Path(ring), StrokeWidth::Medium, style.halo);
+        let mut ring: Vec<Pos2> = quad.iter().map(|c| screen(*c)).collect();
+        ring.push(ring[0]);
+        draw.stroke(&PaintShape::Path(ring), StrokeWidth::Thin, style.ink);
+        if snap.tool == VanishingTool::Transform {
+            for c in quad {
+                let square = PaintShape::Rect(Rect::from_center_size(screen(*c), Vec2::splat(style.handle.side)), CornerRadius::ZERO);
+                draw.fill(&square, style.node_fill);
+                draw.stroke(&square, StrokeWidth::Thin, style.valid);
+            }
         }
     }
 

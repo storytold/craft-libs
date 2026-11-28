@@ -25,12 +25,14 @@ pub struct RasterOverlay<'a> {
     source: &'a dyn RasterSource,
     tint: Option<Color32>,
     mapping: Option<(Homography, u32, Option<Rect64>)>,
+    /// The map from the image's unit square into the frame's ([`placed_by`](Self::placed_by)).
+    placement: Option<Homography>,
 }
 
 impl<'a> RasterOverlay<'a> {
     /// An overlay of `source`.
     pub fn new(source: &'a dyn RasterSource) -> Self {
-        RasterOverlay { source, tint: None, mapping: None }
+        RasterOverlay { source, tint: None, mapping: None, placement: None }
     }
 
     /// Multiplies the overlay's texels by `tint`: the user's sampling-area colour over a coverage mask.
@@ -56,6 +58,17 @@ impl<'a> RasterOverlay<'a> {
     pub fn placed(mut self, placed: Rect64) -> Self {
         if let Some((_, _, at)) = self.mapping.as_mut() {
             *at = Some(placed);
+            self.placement = None;
+        }
+        self
+    }
+
+    /// Where the overlay's image lies in the mapped frame's unit square, as a map from the image's unit square (an
+    /// affine map turns or mirrors it): Vanishing Point's transformed paste. Only with [`mapped`](Self::mapped).
+    #[must_use]
+    pub fn placed_by(mut self, placement: Homography) -> Self {
+        if self.mapping.is_some() {
+            self.placement = Some(placement);
         }
         self
     }
@@ -259,6 +272,9 @@ impl<'a> FullWindowCanvas<'a> {
                             display = display.mapped(frame, cells);
                             if let Some(placed) = placed {
                                 display = display.placed(placed);
+                            }
+                            if let Some(placement) = overlay.placement {
+                                display = display.placed_by(placement);
                             }
                         }
                         display.show_at(ui, body.rect);

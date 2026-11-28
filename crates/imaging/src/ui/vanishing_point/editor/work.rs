@@ -3,18 +3,21 @@
 use std::sync::Arc;
 
 use craft_behavior::geometry::quad::Homography;
-use craft_behavior::kurbo::{Point, Rect};
+use craft_behavior::kurbo::Point;
 use craft_behavior::{EditEvent, GestureId, Mixed};
 use craft_keymap::Mods;
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
 use craft_ui::runtime::env::Label;
 
-use super::{DragStart, PlaneEdit, StampStroke, VanishingDrag, VanishingPointEditor, VanishingPointSession, VanishingPointSettings};
+use super::{DragStart, PasteImage, PlaneEdit, StampStroke, VanishingDrag, VanishingPointEditor, VanishingPointSession, VanishingPointSettings};
 use super::{VanishingPointEvent, VanishingTool};
 use crate::ui::vanishing_point::VanishingPointSource;
 use crate::ui::vanishing_point::planes::{MAX_PLANES, PlaneCheck, PlaneEdge, TornPlane, VanishingPlane, VanishingScene, fit_torn, slide_edge};
 use crate::ui::vanishing_point::words::VanishingPointWords;
+
+/// Transform turns the selected paste from a press this many corner reaches from a corner, outside the paste.
+const ROTATE_REACH: f64 = 4.0;
 
 /// A stroke's dabs lie a tenth of the diameter apart, at least one document pixel (`stamp_to`).
 const DAB_SPACING: f64 = 0.1;
@@ -28,6 +31,8 @@ pub(in crate::ui::vanishing_point) struct Work<'w> {
     pub ctx: &'w egui::Context,
     /// The id of the gesture the host runs for the press in hand; the first history entry the press opens takes it.
     pub gesture: Option<GestureId>,
+    /// How near a Transform corner a press must land, in document pixels (the tool sets it from the view).
+    pub reach: f64,
     pub editor: &'w mut VanishingPointEditor,
     pub session: &'w mut VanishingPointSession,
     pub scene: &'w dyn VanishingScene,
@@ -57,25 +62,33 @@ fn label(text: &str) -> Arc<str> {
     Arc::from(text)
 }
 
-/// The plane the paste lands on while Paste is on and the app has an image: the selected plane, else the first. One
-/// rule for the tool and the drawing.
-pub(in crate::ui::vanishing_point) fn paste_plane(
-    settings: &VanishingPointSettings,
-    source: &dyn VanishingPointSource,
-    planes: usize,
-    selected: Option<usize>,
-) -> Option<usize> {
-    if !settings.paste || source.paste().is_none() {
-        return None;
-    }
-    selected.filter(|i| *i < planes).or((planes > 0).then_some(0))
-}
-
 /// The pasted image's size in plane coordinates: `width` of the plane's width, the height from the image's aspect in the
 /// plane's metric (`lu`, `lv` its sides' lengths). One rule for the tool and the drawing.
 pub(in crate::ui::vanishing_point) fn paste_extent(image: (f64, f64), width: f64, lu: f64, lv: f64) -> [f64; 2] {
     let (w, h) = image;
     [width, width * lu / lv * h / w.max(1.0)]
+}
+
+/// The paste's width range, as a fraction of its plane's width (the bar's 1..=1000 percent).
+const PASTE_WIDTHS: std::ops::RangeInclusive<f64> = 0.01..=10.0;
+
+/// A new paste's width as a fraction of its plane's width, and the most of the plane's height it may take.
+const NEW_PASTE_WIDTH: f64 = 0.5;
+const NEW_PASTE_HEIGHT: f64 = 0.8;
+
+/// The map from a paste's image (its unit square) into its plane's unit square: the unturned box from `at`, `width` of
+/// the plane wide and as tall as the image's aspect makes it in the plane's metric (`lu`, `lv` the plane's sides),
+/// mirrored and turned about its centre in that metric. Affine. The engine places the pixels by the same rule.
+pub(in crate::ui::vanishing_point) fn paste_affine(paste: &PasteImage, image: (f64, f64), lu: f64, lv: f64) -> Homography {
+    let ext = paste_extent(image, paste.width, lu, lv);
+    let (w, h) = (ext[0] * lu, ext[1] * lv);
+    let (fx, fy) = (if paste.flip_h { -1.0 } else { 1.0 }, if paste.flip_v { -1.0 } else { 1.0 });
+    let (sin, cos) = paste.angle.to_radians().sin_cos();
+    let centre = [paste.at[0] + ext[0] / 2.0, paste.at[1] + ext[1] / 2.0];
+    // (s, t) in the image → metric offset from the centre ((s - ½)·w·fx, (t - ½)·h·fy), turned, back to plane units.
+    let (a, b) = (w * fx * cos / lu, -h * fy * sin / lu);
+    let (d, e) = (w * fx * sin / lv, h * fy * cos / lv);
+    Homography::from_rows([[a, b, centre[0] - (a + b) / 2.0], [d, e, centre[1] - (d + e) / 2.0], [0.0, 0.0, 1.0]])
 }
 
 /// Plane `index` closed by `corners`: the scene normalises it, it is selected, Edit Plane takes over and a `Set` is
@@ -128,42 +141,192 @@ impl Work<'_> {
         (lu.is_finite() && lv.is_finite() && lu > 1e-12 && lv > 1e-12).then_some((h, lu, lv))
     }
 
-    fn paste_plane(&self) -> Option<usize> {
-        paste_plane(self.settings, self.source, self.session.planes.len(), self.editor.selected)
-    }
-
     fn image_size(&self) -> Option<(f64, f64)> {
         let size = self.source.paste()?.size();
         Some((f64::from(size.width), f64::from(size.height)))
     }
 
-    /// The pasted image's size in plane coordinates (it keeps its metric aspect).
-    fn paste_extent(&self, lu: f64, lv: f64) -> Option<[f64; 2]> {
-        Some(paste_extent(self.image_size()?, self.session.paste.width, lu, lv))
-    }
-
-    /// The plane the paste lies on: its frame (the unit square onto the plane) and the paste's rectangle in plane
-    /// coordinates; `None` without a usable plane.
-    pub fn paste_placement(&self) -> Option<(Homography, Rect)> {
-        let index = self.paste_plane()?;
-        let plane = self.session.planes.get(index)?;
-        if is_unset(plane) || self.scene.check(&self.session.planes, index) == PlaneCheck::Invalid {
+    /// A usable plane for pastes: set, not invalid, with usable metric sides.
+    fn paste_frame(&self, plane: usize) -> Option<(Homography, f64, f64)> {
+        let pl = self.session.planes.get(plane)?;
+        if is_unset(pl) || self.scene.check(&self.session.planes, plane) == PlaneCheck::Invalid {
             return None;
         }
-        let (h, lu, lv) = self.frame(index)?;
-        let extent = self.paste_extent(lu, lv)?;
-        let at = self.session.paste.at;
-        Some((h, Rect::new(at[0], at[1], at[0] + extent[0], at[1] + extent[1])))
+        self.frame(plane)
     }
 
-    /// The pointer's offset from the paste's top-left in plane coordinates, when `p` is on the pasted image.
-    fn on_paste(&self, p: [f64; 2]) -> Option<[f64; 2]> {
-        let i = self.paste_plane()?;
-        let (h, lu, lv) = self.frame(i)?;
-        let ext = self.paste_extent(lu, lv)?;
+    /// Paste `index`'s plane frame (the unit square onto the document), its map from the image into the plane's unit
+    /// square, and the plane's metric sides; `None` without an image or a usable plane.
+    fn paste_maps(&self, index: usize) -> Option<(Homography, Homography, f64, f64)> {
+        let paste = self.session.pastes.get(index)?;
+        let (h, lu, lv) = self.paste_frame(paste.plane)?;
+        Some((h, paste_affine(paste, self.image_size()?, lu, lv), lu, lv))
+    }
+
+    /// Where paste `index` lies: its plane's frame and the map from the image into the plane's unit square.
+    pub fn paste_placement(&self, index: usize) -> Option<(Homography, Homography)> {
+        self.paste_maps(index).map(|(h, a, _, _)| (h, a))
+    }
+
+    /// Paste `index`'s corners in document pixels, clockwise from the image's top-left.
+    pub fn paste_quad(&self, index: usize) -> Option<[[f64; 2]; 4]> {
+        let (h, a, _, _) = self.paste_maps(index)?;
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(s, t)| {
+            let p = h.apply(a.apply(Point::new(s, t)));
+            [p.x, p.y]
+        });
+        corners.iter().flatten().all(|v| v.is_finite()).then_some(corners)
+    }
+
+    /// The topmost paste under document point `p` and the image point (its unit square) there.
+    fn paste_at(&self, p: [f64; 2]) -> Option<(usize, [f64; 2])> {
+        (0..self.session.pastes.len()).rev().find_map(|i| {
+            let (h, a, _, _) = self.paste_maps(i)?;
+            let plane = h.inverse()?.apply(at(p));
+            if !(0.0..=1.0).contains(&plane.x) || !(0.0..=1.0).contains(&plane.y) {
+                return None;
+            }
+            let q = a.inverse()?.apply(plane);
+            ((0.0..=1.0).contains(&q.x) && (0.0..=1.0).contains(&q.y)).then_some((i, [q.x, q.y]))
+        })
+    }
+
+    /// Paste `index`'s centre and the pointer `p`, both in its plane's metric.
+    fn paste_metric(&self, index: usize, p: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
+        let (h, a, lu, lv) = self.paste_maps(index)?;
+        let c = a.apply(Point::new(0.5, 0.5));
         let q = h.inverse()?.apply(at(p));
-        let (a, b) = (self.session.paste.at, [self.session.paste.at[0] + ext[0], self.session.paste.at[1] + ext[1]]);
-        ((a[0]..=b[0]).contains(&q.x) && (a[1]..=b[1]).contains(&q.y)).then_some([a[0] - q.x, a[1] - q.y])
+        let out = ([c.x * lu, c.y * lv], [q.x * lu, q.y * lv]);
+        out.0.iter().chain(&out.1).all(|v| v.is_finite()).then_some(out)
+    }
+
+    /// ⌘V: the clipboard image once more, centred on the selected plane (else the first usable one), selected, with
+    /// Transform picked; a `Paste` `Set`.
+    pub fn paste_new(&mut self, words: &VanishingPointWords) -> Result<(), Box<StatusMessage>> {
+        let refused = |text: &Label| Box::new(StatusMessage::new(text.clone()).tone(Tone::Warn));
+        if self.editor.busy() {
+            return Err(refused(&words.paste_busy));
+        }
+        let image = self.image_size().ok_or_else(|| refused(&words.paste_no_image))?;
+        let plane = self
+            .editor
+            .selected
+            .filter(|i| self.paste_frame(*i).is_some())
+            .or_else(|| (0..self.session.planes.len()).find(|i| self.paste_frame(*i).is_some()))
+            .ok_or_else(|| refused(&words.paste_no_plane))?;
+        let (_, lu, lv) = self.paste_frame(plane).ok_or_else(|| refused(&words.paste_no_plane))?;
+        let mut width = NEW_PASTE_WIDTH;
+        let tall = paste_extent(image, width, lu, lv)[1];
+        if tall > NEW_PASTE_HEIGHT {
+            width *= NEW_PASTE_HEIGHT / tall;
+        }
+        let ext = paste_extent(image, width, lu, lv);
+        // It lands over the strokes made so far; later strokes paint over it.
+        let paste = PasteImage::new([0.5 - ext[0] / 2.0, 0.5 - ext[1] / 2.0], width).on(plane).after(self.session.strokes.len());
+        let before = self.session.pastes.clone();
+        self.session.pastes.push(paste);
+        self.editor.selected_paste = Some(self.session.pastes.len() - 1);
+        self.editor.selected = Some(plane);
+        self.editor.set_tool(VanishingTool::Transform);
+        let after = self.session.pastes.clone();
+        self.editor.events.push(VanishingPointEvent::Paste(EditEvent::set(Mixed::Same(before), after, label(words.paste_new_step.as_str()), None)));
+        Ok(())
+    }
+
+    /// Starts a drag of the pastes (move, scale or turn).
+    fn begin_paste_drag(&mut self, drag: VanishingDrag, step: &str) -> Pressed {
+        let before = self.session.pastes.clone();
+        let begun = Mixed::Same(before.clone());
+        let name = label(step);
+        self.begin_drag(drag, DragStart::Pastes(before), |id| VanishingPointEvent::Paste(EditEvent::begin(id, begun, name, None)));
+        Pressed::Claimed
+    }
+
+    /// A press on paste `index` at image point `grab`: selects it and its plane, and moves it.
+    fn press_paste(&mut self, index: usize, grab: [f64; 2], words: &VanishingPointWords) -> Pressed {
+        self.editor.selected_paste = Some(index);
+        self.editor.selected = self.session.pastes.get(index).map(|p| p.plane);
+        self.begin_paste_drag(VanishingDrag::Paste { index, grab }, words.paste_step.as_str())
+    }
+
+    /// Transform's press: a corner of the selected paste scales it, a press on a paste moves it, one near the selected
+    /// paste's corners turns it; elsewhere the paste is let go and the plane under the press selected.
+    fn transform_press(&mut self, p: [f64; 2], words: &VanishingPointWords) -> Pressed {
+        if let Some(i) = self.editor.selected_paste
+            && let Some(quad) = self.paste_quad(i)
+            && let Some((c, m)) = self.paste_metric(i, p)
+        {
+            let near = |r: f64| quad.iter().any(|q| (q[0] - p[0]).hypot(q[1] - p[1]) <= r);
+            let paste = self.session.pastes[i];
+            if near(self.reach) {
+                let from = (m[0] - c[0]).hypot(m[1] - c[1]);
+                if from > 1e-12 {
+                    return self.begin_paste_drag(VanishingDrag::Scale { index: i, from, width: paste.width }, words.transform_step.as_str());
+                }
+            } else if self.paste_at(p).is_none() && near(self.reach * ROTATE_REACH) {
+                let from = (m[1] - c[1]).atan2(m[0] - c[0]);
+                return self.begin_paste_drag(VanishingDrag::Rotate { index: i, from, angle: paste.angle }, words.transform_step.as_str());
+            }
+        }
+        if let Some((i, grab)) = self.paste_at(p) {
+            return self.press_paste(i, grab, words);
+        }
+        self.editor.selected_paste = None;
+        self.editor.selected = self.scene.plane_at(&self.session.planes, p);
+        Pressed::Done
+    }
+
+    /// Moves what a paste drag holds to `p`; whether the paste changed.
+    fn paste_drag_to(&mut self, drag: &VanishingDrag, p: [f64; 2]) -> bool {
+        let next = match *drag {
+            VanishingDrag::Paste { index, grab } => self.paste_moved(index, grab, p),
+            VanishingDrag::Scale { index, from, width } => self.paste_metric(index, p).and_then(|(c, m)| {
+                let mut paste = *self.session.pastes.get(index)?;
+                let (_, lu, lv) = self.paste_frame(paste.plane)?;
+                let image = self.image_size()?;
+                let minimum = width.min(*PASTE_WIDTHS.start());
+                let width = (width * (m[0] - c[0]).hypot(m[1] - c[1]) / from).clamp(minimum, *PASTE_WIDTHS.end());
+                let ext = paste_extent(image, width, lu, lv);
+                paste.width = width;
+                paste.at = [c[0] / lu - ext[0] / 2.0, c[1] / lv - ext[1] / 2.0];
+                Some((index, paste))
+            }),
+            VanishingDrag::Rotate { index, from, angle } => self.paste_metric(index, p).and_then(|(c, m)| {
+                let mut paste = *self.session.pastes.get(index)?;
+                let turn = (m[1] - c[1]).atan2(m[0] - c[0]) - from;
+                paste.angle = (angle + turn.to_degrees() + 180.0).rem_euclid(360.0) - 180.0;
+                Some((index, paste))
+            }),
+            _ => None,
+        };
+        match next {
+            Some((index, paste)) if paste.at.iter().all(|v| v.is_finite()) && self.session.pastes.get(index) != Some(&paste) => {
+                self.session.pastes[index] = paste;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Paste `index` moved so its image point `grab` lies under `p`: on the usable plane under `p` (Photoshop's paste
+    /// follows the pointer onto another plane, keeping its size in the planes' shared metric), else on its own.
+    fn paste_moved(&self, index: usize, grab: [f64; 2], p: [f64; 2]) -> Option<(usize, PasteImage)> {
+        let mut paste = *self.session.pastes.get(index)?;
+        let (_, lu, _) = self.paste_frame(paste.plane)?;
+        let image = self.image_size()?;
+        let under = self.scene.plane_at(&self.session.planes, p).filter(|i| self.paste_frame(*i).is_some());
+        if let Some(plane) = under.filter(|i| *i != paste.plane)
+            && let Some((_, lu2, _)) = self.paste_frame(plane)
+        {
+            paste.width = (paste.width * lu / lu2).clamp(*PASTE_WIDTHS.start(), *PASTE_WIDTHS.end());
+            paste.plane = plane;
+        }
+        let (h, lu, lv) = self.paste_frame(paste.plane)?;
+        let q = h.inverse()?.apply(at(p));
+        // The map is a translation of the one at `at` = 0: the grabbed point lands under the pointer.
+        let origin = paste_affine(&PasteImage { at: [0.0, 0.0], ..paste }, image, lu, lv).apply(Point::new(grab[0], grab[1]));
+        paste.at = [(q.x - origin.x).clamp(-2.0, 3.0), (q.y - origin.y).clamp(-2.0, 3.0)];
+        Some((index, paste))
     }
 
     fn begin_drag(&mut self, drag: VanishingDrag, before: DragStart, event: impl FnOnce(craft_behavior::GestureId) -> VanishingPointEvent) {
@@ -273,17 +436,21 @@ impl Work<'_> {
                 Some(Pressed::Done)
             }
             VanishingTool::EditPlane => {
-                if let Some(offset) = self.on_paste(p) {
-                    let before = self.session.paste;
-                    let name = label(words.paste_step.as_str());
-                    self.begin_drag(VanishingDrag::Paste { offset }, DragStart::Paste(before), |id| {
-                        VanishingPointEvent::Paste(EditEvent::begin(id, Mixed::Same(before), name, None))
-                    });
+                if let Some((index, grab)) = self.paste_at(p) {
+                    return Some(self.press_paste(index, grab, words));
+                }
+                self.editor.selected_paste = None;
+                self.editor.selected = self.scene.plane_at(&self.session.planes, p);
+                // A press inside a plane moves it whole.
+                if let Some(plane) = self.editor.selected.map(|i| self.root_of(i))
+                    && let Some(from) = self.session.planes.get(plane).filter(|pl| !is_unset(pl)).map(|pl| pl.corners)
+                {
+                    self.begin_plane_drag(VanishingDrag::Plane { plane, start: p, from }, words);
                     return Some(Pressed::Claimed);
                 }
-                self.editor.selected = self.scene.plane_at(&self.session.planes, p);
                 Some(Pressed::Done)
             }
+            VanishingTool::Transform => Some(self.transform_press(p, words)),
         }
     }
 
@@ -382,6 +549,9 @@ impl Work<'_> {
                     _ => None,
                 }
             }
+            VanishingDrag::Plane { plane, start, from } => self
+                .shift_plane(plane, from, [p[0] - start[0], p[1] - start[1]])
+                .then(|| VanishingPointEvent::Planes(EditEvent::update(id, self.plane_edit()))),
             VanishingDrag::Edge { plane, edge, at_press } => match slide_edge(self.scene, &at_press, edge, p) {
                 Some(slid) if self.session.planes.get(plane).is_some_and(|pl| pl.corners != slid.corners) => {
                     self.session.planes[plane].corners = slid.corners;
@@ -390,16 +560,8 @@ impl Work<'_> {
                 }
                 _ => None,
             },
-            VanishingDrag::Paste { offset } => {
-                let inv = self.paste_plane().and_then(|i| self.session.planes.get(i)).and_then(VanishingPlane::homography).and_then(|h| h.inverse());
-                inv.and_then(|inv| {
-                    let q = inv.apply(at(p));
-                    let to = [(q.x + offset[0]).clamp(-1.0, 2.0), (q.y + offset[1]).clamp(-1.0, 2.0)];
-                    (to.iter().all(|v| v.is_finite()) && to != self.session.paste.at).then(|| {
-                        self.session.paste.at = to;
-                        VanishingPointEvent::Paste(EditEvent::update(id, self.session.paste))
-                    })
-                })
+            VanishingDrag::Paste { .. } | VanishingDrag::Scale { .. } | VanishingDrag::Rotate { .. } => {
+                self.paste_drag_to(&drag, p).then(|| VanishingPointEvent::Paste(EditEvent::update(id, self.session.pastes.clone())))
             }
             VanishingDrag::Stamp => {
                 if self.stamp_to(p) {
@@ -421,13 +583,65 @@ impl Work<'_> {
             (VanishingDrag::Stamp, Some(DragStart::Stamp(_, first))) => {
                 self.session.strokes.last().map(|s| VanishingPointEvent::Stamp(EditEvent::commit(id, Mixed::Same(first), s.clone())))
             }
-            (VanishingDrag::Paste { .. }, Some(DragStart::Paste(before))) => {
-                Some(VanishingPointEvent::Paste(EditEvent::commit(id, Mixed::Same(before), self.session.paste)))
+            (VanishingDrag::Paste { .. } | VanishingDrag::Scale { .. } | VanishingDrag::Rotate { .. }, Some(DragStart::Pastes(before))) => {
+                Some(VanishingPointEvent::Paste(EditEvent::commit(id, Mixed::Same(before), self.session.pastes.clone())))
             }
             (_, Some(DragStart::Planes(before))) => Some(VanishingPointEvent::Planes(EditEvent::commit(id, Mixed::Same(before), self.plane_edit()))),
             _ => None,
         };
         self.editor.events.extend(event);
+    }
+
+    /// An arrow key with a paste selected: moves it by `by` document pixels (onto the plane under its new centre) and
+    /// reports a `Set`; whether a paste was selected. Nothing while a drag runs.
+    pub fn nudge_paste(&mut self, by: [f64; 2], step: &str) -> bool {
+        let Some(i) = self.editor.selected_paste.filter(|_| self.editor.drag.is_none()) else { return false };
+        let Some((h, a, _, _)) = self.paste_maps(i) else { return false };
+        let c = h.apply(a.apply(Point::new(0.5, 0.5)));
+        let Some((_, moved)) = self.paste_moved(i, [0.5, 0.5], [c.x + by[0], c.y + by[1]]) else { return true };
+        if moved != self.session.pastes[i] {
+            let before = self.session.pastes.clone();
+            self.session.pastes[i] = moved;
+            self.editor.selected = Some(moved.plane);
+            self.editor.events.push(VanishingPointEvent::Paste(EditEvent::set(Mixed::Same(before), self.session.pastes.clone(), label(step), None)));
+        }
+        true
+    }
+
+    /// The plane a move of plane `index` moves: a torn plane follows its parent, so the plane its chain starts from.
+    fn root_of(&self, mut index: usize) -> usize {
+        // A torn plane's parent always has a lower index, so the chain ends.
+        while let Some(Some(t)) = self.session.torn.get(index).copied() {
+            index = t.from;
+        }
+        index
+    }
+
+    /// Puts plane `index` at its corners `from` moved by `by` document pixels; the planes torn off it and the pastes on
+    /// them follow. Whether it moved.
+    fn shift_plane(&mut self, index: usize, from: [[f64; 2]; 4], by: [f64; 2]) -> bool {
+        let to = from.map(|c| [c[0] + by[0], c[1] + by[1]]);
+        match self.session.planes.get_mut(index) {
+            Some(plane) if plane.corners != to => {
+                plane.corners = to;
+                self.resolve();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// An arrow key with a plane selected and no paste: moves the plane (the one a torn plane hangs off) by `by`
+    /// document pixels and reports a `Set`; whether a plane was selected. Nothing while a drag runs.
+    pub fn nudge_plane(&mut self, by: [f64; 2], step: &str) -> bool {
+        let Some(plane) = self.editor.selected.filter(|_| self.editor.drag.is_none()).map(|i| self.root_of(i)) else { return false };
+        let Some(from) = self.session.planes.get(plane).filter(|pl| !is_unset(pl)).map(|pl| pl.corners) else { return false };
+        let before = self.plane_edit();
+        if self.shift_plane(plane, from, by) {
+            let after = self.plane_edit();
+            self.editor.events.push(VanishingPointEvent::Planes(EditEvent::set(Mixed::Same(before), after, label(step), None)));
+        }
+        true
     }
 
     /// An arrow key on a focused corner: moves it by `by` document pixels and reports a `Set`. A torn plane's corners
@@ -448,5 +662,39 @@ impl Work<'_> {
             label(words.edit_planes_step.as_str()),
             None,
         )));
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    /// A turn or a mirror keeps the paste's centre; a quarter turn swaps its sides in the plane's metric.
+    #[trial]
+    fn paste_affine_turns_and_mirrors_about_the_centre() {
+        let (lu, lv) = (2.0, 1.0);
+        let plain = PasteImage::new([0.1, 0.2], 0.25);
+        let centre = |p: &PasteImage| paste_affine(p, (100.0, 50.0), lu, lv).apply(Point::new(0.5, 0.5));
+        let c = centre(&plain);
+        for turned in [plain.turned(90.0, false, false), plain.turned(-37.0, true, false), plain.turned(0.0, true, true)] {
+            let d = centre(&turned);
+            assert!((c.x - d.x).abs() < 1e-12 && (c.y - d.y).abs() < 1e-12, "{turned:?}");
+        }
+        let side = |p: &PasteImage, s: f64, t: f64| {
+            let (a, b) =
+                (paste_affine(p, (100.0, 50.0), lu, lv).apply(Point::new(0.0, 0.0)), paste_affine(p, (100.0, 50.0), lu, lv).apply(Point::new(s, t)));
+            ((b.x - a.x) * lu).hypot((b.y - a.y) * lv)
+        };
+        let quarter = plain.turned(90.0, false, false);
+        assert!((side(&plain, 1.0, 0.0) - side(&quarter, 1.0, 0.0)).abs() < 1e-12, "a turn keeps the width in the metric");
+        let top = paste_affine(&quarter, (100.0, 50.0), lu, lv);
+        assert!((top.apply(Point::new(1.0, 0.0)).x - top.apply(Point::new(0.0, 0.0)).x).abs() < 1e-12, "a quarter turn stands the top edge upright");
+        let flipped = paste_affine(&plain.turned(0.0, true, false), (100.0, 50.0), lu, lv);
+        let unflipped = paste_affine(&plain, (100.0, 50.0), lu, lv);
+        assert!(
+            (flipped.apply(Point::new(0.0, 0.0)).x - unflipped.apply(Point::new(1.0, 0.0)).x).abs() < 1e-12,
+            "Flip Horizontal swaps left and right"
+        );
     }
 }
