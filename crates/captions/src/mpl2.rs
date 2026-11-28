@@ -9,7 +9,7 @@
 //! drops other tags, rounds times to a tenth of a second, writes `|` in text as `｜`, and writes
 //! a leading `/` in non-italic text as `／`.
 
-use crate::text::{escape_markup, ms_to_tick, number, plain_text, whole_line_style, wrap_style};
+use crate::text::{escape_markup, ms_to_tick, number, plain_text, round_ticks, whole_line_style, wrap_style};
 use crate::{Cue, Document, Error, Result, TICKS_PER_SECOND, Tick};
 
 /// `[a][b]text` as its parts.
@@ -62,10 +62,7 @@ pub fn parse(text: &str) -> Result<Document> {
 
 pub fn write(doc: &Document) -> String {
     let mut out = String::new();
-    let ds = |t: Tick| {
-        let per = i128::from(TICKS_PER_SECOND / 10);
-        ((i128::from(t.0.max(0)) + per / 2) / per) as i64
-    };
+    let ds = |t: Tick| round_ticks(t, TICKS_PER_SECOND / 10);
     for c in &doc.cues {
         let start = ds(c.start);
         let end = ds(c.end).max(start + 1);

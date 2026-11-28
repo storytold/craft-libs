@@ -104,7 +104,12 @@ pub(crate) fn ms_to_tick(ms: i64) -> Tick {
 
 /// A time in whole milliseconds, rounded to the nearest; negative times read as zero.
 pub(crate) fn tick_to_ms(t: Tick) -> i64 {
-    let per = i128::from(TICKS_PER_MS);
+    round_ticks(t, TICKS_PER_MS)
+}
+
+/// A time in whole units of `per` ticks, rounded half up; negative times read as zero.
+pub(crate) fn round_ticks(t: Tick, per: i64) -> i64 {
+    let per = i128::from(per);
     ((i128::from(t.0.max(0)) + per / 2) / per) as i64
 }
 
