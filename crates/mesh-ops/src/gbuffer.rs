@@ -191,10 +191,16 @@ mod tests {
         let g = UvGBuffer::new(&m, 0, 128, 128);
         assert!(g.covered_count() > 128 * 128 * 9 / 10, "{}", g.covered_count());
         for i in (0..g.tri.len()).step_by(97) {
-            if let Some(s) = g.surface(&m, i) {
-                assert!((s.pos.length() - 2.0).abs() < 0.02);
-                assert!(s.nrm.dot(s.pos.normalize()) > 0.99);
+            let surface = g.surface(&m, i);
+            if !g.covered(i) {
+                assert!(surface.is_none(), "uncovered texel {i} has a surface");
+                continue;
             }
+            let Some(s) = surface else {
+                panic!("covered texel {i} has no surface");
+            };
+            assert!((s.pos.length() - 2.0).abs() < 0.02);
+            assert!(s.nrm.dot(s.pos.normalize()) > 0.99);
         }
     }
 }
