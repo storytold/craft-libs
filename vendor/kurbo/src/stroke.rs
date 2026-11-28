@@ -337,7 +337,10 @@ fn stroke_undashed(
                         continue;
                     }
                     ctx.do_join(style, tan0);
-                    ctx.do_cubic(style, q.raise(), tolerance);
+                    // Craft patch (zero tangent): the raised cubic's control
+                    // arms are 2/3 as long and can fall under the threshold
+                    // of `tangents`, so the quadratic's tangents are passed on.
+                    ctx.do_cubic(style, q.raise(), (tan0, tan1), tolerance);
                     ctx.last_tan = tan1;
                 }
             }
@@ -350,7 +353,7 @@ fn stroke_undashed(
                         continue;
                     }
                     ctx.do_join(style, tan0);
-                    ctx.do_cubic(style, c, tolerance);
+                    ctx.do_cubic(style, c, (tan0, tan1), tolerance);
                     ctx.last_tan = tan1;
                 }
             }
@@ -523,7 +526,7 @@ impl StrokeCtx {
         self.last_pt = p1;
     }
 
-    fn do_cubic(&mut self, style: &Stroke, c: CubicBez, tolerance: f64) {
+    fn do_cubic(&mut self, style: &Stroke, c: CubicBez, tangents: (Vec2, Vec2), tolerance: f64) {
         // First, detect degenerate linear case
 
         // Ordinarily, this is the direction of the chord, but if the chord is very
@@ -563,7 +566,7 @@ impl StrokeCtx {
                 // Mapping back from projection of reference chord
                 let ref_vec = chord_ref / chord_ref_hypot2;
                 let ref_pt = midpoint - 0.5 * (p0 + p3) * ref_vec;
-                self.do_linear(style, c, [p0, p1, p2, p3], ref_pt, ref_vec);
+                self.do_linear(style, c, tangents, [p0, p1, p2, p3], ref_pt, ref_vec);
                 return;
             }
         }
@@ -584,14 +587,15 @@ impl StrokeCtx {
         &mut self,
         style: &Stroke,
         c: CubicBez,
+        (tan0, tan1): (Vec2, Vec2),
         p: [f64; 4],
         ref_pt: Point,
         ref_vec: Vec2,
     ) {
         // Always do round join, to model cusp as limit of finite curvature (see Nehab).
         let style = Stroke::new(style.width).with_join(Join::Round);
-        // Tangents of endpoints (for connecting to joins)
-        let (tan0, tan1) = PathSeg::Cubic(c).tangents();
+        // Tangents of endpoints (for connecting to joins) are those of the
+        // segment, which the caller has checked are nonzero.
         self.last_tan = tan0;
         // find cusps
         let c0 = p[1] - p[0];
@@ -1198,10 +1202,12 @@ mod tests {
     }
 
     // A curve that ends where it starts, with control arms shorter than the
-    // threshold of `PathSeg::tangents`, has a zero tangent at both ends.
+    // threshold of `PathSeg::tangents`, has a zero tangent at both ends. A
+    // quadratic with arms of 1.25e-6 passes that threshold, but the cubic it
+    // is raised to has arms of 2/3 that length, which do not.
     #[test]
     fn tiny_closed_loops() {
-        for arm in [1e-7, 1e-5] {
+        for arm in [1e-7, 1.25e-6, 1e-5] {
             for lead_in in [false, true] {
                 let mut cubic = BezPath::new();
                 let mut quad = BezPath::new();
