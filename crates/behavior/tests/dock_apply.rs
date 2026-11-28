@@ -3,7 +3,7 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, DockPlacement, DockSide, Floating, Group, Layout, NamedWorkspace, Node, PanelPlace, PanelState, Permissions,
-    SplitSize, Target, Workspace, WorkspaceChrome, WorkspaceKeeps, WorkspaceSet, node_at,
+    SplitSize, StackEntry, Target, Workspace, WorkspaceChrome, WorkspaceKeeps, WorkspaceSet, node_at,
 };
 use emath::{Rect, pos2, vec2};
 
@@ -704,4 +704,151 @@ fn window_ids_stay_unique_within_each_layout_and_are_never_reused() {
     let mut layout = loaded.layout().clone();
     let fresh = layout.fresh_window_id();
     assert!(!window_ids(&loaded).contains(&fresh), "a draw past the top of the range takes a free id: {fresh}");
+}
+
+/// Reveal shows a panel the layout already holds: in a column collapsed to icons the column opens and the panel's
+/// tab is the group's active one.
+#[test]
+fn revealing_a_panel_in_a_collapsed_column_opens_the_column_with_the_panel_in_front() {
+    let mut layout = docked();
+    layout.apply(Action::set_iconic(2, true)).unwrap();
+    assert_eq!(layout.panel_state(&2), PanelState::Open, "its tab is behind 3 and the column is collapsed");
+    layout.apply(Action::reveal(2)).unwrap();
+    assert!(!column_of(&layout, 2).iconic, "the column opens");
+    assert_eq!(front(&layout, 2), 2, "and its tab is the group's active one");
+    assert_eq!(layout.panel_state(&2), PanelState::Front);
+}
+
+/// Reveal of a panel in an expanded group selects its tab, in a column and in the docked tree alike.
+#[test]
+fn revealing_a_panel_takes_its_tab_to_the_front_of_its_group() {
+    let mut layout = docked();
+    assert_eq!(front(&layout, 3), 3, "the group shows its second tab");
+    layout.apply(Action::reveal(2)).unwrap();
+    assert_eq!(front(&layout, 2), 2, "the tab switches");
+    assert_eq!(layout.panel_state(&2), PanelState::Front);
+    assert_eq!(layout.panel_state(&3), PanelState::Open, "the panel it replaced is open behind it");
+
+    let mut layout = docked();
+    layout.apply(Action::reveal(11)).unwrap();
+    let place = layout.place(&11).unwrap();
+    let Some(Node::Tabs { active, .. }) = layout.node_of(&place) else { panic!("11 stays a tab node") };
+    assert_eq!(*active, 0, "a tab of the docked tree is selected the same way");
+}
+
+/// Revealing a panel that already shows edits nothing at all.
+#[test]
+fn revealing_a_shown_panel_changes_nothing() {
+    let mut layout = docked();
+    let before = layout.clone();
+    assert_eq!(layout.panel_state(&3), PanelState::Front);
+    layout.apply(Action::reveal(3)).unwrap();
+    assert_eq!(layout, before, "the whole layout is byte for byte what it was");
+
+    let mut layout = columns();
+    let before = layout.clone();
+    layout.apply(Action::reveal(6)).unwrap();
+    assert_eq!(layout, before, "a showing panel of a floating window changes nothing either");
+}
+
+/// Reveal opens only the panel's own column: other collapsed columns, the groups around it and the floating
+/// window keep their state and sizes.
+#[test]
+fn revealing_a_panel_leaves_the_other_columns_and_the_rest_of_the_dock_as_they_are() {
+    let mut layout = docked();
+    layout.apply(Action::set_iconic(2, true)).unwrap();
+    layout.apply(Action::set_iconic(5, true)).unwrap();
+    let float_before = layout.floating.clone();
+    layout.apply(Action::reveal(4)).unwrap();
+    let columns = end_dock(&layout);
+    assert!(!columns[0].iconic, "the panel's column opens");
+    assert_eq!(columns[0].width, Some(180.0), "with the width the user gave it");
+    assert!(columns[1].iconic, "the other collapsed column stays collapsed");
+    assert_eq!(columns[1].width, Some(120.0), "with its width");
+    assert_eq!(columns[0].groups[0].active_panel(), Some(&3), "its neighbour group keeps its active tab");
+    assert_eq!(front(&layout, 4), 4);
+    assert_eq!(layout.floating, float_before, "the floating window is untouched");
+    assert_eq!(layout.panel_state(&1), PanelState::Front, "the docked tree is untouched");
+}
+
+/// A floating window's column is a column too: reveal opens a collapsed one, shows the panel, and keeps the
+/// window's place and the edge its strip hung from.
+#[test]
+fn revealing_a_panel_in_a_collapsed_float_expands_the_window_and_shows_the_panel() {
+    let mut layout = docked();
+    layout.apply(Action::set_iconic(6, true)).unwrap();
+    layout.apply(Action::move_floating_with_edge(6, window(), Some(DockEdge::End))).unwrap();
+    assert_eq!(layout.panel_state(&6), PanelState::Open);
+    layout.apply(Action::reveal(6)).unwrap();
+    assert!(!column_of(&layout, 6).iconic, "the collapsed window opens");
+    assert_eq!(front(&layout, 6), 6, "its tab comes to the front");
+    assert_eq!(layout.panel_state(&6), PanelState::Front);
+    assert_eq!(layout.floating[0].edge, Some(DockEdge::End), "the strip's edge survives the reveal");
+    assert_eq!(layout.floating[0].rect, window(), "the window keeps its place");
+}
+
+/// A panel the layout does not hold is refused: closing and opening stay one call each, so a reveal never
+/// silently re-places a closed panel.
+#[test]
+fn revealing_a_closed_panel_is_refused_and_changes_nothing() {
+    let mut layout = docked();
+    layout.apply(Action::close(5)).unwrap();
+    let before = layout.clone();
+    assert_eq!(layout.apply(Action::reveal(5)), Err(DockError::MissingPanel));
+    assert_eq!(layout, before);
+}
+
+/// A group minimized to its tab strip hides all its panels: reveal expands the group as well as selecting
+/// the tab, so the panel ends showing, and the group keeps the height the user gave it.
+#[test]
+fn revealing_a_panel_expands_its_minimized_group() {
+    let mut layout = docked();
+    layout.apply(Action::set_minimized(2, true)).unwrap();
+    layout.apply(Action::resize_group(2, Some(120.0))).unwrap();
+    assert_eq!(layout.panel_state(&2), PanelState::Open, "the group shows only its tab strip");
+    layout.apply(Action::reveal(2)).unwrap();
+    let group = layout.group(&layout.place(&2).unwrap()).unwrap();
+    assert!(!group.minimized, "the group expands");
+    assert_eq!(front(&layout, 2), 2, "and its tab is the active one");
+    assert_eq!(group.height, Some(120.0), "the group keeps the height the user gave it");
+    assert_eq!(layout.panel_state(&2), PanelState::Front);
+}
+
+/// A panel of the docked tree hidden as a closed accordion entry: reveal opens the entry, leaves the other
+/// entries as they are, and ends with the panel showing.
+#[test]
+fn revealing_a_panel_opens_its_closed_accordion_entry() {
+    let root = Node::stack(vec![StackEntry { panel: 11, open: false, height: Some(80.0) }, StackEntry { panel: 12, open: true, height: None }]);
+    let mut layout = Layout::new(Some(root), Vec::new());
+    assert_eq!(layout.panel_state(&11), PanelState::Open, "the closed entry");
+    layout.apply(Action::reveal(11)).unwrap();
+    let place = layout.place(&11).unwrap();
+    let Some(Node::Stack { entries }) = layout.node_of(&place) else { panic!("11 stays an accordion entry") };
+    assert!(entries[0].open, "the entry opens");
+    assert_eq!(entries[0].height, Some(80.0), "and keeps its height");
+    assert!(entries[1].open, "the entry that was open stays open");
+    assert_eq!(layout.panel_state(&11), PanelState::Front);
+}
+
+/// Today's `Activate` keeps its meaning: it selects the tab but leaves the column collapsed, which is what the
+/// Window menu's flyout path relies on. Reveal is the call that opens the column.
+#[test]
+fn activating_a_panel_in_a_collapsed_column_still_keeps_the_column_closed() {
+    let mut layout = docked();
+    layout.apply(Action::set_iconic(2, true)).unwrap();
+    layout.apply(Action::activate(2)).unwrap();
+    assert!(column_of(&layout, 2).iconic, "the column stays collapsed");
+    assert_eq!(front(&layout, 2), 2, "the tab is selected under the closed column");
+    assert_eq!(layout.panel_state(&2), PanelState::Open, "and the panel still does not show");
+}
+
+/// Today's `Workspace::set_visible` keeps its meaning too: showing a panel selects its tab and opens a minimized
+/// group, but does not expand a column collapsed to icons.
+#[test]
+fn showing_a_panel_with_set_visible_still_leaves_a_collapsed_column_closed() {
+    let mut workspace = Workspace::new(docked());
+    workspace.apply(Action::set_iconic(2, true), false, allow).unwrap();
+    workspace.set_visible(2, true, None, false, allow).unwrap();
+    assert!(column_of(workspace.layout(), 2).iconic, "the column stays collapsed");
+    assert_eq!(front(workspace.layout(), 2), 2, "the tab is selected");
 }

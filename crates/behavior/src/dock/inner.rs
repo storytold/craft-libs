@@ -66,6 +66,21 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 }
                 Err(DockError::MissingPanel)
             }
+            Action::Reveal { panel } => {
+                let place = self.place(&panel).ok_or(DockError::MissingPanel)?;
+                if let Some(column) = self.column_mut(&place) {
+                    let group = column.groups.get_mut(place.group_index().ok_or(DockError::MissingPanel)?).ok_or(DockError::MissingPanel)?;
+                    group.active = group.panels.iter().position(|p| p == &panel).ok_or(DockError::MissingPanel)?;
+                    group.minimized = false;
+                    // The panel shows only once its column does: a column collapsed to icons expands.
+                    column.iconic = false;
+                    return Ok(());
+                }
+                if self.root.as_mut().is_some_and(|root| activate(root, &panel)) {
+                    return Ok(());
+                }
+                Err(DockError::MissingPanel)
+            }
             Action::Open { panel, anchor } => {
                 if self.contains(&panel) {
                     return self.apply_inner(Action::Activate { panel }, canvas);

@@ -135,6 +135,16 @@ pub enum Action<P> {
         /// The panel the action applies to.
         panel: P,
     },
+    /// Select a panel in its group, and open whatever container hides it: a minimized group expands, and a column
+    /// collapsed to icons expands with it, docked or floating, so the panel ends showing
+    /// ([`PanelState::Front`](super::PanelState::Front)). Only the panel's column changes its collapsed state; the
+    /// rest of the layout keeps its sizes and state. A panel the layout does not hold is refused as `Activate` is:
+    /// open it first ([`Self::Open`], [`Self::OpenAt`]).
+    #[non_exhaustive]
+    Reveal {
+        /// The panel the action applies to.
+        panel: P,
+    },
     /// Reveal a registered, currently absent panel. Applications validate their panel registry.
     /// `anchor` names the group it joins as the last tab. Without one it becomes the root of an
     /// empty layout, else joins the first dock group that accepts tabs and is shown (not
@@ -378,6 +388,11 @@ impl<P> Action<P> {
     /// Builds [`Action::Activate`].
     pub fn activate(panel: P) -> Self {
         Self::Activate { panel }
+    }
+
+    /// Builds [`Action::Reveal`].
+    pub fn reveal(panel: P) -> Self {
+        Self::Reveal { panel }
     }
 
     /// Builds [`Action::Open`].
