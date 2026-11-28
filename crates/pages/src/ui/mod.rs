@@ -52,8 +52,8 @@ pub use reading::{ReadingNav, ReadingNavOutput, ReadingState, ReadingView, Readi
 pub use setup::{PageLayoutChoice, PageLayoutMenus, PageSetupDialog};
 pub use sync_views::{Lead, SyncedViews, SyncedViewsOutput, SyncedViewsState};
 pub use table::{
-    BorderEdges, BorderPreset, CellAlign, CellSelectionOverlay, EdgeKey, EdgeLook, EdgePicker, RowHeight, SampleArea, TableChange, TableGeometry,
-    TableProperties, TablePropertiesOutput, TableSizePicker, TableSizePickerOutput, TableValues, TextDirection,
+    BorderEdges, BorderPreset, CellAlign, CellSelectionOverlay, EdgeKey, EdgeLook, EdgePicker, EdgeSize, RowHeight, SampleArea, TableChange,
+    TableGeometry, TableProperties, TablePropertiesOutput, TableSizePicker, TableSizePickerOutput, TableValues, TextDirection,
 };
 pub use text_selection::{
     MarkArea, MarkKind, PageTextSource, PageTexts, TextMark, TextMarks, TextSelectState, TextSelectTool, TextSelection, TextSpan,

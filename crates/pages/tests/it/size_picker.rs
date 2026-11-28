@@ -25,3 +25,22 @@ fn right_at_a_row_end_goes_on_to_the_next_row() {
     fixture.key(Key::ArrowRight, Modifiers::NONE).idle(2);
     assert_eq!(hovered.get(), Some((2, 1)), "Right wraps to the next row");
 }
+
+/// A picker asked for sample size draws a larger square than the default thumbnail.
+#[trial]
+fn edge_picker_sample_size_is_larger_than_the_thumbnail() {
+    use craft_pages::ui::table::{BorderEdges, EdgePicker, EdgeSize};
+    use craft_ui::contract::Bind;
+    let sides = Rc::new(Cell::new((0.0, 0.0)));
+    let seen = sides.clone();
+    let mut edges = BorderEdges::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let thumb = EdgePicker::new("Thumb", Bind::bound(&mut edges)).show(ui).response.rect.width();
+        let mut other = BorderEdges::default();
+        let sample = EdgePicker::new("Sample", Bind::bound(&mut other)).size(EdgeSize::Sample).show(ui).response.rect.width();
+        seen.set((thumb, sample));
+    });
+    fixture.settle();
+    let (thumb, sample) = sides.get();
+    assert!(thumb > 0.0 && sample > thumb, "thumb {thumb}, sample {sample}");
+}

@@ -163,6 +163,8 @@ pub struct EdgePickerStyle {
     focus: FocusLook,
     /// The side of the square.
     side: f32,
+    /// The side of the square at [`EdgeSize::Sample`].
+    sample_side: f32,
     /// How far the outer lines sit inside the square, and how near a line the pointer picks it.
     inset: f32,
     /// The area inside the lines.
@@ -198,6 +200,20 @@ pub struct EdgePicker<'a> {
     /// How the picture is drawn: the proxy diagram, or a sample of the borders on text, a paragraph or a page.
     #[prop]
     look: EdgeLook,
+    /// The extent of the square: a thumbnail, or a sample-sized preview.
+    #[prop]
+    size: EdgeSize,
+}
+
+/// How large the picker's square is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EdgeSize {
+    /// A thumbnail (`size.thumb.lg`).
+    #[default]
+    Thumb,
+    /// A preview at sample size (`size.thumb.sample.lg`), for a Borders or Shading dialog's page-like preview.
+    Sample,
 }
 
 /// How the borders preview is drawn.
@@ -246,7 +262,7 @@ struct ClickRun {
 impl<'a> EdgePicker<'a> {
     /// A picker named `label` editing `edges`.
     pub fn new(label: impl Into<Label>, edges: Bind<'a, BorderEdges>) -> Self {
-        EdgePicker { common: Common::new(), edges, paragraph: false, look: EdgeLook::default() }.label(label).ltr_axis()
+        EdgePicker { common: Common::new(), edges, paragraph: false, look: EdgeLook::default(), size: EdgeSize::default() }.label(label).ltr_axis()
     }
 
     /// The name of `edge`.
@@ -353,6 +369,7 @@ impl Component for EdgePicker<'_> {
                 .border(edge, cx.tokens.stroke.thin),
             focus: cx.focus_look(),
             side: cx.tokens.size.thumb.lg,
+            sample_side: cx.tokens.size.thumb.sample.lg,
             inset: cx.tokens.space.pad.regular,
             fill: cx.color(colors.surface.sunken),
             on: Stateful::new(cx.color(colors.accent.solid)),
@@ -361,7 +378,10 @@ impl Component for EdgePicker<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::splat(cx.style.side)
+        Vec2::splat(match self.size {
+            EdgeSize::Thumb => cx.style.side,
+            EdgeSize::Sample => cx.style.sample_side,
+        })
     }
 
     fn sense(&self) -> Sense {
