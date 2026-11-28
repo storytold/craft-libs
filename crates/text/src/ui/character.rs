@@ -239,6 +239,9 @@ const OPTICAL_ROW: u32 = 1;
 
 /// The range of the size field, points.
 pub(crate) const SIZE_RANGE: RangeInclusive<f64> = 0.1..=1296.0;
+/// The range of the type bar's size field, points: the bar takes sizes down to 0.01 pt (PhotoCraft #12053).
+/// The Character panel and the style options keep [`SIZE_RANGE`].
+pub(crate) const BAR_SIZE_RANGE: RangeInclusive<f64> = 0.01..=1296.0;
 /// The range of the leading field, points.
 const LEADING_RANGE: RangeInclusive<f64> = 0.1..=5000.0;
 /// The range of the baseline shift field, points.

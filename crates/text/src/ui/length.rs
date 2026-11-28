@@ -50,3 +50,19 @@ pub(crate) fn length_field<'a>(unit: DocUnit, label: impl Into<Label>, points: M
 pub(crate) fn shown(units: &Units, unit: DocUnit, points: f64) -> f64 {
     points * units.length_scale(unit.lengths()).unwrap_or(1.0)
 }
+
+/// The fewest decimals a field shows when the ends of its range are fractions in the shown unit: two, which is what
+/// the type bar's 0.01 pt minimum needs (PhotoCraft #12053).
+const MIN_FRACTION_DECIMALS: usize = 2;
+
+/// The decimals a field over `range` (points) writes exactly, when the two ends of that range are not whole numbers
+/// in `unit`: the unit's own decimals at least, and [`MIN_FRACTION_DECIMALS`] at least. A field at its unit's own
+/// decimals rounds such an end away, so the value it keeps shows as a number outside its own range (measured at
+/// 0.01 pt: the field painted 0). `None` when both ends are whole, which leaves the field at its unit's display;
+/// there the unit's decimals can be 0, which is what tells a range message its whole ends are whole.
+pub(crate) fn fraction_decimals(units: &Units, unit: DocUnit, range: RangeInclusive<f64>) -> Option<usize> {
+    if [*range.start(), *range.end()].iter().all(|points| shown(units, unit, *points).fract() == 0.0) {
+        return None;
+    }
+    Some(MIN_FRACTION_DECIMALS.max(*unit.kind.decimals().end()))
+}

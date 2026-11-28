@@ -24,3 +24,4 @@ pub(crate) mod style_panel;
 pub(crate) mod tabs;
 
 pub(crate) mod character;
+pub(crate) mod type_bar_size_range;

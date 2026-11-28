@@ -14,6 +14,7 @@ use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::HostRequests;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::Env;
+use craft_ui::text::RangeAlert;
 use egui::{Response, Ui};
 
 use crate::ui::character::paragraph::{align_toggles, direction_toggles};
@@ -21,9 +22,9 @@ use crate::ui::character::rows::{
     LengthRow, Lengths, family_field, hidden_side, mark, mixed, number_change, select_row, size_menu, string_entries, toggle_row,
 };
 use crate::ui::character::{
-    COLOR_KEY, CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords, SIZE_RANGE,
+    BAR_SIZE_RANGE, COLOR_KEY, CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords,
 };
-use crate::ui::length::DocUnit;
+use crate::ui::length::{DocUnit, fraction_decimals};
 use crate::ui::type_options::{TextAntiAlias, TextOrientation, TypeOptionWords};
 
 #[cfg(feature = "font-picker")]
@@ -74,6 +75,11 @@ pub struct TypeBarOutput {
     pub rested_family: Option<String>,
     /// The colour well was clicked.
     pub requests: HostRequests,
+    /// A value typed into the size field outside its range was clamped to the nearest limit, in the pass it
+    /// committed; never for an arrow, wheel or scrub step. The bar shows nothing itself: the host words this
+    /// report as the out-of-range alert (PhotoCraft #12053). Its ends, its decimals and whether they are whole
+    /// are the size field's own, in the unit the bar shows.
+    pub size_out_of_range: Option<RangeAlert>,
     /// The Warp Text button was pressed.
     pub warp: bool,
     /// The Character and Paragraph panels button was pressed.
@@ -167,6 +173,7 @@ impl<'a> TypeBar<'a> {
         let mut rested_family = None;
         let mut requests = HostRequests::new();
         let (mut warp, mut panels) = (false, false);
+        let mut size_out_of_range = None;
 
         let row = Row::new().gap(Gap::Item).show(ui, |ui, _| {
             let shown_vertical = orientation.map(|o| o == TextOrientation::Vertical);
@@ -188,11 +195,21 @@ impl<'a> TypeBar<'a> {
             let style = select_row(ui, &bar_words.style, hidden_side(), mixed(character.style.clone()), &style_entries, None, CharacterChange::Style);
             edits.extend(style.into_iter().map(|event| event.map(TypeBarChange::Character)));
 
-            // The size glyph the Character panel's size row shows.
+            // The size glyph the Character panel's size row shows. The bar's range ends in fractions (0.01 pt), so
+            // the field writes them at its own decimals: what it paints stays inside its range, and the report names
+            // its ends at the same decimals, in the unit the field shows (PhotoCraft #12053).
             let side = mark(GlyphLabel::text("tT"), None, FieldLayout::Inside);
-            let size =
-                LengthRow { label: bar_words.size.clone(), side, value: character.size, range: SIZE_RANGE, presets: &size_presets, disabled: None };
-            let (event, _) = lengths.row(ui, size);
+            let decimals = fraction_decimals(&units, unit, BAR_SIZE_RANGE);
+            let size = LengthRow {
+                label: bar_words.size.clone(),
+                side,
+                value: character.size,
+                range: BAR_SIZE_RANGE,
+                presets: &size_presets,
+                disabled: None,
+            };
+            let (event, _, alert) = lengths.row_with_alert(ui, size, decimals);
+            size_out_of_range = alert;
             edits.extend(number_change(event, CharacterChange::Size).into_iter().map(|event| event.map(TypeBarChange::Character)));
 
             let method = Field::new(option_words.anti_alias.clone()).side(hidden_side()).show(ui, |ui, _| {
@@ -220,6 +237,6 @@ impl<'a> TypeBar<'a> {
             let button = IconButton::new(IconId::new("panels_top_left")).label(bar_words.panels.clone()).show(ui);
             panels = clicked(&button);
         });
-        TypeBarOutput { response: row.output.response().clone(), edits, preview_family, rested_family, requests, warp, panels }
+        TypeBarOutput { response: row.output.response().clone(), edits, preview_family, rested_family, requests, size_out_of_range, warp, panels }
     }
 }

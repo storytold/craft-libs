@@ -13,7 +13,7 @@ use craft_ui::pickers::Select;
 use craft_ui::primitives::{Glyph, IconSpec};
 use craft_ui::runtime::env::{Label, UnitKind, Units};
 use craft_ui::style::UiTokens;
-use craft_ui::text::{NamedOr, NumberField, NumberPick};
+use craft_ui::text::{NamedOr, NumberField, NumberPick, RangeAlert};
 use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, vec2};
 
 #[cfg(feature = "font-picker")]
@@ -80,14 +80,36 @@ pub(crate) fn disabled_for<P: Props>(component: P, name: &Label, reason: Option<
 }
 
 impl Lengths<'_> {
-    /// A field over a length in points, shown in the unit: its event in points and the preset row picked. The field
-    /// fills its grid cell.
-    pub(crate) fn row(&self, ui: &mut Ui, spec: LengthRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
-        self.row_keyed(ui, spec, None)
+    /// A field over a length in points, shown in the unit: its event in points, the preset row picked, and the
+    /// report of a typed value that committed outside the range and was clamped (the field's `out_of_range`,
+    /// never for an arrow, wheel or scrub step). The row itself shows nothing for the clamp: it hands the report
+    /// to the host to word as an alert. `decimals` writes the field's number at exactly that many decimals
+    /// ([`NumberField::fixed_decimals`]), which is also how many the report names its range's ends at; `None` keeps
+    /// the unit's own display. The field fills its grid cell.
+    pub(crate) fn row_with_alert(
+        &self,
+        ui: &mut Ui,
+        spec: LengthRow<'_>,
+        decimals: Option<usize>,
+    ) -> (EditEvents<Option<f64>>, Option<NumberPick>, Option<RangeAlert>) {
+        self.row_keyed_alert(ui, spec, None, decimals)
     }
 
     /// As [`row`](Self::row), the field carrying the document `key` a host focuses it by.
     pub(crate) fn row_keyed(&self, ui: &mut Ui, spec: LengthRow<'_>, key: Option<DocKey>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
+        let (events, picked, _) = self.row_keyed_alert(ui, spec, key, None);
+        (events, picked)
+    }
+
+    /// Both knobs: the field carries `key` and, with `decimals`, writes a fixed number of decimals and reports
+    /// the clamped out-of-range value.
+    fn row_keyed_alert(
+        &self,
+        ui: &mut Ui,
+        spec: LengthRow<'_>,
+        key: Option<DocKey>,
+        decimals: Option<usize>,
+    ) -> (EditEvents<Option<f64>>, Option<NumberPick>, Option<RangeAlert>) {
         let LengthRow { label, side, value, range, presets, disabled } = spec;
         let points = value.map_or(Mixed::Mixed, |value| Mixed::Same(Some(f64::from(value))));
         let field = Field::new(label.clone()).side(side).show(ui, |ui, _| {
@@ -100,10 +122,20 @@ impl Lengths<'_> {
                 Some(key) => field.doc_key(key),
                 None => field,
             };
+            let field = match decimals {
+                Some(decimals) => field.fixed_decimals(decimals),
+                None => field,
+            };
             let out = disabled_for(field, &label, disabled.as_ref()).show(ui);
-            (out.edit.events, out.preset)
+            (out.edit.events, out.preset, out.out_of_range)
         });
         field.inner.unwrap_or_default()
+    }
+
+    /// [`Lengths::row_with_alert`] without the out-of-range report and at the unit's own display decimals: the row
+    /// stays silent about a clamped typed value, as every caller but the type bar's size field keeps it.
+    pub(crate) fn row(&self, ui: &mut Ui, spec: LengthRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
+        self.row_keyed(ui, spec, None)
     }
 
     /// The kerning field: a number or the name of a presets row (Metrics, Optical). The field fills its grid cell.
