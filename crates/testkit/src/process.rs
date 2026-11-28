@@ -4,6 +4,7 @@
 //! and standard error at the same time, each on its own thread, under [`RunLimits`]. When a stream
 //! passes `max_output_bytes`, when `timeout` passes, or when reading fails, the child is killed and
 //! reaped before the error returns, and `run` waits up to 2 seconds for the pipe readers to finish.
+//! On Unix, readers still blocked after that stop and close their ends of the pipes.
 //!
 //! On Unix the child leads its own process group, and the whole group is killed, so a process it
 //! started that still holds the output pipes ends too. A successful run waits for the child alone
@@ -15,6 +16,10 @@
 use std::fmt;
 use std::io::{self, Read};
 use std::process::{ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -91,24 +96,47 @@ impl std::error::Error for RunError {
 pub(crate) struct Observed {
     /// The child's process id.
     pub(crate) pid: Option<u32>,
-    /// Whether every pending pipe reader finished before a failed run returned.
+    /// Whether every pending pipe reader finished before the grace period of a failed run ended.
     pub(crate) pipes_closed: bool,
+    /// Whether every pending pipe reader had stopped when a failed run returned, including readers
+    /// stopped after the grace period.
+    pub(crate) readers_stopped: bool,
 }
 
 /// How long a failed run waits for its pipe readers to finish after the child is killed.
 const PIPE_GRACE: Duration = Duration::from_secs(2);
+
+/// How long a failed run waits for its pipe readers to stop after it asks them to.
+#[cfg(unix)]
+const READER_STOP: Duration = Duration::from_millis(500);
+
+/// How often a Unix pipe reader checks whether it was asked to stop.
+#[cfg(unix)]
+const READER_POLL_MS: i64 = 20;
 
 enum ReadFail {
     Limit,
     Io(io::Error),
 }
 
+impl From<io::Error> for ReadFail {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
 type StreamResult = (Stream, Result<Vec<u8>, ReadFail>);
 
 /// Runs `cmd` under `limits` and returns its exit status and output. The exit status is not
-/// checked. The runner sets standard input, standard output and standard error, and on Unix the
-/// process group; every other setting of `cmd` is kept. A timeout too long to set a deadline
-/// returns [`RunError::InvalidTimeout`] without starting the program.
+/// checked. The runner sets standard input, standard output and standard error, on Unix the
+/// process group, and on Windows the creation flags: the Job Object wrapper starts the child
+/// suspended and replaces any flags set on `cmd`, such as `CREATE_NO_WINDOW`. Every other setting
+/// of `cmd` is kept.
+///
+/// A timeout too long to set a deadline when `run` is called returns
+/// [`RunError::InvalidTimeout`] without starting the program. A timeout that still fits then but
+/// no longer fits once the child has started returns the same error after the child is killed and
+/// reaped, so the child may already have run for a moment.
 pub(crate) fn run(mut cmd: Command, limits: RunLimits, seen: &mut Observed) -> Result<Output, RunError> {
     if let Some(timeout) = limits.timeout
         && Instant::now().checked_add(timeout).is_none()
@@ -130,12 +158,17 @@ pub(crate) fn run(mut cmd: Command, limits: RunLimits, seen: &mut Observed) -> R
         None => None,
     };
     let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
     let (stdout_pipe, stderr_pipe) = take_pipes(&mut child);
-    if let Err(source) = spawn_reader(stdout_pipe, Stream::Stdout, limits.max_output_bytes, tx.clone()) {
-        return abort(&mut child, &rx, 0, seen, RunError::Read(source));
+    #[cfg(unix)]
+    let readers = Readers { rx: &rx, stop: &stop };
+    #[cfg(not(unix))]
+    let readers = Readers { rx: &rx };
+    if let Err(source) = spawn_reader(stdout_pipe, Stream::Stdout, limits.max_output_bytes, tx.clone(), &stop) {
+        return abort(&mut child, &readers, 0, seen, RunError::Read(source));
     }
-    if let Err(source) = spawn_reader(stderr_pipe, Stream::Stderr, limits.max_output_bytes, tx) {
-        return abort(&mut child, &rx, 1, seen, RunError::Read(source));
+    if let Err(source) = spawn_reader(stderr_pipe, Stream::Stderr, limits.max_output_bytes, tx, &stop) {
+        return abort(&mut child, &readers, 1, seen, RunError::Read(source));
     }
     let timeout = || RunError::Timeout(limits.timeout.unwrap_or_default());
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
@@ -149,13 +182,13 @@ pub(crate) fn run(mut cmd: Command, limits: RunLimits, seen: &mut Observed) -> R
             Ok((Stream::Stdout, Ok(bytes))) => stdout = bytes,
             Ok((Stream::Stderr, Ok(bytes))) => stderr = bytes,
             Ok((stream, Err(ReadFail::Limit))) => {
-                return abort(&mut child, &rx, pending, seen, RunError::OutputLimit { stream, limit: limits.max_output_bytes });
+                return abort(&mut child, &readers, pending, seen, RunError::OutputLimit { stream, limit: limits.max_output_bytes });
             }
-            Ok((_, Err(ReadFail::Io(source)))) => return abort(&mut child, &rx, pending, seen, RunError::Read(source)),
-            Err(RecvTimeoutError::Timeout) => return abort(&mut child, &rx, pending, seen, timeout()),
+            Ok((_, Err(ReadFail::Io(source)))) => return abort(&mut child, &readers, pending, seen, RunError::Read(source)),
+            Err(RecvTimeoutError::Timeout) => return abort(&mut child, &readers, pending, seen, timeout()),
             Err(RecvTimeoutError::Disconnected) => {
                 let source = io::Error::other("a pipe reader stopped without a result");
-                return abort(&mut child, &rx, 0, seen, RunError::Read(source));
+                return abort(&mut child, &readers, 0, seen, RunError::Read(source));
             }
         }
     }
@@ -172,15 +205,21 @@ fn receive(rx: &Receiver<StreamResult>, deadline: Option<Instant>) -> Result<Str
 }
 
 /// Read `r` to its end, or stop with [`ReadFail::Limit`] once it holds more than `cap` bytes.
+#[cfg(test)]
 fn read_capped(mut r: impl Read, cap: usize) -> Result<Vec<u8>, ReadFail> {
+    read_capped_with(cap, |buf| Ok(r.read(buf)?))
+}
+
+/// Like `read_capped`, reading each chunk with `read`. A [`ReadFail`] from `read` ends the read.
+fn read_capped_with(cap: usize, mut read: impl FnMut(&mut [u8]) -> Result<usize, ReadFail>) -> Result<Vec<u8>, ReadFail> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
-        let n = match r.read(&mut chunk) {
+        let n = match read(&mut chunk) {
             Ok(0) => return Ok(buf),
             Ok(n) => n,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(ReadFail::Io(e)),
+            Err(ReadFail::Io(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
         };
         if buf.len().saturating_add(n) > cap {
             return Err(ReadFail::Limit);
@@ -189,16 +228,81 @@ fn read_capped(mut r: impl Read, cap: usize) -> Result<Vec<u8>, ReadFail> {
     }
 }
 
-/// Read one pipe on its own thread and send the result with its stream.
-fn spawn_reader(pipe: Option<impl Read + Send + 'static>, stream: Stream, cap: usize, tx: Sender<StreamResult>) -> io::Result<()> {
+/// The pipe readers of one run: where they send their results, and the flag that asks them to stop.
+struct Readers<'a> {
+    rx: &'a Receiver<StreamResult>,
+    #[cfg(unix)]
+    stop: &'a Arc<AtomicBool>,
+}
+
+/// Read one pipe on its own thread and send the result with its stream. On Unix the reader waits
+/// for data in short polls and stops, closing its end of the pipe, once `stop` is set. On Windows
+/// the job object ends every process that could hold the pipe, so the read always finishes.
+fn spawn_reader(pipe: Option<PipeOf>, stream: Stream, cap: usize, tx: Sender<StreamResult>, stop: &Arc<AtomicBool>) -> io::Result<()> {
     let Some(pipe) = pipe else {
         let _ = tx.send((stream, Ok(Vec::new())));
         return Ok(());
     };
+    #[cfg(unix)]
+    let stop = Arc::clone(stop);
+    #[cfg(not(unix))]
+    let _ = stop;
     std::thread::Builder::new().name(format!("craft-testkit-process-{stream}")).spawn(move || {
-        let _ = tx.send((stream, read_capped(pipe, cap)));
+        #[cfg(unix)]
+        let got = read_capped_with(cap, |buf| {
+            wait_readable(&pipe, &stop)?;
+            rustix::io::read(&pipe, buf).map_err(|e| ReadFail::Io(e.into()))
+        });
+        #[cfg(not(unix))]
+        let mut pipe = pipe;
+        #[cfg(not(unix))]
+        let got = read_capped_with(cap, |buf| Ok(pipe.read(buf)?));
+        let _ = tx.send((stream, got));
     })?;
     Ok(())
+}
+
+/// A child output pipe of either stream.
+enum PipeOf {
+    Stdout(ChildStdout),
+    Stderr(ChildStderr),
+}
+
+impl Read for PipeOf {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Stdout(pipe) => pipe.read(buf),
+            Self::Stderr(pipe) => pipe.read(buf),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl std::os::fd::AsFd for PipeOf {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        match self {
+            Self::Stdout(pipe) => pipe.as_fd(),
+            Self::Stderr(pipe) => pipe.as_fd(),
+        }
+    }
+}
+
+/// Wait until `pipe` has data or has closed, checking `stop` between short polls.
+#[cfg(unix)]
+fn wait_readable(pipe: &PipeOf, stop: &AtomicBool) -> Result<(), ReadFail> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    let pause = Timespec { tv_sec: 0, tv_nsec: READER_POLL_MS * 1_000_000 };
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return Err(ReadFail::Io(io::Error::other("the pipe reader was stopped after the child was killed")));
+        }
+        let mut fds = [PollFd::new(pipe, PollFlags::IN)];
+        match poll(&mut fds, Some(&pause)) {
+            Ok(0) | Err(rustix::io::Errno::INTR) => {}
+            Ok(_) => return Ok(()),
+            Err(e) => return Err(ReadFail::Io(e.into())),
+        }
+    }
 }
 
 /// Kill the child and reap it. On Unix the child leads its own process group, and the whole group
@@ -212,10 +316,26 @@ fn kill_and_reap(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// Kill and reap the child, then wait up to [`PIPE_GRACE`] for the `pending` pipe readers.
-fn abort(child: &mut Child, rx: &Receiver<StreamResult>, mut pending: usize, seen: &mut Observed, e: RunError) -> Result<Output, RunError> {
+/// Kill and reap the child, then wait up to [`PIPE_GRACE`] for the `pending` pipe readers. On
+/// Unix, a process outside the child's group, such as one in another session, can still hold a
+/// pipe; readers left after the grace period are asked to stop, and `abort` waits up to
+/// `READER_STOP` for them, so they close their ends of the pipes.
+fn abort(child: &mut Child, readers: &Readers<'_>, mut pending: usize, seen: &mut Observed, e: RunError) -> Result<Output, RunError> {
     kill_and_reap(child);
-    let until = Instant::now().checked_add(PIPE_GRACE).unwrap_or_else(Instant::now);
+    pending = wait_readers(readers.rx, pending, PIPE_GRACE);
+    seen.pipes_closed = pending == 0;
+    #[cfg(unix)]
+    if pending > 0 {
+        readers.stop.store(true, Ordering::Release);
+        pending = wait_readers(readers.rx, pending, READER_STOP);
+    }
+    seen.readers_stopped = pending == 0;
+    Err(e)
+}
+
+/// Wait up to `grace` for `pending` reader results, and return how many are still pending.
+fn wait_readers(rx: &Receiver<StreamResult>, mut pending: usize, grace: Duration) -> usize {
+    let until = Instant::now().checked_add(grace).unwrap_or_else(Instant::now);
     while pending > 0 {
         match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
             Ok(_) => pending -= 1,
@@ -223,8 +343,7 @@ fn abort(child: &mut Child, rx: &Receiver<StreamResult>, mut pending: usize, see
             Err(RecvTimeoutError::Timeout) => break,
         }
     }
-    seen.pipes_closed = pending == 0;
-    Err(e)
+    pending
 }
 
 /// Start `cmd`, trying again up to 8 times while the program file is busy (`ETXTBSY`). A file is
@@ -251,15 +370,12 @@ fn spawn(cmd: Command) -> io::Result<Child> {
     wrapped.spawn()
 }
 
-fn take_pipes(child: &mut Child) -> (Option<ChildStdout>, Option<ChildStderr>) {
+fn take_pipes(child: &mut Child) -> (Option<PipeOf>, Option<PipeOf>) {
     #[cfg(not(windows))]
-    {
-        (child.stdout.take(), child.stderr.take())
-    }
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
     #[cfg(windows)]
-    {
-        (child.stdout().take(), child.stderr().take())
-    }
+    let (stdout, stderr) = (child.stdout().take(), child.stderr().take());
+    (stdout.map(PipeOf::Stdout), stderr.map(PipeOf::Stderr))
 }
 
 /// The child's exit status, if it has exited, without reaping any other process.
@@ -544,5 +660,32 @@ $output.Flush()
         let got = run(sh("sleep 1000 &\nexec yes"), LIMITS, &mut seen);
         assert!(matches!(got, Err(RunError::OutputLimit { .. })), "{got:?}");
         assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe a descendant holds");
+    }
+
+    /// A process the child started in its own session keeps the pipes open after the child's group
+    /// is killed. Once the grace period passes, the readers stop and close their ends of the pipes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn readers_stop_when_a_process_in_another_session_holds_the_pipes() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let ready = std::env::temp_dir().join(format!("craft-testkit-process-session-{}-{nanos:x}", std::process::id()));
+        // The process in the new session writes its id once it has left the child's group, and the
+        // child starts writing past the output limit only after that.
+        let script = "setsid sh -c 'echo $$ > \"$1.tmp\" && mv \"$1.tmp\" \"$1\" && exec sleep 1000' sh \"$READY\" &\n\
+                      while [ ! -s \"$READY\" ]; do :; done\nexec yes";
+        let mut command = sh(script);
+        command.env("READY", &ready);
+        let mut seen = Observed::default();
+        let got = run(command, LIMITS, &mut seen);
+        let held = std::fs::read_to_string(&ready).unwrap_or_default();
+        if let Ok(pid) = held.trim().parse::<i32>()
+            && let Some(pid) = rustix::process::Pid::from_raw(pid)
+        {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        }
+        let _ = std::fs::remove_file(&ready);
+        assert!(matches!(got, Err(RunError::OutputLimit { .. })), "{got:?}");
+        assert!(!seen.pipes_closed, "the process in another session should still hold the pipes");
+        assert!(seen.readers_stopped, "a pipe reader stayed blocked after the grace period");
     }
 }

@@ -101,7 +101,10 @@ fn parse_required(variable: &str, value: Option<&OsStr>) -> Result<bool, Require
 /// `required_var` is `1`. A value of `required_var` that [`required`] rejects fails the test with
 /// the reason and the error. The caller returns from the test itself:
 /// `if !skip(reason, var) { return; }`.
-/// Optional skips ignore stderr write failures.
+///
+/// The `SKIPPED:` line is written to the process's standard error, not through `eprint!`, so the
+/// test harness does not capture it: it shows in a default run of a passing test, and
+/// `--show-output` does not list it under the test's name. A failed write of the line is ignored.
 #[allow(clippy::panic)]
 pub fn skip(reason: &str, required_var: &str) -> bool {
     match required(required_var) {

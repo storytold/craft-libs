@@ -50,7 +50,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::process::{self, Observed, RunError, RunLimits};
 
@@ -487,6 +487,10 @@ fn lookup_with_probe(
     limits: ProbeLimits,
     mut probe: impl FnMut(&Path) -> Result<Oracle, OracleError>,
 ) -> Result<Oracle, OracleError> {
+    // Checked before the search, so a missing program cannot turn an invalid timeout into a skip.
+    if Instant::now().checked_add(limits.timeout).is_none() {
+        return Err(OracleError::InvalidTimeout { timeout: limits.timeout });
+    }
     let mut denied = HashSet::new();
     loop {
         let path = if denied.is_empty() { locate(s)? } else { locate_if(s, |path| !denied.contains(path))? };
@@ -1197,6 +1201,15 @@ mod tests {
         script(d.path(), "tool", "echo tool 1.0");
         let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::MAX };
         let got = find_on(d.path(), "tool", "-v", limits);
+        assert!(matches!(got, Err(OracleError::InvalidTimeout { timeout: Duration::MAX })), "{got:?}");
+    }
+
+    /// An invalid timeout is reported even when the program is not found, so it cannot become a skip.
+    #[test]
+    fn an_invalid_timeout_is_reported_before_the_search() {
+        let d = Scratch::new("no-deadline-missing");
+        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::MAX };
+        let got = find_in("tool", "-v", None, Some(d.path().as_os_str()), &[], limits);
         assert!(matches!(got, Err(OracleError::InvalidTimeout { timeout: Duration::MAX })), "{got:?}");
     }
 }
