@@ -1112,8 +1112,8 @@ fn styled_cell(t: &Table, style: Option<&craft_wordmodel::styles::TableStyleProp
     };
     let mut part_borders = Vec::new();
     if let Some(st) = style {
-        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
-        for part in PartSet::of_cell(&t.props.look, sizes, (ri, nrows), (g, span, ncols)).iter() {
+        let bands = craft_wordmodel::styles::TableBands::new(&t.props.look, Some(&st.parts), t.rows.iter().map(|r| r.props.header));
+        for part in PartSet::of_cell(&bands, (ri, nrows), (g, span, ncols)).iter() {
             let f = st.part(part);
             out.fill = f.fill.or(out.fill);
             out.v_align = f.v_align.or(out.v_align);

@@ -5254,6 +5254,54 @@ fn our_banded_table_styles_write_their_band_sizes() {
     assert_eq!(back.styles.table_style("GridTable4AccentBlue").map(|t| t.parts.band_size), Some(Some(1)));
 }
 
+/// What makes Word count a table style part for the table's bands (measured): anything inside its
+/// `w:pPr`, `w:rPr`, `w:trPr` or `w:tcPr`, even what we don't keep, and it stays counted through a
+/// save. An empty one, or only a `w:tblPr`, doesn't count. A total row's empty `w:tcBorders`, which
+/// leaves it no borders here, still counts.
+#[test]
+fn a_table_style_part_counts_for_the_bands_when_it_says_something() {
+    use craft_wordmodel::styles::TablePart;
+    let cases = [
+        ("Empty", "", false),
+        ("EmptyTc", "<w:tcPr/>", false),
+        ("EmptyR", "<w:rPr/>", false),
+        ("EmptyP", "<w:pPr/>", false),
+        ("EmptyTr", "<w:trPr/>", false),
+        ("OnlyTbl", r#"<w:tblPr><w:tblInd w:w="100" w:type="dxa"/></w:tblPr>"#, false),
+        ("Mar", r#"<w:tcPr><w:tcMar><w:left w:w="100" w:type="dxa"/></w:tcMar></w:tcPr>"#, true),
+        ("Nil", r#"<w:tcPr><w:shd w:val="nil"/></w:tcPr>"#, true),
+        ("Row", "<w:trPr><w:tblHeader/></w:trPr>", true),
+        ("Keep", r#"<w:pPr><w:keepNext w:val="0"/></w:pPr>"#, true),
+        ("Bold", "<w:rPr><w:b/></w:rPr>", true),
+        ("Mid", r#"<w:tcPr><w:vAlign w:val="center"/></w:tcPr>"#, true),
+        ("Edges", "<w:tcPr><w:tcBorders/></w:tcPr>", true),
+    ];
+    let parts = [("firstRow", TablePart::FirstRow), ("lastRow", TablePart::LastRow)];
+    let styles: String = cases
+        .iter()
+        .flat_map(|(id, inner, _)| parts.map(|(ty, _)| (id, inner, ty)))
+        .map(|(id, inner, ty)| {
+            format!(
+                r#"<w:style w:type="table" w:styleId="{id}-{ty}"><w:name w:val="{id}-{ty}"/><w:tblStylePr w:type="{ty}">{inner}</w:tblStylePr></w:style>"#
+            )
+        })
+        .collect();
+    let styles = format!("<w:styles {W_NS}>{styles}</w:styles>");
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = craft_docx::read(&bytes).unwrap();
+    let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    for (name, doc) in [("read", &d), ("saved", &back)] {
+        for (id, _, counts) in &cases {
+            for (ty, part) in parts {
+                let has = doc.styles.get(&format!("{id}-{ty}")).and_then(|s| s.table.as_ref()).is_some_and(|t| t.has_part(part));
+                assert_eq!(has, *counts, "{id} {ty} {name}");
+            }
+        }
+    }
+    let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/styles.xml");
+    assert!(xml.contains(r#"<w:tblStylePr w:type="firstRow"><w:trPr><w:tblHeader w:val="0"/></w:trPr></w:tblStylePr>"#), "{xml}");
+}
+
 #[test]
 fn vml_shape_wrap_side_and_anchor_case_insensitivity() {
     let body = r##"<w:p>

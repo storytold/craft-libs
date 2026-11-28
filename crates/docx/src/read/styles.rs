@@ -327,7 +327,14 @@ impl Reader<'_> {
                     t.regions.insert(part, PartFormat { v_align: f.v_align, ..PartFormat::default() });
                 }
             } else {
+                // Word counts a part for the table's bands by anything in these, even what isn't
+                // kept here: an empty one or a `w:tblPr` doesn't make it count.
+                let stated = ["w:pPr", "w:rPr", "w:trPr", "w:tcPr"].iter().any(|n| c.child(n).is_some_and(|e| e.els().next().is_some()));
+                // What's left once stored: a total row's empty borders aren't kept.
                 t.set_part(part, f);
+                if stated && t.part(part).is_empty() {
+                    t.parts_present.insert(part);
+                }
             }
         }
         t
