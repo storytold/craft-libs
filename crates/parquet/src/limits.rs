@@ -76,6 +76,12 @@ impl<'a> Compact<'a> {
             let delta = header >> 4;
             id = if delta == 0 { self.integer()? } else { id.checked_add(i64::from(delta)).ok_or_else(|| invalid("Parquet field id overflow"))? };
             let kind = header & 15;
+            // Apache's reader picks a known field by its id and reads the declared type whatever
+            // the wire type says, so a field sent with another type would shift its reading of
+            // every later byte away from this one.
+            if expected_kind(context, self.counts_field, id).is_some_and(|expected| !expected.contains(&kind)) {
+                return Err(invalid("A Parquet metadata field has the wrong type"));
+            }
             if matches!(context, Context::Footer) && id == 2 && kind == 9 {
                 let (n, element) = self.collection()?;
                 if element != 12 || n == 0 || n > (self.limits.max_columns as usize).saturating_add(1) {
@@ -183,6 +189,22 @@ impl<'a> Compact<'a> {
         Ok(())
     }
 }
+/// The compact-Thrift types of the fields this preflight reads, and of every field Apache reads
+/// from a page header before its payload: i32 and enums are 5, structs 12, lists 9, Booleans 1
+/// or 2. `counts_field` names the page-header struct that `Context::Counts` is reading.
+fn expected_kind(context: Context, counts_field: i64, id: i64) -> Option<&'static [u8]> {
+    const I32: &[u8] = &[5];
+    const BOOL: &[u8] = &[1, 2];
+    match (context, counts_field, id) {
+        (Context::Footer, _, 2) => Some(&[9]),
+        (Context::SchemaRoot | Context::Schema, _, 5) => Some(I32),
+        (Context::Page, _, 1..=4) => Some(I32),
+        (Context::Page, _, 5..=8) => Some(&[12]),
+        (Context::Counts, 5, 1..=4) | (Context::Counts, 7, 1 | 2) | (Context::Counts, 8, 1..=6) => Some(I32),
+        (Context::Counts, 7, 3) | (Context::Counts, 8, 7) => Some(BOOL),
+        _ => None,
+    }
+}
 pub(crate) fn footer(bytes: &[u8], limits: &TableLimits) -> Result<usize> {
     if bytes.starts_with(b"PARE") {
         return Err(invalid("Encrypted Parquet files are not supported"));
@@ -286,6 +308,21 @@ mod tests {
         // Negative decoded-page size and a data-page value count of -1.
         assert!(Compact::new(&[0x25, 1, 0], &LIMITS).structure(0, Context::Page).is_err());
         assert!(Compact::new(&[0x15, 1, 0], &LIMITS).structure(0, Context::Counts).is_err());
+    }
+    #[test]
+    fn known_page_header_fields_must_carry_their_declared_type() {
+        // Page type, sizes and a data page header with num_values 3 and PLAIN_DICTIONARY encoding.
+        let header =
+            |num_values_type: u8| [0x15, 0x00, 0x15, 0x40, 0x15, 0x40, 0x2c, num_values_type, 0x06, 0x15, 0x04, 0x15, 0x00, 0x15, 0x00, 0, 0];
+        let plain = header(0x15);
+        let mut page = Compact::new(&plain, &LIMITS);
+        page.structure(0, Context::Page).unwrap();
+        assert_eq!((page.page_type, page.encoding), (Some(0), Some(2)));
+        // As a Boolean, num_values would hide the encoding here while Apache still reads it.
+        let message = Compact::new(&header(0x11), &LIMITS).structure(0, Context::Page).unwrap_err().to_string();
+        assert!(message.contains("wrong type"), "{message}");
+        // An uncompressed_page_size sent as a binary of 0x40 bytes.
+        assert!(Compact::new(&[0x15, 0x00, 0x18, 0x40], &LIMITS).structure(0, Context::Page).unwrap_err().to_string().contains("wrong type"));
     }
     #[test]
     fn impossible_footer_and_encryption_are_rejected() {
