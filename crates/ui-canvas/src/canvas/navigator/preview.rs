@@ -237,7 +237,7 @@ fn take_navigation(cx: &mut Cx<'_, Navigator<'_>>, next: &mut CanvasView, runnin
             }
             NavMove::Start | NavMove::End => {}
             _ => {
-                if let Some(key) = PageKey::of(mv, mods, span) {
+                if let Some(key) = PageKey::of(mv, mods, span, PageKey::small_step(next.zoom, cx.env.scale().0)) {
                     key.apply(next, document);
                 }
             }

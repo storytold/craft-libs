@@ -22,6 +22,8 @@ pub(crate) mod rulers;
 
 pub(crate) mod scrollbars;
 
+pub(crate) mod shift_page_step;
+
 pub(crate) mod snap;
 
 pub(crate) mod split;

@@ -557,7 +557,9 @@ impl<'a> Canvas<'a> {
         for (step, mods) in moves {
             if to_body {
                 keys.page = Some((step, mods));
-            } else if let (Some(document), Some(key)) = (self.document_size(), PageKey::of(step, mods, area.size())) {
+            } else if let (Some(document), Some(key)) =
+                (self.document_size(), PageKey::of(step, mods, area.size(), PageKey::small_step(view.zoom, pixels_per_point)))
+            {
                 jumped |= key.apply(&mut view, document);
             }
         }
