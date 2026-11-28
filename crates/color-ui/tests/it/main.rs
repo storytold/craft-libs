@@ -10,4 +10,5 @@ pub(crate) mod pair;
 pub(crate) mod panels;
 pub(crate) mod picker;
 pub(crate) mod profile_prompts;
+pub(crate) mod sampler_marks;
 pub(crate) mod sampling;

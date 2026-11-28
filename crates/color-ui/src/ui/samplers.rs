@@ -32,7 +32,7 @@ use craft_ui::runtime::toast::Toast;
 use super::eyedropper::HOTSPOT;
 use super::{InfoColor, SampleSize, SampleSizeSelect};
 use craft_ui::style::{ComponentStyle, StyleColor, StyleCx};
-use egui::{Pos2, Response, Ui, Vec2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -188,6 +188,49 @@ pub struct ColorSamplerMarksStyle {
     shadow: f32,
 }
 
+/// The measured marker's reach: the circle's pixels span this many points off the centre on both axes, which is the
+/// 9 px circle measured at 100 % zoom (photocraft #11739). The marker keeps this screen size at every zoom, as the
+/// reference application does at the measured 100 % and 66.7 %.
+const MARKER_REACH: i32 = 4;
+
+/// The four ticks stand outside the circle with a gap: they run along the axes from this many points off the centre
+/// to [`MARKER_TICK_TO`], three pixels each as measured.
+const MARKER_TICK_FROM: i32 = 5;
+const MARKER_TICK_TO: i32 = 7;
+
+/// One marker pixel: a point on a side — the measured dot's 1 px at one point per pixel.
+const MARKER_PIXEL: Vec2 = Vec2::splat(1.0);
+
+/// Where the number sits: its top-left corner this far right and down of the centre (measured).
+const MARKER_NUMBER: Vec2 = Vec2::new(8.0, 5.0);
+
+/// The marker's pixels as offsets from the centre: the dot, the ring of the circle 9 px across, and the ticks. The
+/// ring is the one-pixel-thick outline whose pixels span −4 to +4: the axis ends and the pixels beside them, plus
+/// the diagonal band between, with the corners left out.
+fn marker_pixel_offsets() -> Vec<[i32; 2]> {
+    let mut out = vec![[0, 0]];
+    for dx in -MARKER_REACH..=MARKER_REACH {
+        for dy in -MARKER_REACH..=MARKER_REACH {
+            let (near, far) = (dx.abs().min(dy.abs()), dx.abs().max(dy.abs()));
+            if (far == MARKER_REACH && near <= 1) || (far == MARKER_REACH - 1 && near == 2) {
+                out.push([dx, dy]);
+            }
+        }
+    }
+    for arm in MARKER_TICK_FROM..=MARKER_TICK_TO {
+        out.extend([[arm, 0], [-arm, 0], [0, arm], [0, -arm]]);
+    }
+    out
+}
+
+/// A displayed colour as the marks paint it: each of its 8-bit R, G and B channels with the top bit flipped
+/// (`c ^ 0x80`), the alpha kept — the reference application's marker colours, measured on white, black and red
+/// (photocraft #11739).
+fn flipped(color: Srgba) -> Color32 {
+    let c = Color32::from(color);
+    Color32::from_rgba_unmultiplied(c.r() ^ 0x80, c.g() ^ 0x80, c.b() ^ 0x80, c.a())
+}
+
 /// The numbered reticles of the points on a canvas. Paint only: a press never lands on it.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
@@ -198,12 +241,25 @@ pub struct ColorSamplerMarks<'a> {
     /// The point the tool carries: it draws at the pointer, or with no index the next number draws there.
     #[prop]
     carried: Option<SamplerCarry>,
+    /// The displayed colour at a screen point: with it the marks are painted per pixel in that colour flipped
+    /// bright-for-dark, and without it in the theme's overlay colours. See [`Self::displayed`].
+    displayed: Option<&'a dyn Fn(Pos2) -> Srgba>,
 }
 
 impl<'a> ColorSamplerMarks<'a> {
     /// The marks of `samplers`, named `label`.
     pub fn new(label: impl Into<Label>, samplers: &'a ColorSamplers) -> Self {
-        ColorSamplerMarks { common: Common::new(), samplers, carried: None }.label(label)
+        ColorSamplerMarks { common: Common::new(), samplers, carried: None, displayed: None }.label(label)
+    }
+
+    /// The marks take their colour from the pixels they draw on: `displayed` answers the colour shown at a screen
+    /// point, and every mark pixel — the dot, the circle, the ticks and the number — becomes that colour with each
+    /// 8-bit R, G and B channel flipped at 0x80. This is the reference application's marker look, measured at
+    /// 100 % zoom (photocraft #11739). Without it the marks keep the theme's overlay stroke and halo.
+    #[must_use]
+    pub fn displayed(mut self, displayed: &'a dyn Fn(Pos2) -> Srgba) -> Self {
+        self.displayed = Some(displayed);
+        self
     }
 }
 
@@ -249,22 +305,38 @@ impl Component for ColorSamplerMarks<'_> {
         }
         for (index, point) in marks.iter().enumerate() {
             let at = space.view.to_screen(Point::new(point[0], point[1]));
-            let reticle = |width: StrokeWidth, color: StyleColor| {
-                draw.stroke(&PaintShape::Circle(at, style.radius), width, color);
-                for direction in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
-                    let line = vec![at + direction * style.radius, at + direction * (style.radius + style.tick)];
-                    draw.stroke(&PaintShape::Path(line), width, color);
+            match self.displayed {
+                None => {
+                    let reticle = |width: StrokeWidth, color: StyleColor| {
+                        draw.stroke(&PaintShape::Circle(at, style.radius), width, color);
+                        for direction in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
+                            let line = vec![at + direction * style.radius, at + direction * (style.radius + style.tick)];
+                            draw.stroke(&PaintShape::Path(line), width, color);
+                        }
+                    };
+                    reticle(StrokeWidth::Medium, style.halo);
+                    reticle(StrokeWidth::Hairline, style.ink);
+                    let number = (index + 1).to_string();
+                    let anchor = at + vec2(style.radius, -style.radius);
+                    for (offset, color) in [(Vec2::splat(style.shadow), style.halo), (Vec2::ZERO, style.ink)] {
+                        let run = TextRun::new(number.as_str()).role(TypeRole::Caption).color(color);
+                        let layout = draw.layout(&run, f32::INFINITY);
+                        let size = layout.size();
+                        draw.galley(anchor + offset - vec2(0.0, size.y), &layout);
+                    }
                 }
-            };
-            reticle(StrokeWidth::Medium, style.halo);
-            reticle(StrokeWidth::Hairline, style.ink);
-            let number = (index + 1).to_string();
-            let anchor = at + vec2(style.radius, -style.radius);
-            for (offset, color) in [(Vec2::splat(style.shadow), style.halo), (Vec2::ZERO, style.ink)] {
-                let run = TextRun::new(number.as_str()).role(TypeRole::Caption).color(color);
-                let layout = draw.layout(&run, f32::INFINITY);
-                let size = layout.size();
-                draw.galley(anchor + offset - vec2(0.0, size.y), &layout);
+                Some(displayed) => {
+                    for [dx, dy] in marker_pixel_offsets().iter() {
+                        let min = pos2(at.x + *dx as f32, at.y + *dy as f32);
+                        let color = flipped(displayed(min + MARKER_PIXEL * 0.5));
+                        draw.fill(&PaintShape::Rect(Rect::from_min_size(min, MARKER_PIXEL), CornerRadius::ZERO), StyleColor(color));
+                    }
+                    let number = (index + 1).to_string();
+                    let anchor = at + MARKER_NUMBER;
+                    let run = TextRun::new(number.as_str()).role(TypeRole::Caption).color(StyleColor(flipped(displayed(anchor))));
+                    let layout = draw.layout(&run, f32::INFINITY);
+                    draw.galley(anchor, &layout);
+                }
             }
         }
     }
