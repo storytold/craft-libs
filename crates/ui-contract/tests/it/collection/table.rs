@@ -165,6 +165,45 @@ fn focus_on_an_out_of_view_header_cell_scrolls_it_in() {
     assert_eq!(sorts(&events.borrow()), vec![last], "the header cell sits where the rows' sideways offset puts it");
 }
 
+/// Six removable columns wider together than the table: the header cells and remove controls past the table's end are
+/// not painted, and the bounds the platform gets for their nodes stay inside the header's view, so a hit test beside
+/// the table does not find them.
+#[trial]
+fn header_cells_past_the_view_have_bounds_only_inside_it() {
+    const NAMES: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
+    let columns = || {
+        let specs = NAMES
+            .iter()
+            .map(|name| ColumnSpec::new(ColumnKey::new(name), *name, ColumnWidth::Fixed(COL)).removable(format!("Remove {name}"), true))
+            .collect();
+        CollectionProps::new().columns(specs)
+    };
+    let (rows, source) = (Rows::default(), Count(4));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            Table::new(columns()).id_salt("table").show_items(ui, &source, &mut |key, cx| {
+                rows.note(*key, cx.rect);
+                Row::new()
+            });
+        });
+    };
+    frames.idle(3, &mut show);
+    let tree = frames.platform_tree();
+    let bounds = |role: Role, name: &str| {
+        let key = tree.with_role(role).into_iter().find(|key| tree.name_of(*key) == Some(name)).unwrap_or_else(|| panic!("a node named {name}"));
+        tree.bounds_of(key).unwrap_or_else(|| panic!("the platform gets the bounds of {name}"))
+    };
+    let (start, end) = (ORIGIN.x - SAME, ORIGIN.x + VIEW.x + SAME);
+    for name in NAMES {
+        let cell = bounds(Role::COLUMN_HEADER, name);
+        let remove = bounds(Role::BUTTON, &format!("Remove {name}"));
+        for (what, rect) in [("header cell", cell), ("remove control", remove)] {
+            assert!(rect.min.x >= start && rect.max.x <= end, "the {what} of {name} has bounds {rect:?} inside the header's view {start}..={end}");
+        }
+    }
+}
+
 /// A table bound to a layout that moves a column and hides another shows the bound order, and a resize by a header
 /// edge drag writes the width into the binding in the pass that reports it. Guards restoring a saved layout.
 #[trial]

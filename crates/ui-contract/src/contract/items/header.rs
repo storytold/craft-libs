@@ -874,7 +874,9 @@ impl Header {
                 sort: self.sort_of(&self.specs[cell.spec].key),
             })
             .collect();
-        report_header(ctx, id, (cx.core.resolved.enabled, cx.core.clip), &cells);
+        // The cells and remove controls show only in the header's view, as `paint` clips them.
+        let clip = self.view.map_or(cx.core.clip, |view| cx.core.clip.intersect(view));
+        report_header(ctx, id, (cx.core.resolved.enabled, clip), &cells);
         for cell in &self.cells {
             let (Some(rect), Some(remove)) = (cell.remove, &self.specs[cell.spec].remove) else { continue };
             let name = cx.core.env.resolve(&remove.name).as_str().to_owned();
@@ -889,7 +891,7 @@ impl Header {
                     component: "Collection",
                     node: &node,
                     rect,
-                    clip: cx.core.clip,
+                    clip,
                     enabled,
                     focusable: enabled,
                     clickable: enabled,
