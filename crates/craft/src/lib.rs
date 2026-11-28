@@ -169,6 +169,8 @@ pub use craft_gpu_null as gpu_null;
 pub use craft_gpu_providers as gpu_providers;
 #[cfg(feature = "gpu-wgpu")]
 pub use craft_gpu_wgpu as gpu_wgpu;
+#[cfg(feature = "gpu-yuv")]
+pub use craft_gpu_yuv as gpu_yuv;
 #[cfg(feature = "gridcraft-format")]
 pub use craft_gridcraft_format as gridcraft_format;
 #[cfg(feature = "gzip")]
