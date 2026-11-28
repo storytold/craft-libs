@@ -92,7 +92,7 @@ impl PageApi {
             "request",
             Closure::<dyn FnMut(String, JsValue) -> js_sys::Promise>::new(move |method: String, params: JsValue| {
                 let page = page.clone();
-                future_to_promise(async move { request_promise_outcome(&page.call(&method, || from_js(&params)).await) })
+                future_to_promise(async move { request_promise_outcome(&page.call(&method, || from_js(&params)).await?) })
             })
             .into_js_value(),
         )?;
@@ -104,8 +104,8 @@ impl PageApi {
                 Closure::<dyn FnMut(String, JsValue) -> js_sys::Promise>::new(move |command: String, params: JsValue| {
                     let page = page.clone();
                     future_to_promise(async move {
-                        let params = || json!({"command": command, "params": from_js(&params)});
-                        request_promise_outcome(&page.call(method, params).await)
+                        let params = || Ok(json!({"command": command, "params": from_js(&params)?}));
+                        request_promise_outcome(&page.call(method, params).await?)
                     })
                 })
                 .into_js_value(),
@@ -118,7 +118,7 @@ impl PageApi {
                 "commands",
                 Closure::<dyn FnMut() -> js_sys::Promise>::new(move || {
                     let page = page.clone();
-                    future_to_promise(async move { request_promise_outcome(&page.call(method, || json!({})).await) })
+                    future_to_promise(async move { request_promise_outcome(&page.call(method, || Ok(json!({}))).await?) })
                 })
                 .into_js_value(),
             )?;
@@ -131,7 +131,7 @@ impl PageApi {
                     name,
                     Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                         let page = page.clone();
-                        future_to_promise(async move { request_promise_outcome(&page.call(method, || from_js(&params)).await) })
+                        future_to_promise(async move { request_promise_outcome(&page.call(method, || from_js(&params)).await?) })
                     })
                     .into_js_value(),
                 )?;
@@ -144,8 +144,8 @@ impl PageApi {
                 "screenshot",
                 Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                     let page = page.clone();
-                    let params = move || screenshot_params(from_js(&params));
-                    future_to_promise(async move { request_promise_outcome(&screenshot_data(page.call(method, params).await)) })
+                    let params = move || from_js(&params).map(screenshot_params);
+                    future_to_promise(async move { request_promise_outcome(&screenshot_data(page.call(method, params).await?)) })
                 })
                 .into_js_value(),
             )?;
@@ -159,17 +159,19 @@ impl PageApi {
     /// (a hidden tab answers when it is shown again) and the app's request future is dropped: an app
     /// that releases a request when its future goes away never runs, late, a call the page was told
     /// had failed. `params` is built after the in-flight check, so a call that is turned away costs no conversion.
-    async fn call(&self, method: &str, params: impl FnOnce() -> Value) -> Value {
+    /// Params that are not a JSON object (see [`from_js`]) come back as `Err` and never reach the app.
+    async fn call(&self, method: &str, params: impl FnOnce() -> Result<Value, JsValue>) -> Result<Value, JsValue> {
         if self.in_flight.get() >= self.max_in_flight {
-            return json!({
+            return Ok(json!({
                 "ok": false,
                 "error": format!("{} is busy: {} calls are already waiting for an answer", self.app, self.max_in_flight),
-            });
+            }));
         }
         self.in_flight.set(self.in_flight.get() + 1);
         let _slot = InFlight(&self.in_flight);
+        let params = params()?; // built only once a slot is held; params that are not an object give the slot back here
         let timeout = Timeout::new(self.timeout_ms);
-        let mut work = (self.request)(method.to_string(), params()); // params are built only once a slot is held
+        let mut work = (self.request)(method.to_string(), params);
         let reply = std::future::poll_fn(|cx| {
             if let Poll::Ready(reply) = work.as_mut().poll(cx) {
                 return Poll::Ready(Some(reply));
@@ -183,7 +185,7 @@ impl PageApi {
         .await;
         drop(work); // an unanswered request is released here, before the error goes back
         drop(timeout); // clear the timer and free its callback once the race is over
-        reply.unwrap_or_else(|| {
+        Ok(reply.unwrap_or_else(|| {
             json!({
                 "ok": false,
                 "error": format!(
@@ -191,7 +193,7 @@ impl PageApi {
                     self.app, method, self.timeout_ms / 1000.0
                 ),
             })
-        })
+        }))
     }
 }
 
@@ -307,10 +309,30 @@ fn to_js(v: &Value) -> JsValue {
     js_sys::JSON::parse(&v.to_string()).unwrap_or(JsValue::NULL)
 }
 
-/// JS → JSON. VectorCraft's `from_js`; absent values become an empty object.
-fn from_js(v: &JsValue) -> Value {
+/// JS → JSON params. Absent values (`undefined`, `null`) become an empty object. Anything that is not
+/// a plain JSON object rejects with an `Error` before the app is asked: a number, string or boolean,
+/// `NaN`, a function, an array, an object `JSON.stringify` can't write (a cycle, a throwing
+/// `toJSON`), and one that writes as something other than an object (an invalid `Date` and a
+/// `toJSON` returning `null` both write `null`). As `{}` those would run the method with its
+/// defaults: a typo would act on the whole selection or document.
+fn from_js(v: &JsValue) -> Result<Value, JsValue> {
     if v.is_undefined() || v.is_null() {
-        return json!({});
+        return Ok(json!({}));
     }
-    js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}))
+    let reject = |why: String| -> JsValue { js_sys::Error::new(&format!("params {why}")).into() };
+    if !v.is_object() {
+        return Err(reject("must be an object".to_string()));
+    }
+    let text = js_sys::JSON::stringify(v)
+        .ok()
+        .and_then(|s| s.as_string())
+        .ok_or_else(|| reject("are not JSON (a cyclic object, or a toJSON that throws?)".to_string()))?;
+    match serde_json::from_str::<Value>(&text) {
+        Ok(params @ Value::Object(_)) => Ok(params),
+        _ => {
+            let shown: String = text.chars().take(40).collect();
+            let more = if shown.len() < text.len() { "…" } else { "" };
+            Err(reject(format!("must be a JSON object, not {shown}{more}")))
+        }
+    }
 }
