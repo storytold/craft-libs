@@ -312,12 +312,15 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
         // primary pair; require reciprocal IDs so a stray or incomplete axis cannot win.
         // The old predicate asked whether any partner matched. Index all reciprocal
         // relations, not only the last element for an ID; duplicates keep that semantics.
-        let partners: std::collections::HashSet<(&str, &str, bool)> = pa.elements().filter_map(|a| {
-            if !matches!(a.local(), "catAx" | "dateAx" | "valAx") {
-                return None;
-            }
-            Some((a.child(Local("axId"))?.attr_local("val")?, a.child(Local("crossAx"))?.attr_local("val")?, a.is(Local("valAx"))))
-        }).collect();
+        let partners: std::collections::HashSet<(&str, &str, bool)> = pa
+            .elements()
+            .filter_map(|a| {
+                if !matches!(a.local(), "catAx" | "dateAx" | "valAx") {
+                    return None;
+                }
+                Some((a.child(Local("axId"))?.attr_local("val")?, a.child(Local("crossAx"))?.attr_local("val")?, a.is(Local("valAx"))))
+            })
+            .collect();
         if let Some(id) = pa.children(Local("valAx")).find_map(|a| {
             let id = a.child(Local("axId"))?.attr_local("val")?;
             let cross = a.child(Local("crossAx"))?.attr_local("val")?;
@@ -1906,21 +1909,26 @@ mod tests {
     }
 
     fn review_source_ids_chart(second_id: u32) -> String {
-        metadata_chart(&format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+        metadata_chart(&format!(
+            r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
 <c:ser><c:idx val="0"/><c:order val="1"/><c:tx><c:v>A</c:v></c:tx><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>
 <c:ser><c:idx val="{second_id}"/><c:order val="0"/><c:tx><c:strRef><c:f>Data!$Z$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>B</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:f>Data!$Z$2:$Z$2</c:f><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
-</c:barChart>"#))
+</c:barChart>"#
+        ))
     }
 
     fn review_written_ids(bytes: &[u8]) -> Vec<(String, u32, u32)> {
         let root = crate::xmlx::parse(bytes).unwrap();
-        root.path(&[Local("chart"), Local("plotArea")]).unwrap().elements()
+        root.path(&[Local("chart"), Local("plotArea")])
+            .unwrap()
+            .elements()
             .filter(|g| g.local().ends_with("Chart"))
             .flat_map(|g| g.children(Local("ser")))
             .map(|s| {
                 let value = |name| s.child(Local(name)).and_then(|v| v.attr_local("val")).unwrap().parse().unwrap();
                 (rich_text(s).unwrap(), value("idx"), value("order"))
-            }).collect()
+            })
+            .collect()
     }
 
     #[test]
@@ -1940,11 +1948,15 @@ mod tests {
             chart.series.insert(0, Series { name: "New".into(), values: vec![Some(13.0)], ..Default::default() });
             let written = crate::chart::write::chart_xml(&chart).0;
             let (new_id, duplicate_id) = if second_id == 1 { (2, 3) } else { (1, 2) };
-            assert_eq!(review_written_ids(&written), [
-                ("New".into(), new_id, 0), ("B".into(), second_id, 1), ("A".into(), 0, 2), ("Duplicate B".into(), duplicate_id, 3),
-            ]);
+            assert_eq!(
+                review_written_ids(&written),
+                [("New".into(), new_id, 0), ("B".into(), second_id, 1), ("A".into(), 0, 2), ("Duplicate B".into(), duplicate_id, 3),]
+            );
             let back = read_chart_xml(&written).unwrap();
-            assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), [vec![Some(13.0)], vec![Some(7.0)], vec![Some(2.0)], vec![Some(7.0)]]);
+            assert_eq!(
+                back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(),
+                [vec![Some(13.0)], vec![Some(7.0)], vec![Some(2.0)], vec![Some(7.0)]]
+            );
             assert_eq!(back.series[0].refs.values.as_deref(), Some("Sheet1!$B$2:$B$2"));
             assert_eq!(back.series[1].refs.name.as_deref(), Some("Data!$Z$1"));
             assert_eq!(back.series[1].refs.values.as_deref(), Some("Data!$Z$2:$Z$2"));
@@ -1954,10 +1966,9 @@ mod tests {
         }
         for invalid in [None, Some("-1"), Some("1.5"), Some("4294967296"), Some("bad")] {
             let idx = invalid.map(|v| format!(r#"<c:idx val="{v}"/>"#)).unwrap_or_default();
-            let xml = review_source_ids_chart(1).replacen(r#"<c:idx val="1"/>"#, &idx, 1).replace(
-                "</c:barChart>",
-                r#"<c:ser><c:idx val="1"/><c:order val="2"/><c:tx><c:v>C</c:v></c:tx></c:ser></c:barChart>"#,
-            );
+            let xml = review_source_ids_chart(1)
+                .replacen(r#"<c:idx val="1"/>"#, &idx, 1)
+                .replace("</c:barChart>", r#"<c:ser><c:idx val="1"/><c:order val="2"/><c:tx><c:v>C</c:v></c:tx></c:ser></c:barChart>"#);
             let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
             chart.title = Some("Rebuild invalid ID".into());
             let written = crate::chart::write::chart_xml(&chart).0;
@@ -1999,13 +2010,15 @@ mod tests {
                     let valid = partner(if first_pair { 20 } else { 999 });
                     let invalid = partner(999);
                     let partners = if valid_first { valid + &invalid } else { invalid + &valid };
-                    let xml = metadata_chart(&format!(r#"<c:barChart><c:barDir val="col"/><c:ser><c:tx><c:v>Secondary</c:v></c:tx></c:ser><c:axId val="30"/><c:axId val="40"/></c:barChart>
+                    let xml = metadata_chart(&format!(
+                        r#"<c:barChart><c:barDir val="col"/><c:ser><c:tx><c:v>Secondary</c:v></c:tx></c:ser><c:axId val="30"/><c:axId val="40"/></c:barChart>
 <c:valAx><c:axId val="70"/><c:axPos val="l"/><c:crossAx val="80"/></c:valAx>
 <c:valAx><c:axId val="20"/><c:scaling><c:max val="10"/></c:scaling><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>
 <c:valAx><c:axId val="60"/><c:scaling><c:max val="60"/></c:scaling><c:axPos val="l"/><c:crossAx val="50"/></c:valAx>{partners}
 <c:catAx><c:axId val="50"/><c:axPos val="b"/><c:crossAx val="60"/></c:catAx>
 <c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/></c:catAx>
-<c:valAx><c:axId val="40"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="30"/></c:valAx>"#));
+<c:valAx><c:axId val="40"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="30"/></c:valAx>"#
+                    ));
                     let chart = read_chart_xml(xml.as_bytes()).unwrap();
                     assert_eq!(chart.y_max, Some(if first_pair { 10.0 } else { 60.0 }), "tag={tag}, valid_first={valid_first}");
                     assert_eq!(chart.y2_max, Some(90.0));
@@ -2014,5 +2027,4 @@ mod tests {
             }
         }
     }
-
 }

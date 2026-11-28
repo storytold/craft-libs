@@ -316,16 +316,20 @@ fn indexed_series(c: &Chart) -> Vec<(SeriesIndex, &Series)> {
     let reserved: std::collections::HashSet<usize> = c.series.iter().filter_map(|s| s.source_idx.map(|id| id as usize)).collect();
     let mut used = std::collections::HashSet::new();
     let mut next = 0usize;
-    c.series.iter().enumerate().map(|(order, s)| {
-        let id = s.source_idx.map(|id| id as usize).filter(|id| used.insert(*id)).unwrap_or_else(|| {
-            while reserved.contains(&next) || used.contains(&next) {
-                next += 1;
-            }
-            used.insert(next);
-            next
-        });
-        (SeriesIndex { order, id }, s)
-    }).collect()
+    c.series
+        .iter()
+        .enumerate()
+        .map(|(order, s)| {
+            let id = s.source_idx.map(|id| id as usize).filter(|id| used.insert(*id)).unwrap_or_else(|| {
+                while reserved.contains(&next) || used.contains(&next) {
+                    next += 1;
+                }
+                used.insert(next);
+                next
+            });
+            (SeriesIndex { order, id }, s)
+        })
+        .collect()
 }
 
 fn line_markers(s: &Series, kind: ChartType, override_markers: Option<bool>) -> bool {
