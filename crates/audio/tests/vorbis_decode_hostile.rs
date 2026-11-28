@@ -57,7 +57,8 @@ fn damaged_headers_never_panic() {
     let mut seed = 99u32;
     for which in [0usize, 2] {
         let len = p.headers[which].len();
-        for _ in 0..800 {
+        // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs 1/N of the mutations.
+        for _ in 0..800usize.div_ceil(craft_media_testkit::hostile::divisor()) {
             let mut h = p.headers.clone();
             for _ in 0..1 + xorshift(&mut seed) % 3 {
                 let at = xorshift(&mut seed) as usize % len;

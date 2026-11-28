@@ -58,13 +58,48 @@ impl Document {
     }
 }
 
+/// A COLLADA document with all retained camera instances.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocumentWithCameras {
+    document: Document,
+    additional_cameras: HashMap<usize, Vec<Camera>>,
+}
+
+impl DocumentWithCameras {
+    /// The underlying document, including the primary camera for each node.
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
+    /// Cameras attached to this node, in instance order, all sharing its world transform.
+    /// Use this instead of reading the node's primary camera separately.
+    pub fn cameras_for_node(&self, node: usize) -> impl Iterator<Item = &Camera> {
+        let scene = &self.document.scene;
+        let primary = scene.nodes.get(node).and_then(|n| n.camera).and_then(|i| scene.cameras.get(i));
+        primary.into_iter().chain(self.additional_cameras.get(&node).into_iter().flatten())
+    }
+}
+
 /// Read a COLLADA file into a [`Scene`] (in the file's own axes and units).
+/// Only the first valid camera instance per node is retained.
 pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     Ok(read_document(bytes, limits)?.scene)
 }
 
-/// Read a COLLADA file into a [`Document`].
+/// Read a COLLADA file into a [`Document`], retaining only the first valid camera per node.
 pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
+    Ok(read_document_inner(bytes, limits, false)?.document)
+}
+
+/// Read a COLLADA document and retain additional cameras without adding scene nodes.
+///
+/// Primary and additional cameras share [`Limits::max_extras`]. Valid instances are
+/// retained in scene traversal order until that limit is reached.
+pub fn read_document_with_cameras(bytes: &[u8], limits: &Limits) -> Result<DocumentWithCameras> {
+    read_document_inner(bytes, limits, true)
+}
+
+fn read_document_inner(bytes: &[u8], limits: &Limits, retain_additional_cameras: bool) -> Result<DocumentWithCameras> {
     let mut opts = Options::local();
     opts.unknown_entity = UnknownEntity::Literal;
     opts.strict_end_tags = true;
@@ -98,8 +133,18 @@ pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
         _ => UpAxis::YUp,
     };
 
-    let mut reader =
-        Reader { ids, sources: HashMap::new(), limits, scene: Scene::default(), materials: HashMap::new(), mesh_cache: HashMap::new(), triangles: 0 };
+    let mut reader = Reader {
+        ids,
+        sources: HashMap::new(),
+        limits,
+        scene: Scene::default(),
+        materials: HashMap::new(),
+        mesh_cache: HashMap::new(),
+        triangles: 0,
+        retain_additional_cameras,
+        additional_cameras: HashMap::new(),
+        camera_slots: limits.max_extras,
+    };
 
     let visual_scene = root
         .child("scene")
@@ -121,7 +166,7 @@ pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
         }
     }
 
-    Ok(Document { scene: reader.scene, meter, up_axis })
+    Ok(DocumentWithCameras { document: Document { scene: reader.scene, meter, up_axis }, additional_cameras: reader.additional_cameras })
 }
 
 struct Source {
@@ -151,6 +196,9 @@ struct Reader<'a> {
     /// Keyed by `(geometry element pointer, sorted (symbol, material_name) bindings)`.
     mesh_cache: HashMap<(usize, Vec<(String, String)>), usize>,
     triangles: usize,
+    retain_additional_cameras: bool,
+    additional_cameras: HashMap<usize, Vec<Camera>>,
+    camera_slots: usize,
 }
 
 impl<'a> Reader<'a> {
@@ -216,17 +264,22 @@ impl<'a> Reader<'a> {
         let name = el.attr("name").or_else(|| el.attr("id")).unwrap_or_default().to_string();
         let transform = node_transform(el)?;
         let mut node = Node { name: name.clone(), transform, ..Node::default() };
+        let mut additional_cameras = Vec::new();
 
         for inst in el.elements() {
             if inst.name == "instance_camera" {
-                if node.camera.is_none()
+                if self.camera_slots > 0
+                    && (node.camera.is_none() || self.retain_additional_cameras)
                     && let Some(cam_el) = self.get(inst.attr("url"))
                     && let Some(cam) = parse_camera(cam_el, &name)
-                    && self.scene.cameras.len() < self.limits.max_extras
                 {
-                    let cam_idx = self.scene.cameras.len();
-                    self.scene.cameras.push(cam);
-                    node.camera = Some(cam_idx);
+                    self.camera_slots -= 1;
+                    if node.camera.is_none() {
+                        node.camera = Some(self.scene.cameras.len());
+                        self.scene.cameras.push(cam);
+                    } else {
+                        additional_cameras.push(cam);
+                    }
                 }
                 continue;
             }
@@ -264,7 +317,11 @@ impl<'a> Reader<'a> {
             }
         }
 
-        self.push_node(node)
+        let id = self.push_node(node)?;
+        if !additional_cameras.is_empty() {
+            self.additional_cameras.insert(id, additional_cameras);
+        }
+        Ok(id)
     }
 
     fn bindings(&self, inst: &El) -> Vec<(String, String)> {

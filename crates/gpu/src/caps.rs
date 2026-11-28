@@ -20,6 +20,20 @@ pub struct DeviceCaps {
     /// never on what the adapter merely advertised.
     #[serde(default)]
     pub features: Vec<String>,
+    /// The PCI vendor id of the device's adapter (or the Khronos vendor id some Vulkan drivers
+    /// report instead); 0 when unknown or on backends with no device.
+    #[serde(default)]
+    pub vendor_id: u32,
+    /// The device draws on the CPU (a software adapter such as WARP, llvmpipe or lavapipe).
+    #[serde(default)]
+    pub software: bool,
+}
+
+impl DeviceCaps {
+    /// Whether the feature named `name` (as in [`features`](Self::features)) is enabled.
+    pub fn has_feature(&self, name: &str) -> bool {
+        self.features.iter().any(|f| f == name)
+    }
 }
 
 impl Default for DeviceCaps {
@@ -31,6 +45,8 @@ impl Default for DeviceCaps {
             max_buffer_size: 256 * 1024 * 1024,
             max_texture_dimension_2d: 8192,
             features: Vec::new(),
+            vendor_id: 0,
+            software: false,
         }
     }
 }

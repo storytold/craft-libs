@@ -1,0 +1,262 @@
+{
+  "library": "foundation",
+  "warmup_frames": 30,
+  "measured_frames": 200,
+  "scenarios": [
+    {
+      "name": "inspector-500-fields",
+      "description": "an inspector of 500 Field rows",
+      "no_discard": false,
+      "equivalent": "500 rows alternating NumberField and TextField, each with its side label (no Field row component yet)",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 9.675,
+        "frame_ms_p95": 11.346,
+        "allocations_median": 25969.0,
+        "bytes_median": 6072788.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "virtual-list-10000",
+      "description": "a 10,000-item virtual list",
+      "no_discard": false,
+      "equivalent": "List over 10,000 ListRow rows, one selected row",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.727,
+        "frame_ms_p95": 0.896,
+        "allocations_median": 1262.0,
+        "bytes_median": 296498.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "sheet-50x200",
+      "description": "a sheet of 50 x 200 visible cells as row parts",
+      "no_discard": false,
+      "equivalent": "BenchList of 200 rows, each with 50 cell parts that paint their text",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 14.274,
+        "frame_ms_p95": 19.419,
+        "allocations_median": 121715.0,
+        "bytes_median": 27116816.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "canvas-50-controls",
+      "description": "a canvas with 50 canvas controls",
+      "no_discard": false,
+      "equivalent": "a leaf with 50 control parts painted as knobs",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.057,
+        "frame_ms_p95": 0.102,
+        "allocations_median": 110.0,
+        "bytes_median": 104272.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "menu-40-rows",
+      "description": "an open menu with 40 rows",
+      "no_discard": false,
+      "equivalent": "a Menu open from the first frame over 40 MenuItem rows",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.75,
+        "frame_ms_p95": 0.948,
+        "allocations_median": 5199.0,
+        "bytes_median": 614352.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "table-1000x5",
+      "description": "a table of 1,000 rows and 5 columns",
+      "no_discard": false,
+      "equivalent": "a Table of 1,000 rows and 5 columns, text in every cell",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.576,
+        "frame_ms_p95": 0.702,
+        "allocations_median": 3595.0,
+        "bytes_median": 639672.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "tile-grid-500",
+      "description": "a tile grid of 500 tiles",
+      "no_discard": false,
+      "equivalent": "a TileGrid of 500 Tiles",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 4.187,
+        "frame_ms_p95": 6.298,
+        "allocations_median": 19750.0,
+        "bytes_median": 3880940.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "text-field-100kb",
+      "description": "a 100 KB multi-line text field, bound",
+      "no_discard": false,
+      "equivalent": "TextField::lines(30) bound with Bind::bound over a 100 KB String",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.083,
+        "frame_ms_p95": 0.135,
+        "allocations_median": 82.0,
+        "bytes_median": 739078.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "list-10000-selected",
+      "description": "a list with 10,000 selected keys",
+      "no_discard": false,
+      "equivalent": "List over 10,000 ListRow rows, all 10,000 keys in the Selection",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.818,
+        "frame_ms_p95": 1.426,
+        "allocations_median": 1274.0,
+        "bytes_median": 878546.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "collapse-in-content-sized-panel",
+      "description": "a collapse animating inside a content-sized panel",
+      "no_discard": true,
+      "equivalent": "a content-sized, animated-collapse container whose open state the scene toggles",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.125,
+        "frame_ms_p95": 0.142,
+        "allocations_median": 378.0,
+        "bytes_median": 88604.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "auto-height-list-scroll-10000",
+      "description": "scrolling a 10,000-row auto-height list",
+      "no_discard": true,
+      "equivalent": "List over 10,000 ListRow rows of one to four row heights (detail line and wrapped lines on three in four), mouse wheel every frame",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.763,
+        "frame_ms_p95": 0.84,
+        "allocations_median": 1518.0,
+        "bytes_median": 367136.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "second-viewport",
+      "description": "a second viewport open",
+      "no_discard": true,
+      "equivalent": "a container with Mount::viewport (the fallback layer, as under an embedded backend)",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.201,
+        "frame_ms_p95": 0.242,
+        "allocations_median": 632.0,
+        "bytes_median": 146354.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "dialog-20-fields",
+      "description": "a modal dialog open over 20 fields",
+      "no_discard": false,
+      "equivalent": "a modal Dialog open from the first frame over 10 NumberFields and 10 TextFields",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.645,
+        "frame_ms_p95": 0.782,
+        "allocations_median": 1935.0,
+        "bytes_median": 439136.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "tab-strip-60",
+      "description": "a tab strip of 60 document tabs with overflow, one selected",
+      "no_discard": false,
+      "equivalent": "a TabStrip of 60 TabKind::Document tabs that overflow, tab 30 shown",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.194,
+        "frame_ms_p95": 0.397,
+        "allocations_median": 1012.0,
+        "bytes_median": 166525.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "canvas-view-4k",
+      "description": "a rotated canvas view over a 4096 x 4096 raster with rulers, 40 guides and the Hand tool, panning each frame",
+      "no_discard": true,
+      "equivalent": "a Canvas with a rotated CanvasView, RasterDisplay over a 4096 x 4096 RasterSource, Rulers, 40 Guides and the Hand tool, panning a step each frame",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.217,
+        "frame_ms_p95": 0.286,
+        "allocations_median": 1185.0,
+        "bytes_median": 238652.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "param-dialog-export",
+      "description": "the Export As dialog open with its format form and a ready preview",
+      "no_discard": false,
+      "equivalent": "ExportAsDialog open with its format form and a PreviewPane in PreviewState::Ready",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 1.427,
+        "frame_ms_p95": 1.678,
+        "allocations_median": 4692.0,
+        "bytes_median": 1062184.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    },
+    {
+      "name": "readout-and-content-column",
+      "description": "an end-aligned readout and a Content grid column changing every frame",
+      "no_discard": true,
+      "equivalent": "two labelled TextFields in a ColumnGroup whose label text changes width every frame, and an end-aligned readout block",
+      "no_equivalent_reason": null,
+      "measurement": {
+        "frame_ms_median": 0.078,
+        "frame_ms_p95": 0.129,
+        "allocations_median": 132.0,
+        "bytes_median": 32173.0,
+        "discard_passes_per_frame": 0.0,
+        "frames_with_discard": 0
+      }
+    }
+  ]
+}

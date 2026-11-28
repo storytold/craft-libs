@@ -26,6 +26,7 @@ pub type Step = Result<Vec<u8>, Failure>;
 pay(work: &mut u64, steps) -> Result<(), CodecError>   // an allowance shared across a run of images
 
 lzw::decode(data, early_change, max) -> Step;        lzw::encode(data, early_change) -> Vec<u8>
+lzw::decode_prefix(data, early_change, max) -> Result<(Vec<u8>, usize), Failure>
 ascii85::decode(data, max) -> Step;                  ascii85::encode(data) -> Vec<u8>
 asciihex::decode(data, max) -> Step;                 asciihex::encode(data) -> Vec<u8>
 runlength::decode(data, max) -> Step;                runlength::encode(data) -> Vec<u8>

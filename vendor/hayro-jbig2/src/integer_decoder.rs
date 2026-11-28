@@ -38,10 +38,7 @@ impl IntegerDecoder {
         let s = self.decode_bit(decoder, &mut prev);
 
         // `V` - Magnitude value, decoded according to Figure A.1 flowchart.
-        #[expect(
-            clippy::same_functions_in_if_condition,
-            reason = "each call mutates `prev`"
-        )]
+        #[expect(clippy::same_functions_in_if_condition, reason = "each call mutates `prev`")]
         let v = if self.decode_bit(decoder, &mut prev) == 0 {
             // Figure A.1: "V = next 2 bits"
             self.decode_n_bits(decoder, &mut prev, 2)
@@ -59,8 +56,7 @@ impl IntegerDecoder {
             self.decode_n_bits(decoder, &mut prev, 12) + 340
         } else {
             // Figure A.1: "V = (next 32 bits) + 4436"
-            self.decode_n_bits(decoder, &mut prev, 32)
-                .wrapping_add(4436)
+            self.decode_n_bits(decoder, &mut prev, 32).wrapping_add(4436)
         };
 
         // A.2: "The result of the integer arithmetic decoding procedure is equal to:
@@ -103,12 +99,7 @@ impl IntegerDecoder {
 
     /// Decode `n` bits and update `PREV` for each.
     #[inline(always)]
-    fn decode_n_bits(
-        &mut self,
-        decoder: &mut ArithmeticDecoder<'_>,
-        prev: &mut u32,
-        n: usize,
-    ) -> u32 {
+    fn decode_n_bits(&mut self, decoder: &mut ArithmeticDecoder<'_>, prev: &mut u32, n: usize) -> u32 {
         let mut value = 0_u32;
         for _ in 0..n {
             let bit = self.decode_bit(decoder, prev);

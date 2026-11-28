@@ -1,0 +1,179 @@
+//! Where a container on a layer sits: its remembered placement and the overlay and opener of its mount.
+
+use crate::contract::overlay::{OverlayFit, Place};
+use crate::contract::{ContainerProps, Mount};
+use crate::runtime::egui::areas;
+use crate::runtime::memory::{MemoryStage, SaveKey, sub};
+use crate::runtime::windows::{self};
+use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
+use serde::{Deserialize, Serialize};
+
+/// Where a container on a layer sits and how large the user made it.
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+pub(crate) struct Placement {
+    pub pos: Option<[f32; 2]>,
+    pub size: Option<[f32; 2]>,
+}
+
+impl Placement {
+    /// The placement that puts the layer at `rect`.
+    pub(super) fn at(rect: Rect) -> Placement {
+        Placement { pos: Some(rect.min.into()), size: Some(rect.size().into()) }
+    }
+
+    /// The placement that puts the layer's top left at `pos` and leaves its size to its content.
+    fn at_pos(pos: Pos2) -> Placement {
+        Placement { pos: Some(pos.into()), size: None }
+    }
+
+    /// The placement the caller of `overlay` gives, when it places the layer.
+    fn given(overlay: &crate::contract::Overlay) -> Option<Placement> {
+        overlay.placed.map(|rect| Placement::at(super::window::kept_in(rect, overlay.bounds))).or_else(|| overlay.placed_at.map(Placement::at_pos))
+    }
+
+    /// The rect it names, taking the position and size it lacks from `rect`.
+    pub(super) fn rect_over(&self, rect: Rect) -> Rect {
+        Rect::from_min_size(self.pos.map_or(rect.min, Pos2::from), self.size.map_or(rect.size(), Vec2::from))
+    }
+}
+
+pub(crate) fn placement_id(id: Id) -> Id {
+    sub(id, "placement")
+}
+
+/// The one store of a layer's placement: the saved tier when `save` is set, else shown memory. A layer whose overlay
+/// is `placed` has the caller's rect instead: the slot reads it and writes nothing, since the caller owns the
+/// placement and learns of the user's changes from `PlacementChange` reports. A layer hung from its anchor keeps only
+/// its size, whether or not the user can move it: each opening places it from its anchor at that size, and a caller
+/// that keeps a moved layer where it was dropped places it (`placed_at`) from the change it was told of. While the
+/// user drags the move band, the layer host shows the layer at the drag's rect whatever the slot holds
+/// ([`shown_placement`]), so a caller places it from the drag's `Commit` alone.
+pub(super) struct PlacementSlot<'s> {
+    stage: &'s mut MemoryStage,
+    id: Id,
+    save: Option<&'s SaveKey>,
+    controlled: Option<Placement>,
+    anchored: bool,
+}
+
+impl<'s> PlacementSlot<'s> {
+    pub(super) fn new(stage: &'s mut MemoryStage, id: Id, save: Option<&'s SaveKey>, overlay: &crate::contract::Overlay) -> Self {
+        let anchored = matches!(overlay.place, Place::Anchored { .. });
+        PlacementSlot { stage, id, save, controlled: Placement::given(overlay), anchored }
+    }
+
+    fn stored(&mut self) -> &mut Placement {
+        match self.save {
+            Some(key) => self.stage.saved::<Placement>(key),
+            None => self.stage.shown::<Placement>(placement_id(self.id)),
+        }
+    }
+
+    pub(super) fn read(&mut self) -> Placement {
+        match &self.controlled {
+            Some(placement) => placement.clone(),
+            None => self.stored().clone(),
+        }
+    }
+
+    pub(super) fn write(&mut self, placement: Placement) {
+        if self.controlled.is_none() {
+            let pos = if self.anchored { None } else { placement.pos };
+            *self.stored() = Placement { pos, ..placement };
+        }
+    }
+}
+
+/// The placement of `id` as the last pass left it, read without opening a stage: the layer host places by it before
+/// the container's own pass runs.
+fn placement_of(ctx: &Context, id: Id, save: Option<&SaveKey>) -> Placement {
+    match save {
+        Some(key) => MemoryStage::peek_saved(ctx, key),
+        None => MemoryStage::peek(ctx, placement_id(id)),
+    }
+}
+
+/// The placement a layer is shown at: the caller's `placed` rect or `placed_at` position, else the saved or session placement, else for a
+/// floating resizable layer with a default size (`Overlay::size`) that size, within the screen less `screen_inset` on
+/// each side, centred or at the overlay's float position. A saved size and position win over the default. A size with
+/// no position places an anchored layer from its anchor at that size.
+///
+/// While a drag of the layer's move band runs, `moving` is the rect it puts the layer at in this pass
+/// (`WindowMode::running_move`): the layer shows there, within its bounds, at the size the placement gives. The
+/// caller's place, the stored one or the anchor applies again once the drag ends.
+pub(crate) fn shown_placement(
+    ctx: &Context,
+    id: Id,
+    save: Option<&SaveKey>,
+    overlay: &crate::contract::Overlay,
+    moving: Option<Rect>,
+    screen: Rect,
+    screen_inset: f32,
+) -> Placement {
+    let mut placement = resting_placement(ctx, id, save, overlay, screen, screen_inset);
+    if let Some(moving) = moving {
+        placement.pos = Some(super::window::kept_in(moving, overlay.bounds).min.into());
+    }
+    placement
+}
+
+/// The placement a layer is shown at while no drag moves it ([`shown_placement`]).
+fn resting_placement(
+    ctx: &Context,
+    id: Id,
+    save: Option<&SaveKey>,
+    overlay: &crate::contract::Overlay,
+    screen: Rect,
+    screen_inset: f32,
+) -> Placement {
+    if let Some(given) = Placement::given(overlay) {
+        return given;
+    }
+    let mut placement = placement_of(ctx, id, save);
+    let (Some(default), Place::Float(float), true) = (overlay.size, &overlay.place, overlay.fit == OverlayFit::Resizable) else {
+        return placement;
+    };
+    if placement.size.is_some() {
+        return placement;
+    }
+    let room = (screen.size() - Vec2::splat(2.0 * screen_inset)).max(Vec2::ZERO);
+    let least = overlay.size_limits.min.min(room);
+    let size = default.max(least).min(overlay.size_limits.max.unwrap_or(Vec2::INFINITY)).min(room);
+    // The layer centres, and is kept, inside the screen cut to `bounds`; bounds that miss the screen leave it whole.
+    let region = overlay.bounds.map(|bounds| screen.intersect(bounds)).filter(|region| region.is_positive()).unwrap_or(screen);
+    // The saved position is the layer's top left; the float's is where its corner sits.
+    let pos = placement.pos.map(Pos2::from).or_else(|| float.top_left(size)).unwrap_or_else(|| region.center() - size / 2.0);
+    let pos = super::window::keep_inside(Rect::from_min_size(pos, size), region).min;
+    placement.pos = Some(pos.into());
+    placement.size = Some(size.into());
+    placement
+}
+
+/// The overlay a layer-like mount shows its container in.
+pub(super) fn overlay_of(props: &ContainerProps) -> Option<&crate::contract::Overlay> {
+    match &props.mount {
+        Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => Some(overlay),
+        _ => None,
+    }
+}
+
+/// The layer a measuring run lays the regions out on: the one the real run shows them on, since egui keeps a
+/// region's `Ui` on one layer per pass. A viewport's own window keeps its widgets apart, so it measures on the parent's.
+pub(super) fn measure_layer(props: &ContainerProps, id: Id, ui: &Ui) -> areas::Layer {
+    let area = sub(id, "area");
+    match &props.mount {
+        Mount::Viewport { .. } if windows::mount_window(ui.ctx(), id) => ui.layer_id(),
+        Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => {
+            areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), overlay.rank), area)
+        }
+        Mount::FullWindow => {
+            areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), crate::contract::Overlay::full_window(props.focus).rank), area)
+        }
+        _ => ui.layer_id(),
+    }
+}
+
+/// The opener of a layer-like mount's overlay: a container with no `open` binding takes its open state from it.
+pub(super) fn opener_of(props: &ContainerProps) -> Option<&crate::contract::overlay::Opener> {
+    overlay_of(props)?.opener.as_ref()
+}

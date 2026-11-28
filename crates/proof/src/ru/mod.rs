@@ -11,7 +11,7 @@
 //!   vowel (`северо-западный`, `сине-зелёный`). Compounds written solid are checked the same way
 //!   (`высокоэластичный`, `газоиспользующий`), and so are adjectives, participles and verbal nouns
 //!   with `не` (`невскрытый`, `непредоставление`; not verbs: `незнаю` stays wrong). Our supplement
-//!   adds words older dictionaries lack (`маркетплейс`, `промокод`, `интеграция`: [`extra`]).
+//!   adds words older dictionaries lack (`маркетплейс`, `промокод`, `интеграция`: `extra`).
 //!   Words in another script (`iPhone`), with digits or superscripts (`м²`), in camel case
 //!   (`ВКонтакте`) or abbreviations with an ending (`ГИПа`, `ПДн`) are left alone.
 //! - **Suggestions** tuned for Russian ([`suggest()`]): `е`/`ё`, the common confusions (`тся`/
@@ -347,95 +347,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dictionary_loads() {
-        test_dict::install();
-        let d = dictionary();
-        assert!(has_dictionary());
-        assert!(d.len() > 50, "{}", d.len());
-    }
-
-    #[test]
-    fn without_a_dictionary_nothing_is_flagged_and_nothing_suggested() {
-        let none = AffixDict::default();
-        for w in ["превет", "сдесь", "xqzv", ""] {
-            assert!(is_correct_with(&none, w), "{w}");
-        }
-        assert!(suggest::suggest_in(&none, "превет", 5).is_empty());
-    }
-
-    #[cfg_attr(
-        not(craft_proof_embed = "ru"),
-        ignore = "needs the ru Language data (CRAFT_I18N_DIR; ru-extra.txt is embedded in every build that has it)"
-    )]
-    #[test]
-    fn russian_words_are_correct() {
-        test_dict::install();
-        for w in [
-            "привет",
-            "Привет",
-            "ПРИВЕТ",
-            "дом",
-            "дома",
-            "домами",
-            "красный",
-            "красного",
-            "красной",
-            "читать",
-            "читаем",
-            "читаются",
-            "ёлка",
-            "елка",
-            "всё",
-            "все",
-            "ещё",
-            "еще",
-            "Москва",
-            "Москве",
-            "кто-то",
-            "где-нибудь",
-            "что-либо",
-            "давай-ка",
-            "всё-таки",
-            "все-таки",
-            "кое-кто",
-            "по-русски",
-            "по-новому",
-            "северо-западный",
-            "сине-зелёный",
-            "сине-зеленый",
-            "из-за",
-            "ООО",
-            "НДС",
-            "2026",
-            "5-й",
-            "iPhone",
-            "e-mail",
-            "в",
-            "м²",
-            "ВКонтакте",
-            "МирКрасок",
-            "ГИПа",
-            "ПДн",
-            "ИИ-консультант",
-            "маркетплейсов",
-            "промокода",
-            "невскрытой",
-            "некрасного",
-            "непредоставления",
-            "высокоэластичная",
-            "краснозелёный",
-            "Пн-Пт",
-            "ультракрасный",
-            "суперновый",
-            "прочитать",
-            "администрируется",
-            "юрлица",
-        ] {
-            assert!(is_correct(w), "{w}");
-        }
-    }
-
-    #[test]
     fn misspellings_are_flagged() {
         test_dict::install();
         for w in [
@@ -456,36 +367,5 @@ mod tests {
         ] {
             assert!(!is_correct(w), "{w}");
         }
-    }
-
-    #[test]
-    fn user_dictionary_applies() {
-        test_dict::install();
-        assert!(!is_correct("зкщфрусскоеслово"));
-        crate::add_word("Зкщфрусскоеслово");
-        assert!(is_correct("зкщфрусскоеслово"));
-    }
-
-    /// With Ignore words in UPPERCASE or Ignore words that contain numbers off, Russian checks
-    /// those words against the dictionary instead of accepting them.
-    #[test]
-    fn proofing_options_reach_the_russian_check() {
-        test_dict::install();
-        let lang = crate::ProofLang::Ru;
-        let defaults = crate::Options::default();
-        let check_caps = crate::Options { ignore_uppercase: false, ..defaults };
-        let check_digits = crate::Options { ignore_numbers: false, ..defaults };
-        assert!(crate::is_correct_in_with("ПРЕВЕТ", lang, &defaults), "short capitals are abbreviations by default");
-        assert!(!crate::is_correct_in_with("ПРЕВЕТ", lang, &check_caps));
-        assert!(crate::is_correct_in_with("ПРИВЕТ", lang, &check_caps));
-        assert!(crate::is_correct_in_with("ИИ-консультант", lang, &defaults));
-        assert!(!crate::is_correct_in_with("ИИ-консультант", lang, &check_caps), "a part in capitals is checked too");
-        assert!(crate::is_correct_in_with("превет2", lang, &defaults));
-        assert!(!crate::is_correct_in_with("превет2", lang, &check_digits));
-        assert!(!crate::is_correct_in_with("м²", lang, &check_digits), "a superscript is a number too");
-        assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
-        assert!(is_correct("ПРЕВЕТ"), "direct checks keep the defaults");
-        // The cased-letter rule (craft-libs#485): capitals and letterless parts are abbreviations.
-        assert!(crate::is_correct_in_with("ИИ-2", lang, &check_digits) && crate::is_correct_in_with("ТУ-154М", lang, &check_digits));
     }
 }

@@ -1,7 +1,7 @@
 name: Nightly full tests
 
 # The tests the Workspace gate shortens, in full, once a day: every hostile-input hammer and sweep
-# without CRAFT_HOSTILE_DIVISOR, and every proptest at its own case count (no PROPTEST_CASES). The
+# with CRAFT_HOSTILE_DIVISOR=1 (every member, no sample), and every proptest at its own case count (no PROPTEST_CASES). The
 # rest of the workspace's tests run with them, on Linux, with the gate's setup.
 on:
   schedule:
@@ -26,9 +26,12 @@ jobs:
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
-      env: CRAFT_PRINT_REQUIRE_QUEUE=0
+      env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=0
+        CRAFT_HOSTILE_DIVISOR=1
       setup-command: bash scripts/ci-test-inputs.sh
       cache-paths: .test-inputs/photocraft/corpus
       cache-key: photocraft-corpus
       cache-key-files: scripts/ci-test-inputs.sh
-      command: cargo nextest run --workspace --all-features --locked --profile ci
+      # The gate's build (the same targets and profile overrides), with every test at its full count.
+      command: bash scripts/ci-workspace-tests.sh full

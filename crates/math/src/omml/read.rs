@@ -15,7 +15,7 @@ pub fn read_omath(e: &El, jc: MathJc) -> Math {
 }
 
 /// A colour every math run shares, taken off the runs: it is the equation's own colour, as
-/// [`write_equation`] spreads it (#1467). The source OMML
+/// `write_equation` spreads it (#1467). The source OMML
 /// is kept: the writer replaces it only when the colour changes.
 pub fn lift_color(math: &mut Math) -> Option<Rgb> {
     let (mut shared, mut uniform) = (None, true);

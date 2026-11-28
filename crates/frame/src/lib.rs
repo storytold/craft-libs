@@ -10,7 +10,7 @@
 //! tags as H.273 codes). This type is the one `MediaSource::video_frame` returns.
 //!
 //! Came from FilmCraft's `filmcraft-frame` (the picture type and display conversions; the frame
-//! pool and audio buffer stay out — audio is [`craft_audio::AudioBuffer`]).
+//! pool and audio buffer stay out — audio is `craft_audio::AudioBuffer`).
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 

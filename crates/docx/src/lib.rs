@@ -1,6 +1,6 @@
 //! DOCX reader and writer (ECMA-376 / ISO/IEC 29500 WordprocessingML).
 //!
-//! [`read`] turns a `.docx` package into a [`craft_wordmodel::Document`]; [`write`] does the
+//! [`read`] turns a `.docx` package into a [`craft_wordmodel::Document`]; [`fn@write`] does the
 //! reverse. Both are written from the public specification. The reader is lenient (unknown
 //! markup is skipped, bad numbers fall back to defaults) and bounded (zip entry sizes, total
 //! decompressed size, XML depth, element counts per part and a package-wide element budget are

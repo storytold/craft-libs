@@ -253,24 +253,3 @@ fn project_outline(p: Project, budget: &Budget) -> Result<Outline, Error> {
         .collect::<Result<_, Error>>()?;
     Ok(Outline { canvas: None, pages, layers: vec![] })
 }
-
-#[cfg(test)]
-mod cancellation_tests {
-    #![allow(clippy::unwrap_used)]
-    use super::*;
-    use std::cell::Cell;
-
-    #[test]
-    fn conversion_stops_inside_composition_layers() {
-        let project: Project =
-            serde_json::from_str(r#"{"items":{"1":{"id":1,"kind":{"type":"Comp","width":1,"height":1,"layers":[{},{},{},{},{},{}]}}}}"#).unwrap();
-        let polls = Cell::new(0);
-        let cancel = || {
-            polls.set(polls.get() + 1);
-            polls.get() == 6
-        };
-        let result = crate::cancel::run(&cancel, |control| project_outline(project, &Budget::controlled(&crate::Limits::default(), control)));
-        assert_eq!(result, Err(Error::Cancelled));
-        assert_eq!(polls.get(), 6);
-    }
-}

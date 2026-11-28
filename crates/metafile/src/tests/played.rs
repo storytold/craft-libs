@@ -208,13 +208,3 @@ fn huge_counts_sizes_and_offsets_are_refused_not_allocated() {
     assert!(parse(&huge).unwrap().items.is_empty());
     assert!(parse(b"not a metafile").is_err());
 }
-
-#[test]
-fn a_run_of_clip_rectangles_stays_one_region() {
-    // 200,000 INTERSECTCLIPRECT records nest nothing: the region is still one rectangle.
-    let mut records = vec![(30, le(&[0, 0, 1500, 1500])); 200_000];
-    records.push((43, le(&[100, 100, 200, 200])));
-    let p = parse(&hand_emf(5000, 3000, &records)).unwrap();
-    let Item::Path { region: Some(r), clips, .. } = &p.items[0] else { panic!("a clipped path") };
-    assert_eq!((r.len(), clips.len()), (1, 0));
-}

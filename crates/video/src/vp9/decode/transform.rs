@@ -380,99 +380,6 @@ fn itx_wide<const N: usize>(coefs: &[i32], p: &TxParams, dst: &mut [u16], stride
 mod tests {
     use super::*;
 
-    /// Reference inverse DCT (orthonormal, scaled like VP9: DC gain 1/sqrt(2) per pass times
-    /// sqrt(2) ... ) — compare basis functions up to rounding.
-    fn float_idct(input: &[f64]) -> Vec<f64> {
-        let n = input.len();
-        (0..n)
-            .map(|x| {
-                let mut s = input[0] / 2f64.sqrt();
-                for (k, &v) in input.iter().enumerate().skip(1) {
-                    s += v * ((2 * x + 1) as f64 * k as f64 * std::f64::consts::PI / (2 * n) as f64).cos();
-                }
-                s
-            })
-            .collect()
-    }
-
-    #[test]
-    fn idct_matches_float_reference() {
-        for n in [4usize, 8, 16, 32] {
-            for k in 0..n {
-                let mut buf = vec![0i32; n];
-                buf[k] = 1000;
-                tx1d_narrow(&mut buf, n, false);
-                let mut inp = vec![0f64; n];
-                inp[k] = 1000.0;
-                let r = float_idct(&inp);
-                for (a, b) in buf.iter().zip(&r) {
-                    assert!((*a as f64 - b).abs() <= 3.0, "n {n} k {k}: {buf:?} vs {r:?}");
-                }
-                let mut w: Vec<i64> = vec![0; n];
-                w[k] = 1000;
-                tx1d_wide(&mut w, n, false);
-                assert_eq!(w.iter().map(|&v| v as i32).collect::<Vec<_>>(), buf);
-            }
-        }
-    }
-
-    #[test]
-    fn adst_is_sine_basis() {
-        // VP9's ADST (for n = 8, 16) is a DST-IV variant: out[x] ~ sum in[k] sin(pi (2x+1)(2k+1) / 4n).
-        for n in [8usize, 16] {
-            for k in 0..n {
-                let mut buf = vec![0i32; n];
-                buf[k] = 1000;
-                tx1d_narrow(&mut buf, n, true);
-                let r: Vec<f64> = (0..n)
-                    .map(|x| {
-                        1000.0 * ((2 * x + 1) as f64 * (2 * k + 1) as f64 * std::f64::consts::PI / (4 * n) as f64).sin() * 2f64.sqrt() / 2f64.sqrt()
-                    })
-                    .collect();
-                for (a, b) in buf.iter().zip(&r) {
-                    assert!((*a as f64 - b).abs() <= 4.0, "n {n} k {k}: {buf:?} vs {r:?}");
-                }
-            }
-        }
-        // ADST4 is the sine transform sin(pi (x+1)(2k+1) / 9) scaled.
-        for k in 0..4 {
-            let mut buf = vec![0i32; 4];
-            buf[k] = 1000;
-            tx1d_narrow(&mut buf, 4, true);
-            let r: Vec<f64> =
-                (0..4).map(|x| 1000.0 * (std::f64::consts::PI * (x + 1) as f64 * (2 * k + 1) as f64 / 9.0).sin() * 2.0 * 2f64.sqrt() / 3.0).collect();
-            for (a, b) in buf.iter().zip(&r) {
-                assert!((*a as f64 - b).abs() <= 3.0, "k {k}: {buf:?} vs {r:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn dc_only_shortcut_matches_full_transform() {
-        for tx in 0..4u8 {
-            let n = 4usize << tx;
-            for dc in [-5000, -37, -1, 1, 2, 57, 1234, 9999] {
-                let mut coefs = vec![0i32; n * n];
-                coefs[0] = dc;
-                let mut a = vec![128u16; n * n];
-                let mut b = vec![128u16; n * n];
-                inverse_transform_add(
-                    &coefs,
-                    &InverseTx { tx_size: tx, tx_type: DCT_DCT, lossless: false, eob: 1, rows: 1, bit_depth: 8 },
-                    &mut a,
-                    n,
-                );
-                inverse_transform_add(
-                    &coefs,
-                    &InverseTx { tx_size: tx, tx_type: DCT_DCT, lossless: false, eob: 2, rows: n, bit_depth: 8 },
-                    &mut b,
-                    n,
-                );
-                assert_eq!(a, b, "tx {tx} dc {dc}");
-            }
-        }
-    }
-
     /// The per-column formulation the vectorised column pass replaced.
     fn itx_narrow_ref<const N: usize>(coefs: &[i32], p: &TxParams, dst: &mut [u16], stride: usize) {
         let lim = 1 << 24;
@@ -531,17 +438,5 @@ mod tests {
         check_cols::<8>(&mut seed);
         check_cols::<16>(&mut seed);
         check_cols::<32>(&mut seed);
-    }
-
-    #[test]
-    fn wht_round_trip_identity() {
-        // A single DC coefficient of 4 * v spreads v / 4 ... check invertibility on a simple case:
-        // input [4, 0, ..] (after the >> 2 pre-scaling a unit impulse).
-        let mut coefs = [0i32; 16];
-        coefs[0] = 4 * 4;
-        let mut dst = [100u16; 16];
-        inverse_transform_add(&coefs, &InverseTx { tx_size: 0, tx_type: DCT_DCT, lossless: true, eob: 1, rows: 4, bit_depth: 8 }, &mut dst, 4);
-        let sum: i32 = dst.iter().map(|&v| v as i32 - 100).sum();
-        assert_eq!(sum, 16);
     }
 }

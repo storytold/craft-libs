@@ -26,11 +26,7 @@ print = { max-threads = 1 }
 video-integration = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'package(craft-ui) & (binary(visual_regression) | test(/^combo::tests::|selected_tab_erases_a_baseline_centered_on_its_bottom_edge/))'
-test-group = 'gpu'
-
-[[profile.default.overrides]]
-filter = 'package(craft-video) & binary(h264_decode)'
+filter = 'package(craft-video) & binary(it) & test(/^h264_decode::/)'
 test-group = 'video-fixtures'
 
 [[profile.default.overrides]]
@@ -45,7 +41,6 @@ fail-fast = false
 slow-timeout = { period = "60s" }
 failure-output = "immediate-final"
 
-
 # Linux and macOS (the resource audit in craft-libs#2058): every GPU consumer shares the one `gpu`
 # slot, and the craft-video integration binaries share their fixture directories. Conservative on
 # purpose: the in-process mutexes these tests rely on do not reach across nextest's processes.
@@ -59,3 +54,30 @@ test-group = 'gpu'
 platform = 'cfg(unix)'
 filter = 'package(craft-video) & kind(test)'
 test-group = 'video-integration'
+
+# Slowest tests first (priority runs higher values earlier), so the longest ones start at the
+# beginning of the run instead of holding the tail. Every test that took over 30 s in the gate's
+# run on next (run 44318177438, Linux); the first tier is the one over 60 s.
+[[profile.ci.overrides]]
+filter = '(package(craft-media) & test(=mxf::tests::hostile::hostile_input_never_panics)) | (package(craft-table) & test(/CellGrid.*::drives$/)) | (package(craft-proto) & test(=imap::gmail_labels_tests::a_mailbox_claimed_huge_cant_fill_memory_with_flags))'
+priority = 20
+
+[[profile.ci.overrides]]
+filter = '''
+(package(craft-design-lint) & test(=mapped_crates_have_no_findings))
+| (package(craft-ui-widgets) & test(/SwatchTable.*::activation$/))
+| (package(craft-table) & test(/CellGrid.*::activation$/))
+| (package(craft-pkcs7) & test(=crypto::new_digital_ids_are_self_signed_and_survive_a_p12_round_trip))
+| (package(craft-image-codecs) & test(=tiff_bands::a_blank_fax_page_wider_than_4096_px_passes_the_bomb_guard))
+| (package(craft-image-codecs) & test(=codecs::png::streamed_tests::streamed_rows_match_the_whole_image_encoder))
+| (package(craft-image-codecs) & test(=codecs::png::parallel_tests::the_parallel_encoder_gives_the_same_bytes_on_any_thread_count))
+| (package(craft-image-codecs) & test(=limits::highly_compressible_jpeg_and_gif_still_decode))
+| (package(craft-color-ui) & test(=integration::sampling::an_invalid_capture_ends_the_pick_with_a_status))
+| (package(craft-docx) & test(=read::chart::tests::hostile_radar_charts_never_panic))
+| (package(craft-drawingml) & test(=chart::chartex_tests::large_box_hierarchy_and_stacked_charts_take_linear_work))
+| (package(craft-audio) & test(=integration::flac_decode::hostile_input_is_an_error_not_a_panic))
+| (package(craft-docx) & test(=comment_save_cost::many_comments_save_without_quadratic_id_searches))
+| (package(craft-ui-widgets) & test(/menu::popup::Menu.*::activation$/))
+| (package(craft-scraft-format) & test(=b64::tests::size_cap_counts_the_partial_quartet))
+'''
+priority = 10

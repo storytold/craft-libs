@@ -16,8 +16,11 @@ const DAY_MS: i64 = 86_400_000;
 /// A calendar day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Day {
+    #[allow(missing_docs)]
     pub year: i32,
+    /// Month number, 1 to 12.
     pub month: u8,
+    /// Day of the month, starting at 1.
     pub day: u8,
 }
 
@@ -38,6 +41,7 @@ impl Day {
         civil_from_days(days)
     }
 
+    /// The month this day falls in.
     pub fn month(self) -> Month {
         Month { year: self.year, month: self.month }
     }
@@ -52,7 +56,9 @@ impl fmt::Display for Day {
 /// A calendar month.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Month {
+    #[allow(missing_docs)]
     pub year: i32,
+    /// Month number, 1 to 12.
     pub month: u8,
 }
 
@@ -128,19 +134,23 @@ fn exact_amount(micros: u64) -> String {
 /// Which entries to show. An empty filter shows everything.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HistoryFilter {
+    /// Only jobs from this app id.
     pub app: Option<String>,
+    /// Only jobs that used this model id.
     pub model: Option<String>,
     /// Only jobs that started at or after this Unix-millisecond time.
     pub since_ms: Option<u64>,
 }
 
 impl HistoryFilter {
+    /// Whether `entry` passes every filter that is set.
     pub fn matches(&self, entry: &HistoryEntry) -> bool {
         self.app.as_ref().is_none_or(|a| *a == entry.start.app)
             && self.model.as_ref().is_none_or(|m| *m == entry.start.model)
             && self.since_ms.is_none_or(|t| entry.start.at_ms >= t)
     }
 
+    /// The entries that pass, in their original order.
     pub fn apply<'a>(&self, entries: &'a [HistoryEntry]) -> Vec<&'a HistoryEntry> {
         entries.iter().filter(|e| self.matches(e)).collect()
     }
@@ -164,9 +174,13 @@ fn distinct<'a>(items: impl Iterator<Item = &'a str>) -> Vec<String> {
 /// A count of jobs and the money the providers reported for them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Totals {
+    /// Every job counted, finished or not.
     pub jobs: usize,
+    /// Jobs that finished successfully.
     pub done: usize,
+    /// Jobs that failed.
     pub failed: usize,
+    /// Jobs that were cancelled.
     pub cancelled: usize,
     /// Started, but the app closed before the end was seen.
     pub unfinished: usize,
@@ -181,6 +195,7 @@ pub struct Totals {
 }
 
 impl Totals {
+    /// Counts one entry into the totals.
     pub fn add(&mut self, entry: &HistoryEntry) {
         self.jobs += 1;
         if matches!(entry.outcome(), Some(Outcome::Done))
@@ -213,6 +228,7 @@ impl Totals {
     }
 }
 
+/// Sums `entries` into one [`Totals`].
 pub fn totals<'a>(entries: impl IntoIterator<Item = &'a HistoryEntry>) -> Totals {
     let mut t = Totals::default();
     for e in entries {

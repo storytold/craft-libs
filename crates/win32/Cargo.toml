@@ -1,0 +1,26 @@
+[package]
+name = "craft-win32"
+description = "The Win32 window-procedure subclassing and window-handle calls that need `unsafe`, behind a safe API, so no other crate allows `unsafe`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winsafe = { version = "0.0.29", default-features = false, features = ["user", "comctl"] }
+
+# The workspace table with `unsafe_code` at `deny`: `lib.rs` allows it for this crate's FFI calls, and design-lint's
+# `contract/unsafe-allow` rule names this crate's source as one of the two places that may. Cargo cannot override one
+# workspace lint.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"

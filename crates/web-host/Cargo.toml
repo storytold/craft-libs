@@ -9,8 +9,27 @@ repository.workspace = true
 
 # Already in every web build's Cargo.lock through eframe.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+craft-host = { workspace = true }
+craft-platform = { workspace = true, features = ["browser"] }
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Blob", "CustomEvent", "CustomEventInit", "Element", "Event", "EventTarget", "Location", "MessageEvent", "Window"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Blob",
+    "CustomEvent",
+    "CustomEventInit",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlElement",
+    "HtmlInputElement",
+    "Location",
+    "MessageEvent",
+    "Node",
+    "Window",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

@@ -28,7 +28,7 @@ pub struct CertificateInfo {
     pub addresses: Vec<String>,
     /// Until when it is valid.
     pub not_after: Timestamp,
-    /// Whether it is for mail ([`Cert::for_mail`]).
+    /// Whether it is for mail (`Cert::for_mail`).
     pub for_mail: bool,
     /// Whether it is a certification authority's.
     pub authority: bool,

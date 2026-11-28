@@ -1,0 +1,25 @@
+# API map of the "Font manager: panel parts" family: the pieces of the panel that `ui.rs` exposed to the facade.
+# `FontsPanel::sources_ui`, `FontSourcesOutput`, `Look` and `Palette` are in font-manager-panel.toml.
+
+family = "Font manager: panel parts"
+new_module = "craft_font_manager"
+
+[[call]]
+old = "craft_font_manager::ui::stories()"
+new = ""
+note = "Deleted with `ui.rs`. The stories live in each type's `stories` module and register through the crate's `tests/it` harness."
+
+[[call]]
+old = "craft_font_manager::ui::COMPONENTS"
+new = ""
+note = "Deleted with `ui.rs`. Registration lists the components."
+
+[[call]]
+old = "craft_font_manager::ui::WORDS"
+new = ""
+note = "Deleted with `ui.rs`. Each type's `words!` set (`FontSourcesWords`, `DetailsWords`, and the other tracks') registers its own words."
+
+[[call]]
+old = "craft_font_manager::ui::COUNTS"
+new = ""
+note = "Deleted with `ui.rs`. Count words are rows of each `words!` set."

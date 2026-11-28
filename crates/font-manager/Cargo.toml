@@ -7,35 +7,62 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[package.metadata.craft]
+reads = [
+    "crates/ui-contract/fonts/inter/Inter-Regular.ttf",
+    "crates/ui-contract/fonts/inter/Inter-SemiBold.ttf",
+    "crates/font-subset/tests/data/orbitron/Orbitron[wght].ttf",
+    "crates/font-subset/tests/data/sarabun/Sarabun-Regular.ttf",
+    "crates/ui-contract/tests/fonts/NotoSansCJKsc-test.otf",
+]
+
+[lib]
+# Every test lives in the `it` integration binary, so `cargo test` builds the library once.
+test = false
+
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
-# `FontsPanel`: the whole interface as one egui panel.
-egui = ["dep:egui", "dep:craft-ui", "dep:serde", "dep:log"]
+# `FontsPanel`: the whole interface as one egui panel (it builds for the web too), with the picker, the Glyphs panel, the axis sliders and the
+# Missing Fonts dialog.
+ui = ["dep:craft-behavior", "dep:craft-theme", "dep:egui", "dep:craft-ui", "dep:craft-host", "dep:serde", "dep:log"]
+# The widgets' stories and trials (`tests/it`).
+screen-testing = ["ui", "craft-ui/testing", "dep:epaint_default_fonts", "egui/default_fonts"]
 
 [dependencies]
 craft-font-catalog = { workspace = true }
 craft-i18n = { workspace = true }
 # The pinned built-in indexes compiled in, for browsing offline.
 craft-font-store = { workspace = true, features = ["bundled-index"] }
-# egui's default faces lead the interface font stack.
-egui = { workspace = true, features = ["default_fonts"], optional = true }
+egui = { workspace = true, optional = true }
+# The story's installed faces.
+epaint_default_fonts = { version = "0.37", optional = true }
 # A host that wants installed fonts for characters its interface faces lack (language names in
 # their own scripts in the language filter) enables craft-ui's `system_fonts` itself.
 craft-ui = { workspace = true, optional = true }
+# The Host: settings section, jobs and interface language.
+craft-host = { workspace = true, optional = true }
+craft-behavior = { workspace = true, optional = true }
+craft-theme = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
+# Variation axes and named instances of a face (`axes`), on every feature set.
+skrifa = { version = "0.47", default-features = false, features = ["std"] }
+
+[build-dependencies]
+# The Arabic sample story's face, from the craft fonts set when `CRAFT_FONTS_DIR` names one.
+craft-fonts-build = { workspace = true }
 
 [dev-dependencies]
-egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
-# Real fonts for the fake font store to install: egui's own Hack and Ubuntu Light.
-epaint_default_fonts = "0.37"
-image = { version = "0.25", default-features = false, features = ["png"] }
-# The system's fonts for the Japanese and Arabic screenshots.
-egui_system_font_provider = "0.37"
+craft-font-manager = { path = ".", features = ["suite"] }
+# The shared preview test vectors.
+serde_json = { workspace = true }
 
 [[test]]
-name = "flows"
-required-features = ["egui"]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
+required-features = ["suite"]
 
 [lints]
 workspace = true

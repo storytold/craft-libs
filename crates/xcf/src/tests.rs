@@ -405,7 +405,8 @@ fn corrupted_files_never_panic() {
         let bytes = img.write();
         assert!(read_all(&bytes).is_ok());
         let mut state = 0x9e37_79b9_u32;
-        for _ in 0..2000 {
+        // The gate runs a divisor's fraction of the rounds; nightly runs all.
+        for _ in 0..2000 / craft_testkit::hostile::divisor() {
             let mut b = bytes.clone();
             for _ in 0..3 {
                 state ^= state << 13;

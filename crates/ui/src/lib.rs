@@ -1,50 +1,79 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! Small, reusable egui components for the Craft frontends.
+//! The craft UI library: runtime, style, fonts, primitives, the component contract, layout, components, patterns and
+//! the shell (layers 2 to 7).
 //!
-//! Applications own their assets, themes, layouts, commands and document semantics. Components
-//! accept focused style values and return egui responses; no application engine is required.
+//! The library is built as crates along its layers: craft-ui-contract (runtime to contract, and the test kit),
+//! craft-ui-widgets, craft-ui-panels, then craft-ui-canvas, craft-ui-patterns and craft-ui-shell side by side. This
+//! crate re-exports all of them under one root, so every `craft_ui::…` path names the same item as in the crate that
+//! defines it. It also re-exports storytold main's cloud, share and e-sign UI (`account`, `cloud`, `esign`, `share`,
+//! `presence`) from craft-cloud-ui, which is still raw egui.
+#![warn(missing_docs)]
 
-#[cfg(feature = "share")]
-pub mod account;
-pub mod backdrop;
-pub mod buttons;
-pub mod capture;
+extern crate self as craft_ui;
+
 #[cfg(feature = "cloud")]
-pub mod cloud;
-pub mod combo;
-pub mod direction;
-pub mod docking;
+pub use craft_cloud_ui::cloud;
 #[cfg(feature = "esign")]
-pub mod esign;
-mod focus;
-pub mod fonts;
-pub mod icons;
-pub mod ime;
-pub mod layout;
-pub mod localized;
-pub mod menu;
-pub mod panes;
-pub mod presence;
-pub mod printing;
-pub mod shapes;
+pub use craft_cloud_ui::esign;
+pub use craft_cloud_ui::presence;
 #[cfg(feature = "share")]
-pub mod share;
-pub mod tabs;
-#[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
-pub mod testing;
-pub mod text;
-pub mod theme;
+pub use craft_cloud_ui::{account, share};
+pub use craft_ui_canvas::{canvas, canvas_controls, dialog};
+#[cfg(feature = "testing")]
+pub use craft_ui_contract::registry;
+#[doc(hidden)]
+pub use craft_ui_contract::{__private, __register_command_set, __register_contract, __register_pattern};
+pub use craft_ui_contract::{InstallError, InstallSpec, contract, fonts, install, layout, primitives, runtime, style, words};
+pub use craft_ui_panels::{docking, rails, sections};
+pub use craft_ui_shell::shell;
+pub use craft_ui_widgets::{
+    bars, buttons, choice, controls, display, edit, form, graph, layout_components, list, menu, notices, pickers, popover, table, tabs, text,
+    tile_grid, value_drag,
+};
 
-pub use combo::ComboBox;
+/// `Inspector`, `CommandPalette`, `PreferencesWindow`, `DockArea`, `DockPanels`, `PanelSpec`,
+/// `NavigatorPanel` and the other patterns.
+pub mod patterns {
+    pub use craft_ui_patterns::patterns::*;
 
-/// Lets one unit test at a time hold a wgpu renderer. Each renderer creates its own Vulkan instance
-/// and device. When one test uses its device while a test on another thread creates or destroys
-/// one, the Vulkan loader now and then crashes the test binary with SIGSEGV. Take the lock before
-/// building the harness (`let _gpu = crate::gpu_test_lock();`), so it is released after the harness
-/// is dropped. A test that failed while holding it does not block the others.
-#[cfg(test)]
-pub(crate) fn gpu_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// Canvas panel patterns: `NavigatorPanel`.
+    pub mod canvas {
+        pub use craft_ui_canvas::canvas::navigator_panel::{NavigatorPanel, NavigatorPanelOutput};
+    }
+}
+
+/// The fixture, the suite runner and the story helpers of every crate of the library.
+#[cfg(feature = "testing")]
+pub mod testing {
+    pub use craft_ui_canvas::testing::*;
+
+    #[cfg(feature = "suite")]
+    crate::registry!();
+
+    /// The framework crates whose suite items form the library.
+    #[cfg(feature = "suite")]
+    const LIBRARY: [fn(&mut Registry); 7] = [
+        register,
+        craft_ui_contract::testing::register,
+        craft_ui_widgets::testing::register,
+        craft_ui_panels::testing::register,
+        craft_ui_canvas::testing::register,
+        craft_ui_patterns::testing::register,
+        craft_ui_shell::testing::register,
+    ];
+
+    /// Adds the framework library crates to a registry.
+    #[cfg(feature = "suite")]
+    pub fn register_library(registry: &mut Registry) {
+        for register in LIBRARY {
+            register(registry);
+        }
+    }
+
+    /// The suite items declared by the framework library crates.
+    #[cfg(feature = "suite")]
+    pub fn library_registrations() -> Registry {
+        Registry::of(&LIBRARY)
+    }
 }

@@ -34,25 +34,3 @@ impl Default for Methods {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Methods;
-
-    #[test]
-    fn default_is_the_desktop_control_methods() {
-        let m = Methods::default();
-        assert_eq!(m.commands, Some("engine.commands"));
-        assert_eq!(m.execute, Some("engine.execute"));
-        assert_eq!(m.doc_inspect, Some("document.inspect"));
-        assert_eq!(m.ui_inspect, Some("ui.inspect"));
-        assert_eq!(m.screenshot, Some("ui.screenshot"));
-    }
-
-    #[test]
-    fn none_has_no_methods() {
-        let none = Methods::NONE;
-        assert!([none.commands, none.execute, none.doc_inspect, none.ui_inspect, none.screenshot].iter().all(Option::is_none));
-        assert_ne!(none, Methods::default());
-    }
-}

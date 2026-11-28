@@ -4,7 +4,7 @@
 // Test code: a failed unwrap is a failed test.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod mpegts_mux;
+use super::mpegts_mux;
 
 use craft_media::mpegts;
 use craft_media::mpegts::mux::{Av1Config, Codec, Config, Error, Frame, MAX_PCR_DELAY, MAX_PCR_INTERVAL, Muxer, OpusMapping, OpusTrim, Stream};
@@ -66,8 +66,7 @@ fn frame(s: usize, size: usize, key: bool, n: usize) -> (Vec<u8>, Vec<u8>) {
         1 => {
             let mut d = vec![0xFC];
             fill(&mut d, size.min(1500), seed);
-            let e = opus_unit(&d);
-            (d, e)
+            (d.clone(), d)
         }
         2 => {
             let mut d = Vec::new();

@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-settings"
 version.workspace = true
 edition.workspace = true
@@ -10,13 +11,32 @@ description = "Shared settings storage for the Craft suite: platform folders, co
 [lints]
 workspace = true
 
+[features]
+# The in-memory `SettingsFiles` for tests in other crates (`craft_settings::testing`).
+testing = []
+
 [dependencies]
 craft-atomic = { workspace = true }
+craft-host = { workspace = true }
+log = { workspace = true }
 serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 toml_edit = { version = "0.25", features = ["serde"] }
+web-time = "1.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7"
 
+# `LocalStorageFiles`: the browser's localStorage.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Storage", "Window"] }
+
 [dev-dependencies]
+craft-settings = { path = ".", features = ["testing"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

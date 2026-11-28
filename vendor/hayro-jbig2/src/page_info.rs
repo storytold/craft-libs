@@ -93,19 +93,11 @@ pub(crate) fn parse_page_information(reader: &mut Reader<'_>) -> Result<PageInfo
 
     // 7.4.8.3: Page X resolution
     let x_resolution_raw = reader.read_u32().ok_or(ParseError::UnexpectedEof)?;
-    let x_resolution = if x_resolution_raw == 0 {
-        None
-    } else {
-        Some(x_resolution_raw)
-    };
+    let x_resolution = if x_resolution_raw == 0 { None } else { Some(x_resolution_raw) };
 
     // 7.4.8.4: Page Y resolution
     let y_resolution_raw = reader.read_u32().ok_or(ParseError::UnexpectedEof)?;
-    let y_resolution = if y_resolution_raw == 0 {
-        None
-    } else {
-        Some(y_resolution_raw)
-    };
+    let y_resolution = if y_resolution_raw == 0 { None } else { Some(y_resolution_raw) };
 
     // 7.4.8.5: Page segment flags
     let flags_byte = reader.read_byte().ok_or(ParseError::UnexpectedEof)?;
@@ -113,19 +105,9 @@ pub(crate) fn parse_page_information(reader: &mut Reader<'_>) -> Result<PageInfo
 
     // 7.4.8.6: Page striping information
     let striping_raw = reader.read_u16().ok_or(ParseError::UnexpectedEof)?;
-    let striping = PageStriping {
-        _is_striped: striping_raw & 0x8000 != 0,
-        _max_stripe_size: striping_raw & 0x7FFF,
-    };
+    let striping = PageStriping { _is_striped: striping_raw & 0x8000 != 0, _max_stripe_size: striping_raw & 0x7FFF };
 
-    Ok(PageInformation {
-        width,
-        height,
-        _x_resolution: x_resolution,
-        _y_resolution: y_resolution,
-        flags,
-        _striping: striping,
-    })
+    Ok(PageInformation { width, height, _x_resolution: x_resolution, _y_resolution: y_resolution, flags, _striping: striping })
 }
 
 fn parse_page_flags(flags: u8) -> PageFlags {

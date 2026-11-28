@@ -4,6 +4,8 @@
 //! separated by three split points. Each region contributes a cosine-windowed bump, summed and
 //! forced monotone.
 
+pub mod compat;
+
 use crate::color::spline::Lut1;
 use craft_develop_model::ToneCurve;
 

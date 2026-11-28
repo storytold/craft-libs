@@ -29,6 +29,7 @@ pub enum InstallSource {
 }
 
 impl InstallSource {
+    /// The name shown to the user.
     pub fn label(self) -> &'static str {
         match self {
             Self::Launcher => "ArtCraft Launcher",
@@ -55,6 +56,7 @@ impl InstallSource {
 pub struct Installed {
     /// `None` when the copy is there but its version couldn't be read.
     pub version: Option<Version>,
+    #[allow(missing_docs)]
     pub source: InstallSource,
     /// Where it lives: the `.app`, the exe, the AppImage, or the binary of a package.
     pub location: String,

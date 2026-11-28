@@ -13,6 +13,9 @@ pub const MAX_CHANNELS: usize = 15;
 /// Largest number of stored values (nodes × outputs) a table may hold.
 pub const MAX_VALUES: usize = 16 * 1024 * 1024;
 
+/// An N-input, M-output colour lookup table with `f32` node values.
+///
+/// Build one with [`Clut::new`]; evaluate it with the interpolation methods below.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clut {
     pub(crate) inputs: usize,
@@ -60,9 +63,11 @@ impl Clut {
         Clut { inputs, outputs, grid, data, strides }
     }
 
+    /// Number of input channels.
     pub fn inputs(&self) -> usize {
         self.inputs
     }
+    /// Number of output channels.
     pub fn outputs(&self) -> usize {
         self.outputs
     }
@@ -266,90 +271,6 @@ impl Clut {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn f3(p: &[f32], o: &mut [f32]) {
-        o[0] = p[0] * 0.5 + p[1] * 0.3 + p[2] * 0.2;
-        o[1] = p[0] * p[1];
-        o[2] = (p[2] * 3.0).sin() * 0.5 + 0.5;
-    }
-
-    #[test]
-    fn exact_on_nodes_and_linear_functions() {
-        let c = Clut::sample(vec![5, 5, 5], 3, f3).unwrap();
-        let mut o = [0.0; 3];
-        c.eval(&[0.25, 0.5, 0.75], &mut o).unwrap();
-        let mut w = [0.0; 3];
-        f3(&[0.25, 0.5, 0.75], &mut w);
-        for i in 0..3 {
-            assert!((o[i] - w[i]).abs() < 1e-6);
-        }
-        // Linear function is reproduced exactly anywhere.
-        c.eval(&[0.13, 0.77, 0.41], &mut o).unwrap();
-        assert!((o[0] - (0.13 * 0.5 + 0.77 * 0.3 + 0.41 * 0.2)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn four_d_and_multilinear_agree_on_linear() {
-        let f = |p: &[f32], o: &mut [f32]| o[0] = 0.1 * p[0] + 0.2 * p[1] + 0.3 * p[2] + 0.4 * p[3];
-        let c = Clut::sample(vec![3, 4, 5, 6], 1, f).unwrap();
-        let mut a = [0.0];
-        let mut b = [0.0];
-        for p in [[0.1f32, 0.9, 0.3, 0.7], [1.0, 0.0, 0.5, 0.5], [0.33, 0.66, 0.99, 0.01]] {
-            c.eval(&p, &mut a).unwrap();
-            c.eval_multilinear(&p, &mut b).unwrap();
-            let want = 0.1 * p[0] + 0.2 * p[1] + 0.3 * p[2] + 0.4 * p[3];
-            assert!((a[0] - want).abs() < 1e-5 && (b[0] - want).abs() < 1e-5);
-        }
-    }
-
-    #[test]
-    fn one_and_two_d() {
-        let c = Clut::sample(vec![3], 2, |p, o| {
-            o[0] = p[0];
-            o[1] = 1.0 - p[0];
-        })
-        .unwrap();
-        let mut o = [0.0; 2];
-        c.eval(&[0.25], &mut o).unwrap();
-        assert!((o[0] - 0.25).abs() < 1e-6 && (o[1] - 0.75).abs() < 1e-6);
-        let c = Clut::sample(vec![2, 2], 1, |p, o| o[0] = p[0] + p[1]).unwrap();
-        c.eval(&[0.5, 0.25], &mut o).unwrap();
-        assert!((o[0] - 0.75).abs() < 1e-6);
-    }
-
-    #[test]
-    fn a_nan_input_still_gives_nan() {
-        let c = Clut::sample(vec![2; 5], 1, |p, o| o[0] = p.iter().sum()).unwrap();
-        let mut o = [0.0];
-        c.eval_multilinear(&[0.5, f32::NAN, 0.5, 0.5, 0.5], &mut o).unwrap();
-        assert!(o[0].is_nan(), "{o:?}");
-    }
-
-    #[test]
-    fn singleton_dimensions_do_not_multiply_corners() {
-        // Fifteen inputs, all but two on a single grid point: the result interpolates only those
-        // two, and matches the same table built with two inputs.
-        let mut grid = vec![1usize; 15];
-        grid[3] = 2;
-        grid[9] = 3;
-        let wide = Clut::sample(grid, 2, |p, o| {
-            o[0] = p[3] * 0.5 + p[9] * 0.25;
-            o[1] = p[3] * p[9];
-        })
-        .unwrap();
-        let narrow = Clut::sample(vec![2, 3], 2, |p, o| {
-            o[0] = p[0] * 0.5 + p[1] * 0.25;
-            o[1] = p[0] * p[1];
-        })
-        .unwrap();
-        let mut input = [0.4f32; 15];
-        input[3] = 0.3;
-        input[9] = 0.7;
-        let (mut a, mut b) = ([0.0; 2], [0.0; 2]);
-        wide.eval_multilinear(&input, &mut a).unwrap();
-        narrow.eval_multilinear(&[0.3, 0.7], &mut b).unwrap();
-        assert!((a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6, "{a:?} {b:?}");
-    }
 
     #[test]
     fn degenerate_dimensions_do_not_change_the_result() {

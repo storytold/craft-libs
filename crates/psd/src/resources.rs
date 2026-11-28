@@ -99,7 +99,9 @@ impl<'a> ImageResourceView<'a> {
         r.skip(name_pad)?;
         let len = r.u32()?;
         let data = r.bytes_u64(u64::from(len))?;
-        if len % 2 == 1 {
+        // A writer that drops the pad byte after the section's last resource is common; that
+        // byte would be past the section, so don't fail the whole file over it.
+        if len % 2 == 1 && !r.is_empty() {
             r.skip(1)?;
         }
         Ok(ImageResourceView { signature, id, name, data })
@@ -515,6 +517,19 @@ mod tests {
     #[test]
     fn empty_section() {
         assert_eq!(roundtrip(&[]), vec![0, 0, 0, 0]);
+    }
+
+    /// The last resource of the section has odd data and no pad byte (some writers drop it):
+    /// the resource still reads instead of the whole file failing.
+    #[test]
+    fn odd_last_resource_without_pad() {
+        let mut out = Vec::new();
+        write_section(&mut out, &[ImageResource::new(1000, vec![1, 2, 3])]).unwrap();
+        out.pop();
+        let len = u32::from_be_bytes([out[0], out[1], out[2], out[3]]) - 1;
+        out[..4].copy_from_slice(&len.to_be_bytes());
+        let back = read_section(&mut Reader::new(&out)).unwrap();
+        assert_eq!(back, [ImageResource::new(1000, vec![1, 2, 3])]);
     }
 
     #[test]

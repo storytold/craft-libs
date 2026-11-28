@@ -987,10 +987,12 @@ mod tests {
     /// D70 and D70s get best-guess frames (the D40 shares the D50 / D70 / D70s data size but not their frame).
     #[test]
     fn measured_older_dx_bodies_image_area() {
-        let decode_as = |model: &str, (w, h): (usize, usize)| {
-            let nef = nef_model_in(ByteOrder::Big, model, 1, 12, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32, None);
-            crate::decode(&nef).unwrap()
+        let nef_as = |model: &str, (w, h): (usize, usize)| {
+            nef_model_in(ByteOrder::Big, model, 1, 12, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32, None)
         };
+        // The headers decide the frame (`probe_info` equals the decoded image's info); one body decodes in full.
+        let crop_of = |model: &str, size: (usize, usize)| crate::probe_info(&nef_as(model, size)).unwrap().crop;
+        assert_eq!(crate::decode(&nef_as("NIKON D200", (3904, 2616))).unwrap().crop, Rect::new(16, 12, 3872, 2592));
         for (model, size, crop) in [
             ("NIKON D200", (3904, 2616), Rect::new(16, 12, 3872, 2592)),
             ("NIKON D80", (3904, 2616), Rect::new(14, 9, 3872, 2592)),
@@ -1003,10 +1005,10 @@ mod tests {
             ("NIKON D70", (3040, 2014), Rect::new(15, 7, 3008, 2000)),
             ("NIKON D70s", (3040, 2014), Rect::new(15, 7, 3008, 2000)),
         ] {
-            assert_eq!(decode_as(model, size).crop, crop, "{model}");
+            assert_eq!(crop_of(model, size), crop, "{model}");
         }
         // the V1's area on the V2's data size: no entry, the whole data
-        assert_eq!(decode_as("NIKON 1 V1", (4620, 3084)).crop, Rect::new(0, 0, 4620, 3084));
+        assert_eq!(crop_of("NIKON 1 V1", (4620, 3084)), Rect::new(0, 0, 4620, 3084));
     }
 
     /// Every measured entry is a crop inside its data, once per model, data size and depth, with a white level (if
@@ -1028,21 +1030,25 @@ mod tests {
     /// image areas (full frame and 1.3x crop), so renders came out larger and Lightroom crops landed off.
     #[test]
     fn measured_d7100_image_area() {
-        let decode_as = |model: &str, (w, h): (usize, usize)| {
+        let nef_as = |model: &str, (w, h): (usize, usize)| {
             let mut nef = nef(1, 14, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32);
             // the fixture's model is "NIKON TEST" plus its NUL: 11 bytes to overwrite
             let at = nef.windows(11).position(|b| b == b"NIKON TEST\0").unwrap();
             let name = format!("{model:\0<11}");
             nef[at..at + 11].copy_from_slice(name.as_bytes());
-            crate::decode(&nef).unwrap()
+            nef
         };
+        // The headers decide the frame (`probe_info` equals the decoded image's info); the white level needs the
+        // samples, so the full-frame area decodes in full.
+        let d7100 = crate::decode(&nef_as("NIKON D7100", (6036, 4020))).unwrap();
+        assert_eq!(d7100.crop, Rect::new(18, 10, 6000, 4000));
+        assert_ne!(d7100.white, vec![15520.0]);
         for (size, crop) in [((6036, 4020), Rect::new(18, 10, 6000, 4000)), ((4812, 3212), Rect::new(6, 6, 4800, 3200))] {
-            let d7100 = decode_as("NIKON D7100", size);
+            let d7100 = crate::probe_info(&nef_as("NIKON D7100", size)).unwrap();
             assert_eq!(d7100.crop, crop);
             assert_eq!((d7100.crop.width, d7100.crop.height), (crop.width, crop.height));
-            assert_ne!(d7100.white, vec![15520.0]);
-            assert_eq!(d7100.info().developed_size(), (crop.width, crop.height));
-            assert_eq!(decode_as("NIKON D7200", size).crop, Rect::new(0, 0, size.0, size.1));
+            assert_eq!(d7100.developed_size(), (crop.width, crop.height));
+            assert_eq!(crate::probe_info(&nef_as("NIKON D7200", size)).unwrap().crop, Rect::new(0, 0, size.0, size.1));
         }
     }
 

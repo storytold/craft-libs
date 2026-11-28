@@ -1,0 +1,317 @@
+# API map of the "Layers parts" family: old path to new path and setter renames.
+# Covers the tree data, the blend rows, the filter bar, the options dialog and the thumbnail key of craft-layers.
+
+family = "Layers parts"
+new_module = "craft_layers::ui"
+
+[[type]]
+name = "LayerTree"
+old = "craft_layers::ui::tree::LayerTree"
+new = "craft_layers::ui::tree::LayerTree"
+status = "same"
+note = "`blend_modes` returns `Vec<Entry<String>>` and `accepts_drop` takes `&ReorderMove<LayerRowKey<Id>>` and `craft_keymap::Mods`."
+
+[[type]]
+name = "LayerInfo"
+old = "craft_layers::ui::tree::LayerInfo"
+new = "craft_layers::ui::tree::LayerInfo"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "LayerKind"
+old = "craft_layers::ui::tree::LayerKind"
+new = "craft_layers::ui::tree::LayerKind"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "LayerPart"
+old = "craft_layers::ui::tree::LayerPart"
+new = "craft_layers::ui::tree::LayerPart"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "MaskInfo"
+old = "craft_layers::ui::tree::MaskInfo"
+new = "craft_layers::ui::tree::MaskInfo"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "LayerLocks"
+old = "craft_layers::ui::tree::LayerLocks"
+new = "craft_layers::ui::tree::LayerLocks"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "LockKind"
+old = "craft_layers::ui::tree::LockKind"
+new = "craft_layers::ui::tree::LockKind"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "LayerSelection"
+old = "craft_layers::ui::tree::LayerSelection"
+new = "craft_layers::ui::tree::LayerSelection"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "LayerRowKey"
+old = "craft_layers::ui::tree::LayerRowKey"
+new = "craft_layers::ui::tree::LayerRowKey"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "SubRowGroup"
+old = "craft_layers::ui::tree::SubRowGroup"
+new = "craft_layers::ui::tree::SubRowGroup"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "SubRows"
+old = "craft_layers::ui::tree::SubRows"
+new = "craft_layers::ui::tree::SubRows"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "SubRow"
+old = "craft_layers::ui::tree::SubRow"
+new = "craft_layers::ui::tree::SubRow"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "LayerProperties"
+old = "craft_layers::ui::tree::LayerProperties"
+new = "craft_layers::ui::tree::LayerProperties"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "LayersFooterState"
+old = "craft_layers::ui::tree::LayersFooterState"
+new = "craft_layers::ui::tree::LayersFooterState"
+status = "same"
+note = "Plain data, now `#[non_exhaustive]` with constructors; build a value with its `new` or `Default` and set the fields."
+
+[[type]]
+name = "BlendChoice"
+old = "craft_ui::controls::blend_choice::BlendChoice"
+new = ""
+status = "removed"
+note = "A blend list is `Vec<craft_ui::contract::Entry<String>>`: `Entry::new(key, label)` per mode and `Entry::separator()` for each group break."
+
+[[type]]
+name = "BlendRows"
+old = "craft_layers::ui::rows::BlendRows"
+new = "craft_layers::ui::rows::BlendRows"
+status = "same"
+
+[[type]]
+name = "BlendRowsOutput"
+old = "craft_layers::ui::rows::BlendRowsOutput"
+new = "craft_layers::ui::rows::BlendRowsOutput"
+status = "same"
+
+[[type]]
+name = "LayerPropertyEdit"
+old = "craft_layers::ui::rows::LayerPropertyEdit"
+new = "craft_layers::ui::rows::LayerPropertyEdit"
+status = "same"
+note = "`BlendHover` is gone: the hovered mode is the `Update` of `Blend`, and closing the list without a pick is its `Cancel`."
+
+[[type]]
+name = "BlendRowsLabels"
+old = "craft_layers::ui::rows::BlendRowsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `BlendRowsWords` (ids `blendRows.*`); read it with `Env::of(ui).words::<BlendRowsWords>()`."
+
+[[type]]
+name = "BlendRowsWords"
+old = ""
+new = "craft_layers::ui::rows::BlendRowsWords"
+status = "replaced"
+note = "The words of the blend, opacity, lock and fill rows; ids `blendRows.*` (legacy `layers.blendMode`, `layers.opacity`, `layers.fill`, `layers.lock`, `layers.lock*`). The Opacity, Fill and Lock captions carry no colon."
+
+[[type]]
+name = "FilterBy"
+old = "craft_layers::ui::filter::FilterBy"
+new = "craft_layers::ui::filter::FilterBy"
+status = "same"
+
+[[type]]
+name = "FilterKind"
+old = "craft_layers::ui::filter::FilterKind"
+new = "craft_layers::ui::filter::FilterKind"
+status = "same"
+
+[[type]]
+name = "LayerFilter"
+old = "craft_layers::ui::filter::LayerFilter"
+new = "craft_layers::ui::filter::LayerFilter"
+status = "same"
+
+[[type]]
+name = "LayerFilterBar"
+old = "craft_layers::ui::filter::LayerFilterBar"
+new = "craft_layers::ui::filter::LayerFilterBar"
+status = "same"
+
+[[type]]
+name = "LayerFilterOutput"
+old = "craft_layers::ui::filter::LayerFilterOutput"
+new = "craft_layers::ui::filter::LayerFilterOutput"
+status = "same"
+
+[[type]]
+name = "LayerFilterLabels"
+old = "craft_layers::ui::filter::LayerFilterLabels"
+new = ""
+status = "removed"
+note = "Replaced by `LayerFilterWords` (ids `layerFilterBar.*`)."
+
+[[type]]
+name = "LayerFilterWords"
+old = ""
+new = "craft_layers::ui::filter::LayerFilterWords"
+status = "replaced"
+note = "The words of the filter bar; ids `layerFilterBar.*` (legacy `layers.filter.*`); the clear-search word is the search field's own."
+
+[[type]]
+name = "LayersSettings"
+old = "craft_layers::ui::options::LayersSettings"
+new = "craft_layers::ui::options::LayersSettings"
+status = "same"
+
+[[type]]
+name = "LayersOptions"
+old = "craft_layers::ui::options::LayersOptions"
+new = "craft_layers::ui::options::LayersOptions"
+status = "same"
+
+[[type]]
+name = "LayersOptionsDialog"
+old = "craft_layers::ui::options::LayersOptionsDialog"
+new = "craft_layers::ui::options::LayersOptionsDialog"
+status = "same"
+
+[[type]]
+name = "LayersOptionsLabels"
+old = "craft_layers::ui::options::LayersOptionsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `LayersOptionsWords` (ids `layersOptionsDialog.*`)."
+
+[[type]]
+name = "LayersOptionsWords"
+old = ""
+new = "craft_layers::ui::options::LayersOptionsWords"
+status = "replaced"
+note = "The words of Layers Panel Options; ids `layersOptionsDialog.*` (legacy `layers.options.*`); the per-size description word is gone with the sample's side in points."
+
+[[type]]
+name = "paint_sample_thumbnail"
+old = "craft_layers::ui::options::paint_sample_thumbnail"
+new = ""
+status = "removed"
+note = "Each thumbnail-size radio shows a `craft_ui::display::Picture` of a sample image at the size's token."
+
+[[type]]
+name = "ThumbContents"
+old = "craft_layers::ui::thumbs::ThumbContents"
+new = "craft_layers::ui::thumbs::ThumbContents"
+status = "same"
+note = "Now `#[non_exhaustive]`; build a key with its constructors."
+
+[[type]]
+name = "LayerThumbKind"
+old = "craft_layers::ui::thumbs::LayerThumbKind"
+new = "craft_layers::ui::thumbs::LayerThumbKind"
+status = "same"
+note = "Now `#[non_exhaustive]`; build a key with its constructors."
+
+[[type]]
+name = "LayerThumb"
+old = "craft_layers::ui::thumbs::LayerThumb"
+new = "craft_layers::ui::thumbs::LayerThumb"
+status = "same"
+note = "Now `#[non_exhaustive]`; build a key with its constructors."
+
+[[type]]
+name = "FakeLayers"
+old = ""
+new = "craft_layers::ui::mock::FakeLayers"
+status = "replaced"
+note = "Public behind the crate's `screen-testing` feature, with public fields; `flat` and `take_info_calls` are always present."
+
+[[type]]
+name = "FakeLayer"
+old = ""
+new = "craft_layers::ui::mock::FakeLayer"
+status = "replaced"
+note = "Public behind the crate's `screen-testing` feature."
+
+[[setter]]
+type = "BlendRows"
+old = "new(id_salt, properties, blend_modes)"
+new = "new(properties, blend_modes)"
+note = "`blend_modes` is `&[Entry<String>]`; the id salt is gone."
+
+[[setter]]
+type = "BlendRows"
+old = "labels(BlendRowsLabels)"
+new = ""
+note = "Words are the installed `BlendRowsWords`."
+
+[[setter]]
+type = "BlendRows"
+old = "locks(bool)"
+new = "locks(bool)"
+
+[[setter]]
+type = "LayerFilterBar"
+old = "new(id_salt, &mut LayerFilter)"
+new = "new(Bind<LayerFilter>)"
+note = "`Bind::bound(&mut filter)` writes through; `LayerFilterOutput::edit` carries the change for a given value."
+
+[[setter]]
+type = "LayerFilterBar"
+old = "blend_modes(&[BlendChoice])"
+new = "blend_modes(&[Entry<String>])"
+
+[[setter]]
+type = "LayerFilterBar"
+old = "labels(LayerFilterLabels)"
+new = ""
+note = "Words are the installed `LayerFilterWords`."
+
+[[setter]]
+type = "LayersOptionsDialog"
+old = "new()"
+new = "new(LayersOptions)"
+
+[[setter]]
+type = "LayersOptionsDialog"
+old = "initial(LayersOptions)"
+new = ""
+note = "Pass the options to `new`."
+
+[[setter]]
+type = "LayerTree"
+old = "accepts_drop(&Move<LayerRowKey<Id>>, Modifiers)"
+new = "accepts_drop(&ReorderMove<LayerRowKey<Id>>, Mods)"
+note = "`Mods` is `craft_keymap::Mods`; `ReorderMove` is `craft_ui::contract::ReorderMove`."
+
+[[call]]
+old = "LayersOptionsDialog::new().initial(options)"
+new = "LayersOptionsDialog::new(options)"
+note = "The dialog takes the options it opens with."

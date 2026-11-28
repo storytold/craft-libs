@@ -418,13 +418,16 @@ mod tests {
     /// returns `MAX_RESAMPLE_BLOCK` frames.
     #[test]
     fn source_held_and_block_length_are_bounded() {
+        // At this ratio a pull holds about 42 output frames' worth of source, so 64 frames take two pulls; each output
+        // frame pulls 1,536 source frames of 64 channels, so nightly runs a longer block.
+        let frames = if craft_testkit::hostile::divisor() == 1 { 1_024 } else { 64 };
         let mut r = StreamResampler::new(1_536_000, 1_000);
         let mut widest = 0;
-        let out = r.process(0, 1_024, |_, frames| {
+        let out = r.process(0, frames, |_, frames| {
             widest = widest.max(frames);
             vec![vec![0.5; frames]; 64]
         });
-        assert_eq!((out.len(), out[0].len()), (64, 1_024));
+        assert_eq!((out.len(), out[0].len()), (64, frames));
         assert!(widest <= MAX_RESAMPLE_HELD / 64, "{widest}");
         assert!(r.held.iter().map(Vec::len).sum::<usize>() <= MAX_RESAMPLE_HELD);
         let mut r = StreamResampler::new(48_000, 48_000);

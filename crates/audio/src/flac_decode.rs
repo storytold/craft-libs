@@ -205,6 +205,16 @@ impl<'a> Bits<'a> {
 
 const BLOCK_SIZES: [usize; 16] = [0, 192, 576, 1152, 2304, 4608, 0, 0, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
 
+struct FrameHeader {
+    variable: bool,
+    number: u64,
+    block_size: usize,
+    sample_rate: u32,
+    bits: u32,
+    channels: usize,
+    mode: Stereo,
+}
+
 /// A frame decoder. `info` supplies what a frame header leaves to the STREAMINFO.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Decoder {
@@ -223,14 +233,12 @@ impl Decoder {
         Decoder { info: None }
     }
 
-    /// Decode the frame at the start of `data`.
-    pub fn decode_frame(&self, data: &[u8]) -> Result<Frame> {
+    fn read_frame_header(&self, r: &mut Bits<'_>) -> Result<FrameHeader> {
         // StreamInfo has public fields: container callers can construct it without
         // parse(), so validate before it can control shifts and sample reads.
         if self.info.is_some_and(|i| !(4..=32).contains(&i.bits_per_sample) || !(1..=8).contains(&i.channels) || i.sample_rate == 0) {
             return Err(DecodeError::Invalid("invalid decoder STREAMINFO"));
         }
-        let mut r = Bits::new(data);
         if r.bits(15)? != 0x7FFC {
             return Err(DecodeError::Invalid("missing frame sync code"));
         }
@@ -240,7 +248,7 @@ impl Decoder {
         if r.bit()? != 0 {
             return Err(DecodeError::Invalid("reserved bit set"));
         }
-        let number = coded_number(&mut r)?;
+        let number = coded_number(r)?;
         let block_size = match bs_code {
             0 => return Err(DecodeError::Invalid("reserved block size")),
             6 => r.bits(8)? as usize + 1,
@@ -267,7 +275,7 @@ impl Decoder {
         };
         let header_len = r.pos.div_ceil(8);
         let stored_crc = r.bits(8)? as u8;
-        if crc8(&data[..header_len]) != stored_crc {
+        if crc8(&r.data[..header_len]) != stored_crc {
             return Err(DecodeError::Crc("a frame header"));
         }
         let bits = match bps_code {
@@ -287,6 +295,24 @@ impl Decoder {
             10 => (2, Stereo::MidSide),
             _ => return Err(DecodeError::Invalid("reserved channel assignment")),
         };
+        Ok(FrameHeader { variable, number, block_size, sample_rate, bits, channels, mode })
+    }
+
+    /// Read a FLAC packet's sample count from an intact header even if the body is damaged.
+    pub(crate) fn packet_block_size(&self, data: &[u8]) -> Option<usize> {
+        let info = self.info?;
+        let header = self.read_frame_header(&mut Bits::new(data)).ok()?;
+        (header.sample_rate == info.sample_rate
+            && header.bits == u32::from(info.bits_per_sample)
+            && header.channels == usize::from(info.channels)
+            && header.block_size <= usize::from(u16::MAX))
+        .then_some(header.block_size)
+    }
+
+    /// Decode the frame at the start of `data`.
+    pub fn decode_frame(&self, data: &[u8]) -> Result<Frame> {
+        let mut r = Bits::new(data);
+        let FrameHeader { variable, number, block_size, sample_rate, bits, channels, mode } = self.read_frame_header(&mut r)?;
         let mut out: Vec<Vec<i64>> = Vec::with_capacity(channels);
         for c in 0..channels {
             let extra = match (mode, c) {

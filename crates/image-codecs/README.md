@@ -4,7 +4,8 @@ Codecs for flat raster image formats, written in pure Rust. This crate defines i
 type and shares its baseline and extended JPEG decoders through `craft-jpeg`, its optional HEIF
 decoder through `craft-heif`, and its optional AVIF decoder through `craft-video`'s AV1 decoder.
 It builds for `wasm32-unknown-unknown` and does no filesystem I/O: decoders take `&[u8]` and
-encoders return `Vec<u8>`.
+encoders return `Vec<u8>`. `read_bounded(reader, max_bytes)` reads a caller's file or stream into
+bytes for them and fails with `ErrorKind::FileTooLarge` when the input is longer than `max_bytes`.
 
 It follows the "Avoiding GIMP's hole" rules in `docs/architecture.md` §1.1:
 
@@ -75,6 +76,12 @@ the encode plan, and `fidelity_warnings` reports the conversion when it loses in
 
 `Image::convert` applies the same ICC rule: it keeps the profile only when the colour model stays
 the same.
+
+`Image::to_rgba8` changes only the layout and sample type. With the `cms` feature,
+`Image::to_display_rgba8` also converts the colors through `craft-cms`: from the embedded ICC
+profile, or from the CICP description of an RGB image without one, into the display profile the
+caller passes. An image with neither is treated as sRGB. `Image::source_profile` returns the
+profile it converts from.
 
 Palette BMP and PNG pixels decode as RGB(A) in `Image`; `bmp_palette` and `png_palette` expose the
 embedded table (and a PNG's transparent entry) so `photocraft-io` can open them in Indexed Color mode.
@@ -338,6 +345,9 @@ PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) b
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
 `Image::to_rgba_f32(&limits)` checks its output buffer against the same `Limits` and returns
 `CodecError::LimitExceeded` before allocating when the RGBA f32 copy would exceed them.
+`Image::try_to_rgba8(&limits)` and `Image::try_to_rgba16(&limits)` do the same for the 8-bit and
+16-bit RGBA copies. `Image::into_rgba8(&limits)` consumes the image and returns the pixel buffer of
+an RGBA8 image without copying it; other images are converted with the same check.
 PNG `cICP` and `cLLI` values are retained as image color metadata. `encode_png_pq` writes linear-light
 Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the required chunks.
 

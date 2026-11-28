@@ -5,3 +5,5 @@ mod edit_orientation;
 mod edit_pixel_size;
 mod edit_resolution;
 mod robust;
+
+mod ifd0_orientation_compat;

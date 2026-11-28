@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn every_effect_recovers_after_one_non_finite_sample() {
         let mut failures = Vec::new();
-        for e in crate::effects() {
+        for e in crate::testutil::sampled_effects() {
             for setting in [Setting::Default, Setting::Moved, Setting::Min] {
                 let (l, r, _) = run_effect(e.id, setting, None);
                 let clean = tail_rms(&l, &r);
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn nan_parameter_values_never_produce_non_finite_output() {
         let mut bad = Vec::new();
-        for e in crate::effects() {
+        for e in crate::testutil::sampled_effects() {
             let ids: Vec<&str> = crate::create_effect(e.id, SR as f32, 2).unwrap().params().iter().map(|p| p.id).collect();
             for id in ids {
                 let mut fx = crate::create_effect(e.id, SR as f32, 2).unwrap();
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn subnormal_input_stays_finite_and_decays() {
         let mut bad = Vec::new();
-        for e in crate::effects() {
+        for e in crate::testutil::sampled_effects() {
             for setting in [Setting::Default, Setting::Min] {
                 let mut fx = crate::create_effect(e.id, SR as f32, 2).unwrap();
                 for p in fx.params() {

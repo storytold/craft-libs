@@ -1,0 +1,1397 @@
+//! `Tile`: the item of a tile grid: a picture, a caption, corner badges, a badge bar with the rating, a flag and a
+//! colour label, a check box, a file status and marks.
+//!
+//! Selection, the lead, hover, the focus ring, the drag ghost and the rename editor belong to the collection that
+//! shows the tile; the tile draws the look the item step gives it and reports what its own parts do. The collection
+//! sizes a tile as the picture it wants plus [`Tile::around_picture`]. The grid owns where the caption goes and
+//! whether the card reserves a detail line, and applies both to its tiles.
+
+use super::layout::Around;
+use super::words::TileWords;
+use super::{BadgeKind, BadgeSlot, BadgeVisibility, CaptionPlace, CardText, TileBadge, TileFlag, TileMark, TileStatus};
+use crate::buttons::IconButton;
+use crate::choice::{Checkbox, ChoiceWords, Rating};
+use crate::contract::{
+    Access, Bind, Common, Component, Cx, DisabledLook, Focus as _, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
+    Props as _, Role, Styled as _, WordSetCx as _,
+};
+use crate::display::{Badge, Picture};
+use crate::list::{RowThumb, ThumbAspect, ThumbPaint, ToggleState};
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
+use crate::runtime::commands::CommandRef;
+use crate::runtime::env::{Label, Units};
+use crate::style::{
+    ComponentStyle, Corners, DataColor, Flags, FocusLook, IconLook, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceLook, SurfaceStyle,
+    TextLook, UiTokens,
+};
+use craft_behavior::{AccessAction, AccessData, Flow, IconId, Insets, Metrics, Mixed, NavShape, PartKey, PressPhase, Proposal, Roving, Sense};
+use craft_keymap::Mods;
+use craft_theme::variant::{Emphasis, Tone};
+use craft_theme::{Rgba, Srgba, Stateful, States, TypeRole, Variant, over};
+use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2};
+
+/// Stars a rating has.
+const STARS: u8 = 5;
+/// The share of the scrim's opacity that veils a dimmed, rejected or hidden tile's picture.
+const DIM_VEIL: f32 = 0.45;
+
+/// What a tile's own parts report, besides what the collection reads from the pointer.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum TilePartEvent {
+    /// A click on the stars: the rating to set, 0 clears (a click on the star of the current rating).
+    Rate(u8),
+    /// A click on the check box, with the modifier keys held.
+    #[non_exhaustive]
+    Check {
+        /// The modifiers held during the click.
+        mods: Mods,
+    },
+    /// The pointer is over the picture: how far across it, from the reading start, 0 to 1.
+    Scrub(f32),
+    /// An activation of the `i`-th hover action ([`Tile::action`]), counted from 0 in the order added.
+    Action(usize),
+}
+
+/// Where a tile's hover actions sit.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TileActionPlace {
+    /// In the picture's end-top corner.
+    #[default]
+    Corner,
+    /// Below the caption, with the check above the picture and a selection fill across the tile.
+    Band,
+}
+
+/// How a stacked tile shows its stack.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StackLook {
+    /// The ×N badge in the end-top corner.
+    #[default]
+    Badge,
+    /// Two offset sheets inside the cell.
+    Sheets,
+}
+
+/// What a tile returns.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct TileOutput {
+    /// The tile's response.
+    pub response: Response,
+    /// What the tile's parts reported this pass.
+    pub event: Option<TilePartEvent>,
+    /// Where the caption is drawn: the band under the picture, or the name's line in a start column; `None` for a
+    /// tile that shows no caption.
+    pub caption: Option<Rect>,
+}
+
+impl Outcome for TileOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+impl ItemOutput<TilePartEvent> for TileOutput {
+    fn into_event(self) -> Option<TilePartEvent> {
+        self.event
+    }
+
+    /// A tile without a caption has no label line: its rename field goes over the whole tile.
+    fn label_rect(&self) -> Option<Rect> {
+        self.caption
+    }
+}
+
+const CHECK: PartKey = PartKey::new("check");
+const RATING: PartKey = PartKey::new("rating");
+const PILL: PartKey = PartKey::new("pill");
+const MARK: PartKey = PartKey::new("mark");
+const PICTURE: PartKey = PartKey::new("picture");
+const ACTION: PartKey = PartKey::new("action");
+
+const CHECK_REASON: &str = "In a tile grid with checks, Space toggles the lead tile's check";
+const RATING_REASON: &str = "In a tile grid with rating keys, the digits rate the selected tiles";
+
+/// The sizes a tile takes from its control size and the tokens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Sizes {
+    card: bool,
+    text: CardText,
+    inset: f32,
+    tight: f32,
+    bar: f32,
+    glyph: f32,
+    band: f32,
+    dot: f32,
+    range_bar: f32,
+    face: f32,
+    name_line: f32,
+    detail_line: f32,
+    start: f32,
+    /// The picture width of a tile measured on its own: least, and ideal (a grid's card thumbnail at zoom 1).
+    thumbs: [f32; 2],
+    /// How far each sheet of a stack shown as sheets lies from the one in front of it.
+    sheet: f32,
+    /// What the picture gives up at its reading end and bottom for the two sheets behind it.
+    sheet_room: f32,
+}
+
+/// What a tile adds around its picture for each caption arrangement, from the sizes: the grid sizes its cards with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct AroundPicture {
+    below: Around,
+    below_detail: Around,
+    start: Around,
+    bare: Around,
+}
+
+impl AroundPicture {
+    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool, action_place: TileActionPlace) -> AroundPicture {
+        let around = |place: CaptionPlace, detail: bool| {
+            let sizes = Sizes::of(cx, card, text, place, regular_card_padding);
+            let mut around = sizes.around(place, detail);
+            if action_place == TileActionPlace::Band {
+                around.start = sizes.glyph + sizes.column(place);
+                around.end = sizes.glyph;
+                around.top += sizes.bar;
+                around.bottom += sizes.bar;
+            }
+            around
+        };
+        AroundPicture {
+            below: around(CaptionPlace::Below, false),
+            below_detail: around(CaptionPlace::Below, true),
+            start: around(CaptionPlace::Start, false),
+            bare: around(CaptionPlace::None, false),
+        }
+    }
+
+    /// What a tile with its caption in `place` adds, with a detail line reserved or not.
+    pub(super) fn get(&self, place: CaptionPlace, detail: bool) -> Around {
+        match (place, detail) {
+            (CaptionPlace::Below, false) => self.below,
+            (CaptionPlace::Below, true) => self.below_detail,
+            (CaptionPlace::Start, _) => self.start,
+            _ => self.bare,
+        }
+    }
+}
+
+impl Sizes {
+    /// The sizes of a tile with its caption in `place`. A bare tile keeps only the room its selection ring draws in, so
+    /// a grid packs bare tiles close.
+    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, place: CaptionPlace, regular_card_padding: bool) -> Sizes {
+        let (tokens, control) = (cx.tokens, cx.control());
+        let line = tokens.typography.get(TypeRole::Caption).line_height;
+        let name_line = if card { tokens.typography.get(text.name_role()).line_height * f32::from(text.name_lines()) } else { line };
+        let inset = match (card, place) {
+            (true, _) if regular_card_padding => tokens.space.pad.regular,
+            (true, _) => tokens.space.pad.control,
+            (false, CaptionPlace::None) => tokens.space.gap.tight,
+            (false, _) => tokens.space.gap.inline,
+        };
+        Sizes {
+            card,
+            text,
+            inset,
+            tight: tokens.space.gap.tight,
+            bar: control.height,
+            glyph: control.icon,
+            band: tokens.size.icon.md,
+            dot: tokens.size.handle.md,
+            range_bar: tokens.size.handle.sm,
+            face: tokens.size.icon.lg,
+            name_line,
+            detail_line: line,
+            start: control.height,
+            thumbs: [tokens.size.thumb.sm, tokens.size.thumb.card],
+            sheet: tokens.space.gap.tight,
+            sheet_room: 2.0 * tokens.space.gap.tight,
+        }
+    }
+
+    /// What the tile adds around its picture with its caption in `place`, with a detail line reserved or not.
+    fn around(&self, place: CaptionPlace, detail: bool) -> Around {
+        Around::new(self.inset + self.column(place), self.inset, self.inset, self.inset + self.caption(place, detail))
+    }
+
+    /// The height of the caption band under the picture.
+    fn caption(&self, place: CaptionPlace, detail: bool) -> f32 {
+        match place {
+            CaptionPlace::Below => {
+                let gaps = if self.card { self.inset } else { 2.0 * self.tight };
+                gaps + self.name_line + if detail { self.detail_line } else { 0.0 }
+            }
+            _ => 0.0,
+        }
+    }
+
+    fn column(&self, place: CaptionPlace) -> f32 {
+        if place == CaptionPlace::Start { self.start } else { 0.0 }
+    }
+}
+
+/// The look of a tile.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct TileStyle {
+    #[style(surface)]
+    surface: SurfaceLook,
+    #[style(metrics)]
+    metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
+    /// The name.
+    #[style(text)]
+    name: TextLook,
+    /// The name of an offline tile.
+    #[style(text)]
+    name_failed: TextLook,
+    /// The detail line.
+    #[style(text)]
+    detail: TextLook,
+    /// The text of the offline band.
+    #[style(text)]
+    band_text: TextLook,
+    /// The glyph of the offline band.
+    #[style(icon)]
+    band_icon: IconLook,
+    /// A mark under a start caption.
+    #[style(icon)]
+    mark: IconLook,
+    /// The stars of the badge bar, which the rating face reads as its host ink.
+    #[style(icon)]
+    stars: IconLook,
+    /// The pick flag.
+    #[style(icon)]
+    picked: IconLook,
+    /// The reject flag.
+    #[style(icon)]
+    rejected: IconLook,
+    /// The glyph in the picture area of a folder tile or a tile with an icon face.
+    #[style(icon)]
+    face: IconLook,
+    /// The glyph of a glyph badge.
+    #[style(icon)]
+    pill_icon: IconLook,
+    /// The fill of a picture that shows nothing yet, and of one on a sunken surface, where the sunken fill would vanish.
+    placeholder: StyleColor,
+    placeholder_on_sunken: StyleColor,
+    dim: StyleColor,
+    /// The ring outside the picture: the accent when selected or current, the muted ink under the pointer.
+    ring: Stateful<StyleColor>,
+    /// The ring's width: thick when selected or current, thin under the pointer, none at rest.
+    ring_width: Stateful<f32>,
+    /// The halo outside a selected ring, so it reads on any background.
+    halo: StyleColor,
+    /// The halo's width: thin when selected or current, none otherwise.
+    halo_width: Stateful<f32>,
+    /// The fill under the badge bar and the check box, over the picture.
+    plate: StyleColor,
+    pill: StyleColor,
+    band: StyleColor,
+    range: StyleColor,
+    scrub: StyleColor,
+    dot_edge: StyleColor,
+    /// The fill of the sheets behind a stack shown as sheets.
+    sheet: StyleColor,
+    /// The edge of those sheets: the frame a picture has.
+    sheet_edge: StyleColor,
+    pill_radius: CornerRadius,
+    plate_radius: CornerRadius,
+    sizes: Sizes,
+}
+
+/// The paper of a page picture (`Tile::page`): a document's blank page, which is data, not a theme surface.
+const PAPER: DataColor = DataColor::new(Color32::WHITE); // design: allow[raw-colour/const](a document's blank page is data, not a theme surface)
+
+/// A `width` by `height` page centred in `picture` on the knob's shadow, the theme's short hard shadow of a part lifted
+/// just off the surface under it. The page's longer side spans the largest square the picture holds with the shadow,
+/// so pages of every shape stand at one scale of size.
+fn paint_page(cx: &ContentPainterCx<'_>, picture: Rect, width: f64, height: f64) {
+    let shadow = cx.style_cx().surface(SurfaceKind::Knob).shadow;
+    let reach = shadow.map(|shadow| shadow.margin()).unwrap_or_default();
+    let room = Rect::from_min_max(picture.min + Vec2::new(reach.left, reach.top), picture.max - Vec2::new(reach.right, reach.bottom));
+    let (width, height) = (width.max(1.0) as f32, height.max(1.0) as f32);
+    let scale = (room.width().min(room.height()) / width.max(height)).max(0.0);
+    let page = Rect::from_center_size(room.center(), Vec2::new(width * scale, height * scale));
+    cx.with_draw(|draw| {
+        draw.surface_styled(page, &SurfaceStyle { fill: Color32::TRANSPARENT, radius: CornerRadius::ZERO, edge: SurfaceEdge::None, shadow });
+        draw.data_fill(&PaintShape::Rect(page, CornerRadius::ZERO), PAPER);
+    });
+}
+
+/// A text badge's variant: a solid fill in its tone.
+fn pill_variant(tone: Tone) -> Variant {
+    Variant::look(Emphasis::Solid, tone)
+}
+
+/// A corner badge's width and the badge cell's height, from the measured faces.
+#[derive(Clone, Copy, Debug)]
+struct Faces {
+    check: Vec2,
+    stars: Vec2,
+    pill: f32,
+    /// The largest face of the hover actions.
+    action: Vec2,
+}
+
+/// Where the parts of a tile lie in its content rect.
+struct Placed {
+    picture: Rect,
+    /// The sheets behind a stack shown as sheets, farthest first.
+    sheets: Vec<Rect>,
+    caption: Rect,
+    name: Rect,
+    detail: Option<Rect>,
+    marks: Vec<Rect>,
+    band: Option<Rect>,
+    bar: Option<Rect>,
+    stars: Option<Rect>,
+    flag: Option<Rect>,
+    dot: Option<Rect>,
+    check: Option<(Rect, Rect)>,
+    pills: Vec<Rect>,
+    /// The hover actions, in the order added; empty while they are hidden.
+    actions: Vec<Rect>,
+}
+
+/// One tile of a tile grid.
+#[derive(crate::contract::Component, crate::contract::Props)]
+pub struct Tile<'a> {
+    #[common]
+    common: Common,
+    /// Where the caption goes: the grid's, applied to its tiles.
+    #[style_key]
+    #[prop]
+    caption: CaptionPlace,
+    /// The grid asked for the theme's regular padding around a framed card.
+    #[style_key]
+    #[prop]
+    regular_card_padding: bool,
+    /// The card has a line for the detail, whether this tile has one or not: the grid's, applied to its tiles.
+    #[prop]
+    detail_line: bool,
+    /// The tile is a framed card: the picture inset in a raised surface, with the name and detail under it as
+    /// `card_text` sets them. The grid's, applied to its tiles.
+    #[style_key]
+    #[prop(flag)]
+    card: bool,
+    /// How a card sets its name and detail; the grid's, applied to its tiles.
+    #[style_key]
+    #[prop]
+    card_text: CardText,
+    /// Draws the preview directly on the tile so a small symbol has no separate background or selection frame.
+    #[style_key]
+    #[prop(flag)]
+    flat_thumbnail: bool,
+    /// The paper colour of a page card (document data); replaces the sunken well and draws a crisp frame border.
+    #[prop(into)]
+    paper: Option<DataColor>,
+    /// The zoom of the icon in the picture area, a factor on the style's face size (default: 1, or 2 on a paper card).
+    #[prop(quantity = "zoom factor")]
+    icon_zoom: Option<f32>,
+    /// A second line under the name.
+    #[prop(into)]
+    detail: Option<Label>,
+    /// Compact action card: the title sits beside the icon, above the detail and action text. An empty action
+    /// shows a centered icon and title for a simple destination card. Clicking anywhere activates the tile.
+    #[prop(into)]
+    summary_action: Option<Label>,
+    /// What a screen reader reads as the tile's name, in place of the name with its details; the marks' tips still
+    /// join it.
+    #[prop(into)]
+    accessible_name: Option<String>,
+    /// The stars, 0 to 5; a tile without a rating has no stars.
+    #[prop]
+    rating: Option<u8>,
+    /// A pick or reject flag.
+    #[prop]
+    flag: Option<TileFlag>,
+    /// The colour label's dot.
+    #[prop]
+    label_color: Option<Srgba>,
+    /// The app's name for the colour label, read by a screen reader.
+    #[prop(into)]
+    label_name: Option<Label>,
+    /// Offline, unreadable or failed.
+    #[prop]
+    status: TileStatus,
+    /// In and Out as fractions of the picture's width, drawn as a bar along its bottom.
+    #[prop]
+    range: Option<(f32, f32)>,
+    /// The scrub line's fraction across the picture from the reading start.
+    #[prop(quantity = "fraction")]
+    scrub: Option<f32>,
+    /// When the badge bar shows.
+    #[prop]
+    bar: BadgeVisibility,
+    /// The size of the stack this tile stands for: a "×N" badge in the end-top corner, or sheets behind the picture
+    /// (`stack_look`).
+    #[prop]
+    stack: Option<usize>,
+    /// How the stack of a stacked tile shows: the "×N" badge, or two sheets behind a picture that shrinks inside its
+    /// cell to make room for them. The count stays in the accessible name either way.
+    #[prop]
+    stack_look: StackLook,
+    /// The picture under a veil, still selectable.
+    #[prop(flag)]
+    dimmed: bool,
+    /// Rejected: the picture under a veil.
+    #[prop(flag)]
+    rejected: bool,
+    /// Hidden from the output: the picture under a veil and, with a start caption, a slash across the name.
+    #[prop(flag)]
+    hidden: bool,
+    /// A folder: the placeholder with the folder glyph instead of a picture.
+    #[prop(flag)]
+    folder: bool,
+    /// The rename editor replaces the name: the row's state, applied by the grid.
+    #[prop]
+    renaming: bool,
+    /// The check box, in check mode; `None` outside it.
+    #[prop]
+    check: Option<ToggleState>,
+    /// Where the hover actions sit: the grid's, applied to its tiles.
+    #[style_key]
+    #[prop]
+    action_place: TileActionPlace,
+    /// The icon face reads in this colour from data in place of the face colour.
+    #[prop]
+    hue: Option<DataColor>,
+    aspect: ThumbAspect,
+    first: Option<ThumbPaint<'a>>,
+    /// A picture component shown as the tile's picture, for a face that is more than a painter.
+    picture: Option<Picture<'a>>,
+    icon: Option<IconSpec<'static>>,
+    badges: Vec<TileBadge>,
+    marks: Vec<TileMark>,
+    pills: Vec<TileBadge>,
+    /// The hover actions: icon, command and the name that tells the action apart from the other tiles' (`action_named`).
+    actions: Vec<(IconId, CommandRef, Option<Label>)>,
+    placed: Option<Placed>,
+    event: Option<TilePartEvent>,
+    caption_rect: Option<Rect>,
+}
+
+impl<'a> Tile<'a> {
+    /// A tile named `label`, which is its caption and its accessible name.
+    pub fn new(label: impl Into<Label>) -> Self {
+        Tile {
+            common: Common::new(),
+            caption: CaptionPlace::Below,
+            regular_card_padding: false,
+            detail_line: false,
+            card: false,
+            card_text: CardText::File,
+            flat_thumbnail: false,
+            paper: None,
+            icon_zoom: None,
+            detail: None,
+            summary_action: None,
+            accessible_name: None,
+            rating: None,
+            flag: None,
+            label_color: None,
+            label_name: None,
+            status: TileStatus::Normal,
+            range: None,
+            scrub: None,
+            bar: BadgeVisibility::Auto,
+            stack: None,
+            stack_look: StackLook::Badge,
+            dimmed: false,
+            rejected: false,
+            hidden: false,
+            folder: false,
+            icon: None,
+            renaming: false,
+            check: None,
+            action_place: TileActionPlace::Corner,
+            hue: None,
+            aspect: ThumbAspect::SQUARE,
+            first: None,
+            picture: None,
+            badges: Vec::new(),
+            marks: Vec::new(),
+            pills: Vec::new(),
+            actions: Vec::new(),
+            placed: None,
+            event: None,
+            caption_rect: None,
+        }
+        .label(label)
+    }
+
+    /// A picture `aspect` times as wide as high; `paint` draws into the picture's rect through the content painter,
+    /// which is clipped to it. Without one the tile shows the placeholder.
+    #[must_use]
+    pub fn thumb(mut self, aspect: ThumbAspect, paint: impl FnOnce(&ContentPainterCx, Rect) + 'a) -> Self {
+        self.aspect = aspect;
+        self.first = Some(Box::new(paint));
+        self.picture = None;
+        self.icon = None;
+        self
+    }
+
+    /// The tile's picture is `picture`, `aspect` times as wide as high, shown in the picture's rect as its own
+    /// component (a stored or off-frame image). The last of `thumb`, `picture` and `icon` called wins.
+    #[must_use]
+    pub fn picture(mut self, aspect: ThumbAspect, picture: Picture<'a>) -> Self {
+        self.aspect = aspect;
+        self.picture = Some(picture);
+        self.first = None;
+        self.icon = None;
+        self
+    }
+
+    /// The picture area shows `icon` centred on the placeholder, in the style's face size and ink, in place of a
+    /// picture. The last of `thumb` and `icon` called wins.
+    #[must_use]
+    pub fn icon(mut self, icon: impl Into<IconSpec<'static>>) -> Self {
+        self.icon = Some(icon.into());
+        self.first = None;
+        self.picture = None;
+        self
+    }
+
+    /// The picture is a page `width` by `height` (in any one unit: only the shape counts): blank paper lifted on the
+    /// knob's short shadow, as large as the picture holds with its shadow, drawn flat on the tile. A preset or template
+    /// that stands for a document size shows it this way (New Document's presets in `PresetCardLook::Page`, a start
+    /// page's page templates).
+    #[must_use]
+    // design: allow[props/point-size](only the page's shape counts: `width` and `height` are a proportion in any one unit)
+    pub fn page(self, width: f64, height: f64) -> Self {
+        self.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |cx: &ContentPainterCx<'_>, picture: Rect| paint_page(cx, picture, width, height))
+    }
+
+    /// A hover action: an `IconButton::command` face shown while the pointer is over the tile, it has visible focus or
+    /// it is selected, where `action_place` puts it, and reached by the keys as a part of the tile; repeatable. Its activation is
+    /// [`TilePartEvent::Action`] with its index; `command` gives its label, tooltip and enabled state, and the tile
+    /// does not fire it.
+    #[must_use]
+    pub fn action(mut self, icon: IconId, command: impl Into<CommandRef>) -> Self {
+        self.actions.push((icon, command.into(), None));
+        self
+    }
+
+    /// A hover action, as [`action`](Self::action), whose accessible name is `name` in place of the command's label:
+    /// a name that says which tile it acts on ("Rotate page 1 clockwise"), so a screen reader tells the actions of
+    /// different tiles apart. The command still gives its tooltip and enabled state.
+    #[must_use]
+    pub fn action_named(mut self, icon: IconId, command: impl Into<CommandRef>, name: impl Into<Label>) -> Self {
+        self.actions.push((icon, command.into(), Some(name.into())));
+        self
+    }
+
+    /// A corner badge.
+    #[must_use]
+    pub fn badge(mut self, badge: TileBadge) -> Self {
+        self.badges.push(badge);
+        self
+    }
+
+    /// A glyph under a start caption.
+    #[must_use]
+    pub fn mark(mut self, mark: TileMark) -> Self {
+        self.marks.push(mark);
+        self
+    }
+
+    /// What a tile adds around its picture: its padding, the caption band under the picture or the column at its
+    /// reading start. A tile grid sizes a tile as the picture plus this.
+    pub fn around_picture(cx: &StyleCx<'_>, place: CaptionPlace, detail: bool) -> Around {
+        Sizes::of(cx, false, CardText::File, place, false).around(place, detail)
+    }
+
+    /// What a tile adds around its picture for every caption arrangement.
+    pub(super) fn around(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool, action_place: TileActionPlace) -> AroundPicture {
+        AroundPicture::of(cx, card, text, regular_card_padding, action_place)
+    }
+
+    /// Whether the caption band holds a detail line.
+    fn has_detail_line(&self) -> bool {
+        self.detail_line || self.detail.is_some()
+    }
+
+    fn has_bar_content(&self) -> bool {
+        self.rating.is_some() || self.flag.is_some() || self.label_color.is_some()
+    }
+
+    fn has_bar_values(&self) -> bool {
+        self.rating.is_some_and(|rating| rating > 0) || self.flag.is_some() || self.label_color.is_some()
+    }
+
+    /// The corner badges: the app's, the stack badge unless the stack shows as sheets, and the file status badge.
+    fn corner_badges(&self, words: &TileWords, units: &Units) -> Vec<TileBadge> {
+        let mut all = self.badges.clone();
+        if let Some(n) = self.stack.filter(|_| self.stack_look == StackLook::Badge) {
+            all.push(TileBadge::new(BadgeSlot::EndTop, BadgeKind::Text(Label::from(units.times(n as f64))), Tone::Neutral, None));
+        }
+        let failure = |text: &Label| TileBadge::new(BadgeSlot::StartBottom, BadgeKind::Text(text.clone()), Tone::Bad, None);
+        match &self.status {
+            TileStatus::Unreadable => all.push(failure(&words.unreadable)),
+            TileStatus::Failed => all.push(failure(&words.failed)),
+            _ => {}
+        }
+        all
+    }
+
+    fn badge_face(badge: &TileBadge) -> Option<Badge> {
+        match &badge.kind {
+            BadgeKind::Text(text) => Some(Badge::new(text.clone()).variant(pill_variant(badge.tone))),
+            BadgeKind::Glyph(_) => None,
+        }
+    }
+
+    fn place(&self, sizes: &Sizes, area: Rect, rtl: bool, bar_shown: bool, faces: &Faces, pill_widths: &[f32]) -> Placed {
+        let flow = Flow::new(area, rtl);
+        let column = sizes.column(self.caption);
+        let band_height = sizes.caption(self.caption, self.has_detail_line());
+        let (start, rest) = flow.take_start(column);
+        let controls = if self.action_place == TileActionPlace::Band { sizes.bar } else { 0.0 };
+        let picture = Rect::from_min_max(rest.rect().min + Vec2::new(0.0, controls), rest.rect().max - Vec2::new(0.0, band_height + controls));
+        let band = Rect::from_min_max(egui::pos2(rest.rect().min.x, picture.bottom()), rest.rect().max - Vec2::new(0.0, controls));
+        let (caption, name, detail, marks) = match self.caption {
+            CaptionPlace::Below => {
+                let above = if sizes.card { sizes.inset } else { sizes.tight };
+                let name = Rect::from_min_size(egui::pos2(band.left(), band.top() + above), Vec2::new(band.width(), sizes.name_line));
+                let detail = self.detail.as_ref().map(|_| Rect::from_min_size(name.left_bottom(), Vec2::new(band.width(), sizes.detail_line)));
+                (band, name, detail, Vec::new())
+            }
+            CaptionPlace::Start => {
+                let name = Rect::from_min_size(egui::pos2(start.left(), start.top() + sizes.tight), Vec2::new(start.width(), sizes.name_line));
+                let first = name.bottom() + sizes.tight;
+                let marks = (0..self.marks.len())
+                    .map(|at| {
+                        let top = first + at as f32 * (sizes.glyph + sizes.tight);
+                        Rect::from_center_size(egui::pos2(start.center().x, top + sizes.glyph / 2.0), Vec2::splat(sizes.glyph))
+                    })
+                    .collect();
+                (start, name, None, marks)
+            }
+            CaptionPlace::None => (Rect::NOTHING, Rect::NOTHING, None, Vec::new()),
+        };
+        // The sheets fit inside the cell the grid sizes, so the grid's card sizes stay those of a tile without them.
+        let (picture, sheets) = self.stacked(picture, sizes, rtl);
+        let pictures = Flow::new(picture, rtl);
+        let mut floor = picture.bottom();
+        let band_rect = matches!(self.status, TileStatus::Offline(_)).then(|| {
+            let rect = Rect::from_min_max(egui::pos2(picture.left(), floor - sizes.band), picture.right_bottom());
+            floor = rect.top();
+            rect
+        });
+        let (mut bar, mut stars, mut flag, mut dot) = (None, None, None, None);
+        if bar_shown {
+            let rect = Rect::from_min_max(egui::pos2(picture.left(), floor - sizes.bar), egui::pos2(picture.right(), floor));
+            // The stars and the flag run from the start, the dot sits at the end, each with an inset after it. A part
+            // that does not fit in what the earlier ones left is left out, and so is every part after it.
+            let mut room = Flow::new(rect, rtl).take_start(sizes.inset).1;
+            let mut fitting = true;
+            let mut take = |width: f32, at_end: bool| {
+                fitting &= width + sizes.inset <= room.rect().width();
+                fitting.then(|| {
+                    if at_end {
+                        let (taken, rest) = room.take_end(width + sizes.inset);
+                        room = rest;
+                        Rect::from_center_size(taken.center(), Vec2::new(width, taken.height()))
+                    } else {
+                        let (taken, rest) = room.take_start(width);
+                        room = rest.take_start(sizes.inset).1;
+                        taken
+                    }
+                })
+            };
+            stars = self.rating.and_then(|_| take(faces.stars.x, false));
+            flag = self.flag.and_then(|_| take(sizes.glyph, false)).map(|cell| Rect::from_center_size(cell.center(), Vec2::splat(sizes.glyph)));
+            dot = self.label_color.and_then(|_| take(sizes.dot, true)).map(|cell| Rect::from_center_size(cell.center(), Vec2::splat(sizes.dot)));
+            floor = rect.top();
+            bar = Some(rect);
+        }
+        let margin = sizes.inset + sizes.tight;
+        let check = self.check.map(|_| {
+            let across = pictures.span(margin, faces.check.x);
+            let top = if self.action_place == TileActionPlace::Band { area.top() } else { picture.top() + margin };
+            let at = Rect::from_min_size(egui::pos2(across.min.x, top), faces.check);
+            (at, at.expand(sizes.tight))
+        });
+        let face = faces.action;
+        let actions: Vec<Rect> = match self.action_place {
+            // Stacked down from the end-top corner, `tight` apart, as the badges stack.
+            TileActionPlace::Corner => (0..self.actions.len())
+                .map(|at| {
+                    let across = pictures.span((picture.width() - margin - face.x).max(0.0), face.x);
+                    Rect::from_min_size(egui::pos2(across.min.x, picture.top() + margin + at as f32 * (face.y + sizes.tight)), face)
+                })
+                .collect(),
+            // A row centred below the caption.
+            TileActionPlace::Band => {
+                let count = self.actions.len() as f32;
+                let row = count * face.x + (count - 1.0).max(0.0) * sizes.tight;
+                let lead = (picture.width() - row) / 2.0;
+                (0..self.actions.len())
+                    .map(|at| {
+                        let across = pictures.span(lead + at as f32 * (face.x + sizes.tight), face.x);
+                        Rect::from_min_size(egui::pos2(across.min.x, band.bottom()), face)
+                    })
+                    .collect()
+            }
+        };
+        let action_plate = actions.iter().copied().reduce(|all, rect| all.union(rect)).map(|all| all.expand(sizes.tight));
+        let corners = Rect::from_min_max(picture.min, egui::pos2(picture.right(), floor));
+        let mut pills = vec![Rect::NOTHING; self.pills.len()];
+        for slot in [BadgeSlot::StartTop, BadgeSlot::EndTop, BadgeSlot::StartBottom, BadgeSlot::EndBottom] {
+            let (is_start, top) = match slot {
+                BadgeSlot::StartTop => (true, true),
+                BadgeSlot::EndTop => (false, true),
+                BadgeSlot::StartBottom => (true, false),
+                _ => (false, false),
+            };
+            let members: Vec<usize> = (0..self.pills.len()).filter(|&at| self.pills[at].slot == slot).collect();
+            let widths: Vec<f32> = members.iter().map(|&at| pill_widths[at]).collect();
+            let plate = match (is_start, top, self.action_place) {
+                (_, false, TileActionPlace::Band) | (false, _, TileActionPlace::Corner) => action_plate,
+                (true, _, _) => check.map(|(_, plate)| plate),
+                _ => None,
+            };
+            let rects = badge_rects(Flow::new(corners, rtl), &widths, faces.pill, sizes, plate, (is_start, top));
+            for (at, rect) in members.into_iter().zip(rects) {
+                pills[at] = rect;
+            }
+        }
+        Placed { picture, sheets, caption, name, detail, marks, band: band_rect, bar, stars, flag, dot, check, pills, actions }
+    }
+
+    /// The picture and the sheets behind it: with `StackLook::Sheets` on a stack the picture gives up `sheet_room` at
+    /// its reading end and bottom, and the sheets sit one and two `sheet` steps toward them, farthest first.
+    fn stacked(&self, picture: Rect, sizes: &Sizes, rtl: bool) -> (Rect, Vec<Rect>) {
+        if self.stack.is_none() || self.stack_look != StackLook::Sheets {
+            return (picture, Vec::new());
+        }
+        let (front, _) = Flow::new(picture, rtl).take_start((picture.width() - sizes.sheet_room).max(0.0));
+        let front = Rect::from_min_max(front.min, egui::pos2(front.max.x, (front.max.y - sizes.sheet_room).max(front.min.y)));
+        let toward_end = if rtl { -1.0 } else { 1.0 };
+        let sheets = [sizes.sheet_room, sizes.sheet].into_iter().map(|by| front.translate(Vec2::new(toward_end * by, by))).collect();
+        (front, sheets)
+    }
+}
+
+/// The rects of the badges of one corner, inward from it. Badges stack toward the middle of the picture `tight`
+/// apart; one that would touch the plate of the check box or the corner button moves past it, away from the corner.
+fn badge_rects(flow: Flow, widths: &[f32], height: f32, sizes: &Sizes, plate: Option<Rect>, corner: (bool, bool)) -> Vec<Rect> {
+    let (is_start, top) = corner;
+    let area = flow.rect();
+    let mut y = if top { area.top() + sizes.inset } else { area.bottom() - sizes.inset - height };
+    widths
+        .iter()
+        .map(|&width| {
+            let across = if is_start { flow.span(sizes.inset, width) } else { flow.span((area.width() - sizes.inset - width).max(0.0), width) };
+            let mut rect = Rect::from_min_size(Pos2::new(across.min.x, y), Vec2::new(width, height));
+            if let Some(plate) = plate.filter(|plate| rect.intersects(*plate)) {
+                let moved = if top { plate.bottom() + sizes.tight } else { plate.top() - sizes.tight - height };
+                rect = rect.translate(Vec2::new(0.0, moved - rect.top()));
+            }
+            y = if top { rect.bottom() + sizes.tight } else { rect.top() - sizes.tight - height };
+            rect
+        })
+        .collect()
+}
+
+/// Returns `zoom` sanitized if it is finite and positive, or `1.0` if non-finite or `<= 0.0`.
+/// When `zoom` is `None`, falls back to `default`.
+fn clean_zoom(zoom: Option<f32>, default: f32) -> f32 {
+    match zoom {
+        Some(z) if z.is_finite() && z > 0.0 => z,
+        Some(_) => 1.0,
+        None => default,
+    }
+}
+
+impl Component for Tile<'_> {
+    const ROLE: Role = Role::LIST_ITEM;
+    const OVERLAYS: bool = false;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
+    type Style = TileStyle;
+    type Output = TileOutput;
+
+    fn shows_label(&self) -> bool {
+        self.caption != CaptionPlace::None
+    }
+
+    fn style(cx: &StyleCx<'_>, key: TileStyleKey) -> TileStyle {
+        let tokens = cx.tokens;
+        let colors = &tokens.color;
+        let (state, text) = (&colors.state, &colors.text);
+        let clear = Rgba::TRANSPARENT;
+        let c = |rgba: Rgba| cx.color(rgba);
+        let sizes = Sizes::of(cx, key.card, key.card_text, key.caption, key.regular_card_padding);
+        // Band tiles use the collection's selection fill over the whole tile. Otherwise selection and hover are rings
+        // around the picture; only a card has a fill of its own.
+        let fill = if key.action_place == TileActionPlace::Band {
+            Stateful::new(c(clear)).off(States::new(c(clear), c(state.hover), c(state.pressed), c(clear))).on(States::new(
+                c(state.selected),
+                c(state.selected_hover),
+                c(state.selected),
+                c(state.selected),
+            ))
+        } else if key.card && key.card_text == CardText::Page {
+            // A page card lies flat on the surface under it.
+            let (rest, hover, pressed) = (c(clear), c(state.hover), c(state.pressed));
+            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(States::new(hover, hover, pressed, hover))
+        } else if key.card {
+            let raised = colors.surface.raised;
+            let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
+            let on = if key.flat_thumbnail {
+                let selected = c(over(state.selected, raised));
+                let selected_hover = c(over(state.selected_hover, raised));
+                States::new(selected, selected_hover, pressed, selected)
+            } else {
+                States::new(rest, hover, pressed, rest)
+            };
+            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(on)
+        } else {
+            Stateful::new(c(clear))
+        };
+        let (line, accent) = (c(clear), c(colors.accent.solid));
+        let ring = Stateful::new(line)
+            .off(States::new(line, c(text.muted), c(text.muted), line))
+            .on(States::new(accent, accent, accent, accent))
+            .when(Flags::CURRENT, accent);
+        let (thin, thick) = (tokens.stroke.thin, tokens.stroke.thick);
+        let ring_width = if key.action_place == TileActionPlace::Band {
+            Stateful::new(0.0)
+        } else {
+            Stateful::new(0.0).off(States::new(0.0, thin, thin, 0.0)).on(States::new(thick, thick, thick, thick)).when(Flags::CURRENT, thick)
+        };
+        let halo_width = if key.action_place == TileActionPlace::Band {
+            Stateful::new(0.0)
+        } else {
+            Stateful::new(0.0).on(States::new(thin, thin, thin, thin)).when(Flags::CURRENT, thin)
+        };
+        let radius = UiTokens::corner(tokens.shape.radius.control);
+        let mut surface = SurfaceLook::new(fill).radius(radius);
+        let page_card = key.card && key.card_text == CardText::Page;
+        if key.action_place == TileActionPlace::Band || page_card {
+            // A band tile or a page card has no ring round its picture: the selected tile is outlined as a whole.
+            let (line, accent) = (c(clear), c(colors.accent.solid));
+            surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
+        }
+        let surface = if key.card && !page_card { surface.kind(SurfaceKind::Raised) } else { surface };
+        // A selected tile's name reads in the normal ink: the selection is the ring, not a fill under the name.
+        let normal = c(text.normal);
+        let ink = |base: StyleColor| Stateful::new(base).on(States::new(normal, normal, normal, normal));
+        let fixed = |color: Rgba| Stateful::new(c(color));
+        let pill = cx.with_variant(pill_variant(Tone::Neutral)).variant_look();
+        let plate = c(colors.surface.scrim);
+        let on_bar = |ink: StyleColor, side: f32| IconLook::new(side, Stateful::new(ink)).on(Stateful::new(plate));
+        TileStyle {
+            surface,
+            metrics: Metrics::new()
+                .padding(Insets::new(
+                    if key.action_place == TileActionPlace::Band { sizes.glyph } else { sizes.inset },
+                    if key.action_place == TileActionPlace::Band { sizes.glyph } else { sizes.inset },
+                    sizes.inset,
+                    sizes.inset,
+                ))
+                .gap(sizes.tight),
+            focus: cx.focus_look(),
+            name: if key.card {
+                TextLook::new(key.card_text.name_role(), ink(c(text.normal)))
+            } else {
+                TextLook::new(TypeRole::Caption, ink(c(text.muted)))
+            },
+            name_failed: TextLook::new(if key.card { key.card_text.name_role() } else { TypeRole::Caption }, ink(cx.tone(Tone::Bad))),
+            detail: TextLook::new(TypeRole::Caption, ink(c(if key.card { text.muted } else { text.faint }))),
+            band_text: TextLook::new(TypeRole::Caption, fixed(text.on_status)).on(fixed(colors.status.bad.solid)),
+            band_icon: IconLook::new(sizes.glyph, fixed(text.on_status)).on(fixed(colors.status.bad.solid)),
+            mark: IconLook::new(sizes.glyph, ink(c(text.faint))),
+            stars: on_bar(c(text.on_strong), tokens.size.icon.glyph_sm),
+            picked: on_bar(cx.tone(Tone::Good), sizes.glyph),
+            rejected: on_bar(cx.tone(Tone::Bad), sizes.glyph),
+            face: IconLook::new(sizes.face, fixed(text.muted)).on(fixed(colors.surface.sunken)),
+            pill_icon: IconLook::new(sizes.glyph, pill.text.clone()).on(pill.fill.clone()),
+            placeholder: c(colors.surface.sunken),
+            placeholder_on_sunken: c(colors.surface.raised),
+            dim: c(colors.surface.scrim.faded(DIM_VEIL)),
+            ring,
+            ring_width,
+            halo: c(colors.overlay.halo),
+            halo_width,
+            plate,
+            pill: pill.fill.off.rest,
+            band: c(colors.status.bad.solid),
+            range: c(colors.accent.solid),
+            scrub: c(colors.accent.solid),
+            dot_edge: c(colors.line.mark),
+            sheet: c(colors.surface.raised),
+            sheet_edge: c(colors.line.frame),
+            pill_radius: UiTokens::corner(tokens.shape.radius.pill),
+            plate_radius: UiTokens::corner(tokens.shape.radius.sm),
+            sizes,
+        }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        let sizes = &cx.style.sizes;
+        if self.summary_action.is_some() {
+            let width = cx.room.map_or(sizes.thumbs[1], |room| room.min(sizes.thumbs[1]));
+            return Vec2::new(width, sizes.face + sizes.name_line + 2.0 * sizes.detail_line + 3.0 * sizes.tight);
+        }
+        let ratio = self.aspect.of(1.0);
+        let caption = sizes.caption(self.caption, self.has_detail_line());
+        let column = sizes.column(self.caption);
+        // An icon tile's picture is its icon. Any other picture is a card of a grid at zoom 1: as wide as the thumbnail
+        // side, with what the density adds around it. A narrower room shrinks the picture to fit.
+        let side = match (&self.icon, cx.proposal) {
+            (Some(_), _) if !self.card => {
+                let zoom = clean_zoom(self.icon_zoom, 1.0);
+                cx.style.face.side * zoom
+            }
+            (Some(_) | None, Proposal::Min) => sizes.thumbs[0],
+            (Some(_) | None, _) => sizes.thumbs[1],
+        };
+        let width = cx.room.map_or(side + column, |room| room.min(side + column));
+        Vec2::new(width, ((width - column).max(0.0) / ratio) + caption)
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::CLICK | Sense::FOCUS
+    }
+
+    fn parts(&mut self, _rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        let sizes = cx.style.sizes;
+        let rtl = cx.flow.is_rtl();
+        let words = cx.words::<TileWords>();
+        self.pills = self.corner_badges(&words, &cx.env.units());
+        let faces = Faces {
+            check: cx.face(Checkbox::new(Bind::given(Mixed::Same(false))).quiet(true)),
+            stars: cx.face(Rating::new(Bind::given(0u8), STARS).compact(true)),
+            pill: cx.face(Badge::new("0")).y,
+            action: self
+                .actions
+                .iter()
+                .fold(Vec2::ZERO, |most, (icon, command, _)| most.max(cx.face(IconButton::command(icon.clone(), command.clone())))),
+        };
+        let pill_widths: Vec<f32> = self.pills.iter().map(|badge| Self::badge_face(badge).map_or(faces.pill, |face| cx.face(face).x)).collect();
+        let bar_shown = self.has_bar_content()
+            && match self.bar {
+                BadgeVisibility::Always => true,
+                BadgeVisibility::Never => false,
+                _ => cx.hovered() || cx.resolved.selected == Some(true) || self.has_bar_values(),
+            };
+        let mut placed = self.place(&sizes, cx.content_rect, rtl, bar_shown, &faces, &pill_widths);
+        if self.summary_action.is_some() {
+            placed.picture = cx.content_rect;
+        }
+        let _ = cx.part(PICTURE, placed.picture).sense(Sense::HOVER);
+        if let (Some(state), Some((at, _))) = (self.check, &placed.check) {
+            let mut flags = Flags::empty();
+            flags.set(Flags::CHECKED, state == ToggleState::On);
+            flags.set(Flags::MIXED, state == ToggleState::Mixed);
+            cx.part(CHECK, *at).sense(Sense::CLICK).flags(flags).pointer_only(CHECK_REASON);
+        }
+        if let Some(stars) = placed.stars {
+            // A click rates by where it lands; AccessKit rates with Increment, Decrement and SetValue instead.
+            cx.part(RATING, stars).sense(Sense::CLICK).access_click(false).pointer_only(RATING_REASON);
+        }
+        for (at, (badge, rect)) in self.pills.iter().zip(&placed.pills).enumerate() {
+            let part = cx.part(PILL.at(at as u64), *rect);
+            if let Some(tip) = &badge.tip {
+                let _ = part.tooltip(tip.clone());
+            }
+        }
+        for (at, (mark, rect)) in self.marks.iter().zip(&placed.marks).enumerate() {
+            let _ = cx.part(MARK.at(at as u64), *rect).tooltip(mark.tip.clone());
+        }
+        if !placed.actions.is_empty() && (cx.hovered() || cx.focus_visible() || cx.resolved.selected == Some(true)) {
+            for (at, rect) in placed.actions.iter().enumerate() {
+                cx.part(ACTION.at(at as u64), *rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
+            }
+            cx.roving(Roving::new(NavShape::Flat));
+        } else {
+            placed.actions.clear();
+        }
+        self.placed = Some(placed);
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let rtl = cx.flow.is_rtl();
+        if let (Some(pos), Some(result)) = (cx.hover_pos(PICTURE), cx.part_if_declared(PICTURE)) {
+            let rect = result.rect;
+            let along = if rtl { rect.right() - pos.x } else { pos.x - rect.left() };
+            self.event = Some(TilePartEvent::Scrub((along / rect.width().max(f32::EPSILON)).clamp(0.0, 1.0)));
+        }
+        if let Some(result) = cx.part_if_declared(RATING)
+            && let PressPhase::Release { pos, click: true, .. } = result.press.phase
+        {
+            let rect = result.rect;
+            let along = if rtl { rect.right() - pos.x } else { pos.x - rect.left() };
+            let star = (along / (rect.width() / f32::from(STARS))).floor().clamp(0.0, f32::from(STARS - 1)) as u8 + 1;
+            let current = self.rating.unwrap_or(0);
+            self.event = Some(TilePartEvent::Rate(if star == current { 0 } else { star }));
+        }
+        if cx.part_activated(CHECK).is_some() {
+            self.event = Some(TilePartEvent::Check { mods: cx.part(CHECK).press.mods });
+        }
+        for at in 0..self.actions.len() {
+            if cx.part_activated(ACTION.at(at as u64)).is_some() {
+                self.event = Some(TilePartEvent::Action(at));
+            }
+        }
+        let current = self.rating.unwrap_or(0);
+        while let Some(request) = cx.intents().take_access() {
+            if request.target != Some(RATING.into()) {
+                continue;
+            }
+            let rated = match (request.action, request.data) {
+                (AccessAction::Increment, _) => current.saturating_add(1),
+                (AccessAction::Decrement, _) => current.saturating_sub(1),
+                (AccessAction::SetValue, Some(AccessData::NumericValue(value))) => value.round().max(0.0) as u8,
+                _ => continue,
+            };
+            self.event = Some(TilePartEvent::Rate(rated.min(STARS)));
+        }
+    }
+
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        let words = cx.words::<TileWords>();
+        let label = cx.resolved.label;
+        access.name(Name::Text(self.full_name(cx, &words)));
+        if self.check.is_some() {
+            access.node(CHECK, Role::CHECK_BOX).name = Name::Text(words.select.fill(&[("name", label)]));
+        }
+        // Only the actions `parts` declared show; a named one takes its name over the command's label.
+        for (at, (_, _, name)) in self.actions.iter().enumerate() {
+            let part = ACTION.at(at as u64);
+            if let Some(name) = name.as_ref().filter(|_| cx.part_if_declared(part).is_some()) {
+                access.node(part, Role::BUTTON).name = Name::Text(name.as_str().to_owned());
+            }
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let Some(placed) = self.placed.take() else { return };
+        let style = cx.style;
+        let picture = placed.picture;
+        if let Some(action) = self.summary_action.clone() {
+            self.paint_summary_card(ui, cx, &placed, action.as_str());
+            return;
+        }
+        let flat = CornerRadius::ZERO;
+        {
+            let draw = ui.draw();
+            for sheet in &placed.sheets {
+                draw.fill(&PaintShape::Rect(*sheet, flat), style.sheet);
+                draw.stroke(&PaintShape::Rect(*sheet, flat), StrokeWidth::Thin, style.sheet_edge);
+            }
+        }
+        // A card's picture is the sunken surface, which the placeholder's fill matches.
+        let placeholder = if !style.sizes.card && cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
+        if !self.flat_thumbnail {
+            // Filled from the outside in, under the picture, so the rings sit outside its edge.
+            let (ring, halo) = (cx.resolve(&style.ring_width), cx.resolve(&style.halo_width));
+            let draw = ui.draw();
+            if halo > 0.0 {
+                draw.fill(&PaintShape::Rect(picture.expand(ring + halo), flat), style.halo);
+            }
+            if ring > 0.0 {
+                draw.fill(&PaintShape::Rect(picture.expand(ring), flat), cx.resolve(&style.ring));
+            }
+            // A band tile's selection fill covers the whole tile, picture included: no well over it.
+            if self.action_place != TileActionPlace::Band {
+                if let Some(paper) = self.paper {
+                    draw.data_fill(&PaintShape::Rect(picture, flat), paper);
+                } else if style.sizes.card {
+                    ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
+                } else {
+                    ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
+                }
+            }
+        }
+        // Only over the sunken well: a flat thumbnail (a page outline on the card, as the New Document presets draw)
+        // has no well and takes no frame.
+        let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some() || self.paper.is_some());
+        if let Some(paint) = self.first.take() {
+            let _ = ui.child("picture", picture, RowThumb::new(paint));
+        }
+        if let Some(shown) = self.picture.take() {
+            let _ = ui.child("picture", picture, shown);
+        }
+        if framed {
+            // A picture covers the sunken well under it, which would leave only its top and bottom edge showing: the
+            // frame goes over the picture so all four sides show.
+            ui.draw().surface(picture, SurfaceKind::Frame, Corners::All);
+        }
+        let face_ink = match self.hue {
+            Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(placeholder.egui()))),
+            None => cx.resolve(&style.face.color),
+        };
+        {
+            let draw = ui.draw();
+            let face = self.icon.take().or_else(|| self.folder.then(|| IconSpec::svg(IconId::new("folder"))));
+            if let Some(face) = face {
+                let paper = if !self.flat_thumbnail && self.action_place != TileActionPlace::Band { self.paper } else { None };
+                let zoom = clean_zoom(self.icon_zoom, if paper.is_some() && style.sizes.card { 2.0 } else { 1.0 });
+                let max_side = picture.width().min(picture.height()).max(0.0);
+                let side = (style.face.side * zoom).min(max_side);
+                let icon = Rect::from_center_size(picture.center(), Vec2::splat(side));
+                let color = match (face.color, paper) {
+                    (Some(color), _) => color,
+                    (None, Some(paper)) => ui.with_style(Variant::SECONDARY, |cx| cx.icon_ink_on(paper)),
+                    (None, None) => face_ink,
+                };
+                draw.icon(icon, &face.color(color));
+            }
+            if self.dimmed || self.rejected || self.hidden {
+                draw.fill(&PaintShape::Rect(picture, flat), style.dim);
+            }
+            self.paint_range_and_scrub(&draw, cx, picture);
+        }
+        self.paint_band(ui, cx, &placed);
+        self.paint_bar(ui, cx, &placed);
+        self.paint_pills(ui, cx, &placed);
+        // The action icons use interface ink; a document picture can have any colour behind them.
+        if self.action_place != TileActionPlace::Band
+            && let Some(plate) = placed.actions.iter().copied().reduce(|all, rect| all.union(rect))
+        {
+            ui.draw().fill(&PaintShape::Rect(plate, style.plate_radius), style.plate);
+        }
+        for (at, ((icon, command, _), _)) in self.actions.iter().zip(&placed.actions).enumerate() {
+            ui.face(ACTION.at(at as u64), IconButton::command(icon.clone(), command.clone()));
+        }
+        if let (Some(state), Some((_, plate))) = (self.check, placed.check) {
+            if self.action_place != TileActionPlace::Band {
+                ui.draw().fill(&PaintShape::Rect(plate, style.plate_radius), style.plate);
+            }
+            let value = match state {
+                ToggleState::Mixed => Mixed::Mixed,
+                state => Mixed::Same(state == ToggleState::On),
+            };
+            ui.face(CHECK, Checkbox::new(Bind::given(value)).quiet(true));
+        }
+        self.paint_caption(ui, cx, &placed);
+        self.caption_rect = match self.caption {
+            CaptionPlace::Below => Some(placed.caption),
+            CaptionPlace::Start => Some(placed.name),
+            CaptionPlace::None => None,
+        };
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> TileOutput {
+        TileOutput { response: cx.response.clone(), event: self.event, caption: self.caption_rect }
+    }
+}
+
+impl Tile<'_> {
+    fn paint_summary_card(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed, action: &str) {
+        let style = cx.style;
+        let picture = placed.picture;
+        let flow = Flow::new(picture, cx.flow.is_rtl());
+        let draw = ui.draw();
+        let icon_side = style.face.side.min(picture.width()).min(picture.height());
+        let ink = match self.hue {
+            Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(style.placeholder.egui()))),
+            None => cx.resolve(&style.face.color),
+        };
+        let centered = action.is_empty();
+        let icon = if centered {
+            Rect::from_center_size(egui::pos2(picture.center().x, picture.center().y - icon_side / 2.0), Vec2::splat(icon_side))
+        } else {
+            let cell = flow.span(0.0, icon_side);
+            Rect::from_min_size(cell.min, Vec2::splat(icon_side))
+        };
+        if let Some(face) = self.icon.take() {
+            draw.icon(icon, &face.color(ink));
+        }
+        let title = TextRun::new(cx.resolved.label).role(style.name.role).color(cx.resolve(&style.name.color)).elide();
+        let title_area = if centered {
+            Rect::from_min_max(egui::pos2(picture.left(), icon.bottom() + style.sizes.tight), picture.max)
+        } else {
+            flow.take_start(icon_side + style.sizes.tight).1.rect()
+        };
+        let title_layout = draw.layout(&title, title_area.width());
+        let title_x =
+            if centered { title_area.center().x - title_layout.size().x / 2.0 } else { Self::text_x(title_area, title_layout.size().x, cx) };
+        draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
+        if !centered {
+            if let Some(detail) = &self.detail {
+                // The description wraps, onto the two lines the card reserves for it, as production's cards do.
+                let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::Wrap);
+                let mut layout = draw.layout(&run, picture.width());
+                // More than the two reserved lines would run into the action: cut that description with an ellipsis.
+                if layout.galley.rows.len() > 2 {
+                    layout = draw.layout(&run.elide(), picture.width());
+                }
+                draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
+            }
+            let run = TextRun::new(action).role(style.detail.role).color(style.range).elide();
+            let layout = draw.layout(&run, picture.width());
+            draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), picture.bottom() - layout.size().y), &layout);
+        }
+        self.caption_rect = Some(title_area);
+    }
+    fn full_name(&self, cx: &Cx<'_, Self>, words: &TileWords) -> String {
+        let marks = || self.marks.iter().map(|mark| mark.tip.as_str().to_owned()).filter(|tip| !tip.is_empty());
+        let joined = |name: &str, details: &[String]| {
+            if details.is_empty() { name.to_owned() } else { words.tile_name.fill(&[("name", name), ("details", &details.join(", "))]) }
+        };
+        if let Some(name) = &self.accessible_name {
+            return joined(name, &marks().collect::<Vec<_>>());
+        }
+        let mut details: Vec<String> = Vec::new();
+        details.extend(self.detail.iter().map(|detail| detail.as_str().to_owned()));
+        details.extend(self.summary_action.iter().map(|action| action.as_str().to_owned()).filter(|action| !action.is_empty()));
+        if let Some(n) = self.rating.filter(|n| *n > 0) {
+            let stars = cx.words::<ChoiceWords>();
+            details.push(stars.stars.text(u64::from(n), &cx.format().integer(u64::from(n))));
+        }
+        match self.flag {
+            Some(TileFlag::Picked) => details.push(words.picked.as_str().to_owned()),
+            Some(TileFlag::Rejected) => details.push(words.rejected.as_str().to_owned()),
+            None if self.rejected => details.push(words.rejected.as_str().to_owned()),
+            None => {}
+        }
+        if let (Some(name), Some(_)) = (&self.label_name, self.label_color) {
+            details.push(words.label.fill(&[("label", name.as_str())]));
+        }
+        match &self.status {
+            TileStatus::Offline(Some(text)) => {
+                details.push(words.offline_with.fill(&[("offline", words.offline.as_str()), ("message", text.as_str())]))
+            }
+            TileStatus::Offline(None) => details.push(words.offline.as_str().to_owned()),
+            TileStatus::Unreadable => details.push(words.unreadable.as_str().to_owned()),
+            TileStatus::Failed => details.push(words.failed.as_str().to_owned()),
+            _ => {}
+        }
+        if let Some(n) = self.stack {
+            details.push(cx.env.units().times(n as f64));
+        }
+        details.extend(self.badges.iter().filter_map(|badge| badge.tip.as_ref()).map(|tip| tip.as_str().to_owned()).filter(|tip| !tip.is_empty()));
+        details.extend(marks());
+        joined(cx.resolved.label, &details)
+    }
+
+    /// The in and out bar along the picture's bottom and the scrub line.
+    fn paint_range_and_scrub(&self, draw: &crate::primitives::Draw<'_>, cx: &Cx<'_, Self>, picture: Rect) {
+        let flow = Flow::new(picture, cx.flow.is_rtl());
+        if let Some((from, to)) = self.range {
+            let (low, high) = (from.clamp(0.0, 1.0).min(to.clamp(0.0, 1.0)), from.clamp(0.0, 1.0).max(to.clamp(0.0, 1.0)));
+            let span = flow.span(low * picture.width(), (high - low) * picture.width());
+            let bar = Rect::from_x_y_ranges(span.x_range(), (picture.bottom() - cx.style.sizes.range_bar)..=picture.bottom());
+            draw.fill(&PaintShape::Rect(bar, CornerRadius::ZERO), cx.style.range);
+        }
+        if let Some(fraction) = self.scrub {
+            let x = flow.span(fraction.clamp(0.0, 1.0) * picture.width(), 0.0).min.x;
+            draw.stroke(&PaintShape::Path(vec![Pos2::new(x, picture.top()), Pos2::new(x, picture.bottom())]), StrokeWidth::Thin, cx.style.scrub);
+        }
+    }
+
+    /// The offline band: the glyph and the text, over a failure fill.
+    fn paint_band(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let (Some(band), TileStatus::Offline(text)) = (placed.band, &self.status) else { return };
+        let (style, words) = (cx.style, cx.words::<TileWords>());
+        let draw = ui.draw();
+        draw.fill(&PaintShape::Rect(band, CornerRadius::ZERO), style.band);
+        let (glyph, rest) = Flow::new(band, cx.flow.is_rtl()).take_start(style.sizes.inset + style.band_icon.side);
+        let icon = Rect::from_center_size(glyph.center(), Vec2::splat(style.band_icon.side));
+        draw.icon(icon, &IconSpec::svg(IconId::new("unlink")).color(cx.resolve(&style.band_icon.color)));
+        let message = text.as_ref().unwrap_or(&words.offline);
+        let run = TextRun::new(message.as_str()).role(style.band_text.role).color(cx.resolve(&style.band_text.color)).elide();
+        draw.text(rest.take_start(style.sizes.inset).1.rect(), &run);
+    }
+
+    /// The badge bar: the stars, the flag and the colour dot over a plate laid on the picture's bottom.
+    fn paint_bar(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let Some(bar) = placed.bar else { return };
+        let style = cx.style;
+        ui.draw().fill(&PaintShape::Rect(bar, CornerRadius::ZERO), style.plate);
+        if let (Some(rating), Some(_)) = (self.rating, placed.stars) {
+            let words = cx.words::<TileWords>();
+            let face = Rating::new(Bind::given(rating), STARS).compact(true).label(words.rating.fill(&[("name", cx.resolved.label)]));
+            ui.face_in(RATING, face, &style.stars.color);
+        }
+        let draw = ui.draw();
+        if let (Some(flag), Some(rect)) = (self.flag, placed.flag) {
+            let (id, look) = match flag {
+                TileFlag::Picked => ("flag", &style.picked),
+                TileFlag::Rejected => ("ban", &style.rejected),
+            };
+            draw.icon(rect, &IconSpec::svg(IconId::new(id)).color(cx.resolve(&look.color)));
+        }
+        if let (Some(color), Some(rect)) = (self.label_color, placed.dot) {
+            let shape = PaintShape::Circle(rect.center(), rect.width() / 2.0);
+            draw.data_fill(&shape, DataColor::new(Color32::from(color)));
+            draw.stroke(&shape, StrokeWidth::Thin, style.dot_edge);
+        }
+    }
+
+    fn paint_pills(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let style = cx.style;
+        for (at, (badge, rect)) in self.pills.iter().zip(&placed.pills).enumerate() {
+            match &badge.kind {
+                BadgeKind::Text(_) => {
+                    if let Some(face) = Self::badge_face(badge) {
+                        ui.face(PILL.at(at as u64), face);
+                    }
+                }
+                BadgeKind::Glyph(id) => {
+                    let draw = ui.draw();
+                    draw.fill(&PaintShape::Rect(*rect, style.pill_radius), style.pill);
+                    let icon = Rect::from_center_size(rect.center(), Vec2::splat(style.pill_icon.side));
+                    draw.icon(icon, &IconSpec::svg(id.clone()).color(cx.resolve(&style.pill_icon.color)));
+                }
+            }
+        }
+    }
+
+    /// Where a caption line of `width` starts in `rect`: centred, or at the reading start in a card of files.
+    fn text_x(rect: Rect, width: f32, cx: &Cx<'_, Self>) -> f32 {
+        let sizes = &cx.style.sizes;
+        match (sizes.card && !sizes.text.centred(), cx.flow.is_rtl()) {
+            (false, _) => rect.center().x - width / 2.0,
+            (true, false) => rect.left(),
+            (true, true) => rect.right() - width,
+        }
+    }
+
+    /// The name and detail in the caption band or column, the slash of a hidden tile and the marks.
+    fn paint_caption(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        if self.caption == CaptionPlace::None {
+            return;
+        }
+        let style = cx.style;
+        let draw = ui.draw();
+        let failed = matches!(self.status, TileStatus::Offline(_));
+        let look = if failed { &style.name_failed } else { &style.name };
+        let ink = cx.resolve(&look.color);
+        let mut name_bottom = placed.name.bottom();
+        if !self.renaming {
+            let lines = if style.sizes.card { style.sizes.text.name_lines() } else { 1 };
+            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink);
+            let run = if lines > 1 { run.wrap(Wrap::Clamp(lines)).align(HAlign::Center) } else { run.wrap(Wrap::ElideMiddle) };
+            let layout = draw.layout(&run, placed.name.width());
+            let at = Pos2::new(Self::text_x(placed.name, layout.size().x, cx), placed.name.top());
+            draw.galley(at, &layout);
+            name_bottom = at.y + layout.size().y;
+            if self.hidden && self.caption == CaptionPlace::Start {
+                let name = Rect::from_min_size(at, layout.size());
+                draw.stroke(&PaintShape::Path(vec![name.left_bottom(), name.right_top()]), StrokeWidth::Medium, ink);
+            }
+        }
+        if let (Some(detail), Some(rect)) = (&self.detail, placed.detail) {
+            let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::ElideMiddle);
+            let layout = draw.layout(&run, rect.width());
+            // Under a name of fewer lines than the card keeps, the detail follows the name.
+            let top = if style.sizes.card && style.sizes.text.name_lines() > 1 { name_bottom } else { rect.top() };
+            draw.galley(Pos2::new(Self::text_x(rect, layout.size().x, cx), top), &layout);
+        }
+        for (mark, rect) in self.marks.iter().zip(&placed.marks) {
+            draw.icon(*rect, &IconSpec::svg(mark.icon.clone()).color(cx.resolve(&style.mark.color)));
+        }
+    }
+}

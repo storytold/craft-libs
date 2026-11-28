@@ -1,7 +1,7 @@
 //! Documents the tests write: what an editor's two-clip sequence with a dissolve looks like in
 //! the model.
 
-use craft_timeline::time::{FrameRate, Tick};
+use craft_timeline::{FrameRate, Tick};
 
 use crate::Identity;
 use crate::model::{CClip, CItem, CKind, CTrack, CTransition, Composition, Document, Gain, Source};

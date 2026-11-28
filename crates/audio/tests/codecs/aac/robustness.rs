@@ -28,7 +28,8 @@ fn mutated_access_units_never_panic() {
     let mut errors = 0usize;
     for (asc, aus) in corpus() {
         let mut dec = Decoder::new(&asc).unwrap();
-        for round in 0..3000 {
+        // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs 1/N of the rounds.
+        for round in 0..3000usize.div_ceil(craft_media_testkit::hostile::divisor()) {
             let mut au = aus[rand(aus.len())].clone();
             match round % 6 {
                 0 => {

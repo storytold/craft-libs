@@ -50,12 +50,22 @@ pub enum ReadNote {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ForeignError {
+    /// The text is empty.
     Empty,
     /// Longer than [`MAX_CHORD_TEXT`].
     TooLong,
+    /// A key name with no counterpart here, as written.
     UnknownKey(String),
     /// A modifier with no counterpart here, such as the Windows key.
     UnsupportedModifier(String),
+    /// A key whose key code (`key`) or modifier code (`mods`) the reader leaves undecided; the decided
+    /// half is `None`.
+    Undecided {
+        /// The key code, when decided.
+        key: Option<u32>,
+        /// The modifier code, when decided.
+        mods: Option<u32>,
+    },
 }
 
 impl std::fmt::Display for ForeignError {
@@ -65,6 +75,7 @@ impl std::fmt::Display for ForeignError {
             ForeignError::TooLong => write!(f, "shortcut longer than {MAX_CHORD_TEXT} bytes"),
             ForeignError::UnknownKey(k) => write!(f, "unknown key `{k}`"),
             ForeignError::UnsupportedModifier(m) => write!(f, "unsupported modifier `{m}`"),
+            ForeignError::Undecided { .. } => f.write_str("undecided key code"),
         }
     }
 }

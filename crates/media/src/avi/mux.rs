@@ -383,7 +383,7 @@ fn hdrl(streams: &[StreamState], main: Option<usize>, max_riffs: u32, first_fram
     list(b"hdrl", &body)
 }
 
-/// Writes an AVI file chunk by chunk; see the [module documentation](self).
+/// Writes an AVI file chunk by chunk; see the [module documentation](crate::avi).
 #[derive(Debug)]
 pub struct AviWriter<W: Write + Seek> {
     w: W,

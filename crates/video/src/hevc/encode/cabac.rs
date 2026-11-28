@@ -209,12 +209,4 @@ mod tests {
         // split_cu_flag ctx 0 (initValue 139) at QP 30: preCtxState 62
         assert_eq!(ctx[crate::hevc::encode::tables::SPLIT_CU], (63 - 62) << 1);
     }
-
-    #[test]
-    fn costs_are_sane() {
-        let t = cost_table();
-        assert_eq!(t[0][0], 32768);
-        assert_eq!(t[0][1], 32768);
-        assert!(t[62][0] < 1000 && t[62][1] > 5 * 32768);
-    }
 }

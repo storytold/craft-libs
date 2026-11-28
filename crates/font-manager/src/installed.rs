@@ -1,28 +1,33 @@
 //! The installed fonts the catalog sees, grouped by family.
 
-use craft_font_catalog::{FaceInfo, Source};
+use craft_font_catalog::{FaceInfo, Source, is_private_family};
 
 /// One family from one source: a family installed on the system and in the font store is two
 /// entries, since only the store's can be removed.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct InstalledFamily {
+    /// The family name.
     pub name: String,
+    /// Where this copy of the family is installed.
     pub source: Source,
     /// Upright before italic, then by weight and width.
     pub faces: Vec<FaceInfo>,
 }
 
 impl InstalledFamily {
+    /// Whether the user can remove it: only copies in the font store can be.
     pub fn removable(&self) -> bool {
         self.source == Source::Store
     }
 }
 
 /// System and font store faces by family, sorted by name ignoring case. Fonts other sources
-/// add (documents, the app's own) are left out.
+/// add (documents, the app's own) and private system families are left out.
 pub fn group(faces: &[FaceInfo]) -> Vec<InstalledFamily> {
     let mut families: Vec<InstalledFamily> = Vec::new();
-    let mut sorted: Vec<&FaceInfo> = faces.iter().filter(|f| matches!(f.source, Source::System | Source::Store)).collect();
+    let mut sorted: Vec<&FaceInfo> =
+        faces.iter().filter(|f| matches!(f.source, Source::System | Source::Store) && !is_private_family(&f.family)).collect();
     sorted.sort_by_cached_key(|f| (f.family.to_lowercase(), f.source == Source::Store));
     for face in sorted {
         match families.last_mut() {

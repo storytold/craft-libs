@@ -20,5 +20,6 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 craft-pst = { path = ".", features = ["test-support"] }
 proptest = { workspace = true }

@@ -74,6 +74,14 @@ fn be16(b: &[u8], at: usize) -> Option<u16> {
 /// `segment_span` covers the `0xFF` marker byte through the end of the segment payload.
 pub fn walk_jpeg_segments<'a>(
     bytes: &'a [u8],
+    visit: impl FnMut(u8, Range<usize>, &'a [u8]) -> Result<JpegVisit, JpegProbeError>,
+) -> Result<(), JpegProbeError> {
+    walk_segments(bytes, false, visit)
+}
+
+fn walk_segments<'a>(
+    bytes: &'a [u8],
+    stop_at_non_marker: bool,
     mut visit: impl FnMut(u8, Range<usize>, &'a [u8]) -> Result<JpegVisit, JpegProbeError>,
 ) -> Result<(), JpegProbeError> {
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
@@ -82,6 +90,9 @@ pub fn walk_jpeg_segments<'a>(
     let mut i = 2usize;
     while let Some(&byte) = bytes.get(i) {
         if byte != 0xFF {
+            if stop_at_non_marker {
+                break;
+            }
             i += 1;
             continue;
         }
@@ -113,6 +124,27 @@ pub fn walk_jpeg_segments<'a>(
         i = end;
     }
     Ok(())
+}
+
+/// EXIF orientation from the first complete APP1 segment prefixed with `Exif\0\0`.
+///
+/// Requires consecutive marker prefixes before SOS or EOI. Returns 1 if the
+/// first EXIF segment has no readable orientation, or if none is found before
+/// the header ends or becomes unreadable. Unlike [`walk_jpeg_segments`], this
+/// does not resynchronize past bytes outside a segment. For compatibility,
+/// even a marker code of zero is treated as an unknown length-bearing marker.
+pub fn strict_exif_orientation(bytes: &[u8]) -> u16 {
+    let mut orientation = 1;
+    let _ = walk_segments(bytes, true, |marker, _, segment| {
+        if marker == 0xE1
+            && let Some(exif) = segment.strip_prefix(b"Exif\0\0")
+        {
+            orientation = crate::exif_orientation(exif);
+            return Ok(JpegVisit::Stop);
+        }
+        Ok(JpegVisit::Continue)
+    });
+    orientation
 }
 
 /// Parse JFIF APP0 density `(x_dpi, y_dpi)` when unit is inches (1) or centimetres (2) and both
@@ -192,6 +224,32 @@ pub fn probe_jpeg(bytes: &[u8]) -> Result<JpegProbe, JpegProbeError> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strict_orientation_reads_the_first_exif_app1_before_the_scan() {
+        const ORIENTATION_6: &[u8] = b"II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
+        let mut header = Vec::from(b"\xFF\xD8\xFF\xE1\0\x05XMP".as_slice());
+        let app1: &[u8] = b"\xFF\xFF\xE1\0\x22Exif\0\0";
+        header.extend_from_slice(app1);
+        header.extend_from_slice(ORIENTATION_6);
+        assert_eq!(strict_exif_orientation(&header), 6);
+        // Preserve the legacy placement scanner’s treatment of a zero marker code.
+        let mut zero_marker = Vec::from(b"\xFF\xD8\xFF\x00\x00\x02".as_slice());
+        zero_marker.extend_from_slice(&header[2..]);
+        assert_eq!(strict_exif_orientation(&zero_marker), 6);
+
+        let mut interrupted = vec![0xff, 0xd8, 0x01];
+        interrupted.extend_from_slice(&header[2..]);
+        assert_eq!(strict_exif_orientation(&interrupted), 1);
+
+        let mut after_scan = Vec::from(b"\xFF\xD8\xFF\xDA".as_slice());
+        after_scan.extend_from_slice(&header[2..]);
+        assert_eq!(strict_exif_orientation(&after_scan), 1);
+
+        let mut untagged_first = Vec::from(b"\xFF\xD8\xFF\xE1\0\x16Exif\0\0II\x2a\0\x08\0\0\0\0\0\0\0\0\0".as_slice());
+        untagged_first.extend_from_slice(&header[2..]);
+        assert_eq!(strict_exif_orientation(&untagged_first), 1);
+    }
 
     #[test]
     fn jpeg_probe_preserves_error_diagnostics() {

@@ -1,0 +1,171 @@
+# API map of the "Overlays" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Overlays"
+new_module = "craft_ui::popover"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Popover"
+old = "craft_ui::popover::Popover"
+new = "craft_ui::popover::Popover"
+status = "same"
+note = "Same path, new shape: a container on Mount::Layer(Overlay::popover()). Popover::new(label, Bind<bool>) replaces new(id_salt, PopoverAnchor); the body goes to ShowContainer::show."
+
+[[type]]
+name = "PopupList"
+old = "craft_ui::popup_list::PopupList"
+new = "craft_ui::popover::PopupList"
+status = "moved"
+note = "A container on Mount::Layer(Overlay::dropdown()) whose body is the caller's List; PopupList::new(label, Bind<bool>).opened_by(&Response)."
+
+[[type]]
+name = "Tooltip"
+old = "craft_ui::controls::tooltip::Tooltip"
+new = "craft_ui::contract::Tooltip"
+status = "replaced"
+note = "No widget type. A tooltip is `Common.tooltip` (`.tooltip(text)` on any component) or `PartBuilder::tooltip(label)` on a part; the overlay host shows it after `DELAY`, hides it during a press, a drag and a key-owning menu, and keeps it for a disabled control when `TooltipSpec::disabled_text` is set. The associated `Tooltip::DELAY` is `craft_ui::contract::tooltip::DELAY`."
+
+[[type]]
+name = "DragBadge"
+old = "craft_ui::behavior::drag_feedback::DragBadge"
+new = ""
+status = "replaced"
+note = "No widget type; `craft_ui::contract::DragPreview::Badge(label)` replaces it. The drag source passes `DragPreview::Badge(label)` to `Cx::start_drag`; the ghost layer paints the badge beside the pointer and the host sets the drag cursor. The count text is the app's `Label` (a counted word of its own words set); `DragBadge::count(n)` has no counterpart. `set_drop_hint` and `drop_hint` go: a drop target that wants other text starts its drag with the badge it needs."
+
+[[type]]
+name = "DropVeil"
+old = "craft_ui::behavior::drag_feedback::DropVeil"
+new = "craft_ui::popover::DropVeil"
+status = "replaced"
+note = "A container: `DropVeil::new(label).show(ui, |ui, _| body).dropped` gives `Option<OsFiles>`. It takes no `Context`, `id_salt` or `lines`: the label is the card text (one line; the app builds the count text) and the veil shows while `OsFiles` hover, as the app does not poll `HoveredFiles`."
+
+[[type]]
+name = "PopoverResponse"
+old = "craft_ui::popover::PopoverResponse"
+new = ""
+status = "removed"
+note = "Replaced by `popover::PopoverOutput`. PopoverOutput { response, closed: Option<CloseReason> }, the output of Popover and PopupList; the body's result is Inner::inner of ShowContainer::show."
+
+[[type]]
+name = "PopoverAnchor"
+old = "craft_ui::popover::PopoverAnchor"
+new = ""
+status = "removed"
+note = "Replaced by `popover::Popover::opened_by`. The opener is the Response of the control: Popover::opened_by(&Response). A point anchor has no equivalent."
+
+[[type]]
+name = "PopoverSize"
+old = "craft_ui::popover::PopoverSize"
+new = ""
+status = "removed"
+note = "Replaced by `popover::Popover::resizable`. Fit is the default; Fixed is dropped; Resizable is resizable(true) with remember(SaveKey). Default and minimum sizes come from the content."
+
+[[type]]
+name = "PopoverClose"
+old = "craft_ui::popover::PopoverClose"
+new = ""
+status = "removed"
+note = "Replaced by `popover::Popover`. The close rules are the overlay's Dismiss: close_on_enter(bool), absorb_outside(bool); outside, Escape and focus-left are on by default."
+
+[[type]]
+name = "CloseReason"
+old = "craft_ui::popover::CloseReason"
+new = "craft_ui::runtime::overlay::CloseReason"
+status = "moved"
+note = "The host's reasons: Requested, Escape, Outside, FocusLeft, Activated, Enter, Timeout, AnchorGone."
+
+[[type]]
+name = "PopoverCtx"
+old = "craft_ui::popover::PopoverCtx"
+new = ""
+status = "removed"
+note = "Replaced by `contract::BodyCx`. close() is BodyCx::request_close; initial_focus(id) is Popover::initial_focus(Initial); content_size and pressed_outside are dropped."
+
+[[type]]
+name = "ResizeGrip"
+old = "craft_ui::popover::ResizeGrip"
+new = ""
+status = "removed"
+note = "Replaced by `contract::overlay::Resize`. Grips are the overlay host's Resize; a popover's resizable(true) turns them on."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[type]]
+name = "TooltipExt"
+old = "craft_ui::controls::tooltip::TooltipExt"
+new = ""
+status = "replaced"
+note = "Extension methods on a response go: `response.tooltip(text)` becomes `Component::tooltip(text)` before `show`. `tooltip_with(text, shortcut)`: bind the command to the component; the chord shows after the text from the command. `tooltip_ui(..)` is `Show::show_with_tip(ui, |ui| ..)` (containers: `ShowContainer::show_with_tip`; parts and children: `PaintUi::child_with_tip`; list items: `ItemCx::tip`). `tooltip_at_pointer(text)` is `.tooltip(TooltipSpec::new(text).at(TooltipAt::Pointer))`. `show_tooltip(text)` is `.tooltip(TooltipSpec::new(text).when(TooltipWhen::Now))`. A disabled control keeps its tip through `TooltipSpec::disabled_text`."
+
+[[type]]
+name = "TooltipStyle"
+old = "craft_ui::controls::tooltip::TooltipStyle"
+new = ""
+status = "removed"
+
+[[type]]
+name = "DragFeedbackLabels"
+old = "craft_ui::behavior::drag_feedback::DragFeedbackLabels"
+new = ""
+status = "removed"
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "Popover"
+old = "new(id_salt, PopoverAnchor)"
+new = "new(label, Bind<bool>).opened_by(&Response)"
+
+[[setter]]
+type = "Popover"
+old = "show(ui, &mut bool, |ui, &PopoverCtx| R) -> Option<PopoverResponse<R>>"
+new = "ShowContainer::show(ui, |ui, &mut BodyCx| R) -> Inner<PopoverOutput, R>"
+
+[[setter]]
+type = "Popover"
+old = "size(PopoverSize::Resizable { .. })"
+new = "resizable(true).remember(SaveKey)"
+
+[[setter]]
+type = "Popover"
+old = "close(PopoverClose::enter(on))"
+new = "close_on_enter(on)"
+
+[[setter]]
+type = "Popover"
+old = "close(PopoverClose::swallow_outside(on))"
+new = "absorb_outside(on)"
+
+[[setter]]
+type = "Popover"
+old = "keep_anchor_focus(true)"
+new = "initial_focus(Initial::KeepAnchor)"
+
+[[setter]]
+type = "Popover"
+old = "label(text)"
+new = "new(label, ..)"
+
+[[setter]]
+type = "Popover"
+old = "toggle(Id)"
+new = "opened_by(&Response)"
+
+[[setter]]
+type = "Popover"
+old = "group(Id)"
+new = "removed: the app closes the other popover when it opens one"
+
+[[setter]]
+type = "DropVeil"
+old = "DropVeil::new(id_salt, lines)"
+new = "DropVeil::new(label)"
+
+[[setter]]
+type = "DropVeil"
+old = "DropVeil::show(self, ctx)"
+new = "Show::show(ui, body)"
+

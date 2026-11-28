@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "legacy-allocate"
+kind = "marker"
+rule = "contract/allocate"
+path = "crates/ui/src/lib.rs"
+reason = "legacy allocation until the cut-over"
+expires = "cutover-2"

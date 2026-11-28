@@ -18,6 +18,7 @@ craft-mime = { workspace = true, features = ["detect"] }
 craft-wordmodel = { workspace = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 craft-markdown = { workspace = true }
 
 proptest = { workspace = true }

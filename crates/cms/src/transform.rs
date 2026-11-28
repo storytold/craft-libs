@@ -11,17 +11,28 @@ use crate::pipeline::{Pipeline, Stage};
 use crate::profile::{ColorSpace, Pcs, Profile, ProfileClass};
 use crate::{CmsError, GpuMatrixShaper, Intent, check_len, invalid_arg};
 
+mod link;
+mod par;
+
+pub use link::black_point;
+pub(crate) use link::link_stages;
+use par::{par_inplace, par_rows};
+
 /// Sample storage of a byte buffer for [`Transform::convert_bytes_many`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleKind {
+    #[allow(missing_docs)]
     U8,
+    #[allow(missing_docs)]
     U16,
+    #[allow(missing_docs)]
     F32,
 }
 
 /// Options for building a [`Transform`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TransformOptions {
+    #[allow(missing_docs)]
     pub intent: Intent,
     /// Adobe-style black point compensation (ignored for absolute colorimetric).
     pub bpc: bool,
@@ -38,6 +49,7 @@ impl Default for TransformOptions {
 
 /// Grid sizes of the device-link tables built for integer (and fast float) evaluation.
 pub const GRID_3D: usize = 33;
+/// Grid points per axis of 4-input tables (grid of 17⁴ nodes).
 pub const GRID_4D: usize = 17;
 const TABLE_1D: usize = GpuMatrixShaper::INPUT_INTERVALS;
 /// Resolution of output shaper tables (indexed by `x^(1/4)`).
@@ -115,6 +127,7 @@ impl Transform {
         Self::with_options(src, dst, TransformOptions { intent, bpc, ..Default::default() })
     }
 
+    /// Like [`Transform::new`], with every option in `opts`.
     pub fn with_options(src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Transform, CmsError> {
         let stages = link_stages(src, dst, opts.intent, opts.bpc)?;
         let mut t = Self::from_pipeline(Pipeline::new(src.channels(), stages)?, opts)?;
@@ -275,12 +288,15 @@ impl Transform {
         }
     }
 
+    /// Number of input channels.
     pub fn inputs(&self) -> usize {
         self.inputs
     }
+    /// Number of output channels.
     pub fn outputs(&self) -> usize {
         self.outputs
     }
+    /// The options this transform was built with.
     pub fn options(&self) -> TransformOptions {
         self.opts
     }
@@ -760,179 +776,6 @@ fn apply_matrix(m: &Option<(usize, usize, Vec<f32>, Vec<f32>)>, v: &[f32; 16], o
                 }
                 out[r] = s;
             }
-        }
-    }
-}
-
-// ------------------------------------------------------------ parallel helpers
-
-#[cfg(not(target_arch = "wasm32"))]
-const PAR_MIN_PIXELS: usize = 16 * 1024;
-#[cfg(not(target_arch = "wasm32"))]
-const PAR_CHUNK_PIXELS: usize = 8 * 1024;
-
-#[cfg(not(target_arch = "wasm32"))]
-fn par_rows<S: Sync, D: Send>(src: &[S], ss: usize, dst: &mut [D], ds: usize, f: impl Fn(&[S], &mut [D]) + Sync) {
-    use rayon::prelude::*;
-    let n = (src.len() / ss).min(dst.len() / ds);
-    let (src, dst) = (&src[..n * ss], &mut dst[..n * ds]);
-    if n < PAR_MIN_PIXELS {
-        return f(src, dst);
-    }
-    src.par_chunks(PAR_CHUNK_PIXELS * ss).zip(dst.par_chunks_mut(PAR_CHUNK_PIXELS * ds)).for_each(|(s, d)| f(s, d));
-}
-
-#[cfg(target_arch = "wasm32")]
-fn par_rows<S: Sync, D: Send>(src: &[S], ss: usize, dst: &mut [D], ds: usize, f: impl Fn(&[S], &mut [D]) + Sync) {
-    let n = (src.len() / ss).min(dst.len() / ds);
-    f(&src[..n * ss], &mut dst[..n * ds]);
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn par_inplace(buf: &mut [f32], stride: usize, f: impl Fn(&mut [f32]) + Sync) {
-    use rayon::prelude::*;
-    if buf.len() / stride < PAR_MIN_PIXELS {
-        return f(buf);
-    }
-    buf.par_chunks_mut(PAR_CHUNK_PIXELS * stride).for_each(&f);
-}
-
-#[cfg(target_arch = "wasm32")]
-fn par_inplace(buf: &mut [f32], _stride: usize, f: impl Fn(&mut [f32]) + Sync) {
-    f(buf)
-}
-
-// ------------------------------------------------------------ linking
-
-/// Stages from `src` device values to `dst` device values.
-pub(crate) fn link_stages(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result<Vec<Stage>, CmsError> {
-    for p in [src, dst] {
-        // A Lab DeviceLink stands in for an abstract profile only when it also ends in Lab.
-        let lab_to_lab =
-            p.color_space == ColorSpace::Lab && p.a2b.iter().flatten().all(|l| l.outputs == 3) && p.b2a.iter().flatten().all(|l| l.inputs == 3);
-        if matches!(p.class, ProfileClass::DeviceLink | ProfileClass::NamedColor | ProfileClass::Abstract) && !lab_to_lab {
-            return Err(CmsError::Unsupported(format!("{:?} profiles cannot be used as a source or destination", p.class)));
-        }
-    }
-    let (mut stages, s_pcs) = src.device_to_pcs(intent)?;
-    let (d_stages, d_pcs) = dst.pcs_to_device(intent)?;
-    let adjust = connection(src, dst, intent, bpc)?;
-    match adjust {
-        Some((scale, offset)) => {
-            if s_pcs == Pcs::Lab {
-                stages.push(Stage::LabToXyz);
-            }
-            stages.push(Stage::Matrix {
-                rows: 3,
-                cols: 3,
-                m: vec![scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, scale[2]],
-                offset: offset.to_vec(),
-            });
-            if d_pcs == Pcs::Lab {
-                stages.push(Stage::XyzToLab);
-            }
-        }
-        None => match (s_pcs, d_pcs) {
-            (Pcs::Lab, Pcs::Xyz) => stages.push(Stage::LabToXyz),
-            (Pcs::Xyz, Pcs::Lab) => stages.push(Stage::XyzToLab),
-            _ => {}
-        },
-    }
-    stages.extend(d_stages);
-    Ok(stages)
-}
-
-/// Per-component XYZ scale and offset applied in the PCS: absolute colorimetric media-white
-/// scaling or black point compensation. `None` = identity.
-/// Per-component XYZ `(scale, offset)`.
-type Affine3 = ([f64; 3], [f64; 3]);
-
-fn connection(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result<Option<Affine3>, CmsError> {
-    if intent == Intent::AbsoluteColorimetric {
-        let (ws, wd) = (src.media_white(), dst.media_white());
-        // `wtpt` comes straight from the file. A zero, negative or non-finite component would
-        // make the scale NaN or infinite and poison every colour the transform produces, so a
-        // profile with such a media white is refused for this intent instead.
-        let usable = |w: &[f64; 3]| w.iter().all(|v| v.is_finite() && *v > 0.0);
-        if !usable(&ws) || !usable(&wd) {
-            return Err(CmsError::Invalid(format!("absolute colorimetric needs a positive media white point (source {ws:?}, destination {wd:?})")));
-        }
-        let s = [ws[0] / wd[0], ws[1] / wd[1], ws[2] / wd[2]];
-        if s.iter().all(|v| (v - 1.0).abs() < 1e-6) {
-            return Ok(None);
-        }
-        return Ok(Some((s, [0.0; 3])));
-    }
-    if !bpc {
-        return Ok(None);
-    }
-    let bs = black_point(src, intent, true)?;
-    let bd = black_point(dst, intent, false)?;
-    if (bs - bd).abs() < 1e-6 {
-        return Ok(None);
-    }
-    // Neutral black points (luminance only, as in Adobe's BPC), mapped linearly in XYZ so that
-    // the source black lands on the destination black and the white stays fixed.
-    let w = math::D50;
-    let mut scale = [1.0; 3];
-    let mut offset = [0.0; 3];
-    for i in 0..3 {
-        let (s, d) = (bs * w[i], bd * w[i]);
-        let a = (w[i] - d) / (w[i] - s);
-        scale[i] = a;
-        offset[i] = w[i] * (1.0 - a);
-    }
-    Ok(Some((scale, offset)))
-}
-
-/// Luminance (Y, D50-relative) of the profile's black point for `intent`.
-///
-/// Follows the structure of Adobe's published BPC algorithm: matrix/TRC profiles use device
-/// zero; v4 LUT profiles in perceptual/saturation use the perceptual reference black; other LUT
-/// profiles use the darkest colour the device reaches (Lab 0 round-tripped through BToA/AToB,
-/// or device black for additive spaces). The destination-side curve fitting of the paper is
-/// not implemented; the round-trip black is used directly.
-pub fn black_point(p: &Profile, intent: Intent, _input: bool) -> Result<f64, CmsError> {
-    if matches!(p.color_space, ColorSpace::Lab | ColorSpace::Xyz) {
-        return Ok(0.0);
-    }
-    let lut_based = p.a2b.iter().any(Option::is_some);
-    if lut_based && p.version.0 >= 4 && matches!(intent, Intent::Perceptual | Intent::Saturation) {
-        return Ok(PERCEPTUAL_BLACK[1]);
-    }
-    let pcs_y = |st: Vec<Stage>, pcs: Pcs, dev: &[f32]| -> Result<f64, CmsError> {
-        let pipe = Pipeline::new(p.channels(), st)?;
-        let mut o = [0.0f32; 16];
-        pipe.eval(dev, &mut o)?;
-        let y = match pcs {
-            Pcs::Xyz => o[1] as f64,
-            Pcs::Lab => math::lab_to_xyz([o[0] as f64, 0.0, 0.0], math::D50)[1],
-        };
-        Ok(y.clamp(0.0, 0.5))
-    };
-    let (to_pcs, pcs) = p.device_to_pcs(intent)?;
-    let additive = matches!(p.color_space, ColorSpace::Rgb | ColorSpace::Gray);
-    if additive || !lut_based {
-        let zero = vec![0.0f32; p.channels()];
-        return pcs_y(to_pcs, pcs, &zero);
-    }
-    // Subtractive LUT profile: darkest reachable colour.
-    let colorimetric = if intent == Intent::Saturation { Intent::Saturation } else { Intent::RelativeColorimetric };
-    match p.pcs_to_device(colorimetric) {
-        Ok((from_pcs, fpcs)) => {
-            let mut st = Vec::new();
-            if fpcs == Pcs::Xyz {
-                st.push(Stage::LabToXyz);
-            }
-            st.extend(from_pcs);
-            let pipe = Pipeline::new(3, st)?;
-            let mut dev = [0.0f32; 16];
-            pipe.eval(&[0.0, 0.0, 0.0], &mut dev)?;
-            pcs_y(to_pcs, pcs, dev.get(..p.channels()).unwrap_or(&dev))
-        }
-        Err(_) => {
-            let ones = vec![1.0f32; p.channels()];
-            pcs_y(to_pcs, pcs, &ones)
         }
     }
 }

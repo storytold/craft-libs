@@ -28,6 +28,7 @@ serde = { workspace = true, optional = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 proptest = { workspace = true }
 craft-psd = { path = ".", features = ["test-support"] }
 

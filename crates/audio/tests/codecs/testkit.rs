@@ -3,20 +3,20 @@
 //! `CRAFT_MEDIA_REQUIRE_ORACLES=1`; fixtures go to `$CRAFT_MEDIA_FIXTURES_DIR` or
 //! `target/fixtures`, never committed.
 
-use crate::common;
+use super::common;
 use std::path::{Path, PathBuf};
 
 /// `let ff = require_ffmpeg!();`: the ffmpeg path, or return from the test after printing
 /// `SKIPPED` (a failure with `CRAFT_MEDIA_REQUIRE_ORACLES=1`).
 macro_rules! require_ffmpeg {
     () => {
-        match $crate::testkit::ffmpeg_or_skip(concat!(module_path!(), ":", line!())) {
+        match $crate::integration::codecs::testkit::ffmpeg_or_skip(concat!(module_path!(), ":", line!())) {
             Some(p) => p,
             None => return,
         }
     };
     ($ret:expr) => {
-        match $crate::testkit::ffmpeg_or_skip(concat!(module_path!(), ":", line!())) {
+        match $crate::integration::codecs::testkit::ffmpeg_or_skip(concat!(module_path!(), ":", line!())) {
             Some(p) => p,
             None => return $ret,
         }
@@ -43,7 +43,7 @@ pub mod oracle {
 
     /// A tool by name, silently.
     pub fn find_tool(name: &str) -> Option<PathBuf> {
-        crate::common::tool(name)
+        crate::integration::codecs::common::tool(name)
     }
 }
 

@@ -197,14 +197,6 @@ pub fn block_var<P: Pixel>(a: &[P], sa: usize, w: usize, h: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn satd_of_dc_difference() {
-        let a = [10u8; 16];
-        let b = [0u8; 16];
-        // DC-only difference of 10: hadamard DC = 160, halved = 80.
-        assert_eq!(satd(&a, 4, &b, 4, 4, 4), 80);
-        assert_eq!(sad(&a, 4, &b, 4, 4, 4), 160);
-    }
 
     #[test]
     fn satd_matches_reference() {

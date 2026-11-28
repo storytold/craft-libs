@@ -90,8 +90,7 @@ pub fn try_acquire(config: &LockConfig) -> Result<Option<Held>, Error> {
     std::fs::create_dir_all(dir).map_err(|e| Error::Lock(format!("{}: {e}", dir.display())))?;
     for slot in 0..config.slots {
         let path = slot_path(dir, slot);
-        let file =
-            OpenOptions::new().create(true).truncate(false).write(true).open(&path).map_err(|e| Error::Lock(format!("{}: {e}", path.display())))?;
+        let file = no_wait().create(true).truncate(false).write(true).open(&path).map_err(|e| Error::Lock(format!("{}: {e}", path.display())))?;
         match file.try_lock() {
             Ok(()) => return Ok(Some(Held { _file: file, owner: record_owner(&path, &config.owner_label) })),
             Err(TryLockError::WouldBlock) => continue,
@@ -112,7 +111,7 @@ fn record_owner(lock: &Path, label: &str) -> PathBuf {
     if let (Err(e), Err(w)) = (&removed, &written)
         && e.kind() != std::io::ErrorKind::NotFound
     {
-        eprintln!("lock: could not record the owner in {} ({e}; {w}): waiting runs may show a stale owner", owner_file.display());
+        crate::note(format_args!("lock: could not record the owner in {} ({e}; {w}): waiting runs may show a stale owner", owner_file.display()));
     }
     owner_file
 }
@@ -120,7 +119,8 @@ fn record_owner(lock: &Path, label: &str) -> PathBuf {
 /// The owner labels of the held slots, as their holders wrote them, each cut to [`MAX_OWNER_BYTES`].
 ///
 /// A slot whose lock file is missing or free is left out, also when a run that ended without dropping
-/// its [`Held`] guard left its owner file behind.
+/// its [`Held`] guard left its owner file behind. An owner entry that is a link, or on Unix a file
+/// with more than one name, is left out too.
 pub fn holders(config: &LockConfig) -> Result<Vec<String>, Error> {
     config.check()?;
     Ok((0..config.slots)
@@ -130,10 +130,27 @@ pub fn holders(config: &LockConfig) -> Result<Vec<String>, Error> {
         .collect())
 }
 
+/// Open options that do not wait on a FIFO under a name in a shared lock directory. On Unix the open
+/// returns at once, and a write open of a FIFO with no reader fails.
+#[cfg(unix)]
+fn no_wait() -> OpenOptions {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = OpenOptions::new();
+    options.custom_flags(libc::O_NONBLOCK);
+    options
+}
+
+/// Open options that do not wait on a FIFO under a name in a shared lock directory.
+#[cfg(not(unix))]
+fn no_wait() -> OpenOptions {
+    OpenOptions::new()
+}
+
 /// Whether a run holds the slot whose lock file is `lock`. The file is opened read-only and never
-/// created; a free slot is locked shared for a moment and released when the file closes.
+/// created, without waiting on a FIFO; a free slot is locked shared for a moment and released when the
+/// file closes.
 fn is_held(lock: &Path) -> bool {
-    match File::open(lock) {
+    match no_wait().read(true).open(lock) {
         Ok(file) => matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock)),
         Err(_) => false,
     }
@@ -141,9 +158,36 @@ fn is_held(lock: &Path) -> bool {
 
 fn read_owner(path: &Path) -> Option<String> {
     let mut bytes = Vec::new();
-    File::open(path).ok()?.take(MAX_OWNER_BYTES).read_to_end(&mut bytes).ok()?;
+    open_owner(path)?.take(MAX_OWNER_BYTES).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes).trim().to_owned();
     (!text.is_empty()).then_some(text)
+}
+
+/// Opens an owner file for reading when the entry is a regular file with no other name. A link planted
+/// under the name in a shared lock directory is not followed, and the open does not wait on a FIFO.
+#[cfg(unix)]
+fn open_owner(path: &Path) -> Option<File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW).open(path).ok()?;
+    let opened = file.metadata().ok()?;
+    (opened.is_file() && opened.nlink() == 1).then_some(file)
+}
+
+/// Opens an owner file for reading when the entry is a regular file. The entry itself is opened, not
+/// the target of a link planted under the name in a shared lock directory.
+#[cfg(windows)]
+fn open_owner(path: &Path) -> Option<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let file = OpenOptions::new().read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path).ok()?;
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+/// Opens an owner file for reading when the entry is a regular file.
+#[cfg(not(any(unix, windows)))]
+fn open_owner(path: &Path) -> Option<File> {
+    std::fs::symlink_metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+    File::open(path).ok()
 }
 
 /// Waits for a slot, printing the holders once while it waits.
@@ -152,9 +196,9 @@ fn read_owner(path: &Path) -> Option<String> {
 /// before any wait.
 pub fn acquire(config: &LockConfig, cancel: Option<&Cancel>) -> Result<Held, Error> {
     acquire_with(config, cancel, || {
-        eprintln!("=== lock: waiting for another run to finish ({} at a time) ===", config.slots);
+        crate::note(format_args!("=== lock: waiting for another run to finish ({} at a time) ===", config.slots));
         for h in holders(config).unwrap_or_default() {
-            eprintln!("  running: {h}");
+            crate::note(format_args!("  running: {h}"));
         }
     })
 }
@@ -170,7 +214,7 @@ fn acquire_with(config: &LockConfig, cancel: Option<&Cancel>, on_wait: impl FnOn
             return Err(Error::Canceled { step: None });
         }
         if let Some(held) = try_acquire(config)? {
-            eprintln!("=== lock: waited {:.0} s for a slot ===", waiting.elapsed().as_secs_f64());
+            crate::note(format_args!("=== lock: waited {:.0} s for a slot ===", waiting.elapsed().as_secs_f64()));
             return Ok(held);
         }
     }
@@ -257,6 +301,75 @@ mod tests {
         let _held = try_acquire(&c).unwrap().expect("free slot");
         std::fs::write(owner_path(&slot_path(dir.path(), 0)), vec![b'x'; 3 * MAX_OWNER_BYTES as usize]).unwrap();
         assert_eq!(holders(&c).unwrap(), ["x".repeat(MAX_OWNER_BYTES as usize)]);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn owner_reads_do_not_follow_links() {
+        let _guard = crate::spawn_guard();
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let private = dir.path().join("private.txt");
+        std::fs::write(&private, b"private").unwrap();
+        let c = config(dir.path(), 1, "");
+        let _held = try_acquire(&c).unwrap().expect("free slot");
+        let owner = owner_path(&slot_path(dir.path(), 0));
+        std::fs::remove_file(&owner).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&private, &owner).unwrap();
+        // Creating a link on Windows needs Developer Mode or an elevated process.
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&private, &owner).is_err() {
+            return;
+        }
+        assert!(holders(&c).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_reads_skip_files_with_other_names() {
+        let _guard = crate::spawn_guard();
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let private = dir.path().join("private.txt");
+        std::fs::write(&private, b"private").unwrap();
+        let c = config(dir.path(), 1, "");
+        let _held = try_acquire(&c).unwrap().expect("free slot");
+        let owner = owner_path(&slot_path(dir.path(), 0));
+        std::fs::remove_file(&owner).unwrap();
+        std::fs::hard_link(&private, &owner).unwrap();
+        assert!(holders(&c).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    fn mkfifo(path: &Path) {
+        let made = std::process::Command::new("mkfifo").arg(path).status().is_ok_and(|s| s.success());
+        assert!(made, "mkfifo {}", path.display());
+    }
+
+    /// A FIFO under a lock or owner name, or a link to one, is opened without waiting for a writer.
+    #[cfg(unix)]
+    #[test]
+    fn lock_and_owner_opens_do_not_wait_on_a_fifo() {
+        let _guard = crate::spawn_guard();
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let fifo = dir.path().join("pipe");
+        mkfifo(&fifo);
+
+        // A lock file that is a FIFO is not a held slot, and taking it fails at once.
+        let pipes = tempfile::tempdir().expect("temporary directory");
+        std::fs::rename(&fifo, slot_path(pipes.path(), 0)).unwrap();
+        assert!(holders(&config(pipes.path(), 1, "")).unwrap().is_empty());
+        assert!(matches!(try_acquire(&config(pipes.path(), 1, "x")), Err(Error::Lock(_))));
+
+        // A held slot whose owner entry is a link to a FIFO.
+        mkfifo(&fifo);
+        let c = config(dir.path(), 1, "");
+        let _held = try_acquire(&c).unwrap().expect("free slot");
+        let owner = owner_path(&slot_path(dir.path(), 0));
+        std::fs::remove_file(&owner).unwrap();
+        std::os::unix::fs::symlink(&fifo, &owner).unwrap();
+        assert!(holders(&c).unwrap().is_empty());
+        assert!(open_owner(&owner).is_none());
+        assert!(open_owner(&fifo).is_none());
     }
 
     #[test]
