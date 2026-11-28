@@ -194,9 +194,9 @@ mod tests {
     use super::*;
 
     fn close(a: &Mat3, b: &[[f64; 3]; 3], tol: f64) {
-        for i in 0..3 {
-            for j in 0..3 {
-                assert!((a.0[i][j] - b[i][j]).abs() < tol, "[{i}][{j}] {} vs {}", a.0[i][j], b[i][j]);
+        for (i, row) in a.0.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                assert!((v - b[i][j]).abs() < tol, "[{i}][{j}] {} vs {}", v, b[i][j]);
             }
         }
     }
