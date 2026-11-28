@@ -1,13 +1,14 @@
 //! [`PolygonLassoTool`]: the Polygonal Lasso, click by click.
 
-use craft_behavior::geometry::{DraftKind, DraftPoint, DraftReach, OutlineDraft, SelectionOperation};
+use craft_behavior::geometry::{DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft, SelectionOperation};
 use craft_behavior::{CancelReason, Cursor, PointerButton};
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, ToolIcon};
+use kurbo::Point;
 
 use super::drag::{InsideDrag, PressRule, drag_kind, moved_selection_snap};
-use super::lasso::{LassoCursor, apply, begin_inside, cursor, draft_key, outline_access, paint_outline, phase, reach, sample};
+use super::lasso::{DraftKey, LassoCursor, apply, begin_inside, cursor, draft_command, outline_access, paint_outline, phase, reach, sample};
 use super::{Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectionProbe};
 
 /// The Polygonal Lasso: each click adds a vertex; the outline closes into a selection.
@@ -26,6 +27,14 @@ use super::{Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectionPr
 ///
 /// While a New outline is open the selection it will replace is hidden: [`replaces_selection`](Self::replaces_selection)
 /// is for the selection overlay's `visible`.
+///
+/// Vertex history, for an app's Edit › Undo and Redo while the tool owns them: [`undo_vertex`](Self::undo_vertex)
+/// retracts as Backspace does and [`redo_vertex`](Self::redo_vertex) puts the retracted vertices back in order (every
+/// retract counts; a new vertex forgets them). The last outline closed is remembered as it was just before the close
+/// (points, straight segments, operation): after undoing its selection the app calls [`reopen`](Self::reopen) to
+/// carry on drawing it, and [`reclose`](Self::reclose) drops it again for a redo of that selection. The memory lasts
+/// until the next outline begins, another document is active, [`reset`](Self::reset) or
+/// [`forget_closed`](Self::forget_closed); the app decides whether its history still allows a reopen.
 #[derive(Clone, Debug)]
 pub struct PolygonLassoTool {
     draft: OutlineDraft,
@@ -34,6 +43,21 @@ pub struct PolygonLassoTool {
     mods: Mods,
     inside: Option<InsideDrag>,
     report: Report,
+    /// Retracted vertices, the latest last, each with whether its incoming segment was straight.
+    undone: Vec<(Point, bool)>,
+    /// The last outline closed, as it was just before the close.
+    closed: Option<ClosedOutline>,
+    /// The outline [`reopen`](PolygonLassoTool::reopen) gave back, for [`reclose`](PolygonLassoTool::reclose).
+    reopened: Option<ClosedOutline>,
+}
+
+/// An outline as it was just before it closed, and the document it was drawn on.
+#[derive(Clone, Debug, PartialEq)]
+struct ClosedOutline {
+    points: Vec<Point>,
+    straight: Vec<usize>,
+    operation: SelectionOperation,
+    document: u64,
 }
 
 impl Default for PolygonLassoTool {
@@ -53,6 +77,9 @@ impl PolygonLassoTool {
             mods: Mods::NONE,
             inside: None,
             report: Report::default(),
+            undone: Vec::new(),
+            closed: None,
+            reopened: None,
         }
     }
 
@@ -72,10 +99,132 @@ impl PolygonLassoTool {
         self.report.take()
     }
 
-    /// Drop the outline and any selection drag without an event (a tool switch).
+    /// Drop the outline, any selection drag, the vertex history and the closed outline without an event (a tool
+    /// switch).
     pub fn reset(&mut self) {
         self.draft.cancel();
         self.inside = None;
+        self.undone.clear();
+        self.forget_closed();
+    }
+
+    /// The open outline's points; empty with none.
+    pub fn points(&self) -> &[Point] {
+        self.draft.points()
+    }
+
+    /// The operation the open outline latched at its first press (or had when it closed, once reopened); `None` while
+    /// no outline is open.
+    pub fn outline_operation(&self) -> Option<SelectionOperation> {
+        self.draft.is_open().then_some(self.operation)
+    }
+
+    /// Whether [`undo_vertex`](Self::undo_vertex) acts: an outline is open between clicks.
+    pub fn can_undo_vertex(&self) -> bool {
+        self.draft.takes_retract()
+    }
+
+    /// Retracts the last vertex as Backspace does, keeping it for [`redo_vertex`](Self::redo_vertex); the only vertex
+    /// cancels the outline (and nothing is kept). False when no outline is open between clicks.
+    pub fn undo_vertex(&mut self) -> bool {
+        self.retract()
+    }
+
+    /// Whether [`redo_vertex`](Self::redo_vertex) acts: a retracted vertex waits and the outline is between clicks.
+    pub fn can_redo_vertex(&self) -> bool {
+        self.draft.takes_retract() && !self.undone.is_empty()
+    }
+
+    /// Puts back the vertex retracted last, with its straight segment. False when there is none.
+    pub fn redo_vertex(&mut self) -> bool {
+        if !self.can_redo_vertex() {
+            return false;
+        }
+        let Some((point, straight)) = self.undone.pop() else { return false };
+        let (mut points, mut indices) = (self.draft.points().to_vec(), self.draft.straight().to_vec());
+        if straight {
+            indices.push(points.len());
+        }
+        points.push(point);
+        self.draft.cancel();
+        self.draft.reopen(points, indices);
+        true
+    }
+
+    /// Whether [`reopen`](Self::reopen) acts: an outline closed since the last one began, and none is open.
+    pub fn can_reopen(&self) -> bool {
+        !self.draft.is_open() && self.closed.is_some()
+    }
+
+    /// Opens the last closed outline again as it was just before the close, with its operation, waiting for the next
+    /// click. Call it once the selection it made has been undone. False, changing nothing, without one.
+    pub fn reopen(&mut self) -> bool {
+        if !self.can_reopen() {
+            return false;
+        }
+        let Some(closed) = self.closed.take() else { return false };
+        if self.draft.reopen(closed.points.clone(), closed.straight.clone()).is_none() {
+            return false;
+        }
+        self.operation = closed.operation;
+        self.undone.clear();
+        self.reopened = Some(closed);
+        true
+    }
+
+    /// Whether [`reclose`](Self::reclose) acts: the open outline is the one [`reopen`](Self::reopen) gave back,
+    /// unchanged, with no retracted vertex waiting.
+    pub fn can_reclose(&self) -> bool {
+        self.draft.takes_retract()
+            && self.undone.is_empty()
+            && self.reopened.as_ref().is_some_and(|r| r.points == self.draft.points() && r.straight == self.draft.straight())
+    }
+
+    /// Drops the reopened outline without an event and remembers it as closed again: the app redid the selection it
+    /// had made. False, changing nothing, unless [`can_reclose`](Self::can_reclose).
+    pub fn reclose(&mut self) -> bool {
+        if !self.can_reclose() {
+            return false;
+        }
+        self.draft.cancel();
+        self.closed = self.reopened.take();
+        true
+    }
+
+    /// Forgets the closed outline: the app's history has moved on from the selection it made.
+    pub fn forget_closed(&mut self) {
+        self.closed = None;
+        self.reopened = None;
+    }
+
+    /// Retracts the last vertex (Backspace, Delete, a secondary press, Undo) and keeps it for a redo. Whether it acted.
+    fn retract(&mut self) -> bool {
+        let Some(last) = self.draft.points().len().checked_sub(1).filter(|_| self.draft.takes_retract()) else { return false };
+        let vertex = (self.draft.points()[last], self.draft.straight().contains(&last));
+        match self.draft.retract() {
+            Some(DraftEvent::Changed) => self.undone.push(vertex),
+            _ => self.undone.clear(),
+        }
+        true
+    }
+
+    /// Turns a draft's answer into events (`apply`), remembering an outline as it closes and forgetting the last closed
+    /// one when a new outline begins. `before` is the point count before the call: a vertex added forgets the retracted
+    /// ones, as does the outline ending.
+    fn take(&mut self, event: Option<DraftEvent>, has_selection: bool, document: u64, before: usize) {
+        match &event {
+            Some(DraftEvent::Started { .. }) => self.forget_closed(),
+            Some(DraftEvent::Closed { points, straight, .. }) => {
+                let closed = ClosedOutline { points: points.clone(), straight: straight.clone(), operation: self.operation, document };
+                self.closed = Some(closed);
+                self.reopened = None;
+            }
+            _ => {}
+        }
+        if !self.draft.is_open() || self.draft.points().len() > before {
+            self.undone.clear();
+        }
+        apply(event, self.bar, has_selection, &mut self.operation, &mut self.report);
     }
 
     /// What the tool is doing.
@@ -96,11 +245,16 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         tool.draft.set_reach(reach(cx));
         if tool.draft.for_document(probe.document()).is_some() {
             tool.inside = None;
+            tool.undone.clear();
+        }
+        if tool.closed.as_ref().or(tool.reopened.as_ref()).is_some_and(|c| c.document != probe.document()) {
+            tool.forget_closed();
         }
         if cx.mods != tool.mods {
             tool.mods = cx.mods;
+            let before = tool.draft.points().len();
             let event = tool.draft.mods_changed(cx.mods);
-            apply(event, tool.bar, probe.has_selection(), &mut tool.operation, &mut tool.report);
+            tool.take(event, probe.has_selection(), probe.document(), before);
         }
     }
 
@@ -139,7 +293,7 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return ToolAction::Ignored };
         if pointer.button == PointerButton::Secondary {
-            tool.draft.retract();
+            tool.retract();
             return ToolAction::Done;
         }
         let open = tool.draft.is_open();
@@ -150,8 +304,9 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         if pointer.mods.cmd && !open {
             return ToolAction::Ignored;
         }
+        let before = tool.draft.points().len();
         let event = if open && pointer.clicks >= 2 { tool.draft.close() } else { tool.draft.press(sample(pointer, &place), probe.has_selection()) };
-        apply(event, tool.bar, probe.has_selection(), &mut tool.operation, &mut tool.report);
+        tool.take(event, probe.has_selection(), probe.document(), before);
         ToolAction::Claimed
     }
 
@@ -165,8 +320,9 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
             }
             return;
         }
+        let before = tool.draft.points().len();
         let event = tool.draft.drag(sample(pointer, &place));
-        apply(event, tool.bar, probe.has_selection(), &mut tool.operation, &mut tool.report);
+        tool.take(event, probe.has_selection(), probe.document(), before);
     }
 
     /// Ends an Alt-drag segment or a selection drag; the outline stays open.
@@ -177,8 +333,9 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
             tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect)));
             return;
         }
+        let before = tool.draft.points().len();
         let event = tool.draft.release(sample(pointer, &place));
-        apply(event, tool.bar, probe.has_selection(), &mut tool.operation, &mut tool.report);
+        tool.take(event, probe.has_selection(), probe.document(), before);
     }
 
     /// The rubber band follows the pointer; it ends where a click would place the vertex.
@@ -201,6 +358,7 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         }
         if reason == CancelReason::Escape {
             tool.draft.cancel();
+            tool.undone.clear();
             return;
         }
         if tool.draft.is_down()
@@ -210,10 +368,28 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         }
     }
 
-    /// Enter closes, Escape cancels, Backspace and Delete retract.
+    /// Between clicks: Enter closes, Escape cancels, Backspace and Delete retract (kept for a redo).
     fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
         let (tool, probe) = (&mut *self.tool, self.probe);
-        draft_key(&mut tool.draft, key, cx, tool.bar, probe.has_selection(), &mut tool.operation, &mut tool.report)
+        if !tool.draft.takes_retract() {
+            return false;
+        }
+        let Some((command, _)) = draft_command(key, cx) else { return false };
+        match command {
+            DraftKey::Close => {
+                let before = tool.draft.points().len();
+                let event = tool.draft.close();
+                tool.take(event, probe.has_selection(), probe.document(), before);
+            }
+            DraftKey::Cancel => {
+                tool.draft.cancel();
+                tool.undone.clear();
+            }
+            DraftKey::Retract => {
+                tool.retract();
+            }
+        }
+        true
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {

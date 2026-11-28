@@ -717,6 +717,113 @@ fn a_polygonal_lasso_closes_by_double_click_or_its_start_and_retracts_by_backspa
     assert_eq!(events, [polygon(&[(100.0, 100.0), (200.0, 100.0), (200.0, 200.0)], SelectionOperation::New)], "a click on the start closes");
 }
 
+/// The square the vertex-history trials draw, its first vertex Shift-clicked (Add).
+const SQUARE: [(f64, f64); 4] = [(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 200.0)];
+
+/// The open outline's points.
+fn outline(rig: &mut Rig<PolygonLassoTool>) -> Vec<(f64, f64)> {
+    rig.tool_mut().tool().points().iter().map(|p| (p.x, p.y)).collect()
+}
+
+/// A Polygonal Lasso over a selection with the first `n` vertices of [`SQUARE`] placed, the first Shift-clicked.
+fn square_begun(n: usize) -> Rig<PolygonLassoTool> {
+    let mut rig = rig("Polygonal Lasso", PolygonLassoTool::new(), Fake::selected(Rect::new(300.0, 250.0, 350.0, 290.0)));
+    focus(&mut rig);
+    hold(&mut rig, Modifiers::SHIFT);
+    click(&mut rig, SQUARE[0], Mods::SHIFT);
+    hold(&mut rig, Modifiers::NONE);
+    for point in &SQUARE[1..n] {
+        click(&mut rig, *point, NONE);
+    }
+    rig
+}
+
+// Vertex history: Undo retracts as Backspace does and Redo puts the vertices back in order, a new vertex forgets them;
+// undoing the only vertex cancels, leaving nothing to redo.
+#[trial]
+fn polygonal_lasso_vertex_undo_and_redo() {
+    let mut rig = square_begun(4);
+    {
+        let mut owned = rig.tool_mut();
+        let tool = owned.tool();
+        assert!(tool.can_undo_vertex() && !tool.can_redo_vertex());
+        assert!(tool.undo_vertex() && tool.undo_vertex());
+        assert_eq!(tool.phase(), SelectPhase::Outline { points: 2 });
+        assert!(tool.redo_vertex());
+    }
+    assert_eq!(outline(&mut rig), SQUARE[..3], "Redo puts back the last vertex undone first");
+    press_key(&mut rig, Key::Backspace, Modifiers::NONE);
+    assert!(rig.tool_mut().tool().can_redo_vertex(), "Backspace is a retract Redo puts back");
+    click(&mut rig, (150.0, 250.0), NONE);
+    assert!(!rig.tool_mut().tool().can_redo_vertex(), "a new vertex forgets the retracted ones");
+    assert!(rig.tool_mut().tool().undo_vertex() && rig.tool_mut().tool().redo_vertex());
+    assert!(!rig.tool_mut().tool().redo_vertex(), "the Backspace's vertex was forgotten");
+    assert_eq!(outline(&mut rig), [SQUARE[0], SQUARE[1], (150.0, 250.0)]);
+    for _ in 0..3 {
+        assert!(rig.tool_mut().tool().undo_vertex());
+    }
+    assert_eq!(rig.tool().phase(), SelectPhase::Idle, "undoing the only vertex cancels");
+    assert!(!rig.tool_mut().tool().can_redo_vertex() && !rig.tool_mut().tool().can_reopen());
+    assert!(rig.tool_mut().events().is_empty());
+}
+
+// A closed outline reopens as it was just before the close, with its operation, carries on and closes again; while
+// unchanged it recloses with no event.
+#[trial]
+fn a_closed_polygonal_lasso_outline_reopens_and_recloses() {
+    let mut rig = square_begun(3);
+    assert!(!rig.tool_mut().tool().can_reopen(), "nothing closed yet");
+    // A double click adds its vertex and closes; the Add latched by Shift comes back with the points.
+    rig.double_press_at(at(SQUARE[3]));
+    assert_eq!(rig.tool_mut().events(), [polygon(&SQUARE, SelectionOperation::Add)]);
+    {
+        let mut owned = rig.tool_mut();
+        let tool = owned.tool();
+        assert!(!tool.can_undo_vertex() && tool.reopen());
+        assert_eq!(tool.phase(), SelectPhase::Outline { points: 4 });
+        assert_eq!(tool.outline_operation(), Some(SelectionOperation::Add));
+        assert!(!tool.can_reopen() && tool.reclose(), "unchanged, it closes again");
+        assert_eq!(tool.phase(), SelectPhase::Idle);
+        assert!(tool.events().is_empty(), "with no event");
+        assert!(tool.reopen() && tool.undo_vertex(), "and reopens again");
+        assert!(!tool.can_reclose(), "an edited outline doesn't reclose");
+        assert!(tool.redo_vertex() && tool.can_reclose());
+    }
+    assert_eq!(outline(&mut rig), SQUARE);
+    click(&mut rig, (50.0, 150.0), NONE);
+    press_key(&mut rig, Key::Enter, Modifiers::NONE);
+    let mut longer = SQUARE.to_vec();
+    longer.push((50.0, 150.0));
+    assert_eq!(rig.tool_mut().events(), [polygon(&longer, SelectionOperation::Add)], "the reopened outline carries on and closes again");
+    assert!(rig.tool_mut().tool().can_reopen());
+}
+
+// The closed outline is forgotten when a new outline begins, another document is active, or on a reset.
+#[trial]
+fn a_closed_polygonal_lasso_outline_is_forgotten() {
+    let close = |rig: &mut Rig<PolygonLassoTool>| {
+        for point in &SQUARE[..3] {
+            click(rig, *point, NONE);
+        }
+        press_key(rig, Key::Enter, Modifiers::NONE);
+        rig.tool_mut().events();
+        assert!(rig.tool_mut().tool().can_reopen());
+    };
+    let mut rig = square_begun(1);
+    press_key(&mut rig, Key::Escape, Modifiers::NONE);
+    close(&mut rig);
+    click(&mut rig, (20.0, 20.0), NONE);
+    press_key(&mut rig, Key::Escape, Modifiers::NONE);
+    assert!(!rig.tool_mut().tool().can_reopen(), "a new outline began");
+    close(&mut rig);
+    rig.tool_mut().probe.document = 2;
+    rig.fixture().frame(Vec::new());
+    assert!(!rig.tool_mut().tool().can_reopen(), "another document");
+    close(&mut rig);
+    rig.tool_mut().tool().reset();
+    assert!(!rig.tool_mut().tool().can_reopen(), "a reset");
+}
+
 // A new outline replaces the selection while it is open: true only for the operation New.
 
 // ---- the Magnetic Lasso ----

@@ -433,6 +433,26 @@ impl OutlineDraft {
         Some(if points.len() >= 3 { DraftEvent::Closed { points, straight } } else { DraftEvent::Cancelled })
     }
 
+    /// Opens `points` again as an outline waiting for the next click, with `straight` as its
+    /// [`straight`](Self::straight) indices (those past the end are dropped): a tool's undo of a
+    /// close, or the redo of a retracted vertex. [`DraftKind::Polygonal`] only, the one kind whose
+    /// open outline has no modifier or button state to restore. The rubber band starts at the last
+    /// point; the document key stays. `None`, changing nothing, for another kind, with an outline
+    /// already open, or with no points or a point that isn't finite.
+    pub fn reopen(&mut self, points: Vec<Point>, mut straight: Vec<usize>) -> Option<DraftEvent> {
+        if self.kind != DraftKind::Polygonal || self.is_open() || points.is_empty() || points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
+            return None;
+        }
+        self.reset();
+        let len = points.len();
+        straight.retain(|&i| i < len);
+        self.cursor = points.last().copied();
+        self.points = points;
+        self.straight = straight;
+        self.polygonal = true;
+        Some(DraftEvent::Changed)
+    }
+
     /// Drops an open outline: [`DraftEvent::Cancelled`]; `None` with no outline.
     pub fn cancel(&mut self) -> Option<DraftEvent> {
         if !self.is_open() {

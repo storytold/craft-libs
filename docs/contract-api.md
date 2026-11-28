@@ -909,6 +909,7 @@ An outline being drawn by a selection or freeform tool, and how it closes: [`Out
   - `pub fn mods_changed(&mut self, mods: Mods) -> Option<DraftEvent>`. The held modifiers changed. Mixed only: ⌥ pressed after the press (or pressed again after
   - `pub fn retract(&mut self) -> Option<DraftEvent>`. Removes the last vertex while [`takes_retract`](Self::takes_retract); removing the only
   - `pub fn close(&mut self) -> Option<DraftEvent>`. Closes an open outline (Enter, a double-click): [`DraftEvent::Closed`] with 3 or more
+  - `pub fn reopen(&mut self, points: Vec<Point>, mut straight: Vec<usize>) -> Option<DraftEvent>`. Opens `points` again as an outline waiting for the next click, with `straight` as its
   - `pub fn cancel(&mut self) -> Option<DraftEvent>`. Drops an open outline: [`DraftEvent::Cancelled`]; `None` with no outline.
   - `pub fn points(&self) -> &[Point]`. The outline's points so far, in document units; empty with no outline.
   - `pub fn straight(&self) -> &[usize]`. Indices into [`points`](Self::points) whose incoming segment is straight.

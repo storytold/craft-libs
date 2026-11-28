@@ -107,3 +107,31 @@ fn moving_a_freehand_outline_shifts_every_point_by_the_pointers_step() {
     draft.release(at(180.0, 130.0, 1.0));
     assert_eq!(draft.move_to(at(0.0, 0.0, 1.0)), None);
 }
+
+#[test]
+fn a_closed_polygon_reopens_with_its_points_and_straight_segments() {
+    let mut draft = OutlineDraft::new(DraftKind::Polygonal, REACH);
+    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)] {
+        draft.press(at(x, y, 1.0), true);
+        draft.release(at(x, y, 1.0));
+    }
+    let Some(DraftEvent::Closed { points, straight }) = draft.close() else { panic!("three points close") };
+    assert_eq!(draft.reopen(Vec::new(), Vec::new()), None, "nothing to reopen");
+    let past_the_end = straight.iter().copied().chain([points.len() + 4]).collect();
+    assert_eq!(draft.reopen(points.clone(), past_the_end), Some(DraftEvent::Changed));
+    assert_eq!(draft.points(), points.as_slice());
+    assert_eq!(draft.straight(), straight.as_slice(), "indices past the end go");
+    assert!(draft.takes_retract(), "the outline waits for the next click");
+    assert_eq!(draft.rubber_band(), Some([points[2], points[2]]));
+    assert_eq!(draft.reopen(points.clone(), Vec::new()), None, "an open outline stays as it is");
+    // It carries on as if never closed: a click adds a vertex, a click on the start closes.
+    assert_eq!(draft.press(at(0.0, 100.0, 1.0), true), Some(DraftEvent::Changed));
+    draft.release(at(0.0, 100.0, 1.0));
+    assert!(
+        matches!(draft.press(at(1.0, 1.0, 1.0), true), Some(DraftEvent::Closed { points, straight }) if points.len() == 4 && straight == [1, 2, 3])
+    );
+
+    let mut lasso = OutlineDraft::new(DraftKind::Mixed, REACH);
+    assert_eq!(lasso.reopen(points, Vec::new()), None, "only a Polygonal draft reopens");
+    assert!(!lasso.is_open());
+}
