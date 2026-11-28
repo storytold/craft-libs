@@ -86,5 +86,8 @@ web-sys = { version = "0.3", features = ["Window", "Document", "HtmlElement", "H
 rfd = { version = "0.17.2", default-features = false, optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 
+[dev-dependencies]
+craft-testkit = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

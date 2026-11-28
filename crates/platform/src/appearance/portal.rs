@@ -494,7 +494,11 @@ mod tests {
     use super::{ANIMATIONS_KEY, Answers, GNOME, KDE, KDE_MOTION_KEY, MOTION_KEY, STANDARD, decode, decode_motion};
     use crate::appearance::is_gnome_session;
     use crate::appearance::{Theme, Watcher};
+    use craft_testkit::deadline::with_deadline;
     use std::time::Duration;
+    // A hang guard only: each wait under it ends at a message the worker sends, so a run that works
+    // never reaches the limit.
+    const HANG_GUARD: Duration = Duration::from_secs(60);
     use zbus::zvariant::Value;
     // The portal's, GNOME's and KDE's keys each decode to reduced or not; malformed values say
     // nothing. Combined, any one asking for reduced motion wins, all answering otherwise is not
@@ -524,7 +528,7 @@ mod tests {
             },
         )
         .ok_or("worker creation failed")?;
-        let shared = sent.recv_timeout(Duration::from_secs(2))?;
+        let shared = with_deadline(HANG_GUARD, "the source's shared state", move || sent.recv())?;
         let mut answers = Answers { standard: None, gnome: None, motion: None, gnome_motion: None, kde_motion: None };
         answers.apply(&shared, KDE, "SingleClick", &Value::F64(0.0));
         answers.apply(&shared, KDE, KDE_MOTION_KEY, &Value::from("fast"));
@@ -618,7 +622,7 @@ mod tests {
             },
         )
         .ok_or("worker creation failed")?;
-        finished.recv_timeout(Duration::from_secs(2))?;
+        with_deadline(HANG_GUARD, "the source's publishing", move || finished.recv())?;
         assert_eq!(watcher.generation(), 4, "theme, contrast, motion and text scale each changed once");
         assert_eq!((watcher.current(), watcher.contrast()), (Some(Theme::Dark), Some(Contrast::High)));
         assert_eq!(watcher.text_scale(), Some(1.25));
@@ -656,18 +660,19 @@ mod tests {
             },
         )
         .ok_or("worker creation failed")?;
-        ready.recv_timeout(Duration::from_secs(2))?;
+        with_deadline(HANG_GUARD, "the source's start", move || ready.recv())?;
         let (dropped, drop_result) = std::sync::mpsc::channel();
         let dropper = std::thread::spawn(move || {
             drop(watcher);
             let _ = dropped.send(());
         });
-        let bounded = drop_result.recv_timeout(Duration::from_secs(1)).is_ok();
-        // Release before asserting, including when an unbounded implementation regresses.
+        // The source stays blocked until `release` drops, so a drop that waits for it never returns
+        // and the hang guard fails the test; unwinding from that failure drops `release`.
+        let returned = with_deadline(HANG_GUARD, "the watcher drop while its source is blocked", move || drop_result.recv());
         drop(release);
-        exit.recv_timeout(Duration::from_secs(2))?;
+        with_deadline(HANG_GUARD, "the released source's exit", move || exit.recv())?;
         assert!(dropper.join().is_ok(), "watcher drop panicked");
-        assert!(bounded, "watcher drop waited for a blocked synchronous poll");
+        assert!(returned.is_ok(), "watcher drop waited for a blocked synchronous poll");
         Ok(())
     }
 }
