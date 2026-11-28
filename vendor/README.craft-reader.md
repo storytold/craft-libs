@@ -103,6 +103,12 @@ white (`color::PCS_WHITE`); the moxcms conversion takes them on through #2770's 
 `crates/pdf/tests/plates.rs` adapts #2770's plate tests to the raster path, with its
 synthetic ICC profiles in `crates/pdf/tests/support/synthetic_icc.rs`.
 
+A craft-libs patch, labeled `Craft patch (re current point, craft-libs #3821)` in code
+comments, leaves the current point and the subpath start at a rectangle's `(x, y)` after `re`,
+as ISO 32000-2 §8.5.2.1 asks. Before it, an `l` after `re` started from the point before the
+rectangle: `begin_subpath_after_close` moved to that stale point. Test:
+`rectangles::a_line_after_a_rectangle_starts_at_its_corner` in `crates/pdf/tests/interpretation.rs`.
+
 The shared snapshot adds immutable per-document ordinary decode limits, threaded through
 initial xrefs, object streams, fallback and repair. Existing constructors retain their
 previous default. Known-size image budgets and streaming content budgets remain distinct.

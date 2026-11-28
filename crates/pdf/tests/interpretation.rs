@@ -195,6 +195,30 @@ mod rectangles {
         assert_eq!(shapes.rects, 0);
         assert_eq!(shapes.paths.len(), 1);
     }
+
+    /// Where the subpath after the rectangle of `path`, its last one, starts, and where the
+    /// rectangle starts.
+    fn starts_after_rectangle(path: &BezPath) -> (kurbo::Point, kurbo::Point) {
+        use kurbo::PathEl;
+        let moves: Vec<_> = path.elements().iter().filter_map(|e| if let PathEl::MoveTo(p) = e { Some(*p) } else { None }).collect();
+        (moves[0], *moves.last().unwrap())
+    }
+
+    /// ISO 32000-2 §8.5.2.1: after `re` the current point is the rectangle's `(x, y)`, so an `l`
+    /// that follows draws from that corner (#3821). It drew from the point before the rectangle:
+    /// the page origin in a new interpreter, or where the previous path ended.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_line_after_a_rectangle_starts_at_its_corner() {
+        let fresh = draw("0 0 0 RG 70 20 30 4 re 80 40 l S");
+        let (rect, line) = starts_after_rectangle(&fresh.paths[0]);
+        assert_eq!(line, rect, "the line starts at the rectangle's corner, not the origin");
+
+        // An earlier path that ended elsewhere leaves no stale point either.
+        let after = draw("0 0 0 RG 5 5 m 110 50 l S 70 20 30 4 re 80 40 l S");
+        let (rect, line) = starts_after_rectangle(after.paths.last().unwrap());
+        assert_eq!(line, rect, "the line starts at the rectangle's corner, not the previous path's end");
+    }
 }
 
 #[cfg(feature = "interpret")]
