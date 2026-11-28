@@ -146,10 +146,10 @@ pub fn parse(text: &str) -> Result<Document> {
                 Some(end_bracket) => stripped[end_bracket + 1..].trim_start(),
                 None => trimmed_rem,
             }
-        } else if let Some(space_idx) = trimmed_rem.find(' ') {
-            let first_token = &trimmed_rem[..space_idx];
+        } else if let Some(separator) = trimmed_rem.find(char::is_whitespace) {
+            let first_token = &trimmed_rem[..separator];
             if first_token.starts_with('D') && first_token[1..].chars().all(|c| c.is_ascii_digit()) {
-                trimmed_rem[space_idx + 1..].trim_start()
+                trimmed_rem[separator..].trim_start()
             } else {
                 trimmed_rem
             }
@@ -216,6 +216,13 @@ mod tests {
 
         let written = write(&doc);
         assert_eq!(written, jss);
+    }
+
+    #[test]
+    fn tab_after_directive_keeps_only_the_subtitle_text() {
+        let doc = parse("0:00:01.00 0:00:03.00 D0\tFirst\tline\n").unwrap();
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].text, "First\tline");
     }
 
     #[test]
