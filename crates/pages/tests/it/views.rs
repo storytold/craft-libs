@@ -15,7 +15,7 @@ use craft_ui::canvas::{
     CanvasTool, CropOverlay, HandTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer, WheelScheme,
 };
 use craft_ui::contract::{Bind, Role, Show as _};
-use craft_ui::primitives::textures::{Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
+use craft_ui::primitives::textures::{CachedTexture, Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
 
 use craft_ui::primitives::textures::TextureStoreOptions;
 use craft_ui::primitives::{Draw, EditorPurpose};
@@ -1414,6 +1414,171 @@ fn a_placed_page_reports_loading_until_its_picture_lands() {
         !out.borrow().visible.contains(&9) && asked.borrow().contains(&9),
         "a page the app keeps is asked for while out of view, so the store sees it"
     );
+}
+
+/// The first complete row is already available. Pending jobs for later rows use the host's job runner.
+struct TurnPictures {
+    ready: DemoPages,
+    later: DemoPages,
+    row_size: usize,
+}
+
+impl ThumbSource<usize> for TurnPictures {
+    fn revision(&self, key: &usize, _: &ThumbRequest) -> Revision {
+        Revision::of(key)
+    }
+
+    fn render(&self, key: &usize, request: &ThumbRequest) -> ThumbRender {
+        if *key < self.row_size { self.ready.render(key, request) } else { self.later.render(key, request) }
+    }
+}
+
+impl PageSource for TurnPictures {
+    fn page_count(&self) -> usize {
+        self.ready.page_count()
+    }
+
+    fn page_size(&self, page: usize) -> kurbo::Size {
+        self.ready.page_size(page)
+    }
+}
+
+struct PictureTurns {
+    fixture: Fixture,
+    displayed: Rc<RefCell<Vec<PlacedPage>>>,
+    current: Rc<Cell<usize>>,
+    epoch: Rc<Cell<u64>>,
+}
+
+impl PictureTurns {
+    fn new(row_size: usize, jobs: std::sync::Arc<dyn craft_host::Jobs>) -> Self {
+        let mut view = state_with(|state| {
+            state.continuous = false;
+            state.cover = false;
+            state.fit = Fit::Page;
+            state.display = if row_size == 2 { PageDisplay::TwoUp } else { PageDisplay::Single };
+        });
+        let pages = 4 * row_size;
+        let source = TurnPictures { ready: DemoPages::new(pages), later: DemoPages::rendering(pages), row_size };
+        let displayed = Rc::new(RefCell::new(Vec::new()));
+        let current = Rc::new(Cell::new(0));
+        let epoch = Rc::new(Cell::new(0));
+        let (placed, page, generation) = (displayed.clone(), current.clone(), epoch.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = PageView::new("Pages", &source, &mut view, PAPER).hold_previous_on_key_turn(generation.get()).show(ui, |_, _| ());
+            *placed.borrow_mut() = shown.pages;
+            page.set(view.current);
+        });
+        let info = craft_host::AppInfo { id: "page-turn-test", name: "Page turn test", version: "0" };
+        fixture.host(std::sync::Arc::new(craft_host::Host::builder(info).jobs(jobs).build())).room(vec2(900.0, 600.0));
+        Self { fixture, displayed, current, epoch }
+    }
+
+    fn ready(&self) -> Vec<CachedTexture> {
+        self.displayed
+            .borrow()
+            .iter()
+            .filter_map(|placed| if let TextureState::Ready(texture) = placed.picture { Some(texture) } else { None })
+            .collect()
+    }
+}
+
+fn paints_picture(shapes: &[egui::Shape], texture: CachedTexture) -> bool {
+    shapes.iter().any(|shape| {
+        let egui::Shape::Mesh(mesh) = shape else { return false };
+        mesh.texture_id == texture.id && mesh.vertices.iter().any(|vertex| texture.uv().contains(vertex.uv))
+    })
+}
+
+#[trial]
+fn keyboard_turns_hold_the_ready_picture_until_the_new_row_is_ready() {
+    use craft_ui::testing::input::{key_press, key_repeat};
+    use craft_ui::testing::text::painted;
+
+    for row_size in [1, 2] {
+        let jobs = std::sync::Arc::new(craft_host::ManualJobs::new());
+        let PictureTurns { mut fixture, displayed, current, .. } = PictureTurns::new(row_size, jobs.clone());
+        fixture.idle(2);
+        let old: Vec<_> = displayed
+            .borrow()
+            .iter()
+            .map(|page| {
+                let TextureState::Ready(texture) = page.picture else { panic!("the opening row is ready") };
+                texture
+            })
+            .collect();
+        assert_eq!(old.len(), row_size);
+        let key = Key::ArrowDown;
+        let mods = Modifiers::NONE;
+        for (event, target) in [(key_press(key, mods), row_size), (key_repeat(key, mods), 2 * row_size)] {
+            fixture.frame(vec![event]);
+            let shapes = fixture.frame_shapes();
+            assert_eq!(current.get(), target, "keyboard turns advance even before their pictures are ready");
+            assert!(
+                displayed
+                    .borrow()
+                    .iter()
+                    .enumerate()
+                    .all(|(column, page)| page.page == target + column && matches!(page.picture, TextureState::Loading { .. })),
+                "the new row owns the visible page identities and loading state"
+            );
+            assert!(old.iter().all(|&texture| paints_picture(&shapes, texture)), "the outgoing row still paints while the new row loads");
+            assert!(painted(&shapes).iter().any(|text| text == "Rendering…"), "the waiting indicator stays visible");
+        }
+        let mut shapes = fixture.frame_shapes();
+        let mut saw_half_ready = false;
+        while jobs.run_next() {
+            shapes = fixture.frame_shapes();
+            let ready = displayed.borrow().iter().filter(|page| matches!(page.picture, TextureState::Ready(_))).count();
+            if row_size == 2 && ready == 1 {
+                saw_half_ready = true;
+                assert!(old.iter().all(|&texture| paints_picture(&shapes, texture)), "a half-ready spread still shows both outgoing pictures");
+                assert!(painted(&shapes).iter().any(|text| text == "Rendering…"));
+            }
+        }
+        assert!(row_size == 1 || saw_half_ready, "the spread's halves arrive in separate passes");
+        assert!(old.iter().all(|&texture| !paints_picture(&shapes, texture)), "readiness replaces the entire outgoing row");
+        assert!(
+            displayed.borrow().iter().all(|page| { matches!(page.picture, TextureState::Ready(texture) if paints_picture(&shapes, texture)) }),
+            "each ready picture of the new row paints"
+        );
+        assert!(!painted(&shapes).iter().any(|text| text == "Rendering…"));
+    }
+}
+
+#[trial]
+fn changing_the_picture_epoch_drops_a_held_row() {
+    let mut rig = PictureTurns::new(1, std::sync::Arc::new(craft_host::ManualJobs::new()));
+    rig.fixture.idle(2);
+    let old = rig.ready();
+    assert_eq!(old.len(), 1);
+    rig.fixture.key(Key::ArrowDown, Modifiers::NONE);
+    assert!(paints_picture(&rig.fixture.frame_shapes(), old[0]), "precondition: the previous picture is held");
+    rig.epoch.set(1);
+    let shapes = rig.fixture.frame_shapes();
+    assert!(!paints_picture(&shapes, old[0]), "an epoch change discards the outgoing picture");
+    assert!(craft_ui::testing::text::painted(&shapes).iter().any(|text| text == "Rendering…"));
+}
+
+#[trial]
+fn a_keyboard_turn_paints_the_ready_target_from_the_threaded_loader() {
+    let mut rig = PictureTurns::new(1, craft_host::default_jobs());
+    rig.fixture.idle(2);
+    let outgoing = rig.ready();
+    assert_eq!(outgoing.len(), 1);
+    rig.fixture.key(Key::ArrowDown, Modifiers::NONE);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let shapes = rig.fixture.frame_shapes();
+        assert_eq!(rig.current.get(), 1);
+        if let Some(&ready) = rig.ready().first() {
+            assert!(paints_picture(&shapes, ready));
+            assert!(!paints_picture(&shapes, outgoing[0]));
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the threaded picture did not arrive");
+        std::thread::yield_now();
+    }
 }
 
 #[trial]

@@ -11,11 +11,13 @@
 //!     |ui, body, _| { TextMarks::new(body.pages, &marks).show_at(ui, body.rect); });
 //! ```
 
+mod hold_picture;
 mod pager;
 pub(crate) mod pictures;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
+use self::hold_picture::{PictureGeometry, ReadyRow};
 use self::pager::wheel_turn;
 use self::pictures::{PageMetrics, PagePictures, page_stores, picture_options};
 use super::access::AccessDescriber;
@@ -477,6 +479,7 @@ pub struct PageView<'a> {
     reach: f32,
     go_to_place: GoToPlace,
     fill_screen: bool,
+    picture_epoch: Option<u64>,
 }
 
 /// How far from the view, in view heights above and below it (and one view width either side), the page view keeps a
@@ -507,6 +510,7 @@ impl<'a> PageView<'a> {
             reach: PICTURE_REACH,
             go_to_place: GoToPlace::AfterRowAbove,
             fill_screen: false,
+            picture_epoch: None,
         }
     }
 
@@ -524,6 +528,17 @@ impl<'a> PageView<'a> {
     #[must_use]
     pub fn fill_screen(mut self, on: bool) -> Self {
         self.fill_screen = on;
+        self
+    }
+
+    /// Keeps the last ready row visible while a keyboard turn in paged mode waits for its pictures.
+    ///
+    /// The new row is current immediately, with its own accessibility and loading state. The old row is painted
+    /// only where its geometry still fits. Off by default. Change `epoch` on source replacement and on every
+    /// edit or other raster-affecting change, even if it affects a page outside the current row.
+    #[must_use]
+    pub fn hold_previous_on_key_turn(mut self, epoch: u64) -> Self {
+        self.picture_epoch = Some(epoch);
         self
     }
 
@@ -695,6 +710,7 @@ impl<'a> PageView<'a> {
             reach,
             go_to_place,
             fill_screen,
+            picture_epoch,
         } = self;
         let mut spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         // Filling the screen, the pages keep no margin above or below and no gutter beside them, and draw no border.
@@ -751,8 +767,20 @@ impl<'a> PageView<'a> {
         let mut held = Held::new(Bind::bound(state));
         let mut seen: Option<Seen> = None;
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-            let inputs =
-                Inputs { source, describer, build: &build, rect, given, paper, navigation, border, keep, reach, strips: strips_clip.map(|_| full) };
+            let inputs = Inputs {
+                source,
+                describer,
+                build: &build,
+                rect,
+                given,
+                paper,
+                navigation,
+                border,
+                keep,
+                reach,
+                strips: strips_clip.map(|_| full),
+                picture_epoch,
+            };
             let (mut next, pending) = run_pass(ui, cx, &mut held, &inputs, |ui, page| before(ui, page, session))?;
             let pass = tool_pass(&cx.env);
             if let Some(clip) = strips_clip {
@@ -818,6 +846,7 @@ struct Inputs<'a> {
     reach: f32,
     /// With `PageView::rulers`, the view's whole rect, strips included; the canvas shows inside the strips.
     strips: Option<Rect>,
+    picture_epoch: Option<u64>,
 }
 
 impl Inputs<'_> {
@@ -885,6 +914,7 @@ impl Seen {
 struct Memory {
     layout: Option<(LayoutKey, Arc<Placed>)>,
     offset: Option<(f64, f64)>,
+    ready_row: Option<ReadyRow>,
 }
 
 /// The mapping between the layout's screen points and the canvas view's document units: the view shows the shown
@@ -985,7 +1015,7 @@ fn run_pass(
     inputs: &Inputs<'_>,
     mut before: impl FnMut(&mut Ui, &PageBody<'_>) -> Option<CanvasView>,
 ) -> Option<(Seen, Pending)> {
-    let Inputs { source, describer, build, rect, given, paper, navigation, border, keep, reach, strips: _ } = *inputs;
+    let Inputs { source, describer, build, rect, given, paper, navigation, border, keep, reach, picture_epoch, .. } = *inputs;
     let mut state = held.read(cx)?;
     let started = state.clone();
     state.normalise();
@@ -1216,9 +1246,21 @@ fn run_pass(
         let bar_want = bar_moved.map(|moved| drawn_frame.offset_of(moved.center, vw, vh));
         let bar_shapes = slot.take_after(&ctx);
 
+        let stand_in = match picture_epoch {
+            Some(epoch) if !state.continuous && !pointer_zoom && !bar_drag && rows.len() == drawn.row.len() => {
+                let geometry = PictureGeometry { epoch, viewport: cx.rect, pixels_per_point: ppp, rotation: state.rotation };
+                ReadyRow::show(&mut mem.ready_row, geometry, &pages, |page, request| thumbs.cached_state(&ctx, source, &page, request))
+            }
+            _ => {
+                mem.ready_row = None;
+                None
+            }
+        };
         // The part in view waits while the view zooms or moves.
-        let pictures =
-            PagePictures::new(source, &pages, cx.id, paper).label(words.text.clone()).hold_detail(pointer_zoom || travel != 0.0 || bar_drag);
+        let pictures = PagePictures::new(source, &pages, cx.id, paper)
+            .label(words.text.clone())
+            .hold_detail(pointer_zoom || travel != 0.0 || bar_drag)
+            .stand_in(stand_in.as_deref().unwrap_or_default());
         match describer {
             Some(describer) => pictures.describer(describer).show_at(ui, cx.rect),
             None => pictures.show_at(ui, cx.rect),
@@ -1236,6 +1278,9 @@ fn run_pass(
         let mut held_pages: Vec<usize> =
             drawn.row.clone().filter(|&p| p < drawn.layout.rects.len() && overlaps(band_rect(&drawn.layout, p), around)).collect();
         held_pages.extend(rows.iter().chain(&near).chain(keep).copied());
+        if let Some(row) = &mem.ready_row {
+            held_pages.extend(row.pages());
+        }
         held_pages.sort_unstable();
         held_pages.dedup();
         thumbs.retain(&ctx, |page| held_pages.binary_search(page).is_ok());
@@ -1343,6 +1388,13 @@ impl Pending {
         state.offset = offset;
         if state.continuous && count > 0 && !went && mem.offset.is_some_and(|last| last != offset) {
             state.current = shown_most(&geo.layout, state.current, offset.1, vh);
+        }
+        if let Some(row) = &mut mem.ready_row {
+            if keys.turn.is_some() && !went && !state.continuous && state.current != before_turn {
+                row.turn_to(geo.row.start);
+            } else if went || state.current != before_turn {
+                mem.ready_row = None;
+            }
         }
         mem.offset = Some(offset);
         mem.layout = build.cache.borrow().clone();
