@@ -491,15 +491,28 @@ fn in_dialect(s: &str, word: &str, lang: ProofLang) -> String {
 /// Words in `text`: (byte start, byte end). Combining marks belong to the word they follow, so a
 /// word typed decomposed (`tambie\u{301}n`, NFD) is one word, as its precomposed form is.
 pub fn words(text: &str) -> Vec<(usize, usize)> {
+    words_for(text, |_| ProofLang::Other)
+}
+
+fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
+    let mut first_letter: Option<usize> = None;
     let is_w = |c: char| c.is_alphanumeric() || c == '\'' || c == '’' || c == '-' || unicode_normalization::char::is_combining_mark(c);
     for (i, c) in text.char_indices() {
-        match (start, is_w(c)) {
+        let catalan_dot = c == '·'
+            && first_letter.is_some_and(|s| language(s).pack_locale().is_some_and(|l| l.primary() == "ca"))
+            && text.get(..i).is_some_and(|left| left.ends_with(['l', 'L']))
+            && text.get(i + c.len_utf8()..).is_some_and(|right| right.starts_with(['l', 'L']));
+        if c.is_alphabetic() && first_letter.is_none() {
+            first_letter = Some(i);
+        }
+        match (start, is_w(c) || catalan_dot) {
             (None, true) => start = Some(i),
             (Some(s), false) => {
                 out.push((s, i));
                 start = None;
+                first_letter = None;
             }
             _ => {}
         }
@@ -507,13 +520,27 @@ pub fn words(text: &str) -> Vec<(usize, usize)> {
     if let Some(s) = start {
         out.push((s, text.len()));
     }
-    // Trim surrounding apostrophes/hyphens.
     out.into_iter()
         .filter_map(|(a, b)| {
             let w = text.get(a..b)?;
             let lead = w.len() - w.trim_start_matches(['\'', '’', '-']).len();
             let trail = w.len() - w.trim_end_matches(['\'', '’', '-']).len();
-            (a + lead < b - trail).then_some((a + lead, b - trail))
+            let from = a + lead;
+            let end = b - trail;
+            if from >= end {
+                return None;
+            }
+            let dutch_prefix =
+                language(from).pack_locale().is_some_and(|l| l.primary() == "nl") && text.get(from..end).is_some_and(pack_lang::dutch_elision);
+            let start = if dutch_prefix {
+                match text.get(a..from).and_then(|prefix| prefix.chars().next_back()) {
+                    Some(apostrophe @ ('\'' | '’')) => from - apostrophe.len_utf8(),
+                    _ => from,
+                }
+            } else {
+                from
+            };
+            Some((start, end))
         })
         .collect()
 }
@@ -545,13 +572,17 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// cost quadratic scanning (#1335).
 fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options) -> Vec<Issue> {
     let mut token = (0, 0, false);
-    words(text)
+    words_for(text, &lang)
         .into_iter()
         .filter_map(|(a, b)| {
             if a < token.0 || a >= token.1 {
                 token = enclosing_token(text, a, b);
             }
-            spelling_issue(text, a, b, lang(a), opts, token.2)
+            let first_letter = match text.get(a..b).and_then(|word| word.chars().next()) {
+                Some(apostrophe @ ('\'' | '’')) => a + apostrophe.len_utf8(),
+                _ => a,
+            };
+            spelling_issue(text, a, b, lang(first_letter), opts, token.2)
         })
         .collect()
 }
@@ -778,3 +809,28 @@ pub(crate) fn hold_dictionary_tests() {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod language_token_tests {
+    use super::*;
+
+    #[test]
+    fn native_punctuation_stays_in_catalan_and_dutch_spelling_ranges() {
+        let text = "col·legi vol·fort ’s-Hertogenbosh ‘een’";
+        let catalan = ProofLang::from_tag(Some("ca-ES"));
+        let dutch = ProofLang::from_tag(Some("nl-NL"));
+        let dutch_start = text.find("’s-").unwrap();
+        let words = words_for(text, |at| if at < dutch_start { catalan } else { dutch });
+        let words: Vec<_> = words.into_iter().map(|(start, end)| &text[start..end]).collect();
+        assert_eq!(words, ["col·legi", "vol", "fort", "’s-Hertogenbosh", "een"]);
+        let quoted_ca = "'col·legi'";
+        assert_eq!(words_for(quoted_ca, |at| if at == 0 { ProofLang::En } else { catalan }), [(1, quoted_ca.len() - 1)]);
+        // Leave the leading apostrophe in the spelling range. The dictionary check
+        // can recognise an elision or treat a straight apostrophe as an opening quote.
+        let quoted_nl = "'T-profiel?'";
+        assert_eq!(words_for(quoted_nl, |_| dutch), [(0, "T-profiel".len() + 1)]);
+        let curved_nl = "‘’s-Hertogenbosch’";
+        assert_eq!(words_for(curved_nl, |_| dutch), [('‘'.len_utf8(), curved_nl.len() - '’'.len_utf8())]);
+        assert!(!super::words(text).into_iter().any(|(a, b)| &text[a..b] == "col·legi"));
+    }
+}
