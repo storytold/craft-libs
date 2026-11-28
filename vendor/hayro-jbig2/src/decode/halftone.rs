@@ -1,24 +1,30 @@
 //! Halftone region segment parsing and decoding (7.4.5, 6.6).
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::RegionBitmap;
 use super::pattern::PatternDictionary;
 use super::{CombinationOperator, RegionSegmentInfo, Template, parse_region_segment_info};
 use crate::ScratchBuffers;
-use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS, copy_work, decode_work};
+use crate::bitmap::{Bitmap, Limits, MAX_DIMENSION, WORD_BITS, copy_work, decode_work, try_filled};
 use crate::error::{OverflowError, ParseError, RegionError, Result, bail};
-use crate::gray_scale::{GrayScaleParams, decode_gray_scale_image};
+use crate::gray_scale::{GrayScaleParams, decode_gray_scale_image, value_count};
 use crate::reader::Reader;
 
-/// Decode a halftone region segment (7.4.5.2, 6.6).
-pub(crate) fn decode(header: &HalftoneRegionHeader<'_>, pattern_dict: &PatternDictionary, ctx: &mut ScratchBuffers) -> Result<RegionBitmap> {
+/// Decode a halftone region segment (7.4.5.2, 6.6). Craft patch: the region and its grid stay
+/// within `limits`.
+pub(crate) fn decode(
+    header: &HalftoneRegionHeader<'_>,
+    pattern_dict: &PatternDictionary,
+    ctx: &mut ScratchBuffers,
+    limits: Limits,
+) -> Result<RegionBitmap> {
     let region = &header.region_info;
 
-    let mut htreg = Bitmap::new_with(region.width, region.height, region.x_location, region.y_location, header.flags.initial_pixel_color)?;
+    let mut htreg =
+        Bitmap::new_with(region.width, region.height, region.x_location, region.y_location, header.flags.initial_pixel_color, limits.max_pixels())?;
 
-    decode_into(header, pattern_dict, &mut htreg, ctx)?;
+    decode_into(header, pattern_dict, &mut htreg, ctx, limits)?;
 
     Ok(RegionBitmap { bitmap: htreg, combination_operator: region.combination_operator })
 }
@@ -28,8 +34,9 @@ pub(crate) fn decode_into(
     pattern_dict: &PatternDictionary,
     htreg: &mut Bitmap,
     ctx: &mut ScratchBuffers,
+    limits: Limits,
 ) -> Result<()> {
-    let skip_bitmap = if header.flags.enable_skip { Some(compute_skip_bitmap(header, pattern_dict, htreg)?) } else { None };
+    let skip_bitmap = if header.flags.enable_skip { Some(skip_bitmap_within(header, pattern_dict, htreg, isize::MAX as u64)?) } else { None };
 
     let bits_per_pixel = bits_per_pixel(pattern_dict);
 
@@ -42,6 +49,7 @@ pub(crate) fn decode_into(
         height: header.grid_position_and_size.height,
         template: header.flags.template,
         skip_mask: skip_bitmap.as_deref(),
+        max_cells: limits.grid_cells(),
     };
     let gi = decode_gray_scale_image(header.data, &gs_params, ctx)?;
 
@@ -71,8 +79,9 @@ fn bits_per_pixel(patterns: &PatternDictionary) -> u32 {
     (patterns.patterns.len() as u32).saturating_sub(1).checked_ilog2().map_or(1, |n| n + 1)
 }
 
-/// Parse a halftone region segment header (7.4.5.1).
-pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<'a>> {
+/// Parse a halftone region segment header (7.4.5.1). Craft patch: the grid has at most the cells
+/// of `limits`.
+pub(crate) fn parse<'a>(reader: &mut Reader<'a>, limits: Limits) -> Result<HalftoneRegionHeader<'a>> {
     let region_info = parse_region_segment_info(reader)?;
     let flags_byte = reader.read_byte().ok_or(ParseError::UnexpectedEof)?;
     let mmr = flags_byte & 0x01 != 0;
@@ -89,8 +98,9 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<
     if grid_width > MAX_DIMENSION || grid_height > MAX_DIMENSION {
         bail!(OverflowError::GridDimension);
     }
-    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`).
-    if u64::from(grid_width) * u64::from(grid_height) > crate::bitmap::MAX_GRID_CELLS {
+    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`; Craft patch: the
+    // bound of `limits`).
+    if u64::from(grid_width) * u64::from(grid_height) > limits.grid_cells() {
         bail!(OverflowError::GridDimension);
     }
 
@@ -195,6 +205,16 @@ impl GridCoords {
     }
 }
 
+/// Craft patch: the HSKIP bitmap, built only when the grid's gray-scale values fit in `max_bytes`
+/// (see `gray_scale::value_count`), which `decode_into` sets to `isize::MAX`. With 32-bit pointers,
+/// a caller's raised `Limits` allows a grid of 2^29 cells whose values take 2^31 bytes; the check
+/// refuses it before the mask's 64 MiB is allocated and its cells are visited.
+fn skip_bitmap_within(header: &HalftoneRegionHeader<'_>, pattern_dict: &PatternDictionary, htreg: &Bitmap, max_bytes: u64) -> Result<Vec<u32>> {
+    let grid = &header.grid_position_and_size;
+    value_count(grid.width, grid.height, max_bytes)?;
+    compute_skip_bitmap(header, pattern_dict, htreg)
+}
+
 /// Compute the HSKIP bitmap (6.6.5.1).
 fn compute_skip_bitmap(header: &HalftoneRegionHeader<'_>, pattern_dict: &PatternDictionary, htreg: &Bitmap) -> Result<Vec<u32>> {
     let grid = &header.grid_position_and_size;
@@ -205,7 +225,7 @@ fn compute_skip_bitmap(header: &HalftoneRegionHeader<'_>, pattern_dict: &Pattern
 
     let stride = grid.width.div_ceil(32);
     let len = stride.checked_mul(grid.height).ok_or(OverflowError::BitmapDimension)? as usize;
-    let mut hskip = vec![0_u32; len];
+    let mut hskip = try_filled(0_u32, len)?;
     let mut coords = GridCoords::new(grid, &header.grid_vector);
 
     for m_g in 0..grid.height {
@@ -335,4 +355,51 @@ fn render_patterns(region: &mut Bitmap, gi: &[u32], header: &HalftoneRegionHeade
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod pdfcraft_limit_tests {
+    use super::*;
+    use crate::bitmap::MAX_PIXELS;
+    use crate::decode::pattern::{self, PatternDictionaryHeader};
+    use crate::error::DecodeError;
+
+    /// Craft patch: a grid whose gray-scale values take more than the byte limit is refused before
+    /// the skip mask is built. The 32,768 by 16,384 grid is within a cell limit of 2^29 and takes
+    /// 2^31 bytes of values, past `isize::MAX` with 32-bit pointers.
+    #[test]
+    fn the_skip_mask_waits_for_the_gray_scale_byte_check() {
+        let patterns =
+            PatternDictionaryHeader { mmr: false, template: Template::Template0, pattern_width: 4, pattern_height: 4, num_patterns: 1, data: &[] };
+        let patterns = pattern::decode(&patterns, &mut ScratchBuffers::default(), u64::MAX, MAX_PIXELS).unwrap();
+        let htreg = Bitmap::new(1, 1, MAX_PIXELS).unwrap();
+        let header = |width, height| HalftoneRegionHeader {
+            region_info: RegionSegmentInfo {
+                width: 1,
+                height: 1,
+                x_location: 0,
+                y_location: 0,
+                combination_operator: CombinationOperator::Or,
+                _colour_extension: false,
+            },
+            flags: HalftoneRegionFlags {
+                mmr: false,
+                template: Template::Template0,
+                enable_skip: true,
+                combination_operator: CombinationOperator::Or,
+                initial_pixel_color: false,
+            },
+            grid_position_and_size: HalftoneGridPositionAndSize { width, height, horizontal_offset: 0, vertical_offset: 0 },
+            grid_vector: HalftoneGridVector { x_vector: 256, y_vector: 0 },
+            data: &[],
+        };
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        let grids: [(u32, u32, u64); 2] = [(64, 64, 64 * 64 * 4 - 1), (1 << 15, 1 << 14, i32::MAX as u64)];
+        for (width, height, max_bytes) in grids {
+            let mask = skip_bitmap_within(&header(width, height), &patterns, &htreg, max_bytes);
+            assert_eq!(mask.map(|_| ()), limit, "{width} by {height}");
+        }
+        let mask = skip_bitmap_within(&header(64, 64), &patterns, &htreg, 64 * 64 * 4).unwrap();
+        assert_eq!(mask.len(), 2 * 64, "64 by 64 within its bytes");
+    }
 }

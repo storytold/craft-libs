@@ -17,7 +17,8 @@ use crate::integer_decoder::IntegerDecoder;
 use crate::reader::Reader;
 use crate::symbol_id_decoder::SymbolIdDecoder;
 
-/// Decode a text region segment (6.4).
+/// Decode a text region segment (6.4). Craft patch: the region and its refined instances have
+/// at most `max_pixels` pixels (see `Limits::max_pixels`).
 pub(crate) fn decode(
     header: &TextRegionHeader<'_>,
     symbols: &[&Bitmap],
@@ -25,6 +26,7 @@ pub(crate) fn decode(
     standard_tables: &StandardHuffmanTables,
     scratch: &mut ScratchBuffers,
     work_left: &mut u64,
+    max_pixels: u64,
 ) -> Result<RegionBitmap> {
     let mut bitmap = Bitmap::new_with(
         header.region_info.width,
@@ -32,9 +34,10 @@ pub(crate) fn decode(
         header.region_info.x_location,
         header.region_info.y_location,
         header.flags.default_pixel,
+        max_pixels,
     )?;
 
-    decode_into(header, symbols, referred_tables, standard_tables, &mut bitmap, scratch, work_left)?;
+    decode_into(header, symbols, referred_tables, standard_tables, &mut bitmap, scratch, work_left, max_pixels)?;
 
     Ok(RegionBitmap { bitmap, combination_operator: header.region_info.combination_operator })
 }
@@ -47,11 +50,12 @@ pub(crate) fn decode_into(
     bitmap: &mut Bitmap,
     scratch: &mut ScratchBuffers,
     work_left: &mut u64,
+    max_pixels: u64,
 ) -> Result<()> {
     if header.flags.use_huffman {
         let mut reader = Reader::new(header.data);
         let ctx = DecodeContext::new_huffman(&mut reader, header, referred_tables, standard_tables)?;
-        decode_with(ctx, symbols, header, bitmap, work_left)?;
+        decode_with(ctx, symbols, header, bitmap, work_left, max_pixels)?;
     } else {
         let mut decoder = ArithmeticDecoder::new(header.data);
 
@@ -64,19 +68,21 @@ pub(crate) fn decode_into(
         scratch.contexts.resize(num_gr_contexts, ArithmeticDecoderContext::default());
 
         let ctx = DecodeContext::new_arithmetic(&mut decoder, &mut contexts, &mut scratch.contexts);
-        decode_with(ctx, symbols, header, bitmap, work_left)?;
+        decode_with(ctx, symbols, header, bitmap, work_left, max_pixels)?;
     }
 
     Ok(())
 }
 
-/// Decode a text region segment with a decode context (6.4).
+/// Decode a text region segment with a decode context (6.4). Craft patch: a refined instance has
+/// at most `max_pixels` pixels.
 pub(crate) fn decode_with(
     mut ctx: DecodeContext<'_, '_>,
     symbols: &[&Bitmap],
     header: &TextRegionHeader<'_>,
     region: &mut Bitmap,
     work_left: &mut u64,
+    max_pixels: u64,
 ) -> Result<()> {
     let strip_size = header.strip_size();
 
@@ -126,7 +132,7 @@ pub(crate) fn decode_with(
 
             let symbol_id = ctx.read_symbol_id()?;
 
-            let symbol_bitmap = decode_symbol_instance_bitmap(&mut ctx, symbols, header, symbol_id, work_left)?;
+            let symbol_bitmap = decode_symbol_instance_bitmap(&mut ctx, symbols, header, symbol_id, work_left, max_pixels)?;
 
             let symbol_bitmap_ref: &Bitmap = match &symbol_bitmap {
                 SymbolBitmap::Reference(idx) => symbols.get(*idx).ok_or(SymbolError::OutOfRange)?,
@@ -410,6 +416,7 @@ fn decode_symbol_instance_bitmap(
     header: &TextRegionHeader<'_>,
     symbol_id: usize,
     work_left: &mut u64,
+    max_pixels: u64,
 ) -> Result<SymbolBitmap> {
     if !header.flags.use_refinement || ctx.read_refinement_flag()? == 0 {
         return Ok(SymbolBitmap::Reference(symbol_id));
@@ -435,7 +442,7 @@ fn decode_symbol_instance_bitmap(
     let work = decode_work(refined_width, refined_height).saturating_add(4 * INTEGER_WORK);
     *work_left = work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
 
-    let mut refined_bitmap = Bitmap::new(refined_width, refined_height)?;
+    let mut refined_bitmap = Bitmap::new(refined_width, refined_height, max_pixels)?;
 
     ctx.decode_refinement_bitmap(
         &mut refined_bitmap,
