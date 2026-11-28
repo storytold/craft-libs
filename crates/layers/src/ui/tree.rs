@@ -285,6 +285,12 @@ pub enum ThumbBadge {
     SmartObject,
     /// A shape layer: a path with an anchor point on each corner, as Photoshop's.
     Shape,
+    /// A linked smart object (File > Place Linked): a chain link in place of the smart object's window glyph, as the
+    /// reference application's (photocraft#14118).
+    Linked,
+    /// A linked smart object whose file is missing: the chain link broken, in the bad status colour, until the file
+    /// is back and the app gives [`Linked`](Self::Linked) again.
+    LinkMissing,
 }
 
 /// What a layer is.

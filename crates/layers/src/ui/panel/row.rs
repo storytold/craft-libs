@@ -146,6 +146,12 @@ pub(super) fn row_description(words: &LayersPanelWords, info: &LayerInfo, target
     });
     let mut parts: Vec<&str> = std::iter::once(kind.as_str()).chain(flags.iter().filter(|(on, _)| *on).map(|(_, word)| word.as_str())).collect();
     parts.extend(target.map(Label::as_str));
+    // The link badges are painted, with no access node of their own: their names go in the description.
+    parts.extend(match info.thumb_badge {
+        Some(ThumbBadge::Linked) => Some(words.linked_smart_object.as_str()),
+        Some(ThumbBadge::LinkMissing) => Some(words.link_missing.as_str()),
+        _ => None,
+    });
     parts.extend(info.description.as_deref());
     parts.extend(info.warning.as_deref());
     parts.join(", ")
@@ -203,9 +209,36 @@ fn badge_box(painter: &ContentPainterCx<'_>, rect: Rect) -> (Rect, Color32) {
     (area, painter.ink_on(SurfaceKind::Well))
 }
 
-/// The app's badge on a layer thumbnail: a window glyph for a smart object, or for a shape layer a path with an
-/// anchor point on each corner, painted so the anchors stay solid squares at this size.
+/// Side of a linked smart object's badge on a thumbnail `side` points tall: 11 on the reference application's default
+/// 24-point thumbnail, growing and shrinking with the thumbnail and kept between 9 and 18 (photocraft#14118).
+pub(crate) fn link_badge_side(side: f32) -> f32 {
+    (side * 11.0 / 24.0).round().clamp(9.0, 18.0)
+}
+
+/// A linked smart object's badge in the bottom corner of the thumbnail `rect`: a field well of [`link_badge_side`]
+/// holding a chain link, or while the file is missing a broken link in the bad status colour, the well ringed in it.
+fn paint_link_badge(painter: &ContentPainterCx<'_>, rect: Rect, missing: bool) {
+    let side = link_badge_side(rect.height()).min(rect.width().min(rect.height()));
+    let area = Rect::from_min_size(pos2(rect.right() - side, rect.bottom() - side), vec2(side, side));
+    painter.surface(area, SurfaceKind::Well, Corners::All);
+    let glyph = area.shrink(1.0);
+    if missing {
+        let cx = painter.style_cx();
+        let bad = cx.color(cx.tokens.color.status.bad.fg);
+        painter.painter.rect_stroke(area, 0.0, Stroke::new(1.0, bad.egui()), StrokeKind::Inside);
+        painter.icon(glyph, &IconSpec::svg(IconId::new("unlink")).color(bad));
+    } else {
+        painter.icon(glyph, &IconSpec::svg(IconId::new("link")).ink(SurfaceKind::Well.ink()));
+    }
+}
+
+/// The app's badge on a layer thumbnail: a window glyph for a smart object, a chain link for a linked one (broken
+/// and red while its file is missing), or for a shape layer a path with an anchor point on each corner, painted so
+/// the anchors stay solid squares at this size.
 fn paint_thumb_badge(painter: &ContentPainterCx<'_>, rect: Rect, mark: ThumbBadge) {
+    if matches!(mark, ThumbBadge::Linked | ThumbBadge::LinkMissing) {
+        return paint_link_badge(painter, rect, mark == ThumbBadge::LinkMissing);
+    }
     let (area, ink) = badge_box(painter, rect);
     let badge = area.width();
     match mark {
@@ -222,6 +255,7 @@ fn paint_thumb_badge(painter: &ContentPainterCx<'_>, rect: Rect, mark: ThumbBadg
                 painter.painter.rect_filled(Rect::from_center_size(corner, anchor), 0.0, ink);
             }
         }
+        ThumbBadge::Linked | ThumbBadge::LinkMissing => {}
     }
 }
 

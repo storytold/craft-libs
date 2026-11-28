@@ -446,3 +446,128 @@ fn a_long_layer_list_asks_only_for_the_rows_in_view() {
     assert!(calls[0] > 0, "the rows in view are built");
     assert_eq!(calls[0], calls[1], "a settled frame builds as many rows for 2,000 layers as for 200");
 }
+
+/// Where [`paint_reference_icons`] paints: right of the panel's room, one row per side.
+const REFERENCE_X: f32 = 600.0;
+/// The glyph sides [`paint_reference_icons`] paints, in points: every side a link badge's glyph takes.
+const REFERENCE_SIDES: std::ops::RangeInclusive<u8> = 7..=16;
+
+/// Paints the catalog's `link`, `unlink` and `app_window` icons at every side in [`REFERENCE_SIDES`], right of the
+/// panel, so a test can tell which icon a badge drew by its texture: an icon's texture is the same wherever it is
+/// painted at one size.
+fn paint_reference_icons(ui: &egui::Ui) {
+    use craft_behavior::IconId;
+    use craft_ui::primitives::{ContentPainterCx, IconSpec};
+    let env = craft_ui::runtime::env::Env::of(ui);
+    // On a layer of its own, unclipped by the panel's room.
+    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("reference-icons"));
+    let painter = ContentPainterCx::new(egui::Painter::new(ui.ctx().clone(), layer, egui::Rect::EVERYTHING), &env, env.ink);
+    for side in REFERENCE_SIDES {
+        let y = 20.0 * f32::from(side);
+        for (at, icon) in ["link", "unlink", "app_window"].into_iter().enumerate() {
+            let rect = egui::Rect::from_min_size(egui::pos2(REFERENCE_X + 30.0 * at as f32, y), Vec2::splat(f32::from(side)));
+            painter.icon(rect, &IconSpec::svg(IconId::new(icon)));
+        }
+    }
+}
+
+/// The texture of the reference icon `icon` (0 `link`, 1 `unlink`, 2 `app_window`) of `side` points among `shapes`.
+fn reference_texture(shapes: &[egui::Shape], icon: usize, side: f32) -> egui::TextureId {
+    let at = egui::Rect::from_min_size(egui::pos2(REFERENCE_X + 30.0 * icon as f32, 20.0 * side), Vec2::splat(side));
+    shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Mesh(mesh) if at.expand(0.5).contains_rect(mesh.calc_bounds()) => Some(mesh.texture_id),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no reference icon {icon} at {side} points"))
+}
+
+/// The icons painted wholly inside the bottom corner of the thumbnail `thumb`, leaving out the kind glyph centred on
+/// the tile (on a small thumbnail it reaches into the corner too): each textured mesh's bounds, texture and tint.
+fn badge_icons(shapes: &[egui::Shape], thumb: egui::Rect) -> Vec<(egui::Rect, egui::TextureId, egui::Color32)> {
+    let corner = egui::Rect::from_min_max(thumb.max - Vec2::splat(18.5), thumb.max + Vec2::splat(0.5));
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() && !mesh.vertices.is_empty() => {
+                Some((mesh.calc_bounds(), mesh.texture_id, mesh.vertices[0].color))
+            }
+            _ => None,
+        })
+        .filter(|(rect, ..)| corner.contains_rect(*rect) && (rect.center() - thumb.center()).length() > 0.5)
+        .collect()
+}
+
+/// A linked smart object's thumbnail carries a chain link in place of the smart object's window glyph, 11 points on a
+/// 24-point thumbnail and following the thumbnail size; while its file is missing the link is another glyph, in a red
+/// tint, with the badge ringed in it. The embedded smart object keeps its badge, and each link badge's name is in its
+/// row's description for a screen reader (photocraft#14118).
+#[trial]
+fn a_linked_smart_object_shows_a_chain_link_badge_red_while_its_file_is_missing() {
+    use craft_layers::ui::options::LayersSettings;
+    use craft_layers::ui::tree::ThumbBadge;
+    use craft_ui::list::ThumbSize;
+
+    let badged = |name: &str, badge: ThumbBadge| {
+        let mut info = LayerInfo::new(name, LayerKind::SmartObject);
+        info.thumb_badge = Some(badge);
+        info
+    };
+    let layers = [badged("Embedded", ThumbBadge::SmartObject), badged("Linked", ThumbBadge::Linked), badged("Missing", ThumbBadge::LinkMissing)];
+    for size in [ThumbSize::Small, ThumbSize::Medium, ThumbSize::Large] {
+        let mut tree = FakeLayers::default();
+        for info in &layers {
+            tree.add(None, info.clone(), false);
+        }
+        let tree = Tracked::new(tree);
+        let mut settings = LayersSettings::default();
+        settings.options.thumbnail_size = size;
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = LayersPanel::new(&tree).settings(&settings).show(ui);
+            paint_reference_icons(ui);
+        });
+        fixture.room(PANEL);
+        fixture.settle();
+        let shapes = fixture.frame_shapes();
+        let badge = |info: &LayerInfo| {
+            let row = node(&fixture, &info.name);
+            // The picture, and the badge on it, fill the thumbnail inside its 1-point frame.
+            let thumb = testing::thumb_rect(fixture.ctx(), row.node.into(), info, LayerPart::Pixels).expect("the layer's thumbnail").shrink(1.0);
+            let description = fixture.tree().description_of(row.node).unwrap_or_default().to_owned();
+            let icons = badge_icons(&shapes, thumb);
+            assert_eq!(icons.len(), 1, "{size:?} {}: one badge glyph in the corner: {icons:?}", info.name);
+            (thumb, icons[0], description)
+        };
+        let (_, (_, smart_tex, smart_tint), smart_said) = badge(&layers[0]);
+        let (thumb, (link, link_tex, link_tint), linked_said) = badge(&layers[1]);
+        let (broken_thumb, (broken, broken_tex, broken_tint), missing_said) = badge(&layers[2]);
+
+        let side = (thumb.height() * 11.0 / 24.0).round().clamp(9.0, 18.0);
+        for (what, glyph, on) in [("chain link", link, thumb), ("broken link", broken, broken_thumb)] {
+            let expected = egui::Rect::from_min_max(on.max - Vec2::splat(side), on.max).shrink(1.0);
+            assert!(
+                (glyph.width() - expected.width()).abs() < 0.6 && (glyph.center() - expected.center()).length() < 0.6,
+                "{size:?}: the {what} fills the {side}-point badge in the thumbnail's corner: {glyph:?}, want {expected:?}"
+            );
+        }
+        let glyph = side - 2.0;
+        assert_eq!(link_tex, reference_texture(&shapes, 0, glyph), "{size:?}: the linked badge is the chain link");
+        assert_eq!(broken_tex, reference_texture(&shapes, 1, glyph), "{size:?}: a missing file breaks the link");
+        assert_ne!(link_tex, smart_tex, "{size:?}: not the smart object's window glyph");
+        assert_eq!(link_tint, smart_tint, "{size:?}: the chain link is in the badge's ink");
+        let red = |c: egui::Color32| c.r() > c.g().saturating_add(40) && c.r() > c.b().saturating_add(40);
+        assert!(!red(link_tint) && red(broken_tint), "{size:?}: only the missing link is red: {link_tint:?} {broken_tint:?}");
+        let ring = egui::Rect::from_min_max(thumb.max - Vec2::splat(side), thumb.max);
+        let ringed = |rect: egui::Rect, tint: egui::Color32| {
+            shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(r) if r.stroke.color == tint && r.stroke.width > 0.0 && (r.rect.center() - rect.center()).length() < 0.6 && (r.rect.width() - rect.width()).abs() < 0.6))
+        };
+        let missing_ring = egui::Rect::from_min_max(broken_thumb.max - Vec2::splat(side), broken_thumb.max);
+        assert!(ringed(missing_ring, broken_tint), "{size:?}: the missing link's badge is ringed in red");
+        assert!(!ringed(ring, broken_tint), "{size:?}: the linked badge has no red ring");
+
+        assert!(linked_said.contains("Linked Smart Object") && !linked_said.contains("missing"), "{size:?}: {linked_said:?}");
+        assert!(missing_said.contains("Linked file is missing"), "{size:?}: {missing_said:?}");
+        assert!(!smart_said.contains("Linked"), "{size:?}: the embedded smart object is not named linked: {smart_said:?}");
+    }
+}

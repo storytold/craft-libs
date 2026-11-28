@@ -90,6 +90,8 @@ craft_ui::words! {
         has_effects: "layersPanel.hasEffects" = "effects";
         has_smart_filters: "layersPanel.hasSmartFilters" = "Smart Filters";
         hidden: "layersPanel.hidden" = "hidden";
+        linked_smart_object: "layersPanel.linkedSmartObject" = "Linked Smart Object";
+        link_missing: "layersPanel.linkMissing" = "Linked file is missing";
         pixels_targeted: "layersPanel.pixelsTargeted" = "pixels targeted";
         layer_mask_targeted: "layersPanel.layerMaskTargeted" = "layer mask targeted";
         vector_mask_targeted: "layersPanel.vectorMaskTargeted" = "vector mask targeted";
