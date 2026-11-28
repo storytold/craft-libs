@@ -4,7 +4,7 @@
 
 use craft_wordmodel::CustomProp;
 
-use crate::xml::{El, MAX_DEPTH, Node, W, esc};
+use crate::xml::{El, MAX_DEPTH, Node, W, esc, esc_text};
 
 /// The format identifier every custom property carries (§22.3.2.2).
 const FMTID: &str = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}";
@@ -112,7 +112,7 @@ fn el_xml(e: &El, out: &mut String, depth: usize) {
     for k in &e.kids {
         match k {
             Node::El(c) => el_xml(c, out, depth + 1),
-            Node::Text(t) => out.push_str(&esc(t)),
+            Node::Text(t) => out.push_str(&esc_text(t)),
         }
     }
     out.push_str("</");

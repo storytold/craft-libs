@@ -3281,3 +3281,18 @@ fn gutter_at_top_is_merged_into_a_foreign_settings_part() {
     let at = |tag: &str| saved.find(tag).unwrap_or_else(|| panic!("{tag} missing: {saved}"));
     assert!(at("<w:mirrorMargins") < at("<w:gutterAtTop") && at("<w:gutterAtTop") < at("<w:proofState"), "{saved}");
 }
+
+/// Quotes in text are written as is, as Word writes them, so tools that read the raw XML (such as
+/// template engines looking for `[name;frm='0']` tags) find them (storytold/wordcraft#7815).
+#[test]
+fn quotes_in_text_are_written_unescaped() {
+    let text = "It's [f;frm='0'] \"quoted\"";
+    let d = doc_with(vec![para_runs(&[(text, CharProps::default())])]);
+    let bytes = craft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(text), "{xml}");
+    assert!(!xml.contains("&apos;") && !xml.contains("&quot;"), "{xml}");
+    assert_eq!(paras(&craft_docx::read(&bytes).expect("read"))[0].plain_text(), text);
+}

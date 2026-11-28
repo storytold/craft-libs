@@ -305,7 +305,7 @@ impl El {
             s.push('>');
             for n in &e.kids {
                 match n {
-                    Node::Text(t) => s.push_str(&esc(t)),
+                    Node::Text(t) => s.push_str(&esc_text(t)),
                     Node::El(c) => go(c, s, depth + 1),
                 }
             }
@@ -458,16 +458,29 @@ fn xml_char_ok(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
 }
 
-/// Escape text for element content or attribute values (drops characters XML can't carry).
+/// Escape an attribute value written inside `"` (drops characters XML can't carry).
+///
+/// Every writer in this crate quotes attributes with `"`, so a `'` is written as is.
 pub fn esc(s: &str) -> String {
+    escape(s, true)
+}
+
+/// Escape element text (drops characters XML can't carry).
+///
+/// Quotes are written as is, as Word writes them: tools that read the raw XML, such as template
+/// engines that look for `[name;frm='0']` tags, would not find a tag spelt with `&apos;`.
+pub fn esc_text(s: &str) -> String {
+    escape(s, false)
+}
+
+fn escape(s: &str, attr: bool) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
             '&' => o.push_str("&amp;"),
             '<' => o.push_str("&lt;"),
             '>' => o.push_str("&gt;"),
-            '"' => o.push_str("&quot;"),
-            '\'' => o.push_str("&apos;"),
+            '"' if attr => o.push_str("&quot;"),
             '\t' => o.push_str("&#9;"),
             '\n' => o.push_str("&#10;"),
             '\r' => o.push_str("&#13;"),
@@ -515,7 +528,7 @@ impl W {
         self.s.push('>');
     }
     pub fn text(&mut self, t: &str) {
-        self.s.push_str(&esc(t));
+        self.s.push_str(&esc_text(t));
     }
     /// `<name>text</name>`.
     pub fn leaf(&mut self, name: &str, attrs: &[(&str, &str)], t: &str) {
@@ -745,6 +758,7 @@ mod tests {
 
     #[test]
     fn escapes() {
-        assert_eq!(esc("a<b&\"\u{1}"), "a&lt;b&amp;&quot;");
+        assert_eq!(esc("a<b&\"'\u{1}"), "a&lt;b&amp;&quot;'");
+        assert_eq!(esc_text("a<b&\"'\u{1}"), "a&lt;b&amp;\"'");
     }
 }
